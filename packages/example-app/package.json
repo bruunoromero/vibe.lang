@@ -1,0 +1,12 @@
+{
+  "name": "@vibe/example-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "rm -rf dist",
+    "dev": "bun run ../cli/index.ts run --file src/main.lang",
+    "build": "mkdir -p dist && bun run ../cli/index.ts compile-all src --out-dir dist",
+    "start": "node dist/main.js"
+  }
+}

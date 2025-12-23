@@ -1,0 +1,19 @@
+{
+  "name": "@vibe/codegen",
+  "version": "0.0.0",
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@vibe/syntax": "workspace:*",
+    "@vibe/semantics": "workspace:*",
+    "@vibe/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@vibe/parser": "workspace:*",
+    "@types/bun": "latest"
+  }
+}

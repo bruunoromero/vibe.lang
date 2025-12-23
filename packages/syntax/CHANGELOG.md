@@ -1,0 +1,15 @@
+# @vibe/syntax Changelog
+
+# @vibe/syntax Changelog
+
+## 2025-12-21
+
+- Promoted `(require ...)` and `(external ...)` forms into a dedicated `NamespaceImport` AST node so downstream stages can access the import kind, alias, and specifier without re-parsing generic list structures.
+- Exported the shared `NamespaceImportKind`/`NamespaceImportNode` types to unblock parser, semantics, and tooling consumers that need to reason about module metadata.
+
+## 2025-12-20
+
+- Added foundational AST node kinds for programs, collections, reader macros, dispatch forms, and atoms.
+- Documented the semantic analyzer's metadata expectations (ADR-002) while keeping AST shapes immutable.
+- Captured macro declaration/usage shapes via new parser snapshots so tooling consumers have concrete AST samples for `defmacro` forms.
+- Introduced optional `scopeId` metadata on every AST node so the parser can tag lexical scope boundaries deterministically.

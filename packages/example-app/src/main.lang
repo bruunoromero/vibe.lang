@@ -1,0 +1,14 @@
+(require math "./math.lang")
+(external path "node:path")
+
+(def favorite-number 42)
+
+(def greet (fn [name]
+  (println "Hello, " name "!")))
+
+(println "Favorite number:" favorite-number)
+(println "math/add 40 2 ->" (math/add 40 2))
+(println "math/multiply 6 7 ->" (math/multiply 6 7))
+(println "Path separator:" path/sep)
+(println "Joined path:" (path/join "/tmp" "example"))
+(greet "Node")

@@ -1,0 +1,17 @@
+{
+  "name": "@vibe/parser",
+  "version": "0.0.0",
+  "type": "module",
+  "module": "index.ts",
+  "scripts": {
+    "build": "bun build index.ts --outdir dist --target bun",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@vibe/lexer": "workspace:*",
+    "@vibe/syntax": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

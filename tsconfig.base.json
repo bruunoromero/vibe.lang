@@ -1,0 +1,16 @@
+{
+  "extends": ["@tsconfig/bun/tsconfig.json"],
+  "compilerOptions": {
+    "rootDir": ".",
+    "baseUrl": ".",
+    "lib": ["esnext", "dom"],
+    "types": ["bun-types"],
+    "paths": {
+      "@vibe/*": [
+        "packages/*/src/index.ts",
+        "packages/*/src",
+        "packages/*/index.ts"
+      ]
+    }
+  }
+}

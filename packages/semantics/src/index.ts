@@ -1,0 +1,20 @@
+export { analyzeProgram, SemanticAnalyzer } from "./analyzer";
+export type {
+  AnalyzeOptions,
+  AnalyzeResult,
+  SemanticGraph,
+  ModuleImportRecord,
+  ModuleExportRecord,
+  ModuleResolver,
+  ModuleResolutionRequest,
+  ModuleResolutionResult,
+  ModuleExportsLookup,
+  ScopeRecord,
+  SymbolRecord,
+  SymbolKind,
+  SemanticNodeRecord,
+  NodeSymbolInfo,
+  ScopeId,
+  SymbolId,
+  NodeId,
+} from "./analyzer";

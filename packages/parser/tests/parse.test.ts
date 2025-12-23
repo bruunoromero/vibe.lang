@@ -1,0 +1,406 @@
+import { describe, expect, test } from "bun:test";
+import { parseSource } from "../src";
+import { NodeKind, type ReaderMacroKind } from "@vibe/syntax";
+
+describe("parseSource", () => {
+  test("parses nested collections", async () => {
+    const result = await parseSource("(def foo [:bar {:baz 1}])");
+
+    expect(result.ok).toBeTrue();
+    expect(result.diagnostics).toHaveLength(0);
+
+    const program = result.program;
+    expect(program.body).toHaveLength(1);
+
+    const list = program.body[0];
+    expect(list?.kind).toBe(NodeKind.List);
+    if (list?.kind !== NodeKind.List) {
+      throw new Error("Expected list node");
+    }
+
+    const [defSym, fooSym, vector] = list.elements;
+    expect(defSym?.kind).toBe(NodeKind.Symbol);
+    expect(fooSym?.kind).toBe(NodeKind.Symbol);
+    expect(vector?.kind).toBe(NodeKind.Vector);
+
+    if (vector?.kind !== NodeKind.Vector) {
+      throw new Error("Expected vector node");
+    }
+
+    const [keyword, map] = vector.elements;
+    expect(keyword?.kind).toBe(NodeKind.Keyword);
+    expect(map?.kind).toBe(NodeKind.Map);
+
+    if (map?.kind !== NodeKind.Map) {
+      throw new Error("Expected map node");
+    }
+
+    expect(map.entries).toHaveLength(1);
+    const entry = map.entries[0];
+    expect(entry).toBeDefined();
+    if (!entry) {
+      throw new Error("Expected map entry");
+    }
+    expect(entry.key?.kind).toBe(NodeKind.Keyword);
+    expect(entry.value?.kind).toBe(NodeKind.Number);
+  });
+
+  test("parses atom literals with correct values", async () => {
+    const source = String.raw`42 "hi" \newline :ns/foo ::auto true false nil`;
+    const result = await parseSource(source);
+
+    expect(result.ok).toBeTrue();
+    expect(result.diagnostics).toHaveLength(0);
+
+    const [num, str, charNode, keyword, autoKeyword, boolTrue, boolFalse, nil] =
+      result.program.body;
+
+    expect(num?.kind).toBe(NodeKind.Number);
+    if (num?.kind !== NodeKind.Number) {
+      throw new Error("Expected number node");
+    }
+    expect(num.value).toBe(42);
+    expect(num.lexeme).toBe("42");
+
+    expect(str?.kind).toBe(NodeKind.String);
+    if (str?.kind !== NodeKind.String) {
+      throw new Error("Expected string node");
+    }
+    expect(str.value).toBe("hi");
+
+    expect(charNode?.kind).toBe(NodeKind.Character);
+    if (charNode?.kind !== NodeKind.Character) {
+      throw new Error("Expected character node");
+    }
+    expect(charNode.value).toBe("\n");
+
+    expect(keyword?.kind).toBe(NodeKind.Keyword);
+    if (keyword?.kind !== NodeKind.Keyword) {
+      throw new Error("Expected keyword node");
+    }
+    expect(keyword.value).toBe("ns/foo");
+    expect(keyword.lexeme).toBe(":ns/foo");
+
+    expect(autoKeyword?.kind).toBe(NodeKind.Keyword);
+    if (autoKeyword?.kind !== NodeKind.Keyword) {
+      throw new Error("Expected auto keyword node");
+    }
+    expect(autoKeyword.value).toBe("auto");
+    expect(autoKeyword.lexeme).toBe("::auto");
+
+    expect(boolTrue?.kind).toBe(NodeKind.Boolean);
+    expect(boolFalse?.kind).toBe(NodeKind.Boolean);
+    if (
+      boolTrue?.kind !== NodeKind.Boolean ||
+      boolFalse?.kind !== NodeKind.Boolean
+    ) {
+      throw new Error("Expected boolean nodes");
+    }
+    expect(boolTrue.value).toBeTrue();
+    expect(boolFalse.value).toBeFalse();
+
+    expect(nil?.kind).toBe(NodeKind.Nil);
+    if (nil?.kind !== NodeKind.Nil) {
+      throw new Error("Expected nil node");
+    }
+    expect(nil.value).toBeNull();
+  });
+
+  test("handles reader macros, sets, and dispatch", async () => {
+    const source = "'(println ~x ~@xs #{:a :b} #(+ 1 @foo))";
+    const result = await parseSource(source);
+
+    expect(result.ok).toBeTrue();
+
+    const quote = result.program.body[0];
+    expect(quote?.kind).toBe(NodeKind.Quote);
+    if (quote?.kind !== NodeKind.Quote || !quote.target) {
+      throw new Error("Expected quote node");
+    }
+
+    const quotedList = quote.target;
+    if (quotedList.kind !== NodeKind.List) {
+      throw new Error("Expected quoted list");
+    }
+
+    expect(quotedList.elements.length).toBeGreaterThan(3);
+    const unquoteNode = quotedList.elements[1];
+    const splicingNode = quotedList.elements[2];
+    const setNode = quotedList.elements[3];
+    const dispatchNode = quotedList.elements[4];
+
+    expect(unquoteNode?.kind).toBe(NodeKind.Unquote);
+    expect(splicingNode?.kind).toBe(NodeKind.UnquoteSplicing);
+    expect(setNode?.kind).toBe(NodeKind.Set);
+    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
+
+    if (setNode?.kind === NodeKind.Set) {
+      expect(setNode.elements.map((node) => node.kind)).toEqual([
+        NodeKind.Keyword,
+        NodeKind.Keyword,
+      ]);
+    }
+
+    if (dispatchNode?.kind === NodeKind.Dispatch && dispatchNode.target) {
+      const innerList = dispatchNode.target;
+      expect(innerList.kind).toBe(NodeKind.List);
+      if (innerList.kind !== NodeKind.List) {
+        throw new Error("Expected dispatch target list");
+      }
+      expect(innerList.elements[2]?.kind).toBe(NodeKind.Deref);
+    }
+  });
+
+  test("reports uneven map entries", async () => {
+    const result = await parseSource("{:a 1 :b}");
+
+    expect(result.ok).toBeFalse();
+    expect(result.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_MAP_ODD_ENTRIES"
+    );
+
+    const mapNode = result.program.body[0];
+    expect(mapNode?.kind).toBe(NodeKind.Map);
+    if (mapNode?.kind !== NodeKind.Map) {
+      throw new Error("Expected map node");
+    }
+
+    expect(mapNode.entries).toHaveLength(2);
+    const [, dangling] = mapNode.entries;
+    expect(dangling?.value).toBeNull();
+  });
+
+  test("reports unexpected closing tokens", async () => {
+    const result = await parseSource(")");
+
+    expect(result.ok).toBeFalse();
+    expect(result.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_UNEXPECTED_CLOSING"
+    );
+  });
+
+  test("reports unterminated sequences", async () => {
+    const list = await parseSource("(foo");
+    const vector = await parseSource("[1 2");
+    const map = await parseSource("{:a 1");
+    const set = await parseSource("#{:a");
+
+    expect(list.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_LIST_UNTERMINATED"
+    );
+    expect(vector.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_VECTOR_UNTERMINATED"
+    );
+    expect(map.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_MAP_UNTERMINATED"
+    );
+    expect(set.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_SET_UNTERMINATED"
+    );
+  });
+
+  test("reader macros require targets", async () => {
+    const cases: Array<{ source: string; kind: ReaderMacroKind }> = [
+      { source: "'", kind: NodeKind.Quote },
+      { source: "`", kind: NodeKind.SyntaxQuote },
+      { source: "~", kind: NodeKind.Unquote },
+      { source: "~@", kind: NodeKind.UnquoteSplicing },
+      { source: "@", kind: NodeKind.Deref },
+    ];
+
+    for (const testCase of cases) {
+      const result = await parseSource(testCase.source);
+      expect(result.diagnostics.map((d) => d.code)).toContain(
+        "PARSE_MACRO_MISSING_TARGET"
+      );
+      const node = result.program.body[0];
+      expect(node?.kind).toBe(testCase.kind);
+      if (
+        node?.kind === NodeKind.Quote ||
+        node?.kind === NodeKind.SyntaxQuote ||
+        node?.kind === NodeKind.Unquote ||
+        node?.kind === NodeKind.UnquoteSplicing ||
+        node?.kind === NodeKind.Deref
+      ) {
+        expect(node.target).toBeNull();
+      }
+    }
+  });
+
+  test("reader macros missing targets inside sequences keep delimiters", async () => {
+    const result = await parseSource("(foo ')");
+
+    expect(result.ok).toBeFalse();
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      "PARSE_MACRO_MISSING_TARGET",
+    ]);
+
+    const listNode = result.program.body[0];
+    expect(listNode?.kind).toBe(NodeKind.List);
+    if (listNode?.kind !== NodeKind.List) {
+      throw new Error("Expected list node");
+    }
+    expect(listNode.elements).toHaveLength(2);
+
+    const orphanQuote = listNode.elements[1];
+    expect(orphanQuote?.kind).toBe(NodeKind.Quote);
+    if (orphanQuote?.kind !== NodeKind.Quote) {
+      throw new Error("Expected quote node");
+    }
+    expect(orphanQuote.target).toBeNull();
+  });
+
+  test("dispatch macros require targets", async () => {
+    const result = await parseSource("#");
+
+    expect(result.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_DISPATCH_MISSING_TARGET"
+    );
+
+    const dispatchNode = result.program.body[0];
+    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
+    if (dispatchNode?.kind === NodeKind.Dispatch) {
+      expect(dispatchNode.target).toBeNull();
+    }
+  });
+
+  test("dispatch macros missing targets inside sequences keep delimiters", async () => {
+    const result = await parseSource("(#)");
+
+    expect(result.ok).toBeFalse();
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      "PARSE_DISPATCH_MISSING_TARGET",
+    ]);
+
+    const listNode = result.program.body[0];
+    expect(listNode?.kind).toBe(NodeKind.List);
+    if (listNode?.kind !== NodeKind.List) {
+      throw new Error("Expected list node");
+    }
+    expect(listNode.elements).toHaveLength(1);
+
+    const dispatchNode = listNode.elements[0];
+    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
+    if (dispatchNode?.kind !== NodeKind.Dispatch) {
+      throw new Error("Expected dispatch node");
+    }
+    expect(dispatchNode.target).toBeNull();
+  });
+
+  test("set literal spans include the dispatch prefix", async () => {
+    const result = await parseSource("#{:a :b}");
+
+    const setNode = result.program.body[0];
+    expect(setNode?.kind).toBe(NodeKind.Set);
+    if (setNode?.kind !== NodeKind.Set) {
+      throw new Error("Expected set node");
+    }
+
+    expect(setNode.span.start.offset).toBe(0);
+    expect(setNode.span.start.column).toBe(0);
+    expect(setNode.span.end.offset).toBeGreaterThan(setNode.span.start.offset);
+  });
+
+  test("bubble up lexer diagnostics", async () => {
+    const result = await parseSource('(println "oops');
+
+    expect(result.ok).toBeFalse();
+    expect(result.diagnostics.map((diag) => diag.code)).toContain(
+      "LEX_STRING_UNTERMINATED"
+    );
+  });
+
+  test("annotates lexical scope identifiers", async () => {
+    const result = await parseSource("(let [x 1] (fn [y] y) x)");
+
+    expect(result.ok).toBeTrue();
+    const program = result.program;
+    expect(program.scopeId).toBeDefined();
+
+    const rootScope = program.scopeId;
+    const letNode = program.body[0];
+    expect(letNode?.scopeId).toBeDefined();
+    if (!letNode || letNode.kind !== NodeKind.List) {
+      throw new Error("Expected let list");
+    }
+
+    const bindingsVector = letNode.elements[1];
+    if (!bindingsVector || bindingsVector.kind !== NodeKind.Vector) {
+      throw new Error("Expected let bindings vector");
+    }
+
+    const bindingTarget = bindingsVector.elements[0];
+    const bindingValue = bindingsVector.elements[1];
+    if (
+      !bindingTarget ||
+      !bindingValue ||
+      bindingTarget.kind !== NodeKind.Symbol ||
+      bindingValue.kind !== NodeKind.Number
+    ) {
+      throw new Error("Expected binding pair");
+    }
+
+    expect(bindingTarget.scopeId).toBeDefined();
+    expect(bindingTarget.scopeId).toBe(bindingValue.scopeId);
+    expect(bindingTarget.scopeId).not.toBe(rootScope);
+
+    const fnNode = letNode.elements[2];
+    if (!fnNode || fnNode.kind !== NodeKind.List) {
+      throw new Error("Expected fn form");
+    }
+
+    const fnScope = fnNode.scopeId;
+    expect(fnScope).toBe(bindingTarget.scopeId);
+
+    const fnParams = fnNode.elements[1];
+    if (!fnParams || fnParams.kind !== NodeKind.Vector) {
+      throw new Error("Expected fn params vector");
+    }
+    expect(fnParams.scopeId).toBe(fnNode.scopeId);
+
+    const parameterSymbol = fnParams.elements[0];
+    if (!parameterSymbol || parameterSymbol.kind !== NodeKind.Symbol) {
+      throw new Error("Expected parameter symbol");
+    }
+    expect(parameterSymbol.scopeId).not.toBe(letNode.scopeId);
+
+    const bodySymbol = fnNode.elements[2];
+    if (!bodySymbol || bodySymbol.kind !== NodeKind.Symbol) {
+      throw new Error("Expected fn body symbol");
+    }
+    expect(bodySymbol.scopeId).toBe(parameterSymbol.scopeId);
+
+    const trailingSymbol = letNode.elements[3];
+    if (!trailingSymbol || trailingSymbol.kind !== NodeKind.Symbol) {
+      throw new Error("Expected trailing symbol");
+    }
+    expect(trailingSymbol.scopeId).toBe(bindingTarget.scopeId);
+  });
+
+  test("parses namespace imports as dedicated nodes", async () => {
+    const result = await parseSource(`
+      (require math "./math.lang")
+      (external fs "node:fs")
+    `);
+
+    expect(result.ok).toBeTrue();
+    const [requireNode, externalNode] = result.program.body;
+
+    expect(requireNode?.kind).toBe(NodeKind.NamespaceImport);
+    if (!requireNode || requireNode.kind !== NodeKind.NamespaceImport) {
+      throw new Error("Expected namespace import node");
+    }
+    expect(requireNode.importKind).toBe("require");
+    expect(requireNode.alias?.kind).toBe(NodeKind.Symbol);
+    expect(requireNode.source?.kind).toBe(NodeKind.String);
+    expect(requireNode.elements).toHaveLength(3);
+
+    expect(externalNode?.kind).toBe(NodeKind.NamespaceImport);
+    if (!externalNode || externalNode.kind !== NodeKind.NamespaceImport) {
+      throw new Error("Expected namespace import node");
+    }
+    expect(externalNode.importKind).toBe("external");
+    expect(externalNode.alias?.kind).toBe(NodeKind.Symbol);
+    expect(externalNode.source?.kind).toBe(NodeKind.String);
+  });
+});
