@@ -403,4 +403,47 @@ describe("parseSource", () => {
     expect(externalNode.alias?.kind).toBe(NodeKind.Symbol);
     expect(externalNode.source?.kind).toBe(NodeKind.String);
   });
+
+  test("parses function definitions with Clojure-style names", async () => {
+    const result = await parseSource(`
+      (def is-valid? (fn [x] (> x 0)))
+      (def set-value! (fn [v] v))
+      (def splat* (fn [] 42))
+      (def foo-bar? (fn [] true))
+    `);
+
+    expect(result.ok).toBeTrue();
+    expect(result.diagnostics).toHaveLength(0);
+    expect(result.program.body).toHaveLength(4);
+
+    const defs = result.program.body;
+    if (!defs[0] || defs[0].kind !== NodeKind.List) {
+      throw new Error("Expected list node");
+    }
+
+    const [defSym1, nameSym1] = defs[0].elements;
+    expect(defSym1?.kind).toBe(NodeKind.Symbol);
+    expect(nameSym1?.kind).toBe(NodeKind.Symbol);
+    if (nameSym1?.kind === NodeKind.Symbol) {
+      expect(nameSym1.value).toBe("is-valid?");
+    }
+
+    const [defSym2, nameSym2] = (defs[1] as any).elements;
+    expect(nameSym2?.kind).toBe(NodeKind.Symbol);
+    if (nameSym2?.kind === NodeKind.Symbol) {
+      expect(nameSym2.value).toBe("set-value!");
+    }
+
+    const [defSym3, nameSym3] = (defs[2] as any).elements;
+    expect(nameSym3?.kind).toBe(NodeKind.Symbol);
+    if (nameSym3?.kind === NodeKind.Symbol) {
+      expect(nameSym3.value).toBe("splat*");
+    }
+
+    const [defSym4, nameSym4] = (defs[3] as any).elements;
+    expect(nameSym4?.kind).toBe(NodeKind.Symbol);
+    if (nameSym4?.kind === NodeKind.Symbol) {
+      expect(nameSym4.value).toBe("foo-bar?");
+    }
+  });
 });

@@ -10,7 +10,8 @@
   "dependencies": {
     "@vibe/syntax": "workspace:*",
     "@vibe/semantics": "workspace:*",
-    "@vibe/runtime": "workspace:*"
+    "@vibe/runtime": "workspace:*",
+    "@vibe/parser": "workspace:*"
   },
   "devDependencies": {
     "@vibe/parser": "workspace:*",

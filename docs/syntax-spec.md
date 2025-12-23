@@ -38,7 +38,7 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 | Numbers | `42` `-3.14` `6.022e23` | Optional sign, decimal part, exponent |
 | Strings | `"hello"` | Double-quoted with escapes |
 | Characters | `\a` `\newline` `\u03bb` | Backslash-prefixed literals |
-| Symbols | `foo` `user/name` `*main*` | Cannot start with digits or delimiters |
+| Symbols | `foo` `user/name` `*main*` `foo?` `bar!` `baz*` | Cannot start with digits or delimiters; may end with `?`, `!`, `*`, `+`, `-`, `=`, `<`, `>`, `/` (Clojure-style naming) |
 | Keywords | `:ok` `::auto` | Optional double-colon auto-namespace |
 | Boolean/Nil | `true` `false` `nil` | Case-insensitive |
 

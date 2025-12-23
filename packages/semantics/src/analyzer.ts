@@ -118,6 +118,7 @@ export interface SemanticNodeRecord {
 interface MacroDefinition {
   readonly symbolId: SymbolId;
   readonly params: readonly string[];
+  readonly rest?: string;
   readonly template: ReaderMacroNode<NodeKind.SyntaxQuote>;
 }
 
@@ -293,13 +294,23 @@ export class SemanticAnalyzer {
     }
 
     const args = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
-    if (args.length !== definition.params.length) {
+    const minArity = definition.params.length;
+    const isVariadic = definition.rest !== undefined;
+
+    if (!isVariadic && args.length !== minArity) {
       this.report(
-        `Macro ${head.value} expects ${definition.params.length} argument(s) but received ${args.length}`,
+        `Macro ${head.value} expects ${minArity} argument(s) but received ${args.length}`,
+        node.span,
+        "SEM_MACRO_ARITY_MISMATCH"
+      );
+    } else if (isVariadic && args.length < minArity) {
+      this.report(
+        `Macro ${head.value} expects at least ${minArity} argument(s) but received ${args.length}`,
         node.span,
         "SEM_MACRO_ARITY_MISMATCH"
       );
     }
+
     const env = new Map<string, ExpressionNode>();
     definition.params.forEach((param, index) => {
       const arg = args[index];
@@ -314,14 +325,125 @@ export class SemanticAnalyzer {
       env.set(param, arg);
     });
 
+    // Handle rest parameter by collecting remaining args into a vector
+    if (definition.rest) {
+      const restArgs = args.slice(definition.params.length);
+      const restVector: VectorNode = {
+        kind: NodeKind.Vector,
+        span: node.span,
+        elements: restArgs,
+      };
+      env.set(definition.rest, restVector);
+    }
+
     this.macroExpansionStack.push(binding.id);
-    const context: MacroExpansionContext = {
+    const expanded = this.expandMacroOnce(definition.template, scopeId, {
       env,
       callSpan: node.span,
-    };
-    this.visitSyntaxQuote(definition.template, scopeId, context);
+    });
+
+    // Recursively expand if the result is also a macro call
+    // Keep the ID on the stack to detect direct recursion
+    if (expanded) {
+      this.fullyExpandAndVisit(expanded, scopeId, 0);
+    }
+
     this.macroExpansionStack.pop();
     return true;
+  }
+
+  private expandMacroOnce(
+    template: ReaderMacroNode<NodeKind.SyntaxQuote>,
+    scopeId: ScopeId,
+    context: MacroExpansionContext
+  ): ExpressionNode | null {
+    if (!template.target) {
+      return null;
+    }
+    return this.instantiateTemplate(template.target, context);
+  }
+
+  private fullyExpandAndVisit(
+    node: ExpressionNode,
+    scopeId: ScopeId,
+    depth: number,
+    maxDepth: number = 100
+  ): void {
+    if (depth >= maxDepth) {
+      this.report(
+        `Macro expansion depth limit (${maxDepth}) exceeded`,
+        node.span,
+        "SEM_MACRO_MAX_DEPTH"
+      );
+      this.visit(node, scopeId);
+      return;
+    }
+
+    // Check if this is a macro call that needs expansion
+    if (node.kind === NodeKind.List) {
+      const head = node.elements[0];
+      if (head && head.kind === NodeKind.Symbol) {
+        const binding = this.resolveSymbol(head.value, scopeId);
+        if (binding && binding.kind === "macro") {
+          // This is a macro call - expand it with increased depth
+          const definition = this.macros.get(binding.id);
+          if (definition) {
+            this.recordNode(node, scopeId);
+            this.recordSymbolUsage(head, scopeId, "usage");
+
+            if (this.macroExpansionStack.includes(binding.id)) {
+              this.report(
+                `Recursive macro expansion detected for ${head.value}`,
+                node.span,
+                "SEM_MACRO_RECURSION"
+              );
+              return;
+            }
+
+            // Build environment and expand
+            const args = node.elements
+              .slice(1)
+              .filter(Boolean) as ExpressionNode[];
+            const env = new Map<string, ExpressionNode>();
+            definition.params.forEach((param, index) => {
+              if (args[index]) {
+                env.set(param, args[index]!);
+              }
+            });
+
+            if (definition.rest) {
+              const restArgs = args.slice(definition.params.length);
+              const restVector: VectorNode = {
+                kind: NodeKind.Vector,
+                span: node.span,
+                elements: restArgs,
+              };
+              env.set(definition.rest, restVector);
+            }
+
+            this.macroExpansionStack.push(binding.id);
+            const expanded = this.expandMacroOnce(
+              definition.template,
+              scopeId,
+              {
+                env,
+                callSpan: node.span,
+              }
+            );
+            this.macroExpansionStack.pop();
+
+            if (expanded) {
+              // Recursively expand with increased depth
+              this.fullyExpandAndVisit(expanded, scopeId, depth + 1, maxDepth);
+            }
+            return;
+          }
+        }
+      }
+    }
+
+    // Not a macro call, visit normally
+    this.visit(node, scopeId);
   }
 
   private handleList(node: ListNode, scopeId: ScopeId): void {
@@ -459,7 +581,11 @@ export class SemanticAnalyzer {
 
     this.recordNode(paramsNode, scopeId);
     const params: string[] = [];
-    for (const param of paramsNode.elements) {
+    let rest: string | undefined = undefined;
+    let sawAmpersand = false;
+
+    for (let i = 0; i < paramsNode.elements.length; i++) {
+      const param = paramsNode.elements[i];
       if (!param) {
         continue;
       }
@@ -472,7 +598,41 @@ export class SemanticAnalyzer {
         );
         continue;
       }
-      if (params.includes(param.value)) {
+
+      if (param.value === "&") {
+        if (sawAmpersand) {
+          this.report(
+            "Only one & rest parameter allowed",
+            param.span,
+            "SEM_MACRO_DUPLICATE_REST"
+          );
+          continue;
+        }
+        sawAmpersand = true;
+        const nextParam = paramsNode.elements[i + 1];
+        if (!nextParam || nextParam.kind !== NodeKind.Symbol) {
+          this.report(
+            "& must be followed by a symbol",
+            param.span,
+            "SEM_MACRO_REST_REQUIRES_SYMBOL"
+          );
+        } else {
+          rest = nextParam.value;
+          i++; // Skip the next parameter since we just consumed it
+        }
+        continue;
+      }
+
+      if (sawAmpersand) {
+        this.report(
+          "No parameters allowed after & rest parameter",
+          param.span,
+          "SEM_MACRO_PARAMS_AFTER_REST"
+        );
+        continue;
+      }
+
+      if (params.includes(param.value) || param.value === rest) {
         this.report(
           `Duplicate macro parameter ${param.value}`,
           param.span,
@@ -514,6 +674,7 @@ export class SemanticAnalyzer {
       this.macros.set(macroSymbol.id, {
         symbolId: macroSymbol.id,
         params,
+        rest,
         template: template as ReaderMacroNode<NodeKind.SyntaxQuote>,
       });
     }
@@ -616,10 +777,47 @@ export class SemanticAnalyzer {
       );
     } else {
       this.recordNode(paramsNode, scopeId);
-      for (const param of paramsNode.elements) {
+      let sawAmpersand = false;
+
+      for (let i = 0; i < paramsNode.elements.length; i++) {
+        const param = paramsNode.elements[i];
         if (!param) {
           continue;
         }
+
+        if (param.kind === NodeKind.Symbol && param.value === "&") {
+          if (sawAmpersand) {
+            this.report(
+              "Only one & rest parameter allowed",
+              param.span,
+              "SEM_FN_DUPLICATE_REST"
+            );
+            continue;
+          }
+          sawAmpersand = true;
+          const nextParam = paramsNode.elements[i + 1];
+          if (!nextParam || nextParam.kind !== NodeKind.Symbol) {
+            this.report(
+              "& must be followed by a symbol",
+              param.span,
+              "SEM_FN_REST_REQUIRES_SYMBOL"
+            );
+          } else {
+            this.defineSymbol(nextParam, fnScopeId, "parameter", "parameter");
+            i++; // Skip the next parameter since we just consumed it
+          }
+          continue;
+        }
+
+        if (sawAmpersand) {
+          this.report(
+            "No parameters allowed after & rest parameter",
+            param.span,
+            "SEM_FN_PARAMS_AFTER_REST"
+          );
+          continue;
+        }
+
         if (param.kind === NodeKind.Symbol) {
           this.defineSymbol(param, fnScopeId, "parameter", "parameter");
         } else {
@@ -861,10 +1059,12 @@ export class SemanticAnalyzer {
     if (!node.target) {
       return;
     }
+    // When not in a macro expansion context, just visit the target normally
     if (!context) {
       this.visit(node.target, scopeId);
       return;
     }
+    // This path is no longer used - macro expansion now goes through expandMacroOnce
     const expanded = this.instantiateTemplate(node.target, context);
     if (expanded) {
       this.visit(expanded, scopeId);
@@ -1053,6 +1253,7 @@ export class SemanticAnalyzer {
     target: ExpressionNode,
     context: MacroExpansionContext
   ): ExpressionNode | null {
+    // Direct parameter substitution
     if (target.kind === NodeKind.Symbol) {
       const value = context.env.get(target.value);
       if (!value) {
@@ -1065,25 +1266,260 @@ export class SemanticAnalyzer {
       }
       return this.cloneExpression(value);
     }
+
+    // Compile-time function evaluation
     if (target.kind === NodeKind.List) {
       const head = target.elements[0];
-      if (head && head.kind === NodeKind.Symbol && head.value === "gensym") {
-        const hintNode = target.elements[1];
-        let hint: string | null = null;
-        if (hintNode && hintNode.kind === NodeKind.String) {
-          hint = hintNode.value;
-        } else if (hintNode && hintNode.kind === NodeKind.Symbol) {
-          hint = hintNode.value;
-        }
-        return this.createGensymSymbol(target.span, hint);
+      if (!head || head.kind !== NodeKind.Symbol) {
+        this.report(
+          "Unquote expression must be a symbol or list with symbol head",
+          target.span,
+          "SEM_MACRO_UNQUOTE_UNSUPPORTED"
+        );
+        return null;
       }
+
+      return this.evaluateCompileTimeCall(target, context);
     }
+
     this.report(
       "Unsupported unquote expression inside macro body",
       target.span,
       "SEM_MACRO_UNQUOTE_UNSUPPORTED"
     );
     return null;
+  }
+
+  private evaluateCompileTimeCall(
+    node: ListNode,
+    context: MacroExpansionContext
+  ): ExpressionNode | null {
+    const head = node.elements[0];
+    if (!head || head.kind !== NodeKind.Symbol) {
+      return null;
+    }
+
+    const args = node.elements.slice(1);
+
+    switch (head.value) {
+      case "gensym": {
+        const hintNode = args[0];
+        let hint: string | null = null;
+        if (hintNode && hintNode.kind === NodeKind.String) {
+          hint = hintNode.value;
+        } else if (hintNode && hintNode.kind === NodeKind.Symbol) {
+          hint = hintNode.value;
+        }
+        return this.createGensymSymbol(node.span, hint);
+      }
+
+      case "first": {
+        const seqArg = args[0];
+        if (!seqArg) {
+          this.report(
+            "first requires an argument",
+            node.span,
+            "SEM_MACRO_EVAL_ERROR"
+          );
+          return null;
+        }
+        const seq = this.evaluateUnquoteTarget(seqArg, context);
+        if (!seq) return null;
+
+        if (
+          seq.kind === NodeKind.List ||
+          seq.kind === NodeKind.Vector ||
+          seq.kind === NodeKind.Set
+        ) {
+          return seq.elements[0] ?? this.createNilLiteral(node.span);
+        }
+        return this.createNilLiteral(node.span);
+      }
+
+      case "rest": {
+        const seqArg = args[0];
+        if (!seqArg) {
+          this.report(
+            "rest requires an argument",
+            node.span,
+            "SEM_MACRO_EVAL_ERROR"
+          );
+          return null;
+        }
+        const seq = this.evaluateUnquoteTarget(seqArg, context);
+        if (!seq) return null;
+
+        if (
+          seq.kind === NodeKind.List ||
+          seq.kind === NodeKind.Vector ||
+          seq.kind === NodeKind.Set
+        ) {
+          return {
+            kind: seq.kind,
+            span: node.span,
+            elements: seq.elements.slice(1),
+          };
+        }
+        // Non-sequence returns empty vector
+        return { kind: NodeKind.Vector, span: node.span, elements: [] };
+      }
+
+      case "count": {
+        const arg = args[0];
+        if (!arg) {
+          this.report(
+            "count requires an argument",
+            node.span,
+            "SEM_MACRO_EVAL_ERROR"
+          );
+          return null;
+        }
+        const value = this.evaluateUnquoteTarget(arg, context);
+        if (!value) return null;
+
+        let count = 0;
+        if (
+          value.kind === NodeKind.List ||
+          value.kind === NodeKind.Vector ||
+          value.kind === NodeKind.Set
+        ) {
+          count = value.elements.length;
+        }
+        return this.createNumberLiteral(node.span, count);
+      }
+
+      case "eq*": {
+        const [leftArg, rightArg] = args;
+        if (!leftArg || !rightArg) {
+          this.report(
+            "eq* requires two arguments",
+            node.span,
+            "SEM_MACRO_EVAL_ERROR"
+          );
+          return null;
+        }
+        const left = this.evaluateUnquoteTarget(leftArg, context);
+        const right = this.evaluateUnquoteTarget(rightArg, context);
+        if (!left || !right) return null;
+
+        // Simple equality check for compile-time values
+        let isEqual = false;
+        if (left.kind === right.kind) {
+          if (left.kind === NodeKind.Number && right.kind === NodeKind.Number) {
+            isEqual = left.value === right.value;
+          } else if (
+            left.kind === NodeKind.String &&
+            right.kind === NodeKind.String
+          ) {
+            isEqual = left.value === right.value;
+          } else if (
+            left.kind === NodeKind.Boolean &&
+            right.kind === NodeKind.Boolean
+          ) {
+            isEqual = left.value === right.value;
+          } else if (
+            left.kind === NodeKind.Nil &&
+            right.kind === NodeKind.Nil
+          ) {
+            isEqual = true;
+          } else if (
+            left.kind === NodeKind.Symbol &&
+            right.kind === NodeKind.Symbol
+          ) {
+            isEqual = left.value === right.value;
+          }
+        }
+        return this.createBooleanLiteral(node.span, isEqual);
+      }
+
+      case "cons": {
+        const [itemArg, seqArg] = args;
+        if (!itemArg || !seqArg) {
+          this.report(
+            "cons requires two arguments",
+            node.span,
+            "SEM_MACRO_EVAL_ERROR"
+          );
+          return null;
+        }
+        const item = this.evaluateUnquoteTarget(itemArg, context);
+        const seq = this.evaluateUnquoteTarget(seqArg, context);
+        if (!item || !seq) return null;
+
+        if (
+          seq.kind === NodeKind.List ||
+          seq.kind === NodeKind.Vector ||
+          seq.kind === NodeKind.Set
+        ) {
+          return {
+            kind: seq.kind,
+            span: node.span,
+            elements: [item, ...seq.elements],
+          };
+        }
+        return {
+          kind: NodeKind.List,
+          span: node.span,
+          elements: [item],
+        };
+      }
+
+      case "if": {
+        const [condArg, thenArg, elseArg] = args;
+        if (!condArg || !thenArg) {
+          this.report(
+            "if requires at least condition and then branch",
+            node.span,
+            "SEM_MACRO_EVAL_ERROR"
+          );
+          return null;
+        }
+        const cond = this.evaluateUnquoteTarget(condArg, context);
+        if (!cond) return null;
+
+        const isTruthy = !(
+          cond.kind === NodeKind.Nil ||
+          (cond.kind === NodeKind.Boolean && cond.value === false)
+        );
+
+        if (isTruthy) {
+          return this.evaluateUnquoteTarget(thenArg, context);
+        } else if (elseArg) {
+          return this.evaluateUnquoteTarget(elseArg, context);
+        } else {
+          return this.createNilLiteral(node.span);
+        }
+      }
+
+      default:
+        this.report(
+          `Unknown compile-time function: ${head.value}`,
+          node.span,
+          "SEM_MACRO_UNQUOTE_UNSUPPORTED"
+        );
+        return null;
+    }
+  }
+
+  private createBooleanLiteral(
+    span: SourceSpan,
+    value: boolean
+  ): ExpressionNode {
+    return {
+      kind: NodeKind.Boolean,
+      span,
+      lexeme: value ? "true" : "false",
+      value,
+    };
+  }
+
+  private createNumberLiteral(span: SourceSpan, value: number): ExpressionNode {
+    return {
+      kind: NodeKind.Number,
+      span,
+      lexeme: value.toString(),
+      value,
+    };
   }
 
   private cloneExpression<T extends ExpressionNode>(node: T): T {
@@ -1474,19 +1910,55 @@ export class SemanticAnalyzer {
 }
 
 class AliasAllocator {
-  private readonly used = new Set<string>(["__println", "__result"]);
+  private readonly used = new Set<string>([
+    "__println",
+    "__result",
+    "eq",
+    "count",
+  ]);
+
+  private readonly operatorNames = new Map<string, string>([
+    // Comparison operators
+    ["<=", "lte"],
+    [">=", "gte"],
+    ["<", "lt"],
+    [">", "gt"],
+    ["=", "eq"],
+    // Arithmetic operators
+    ["+", "plus"],
+    ["-", "minus"],
+    ["*", "mul"],
+    ["/", "div"],
+    // Logical operators
+    ["!", "not"],
+    ["?", "pred"],
+    // Special
+    ["~", "unquote"],
+    ["@", "deref"],
+  ]);
 
   allocate(name: string, symbolId: SymbolId, preferRaw: boolean): string {
-    const preferred = preferRaw ? name : `${name}__${symbolId}`;
-    const sanitized = this.sanitize(preferred);
-    return this.reserve(this.ensureIdentifier(sanitized));
+    const sanitized = this.sanitize(name);
+    // If we're not preferring raw, append the symbol ID to the sanitized name
+    const preferred = preferRaw ? sanitized : `${sanitized}__${symbolId}`;
+    return this.reserve(this.ensureIdentifier(preferred));
   }
 
   private sanitize(value: string): string {
+    // If the entire value is a known operator, use its name
+    const operatorName = this.operatorNames.get(value);
+    if (operatorName) {
+      return operatorName;
+    }
+
+    // For compound names, preserve alphanumerics and replace special chars with underscores
+    // Only convert whole operator tokens when they appear as isolated parts
     let base = value.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^([0-9])/, "_$1");
-    if (base.length === 0) {
+
+    if (base.length === 0 || base === "_") {
       base = "_ident";
     }
+
     return base;
   }
 

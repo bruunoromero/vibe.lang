@@ -119,6 +119,8 @@ export const BUILTIN_SYMBOLS = [
   "if",
   "quote",
   "println",
+  "eq*",
+  "count",
 ] as const;
 
 export interface AstNode<K extends NodeKind = NodeKind> {

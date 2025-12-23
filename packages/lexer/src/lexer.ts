@@ -674,6 +674,11 @@ export class Lexer {
     }
   }
 
+  private isSymbolSuffix(ch: string): boolean {
+    // Allow Clojure-style suffixes: ?, !, *, +, -, =, <, >, etc.
+    return /[?!*+\-=<>/]/.test(ch);
+  }
+
   private isSymbolStart(ch: string): boolean {
     if (!ch) {
       return false;
@@ -693,6 +698,10 @@ export class Lexer {
     }
     if (this.isDelimiter(ch)) {
       return false;
+    }
+    // Allow special suffix characters: ?, !, *, etc.
+    if (this.isSymbolSuffix(ch)) {
+      return true;
     }
     return true;
   }

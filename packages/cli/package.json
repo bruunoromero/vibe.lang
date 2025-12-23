@@ -8,6 +8,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@vibe/syntax": "workspace:*",
     "@vibe/lexer": "workspace:*",
     "@vibe/parser": "workspace:*",
     "@vibe/semantics": "workspace:*",

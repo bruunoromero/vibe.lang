@@ -652,4 +652,78 @@ describe("analyzeProgram", () => {
       expectDiagnostic(failure, "SEM_UNRESOLVED_NAMESPACE_MEMBER");
     });
   });
+
+  describe("operator identifier sanitization", () => {
+    test("generates distinct readable names for comparison operators", async () => {
+      const analysis = await analyzeSource(`
+        (def <= (fn [a b] a))
+        (def >= (fn [a b] b))
+        (def < (fn [a b] a))
+        (def > (fn [a b] b))
+      `);
+
+      expect(analysis.ok).toBeTrue();
+      const symbols = analysis.graph.symbols;
+
+      // Find the aliases for each operator
+      const lte = symbols.find((s) => s.name === "<=");
+      const gte = symbols.find((s) => s.name === ">=");
+      const lt = symbols.find((s) => s.name === "<");
+      const gt = symbols.find((s) => s.name === ">");
+
+      // Aliases include the operator name and symbol ID
+      expect(lte?.alias).toContain("lte");
+      expect(gte?.alias).toContain("gte");
+      expect(lt?.alias).toContain("lt");
+      expect(gt?.alias).toContain("gt");
+
+      // Verify they're all distinct
+      const aliases = [lte?.alias, gte?.alias, lt?.alias, gt?.alias];
+      const uniqueAliases = new Set(aliases);
+      expect(uniqueAliases.size).toBe(4);
+    });
+
+    test("generates readable names for arithmetic operators", async () => {
+      const analysis = await analyzeSource(`
+        (def + (fn [a b] a))
+        (def - (fn [a b] b))
+        (def * (fn [a b] a))
+        (def / (fn [a b] b))
+      `);
+
+      expect(analysis.ok).toBeTrue();
+      const symbols = analysis.graph.symbols;
+
+      const plus = symbols.find((s) => s.name === "+");
+      const minus = symbols.find((s) => s.name === "-");
+      const mul = symbols.find((s) => s.name === "*");
+      const div = symbols.find((s) => s.name === "/");
+
+      // Single operators get readable names as base identifier
+      expect(plus?.alias).toContain("plus");
+      expect(minus?.alias).toContain("minus");
+      expect(mul?.alias).toContain("mul");
+      expect(div?.alias).toContain("div");
+    });
+
+    test("handles compound names with special characters", async () => {
+      const analysis = await analyzeSource(`
+        (def is-valid? (fn [x] true))
+        (def set-value! (fn [v] v))
+        (def map* (fn [f c] c))
+      `);
+
+      expect(analysis.ok).toBeTrue();
+      const symbols = analysis.graph.symbols;
+
+      const isValid = symbols.find((s) => s.name === "is-valid?");
+      const setValue = symbols.find((s) => s.name === "set-value!");
+      const mapVar = symbols.find((s) => s.name === "map*");
+
+      // Compound names get sanitized with underscores
+      expect(isValid?.alias).toContain("is_valid_");
+      expect(setValue?.alias).toContain("set_value_");
+      expect(mapVar?.alias).toContain("map_");
+    });
+  });
 });

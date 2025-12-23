@@ -1,5 +1,9 @@
 # @vibe/parser Changelog
 
+## 2025-12-22
+
+- **Feature: Clojure-style identifier parsing** — Added test coverage for symbols with special-character suffixes (`?`, `!`, `*`, etc.). Parser now correctly handles function definitions and usage sites with Clojure-style names like `is-valid?` and `set-value!`.
+
 ## 2025-12-21
 
 - Promoted `(require ...)`/`(external ...)` forms into dedicated `NamespaceImport` nodes during parsing so downstream stages can access alias + specifier metadata without re-pattern-matching raw lists.

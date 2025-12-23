@@ -326,7 +326,9 @@ class ModuleEmitter {
   }
 
   private emitImports(): void {
-    this.addLine("import { println as __println } from '@vibe/runtime';");
+    this.addLine(
+      "import { println as __println, eq_STAR as eq_STAR, count } from '@vibe/runtime';"
+    );
     for (const spec of this.namespaceImports) {
       const importLiteral = JSON.stringify(spec.importPath);
       this.addLine(
@@ -529,15 +531,41 @@ class ModuleEmitter {
     if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
       throw new Error("fn requires a vector of parameter symbols");
     }
-    const params = paramsNode.elements
-      .filter(
-        (param): param is SymbolNode =>
-          Boolean(param) && param.kind === NodeKind.Symbol
-      )
-      .map((param) => this.resolveBindingIdentifier(param));
+
+    const params: string[] = [];
+    let restParam: string | undefined = undefined;
+    let sawAmpersand = false;
+
+    for (let i = 0; i < paramsNode.elements.length; i++) {
+      const param = paramsNode.elements[i];
+      if (!param || param.kind !== NodeKind.Symbol) {
+        continue;
+      }
+
+      if (param.value === "&") {
+        sawAmpersand = true;
+        const nextParam = paramsNode.elements[i + 1];
+        if (nextParam && nextParam.kind === NodeKind.Symbol) {
+          restParam = this.resolveBindingIdentifier(nextParam);
+          i++; // Skip the next parameter
+        }
+        continue;
+      }
+
+      if (!sawAmpersand) {
+        params.push(this.resolveBindingIdentifier(param));
+      }
+    }
+
+    const paramList = restParam
+      ? [...params, `...${restParam}`].join(", ")
+      : params.join(", ");
+
     const body = node.elements.slice(2).filter(Boolean) as ExpressionNode[];
     const bodyBlock = this.emitFunctionBody(body);
-    return `(${params.join(", ")}) => {\n${bodyBlock}\n}`;
+    return `(${paramList}) => {
+${bodyBlock}
+}`;
   }
 
   private emitGet(node: ListNode): string {

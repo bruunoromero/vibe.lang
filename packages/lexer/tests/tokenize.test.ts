@@ -243,4 +243,46 @@ describe("tokenize", () => {
       result.tokens.find((token) => token.kind === TokenType.Number)?.value
     ).toBe(123);
   });
+
+  test("supports Clojure-style function names with special suffixes", async () => {
+    const result = await collectTokens(
+      "(foo? bar! baz* qux+ quux- foo= bar< baz> qux/path)"
+    );
+
+    expect(result.ok).toBeTrue();
+    expect(result.diagnostics).toHaveLength(0);
+    const symbols = result.tokens.filter(
+      (token) => token.kind === TokenType.Symbol
+    );
+    expect(symbols).toHaveLength(9);
+    expect(symbols.map((s) => s.lexeme)).toEqual([
+      "foo?",
+      "bar!",
+      "baz*",
+      "qux+",
+      "quux-",
+      "foo=",
+      "bar<",
+      "baz>",
+      "qux/path",
+    ]);
+  });
+
+  test("supports symbols with multiple special characters", async () => {
+    const result = await collectTokens("(foo?? bar!! baz*= qux+- foo-bar?)");
+
+    expect(result.ok).toBeTrue();
+    expect(result.diagnostics).toHaveLength(0);
+    const symbols = result.tokens.filter(
+      (token) => token.kind === TokenType.Symbol
+    );
+    expect(symbols).toHaveLength(5);
+    expect(symbols.map((s) => s.lexeme)).toEqual([
+      "foo??",
+      "bar!!",
+      "baz*=",
+      "qux+-",
+      "foo-bar?",
+    ]);
+  });
 });

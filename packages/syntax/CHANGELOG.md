@@ -2,6 +2,11 @@
 
 # @vibe/syntax Changelog
 
+## 2025-12-22
+
+- **Feature: Clojure-style identifier suffixes** — Symbols may now end with special characters (`?`, `!`, `*`, `+`, `-`, `=`, `<`, `>`, `/`) to support Clojure naming conventions (e.g., `is-prime?`, `set-value!`, `map*`). This aligns with Lisp tradition and improves code clarity.
+- Updated syntax specification to document the new identifier format.
+
 ## 2025-12-21
 
 - Promoted `(require ...)` and `(external ...)` forms into a dedicated `NamespaceImport` AST node so downstream stages can access the import kind, alias, and specifier without re-parsing generic list structures.

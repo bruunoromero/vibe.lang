@@ -1,5 +1,10 @@
 # @vibe/semantics Changelog
 
+## 2025-12-22
+
+- **Improved operator identifier sanitization** — Operators like `<=`, `>=`, `+`, `-`, `*`, `/` now map to readable aliases (`lte`, `gte`, `plus`, `minus`, `mul`, `div`) instead of producing underscore-heavy identifiers. This ensures functions with operator-only names are distinguishable and readable in generated JavaScript.
+- Sanitization now applies before symbol ID suffix, preventing collisions between operators like `<=` and `>=`.
+
 ## 2025-12-21
 
 - Added namespace-aware symbol resolution so `alias/member` sugar binds through aliases introduced via `(require alias ...)` or `(external alias ...)`, emitting `SEM_UNRESOLVED_NAMESPACE_ALIAS` when the alias is missing.
