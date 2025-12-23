@@ -1,11 +1,13 @@
 import { parseSource } from "@vibe/parser";
 import { BUILTIN_SYMBOLS } from "@vibe/syntax";
 import { analyzeProgram } from "@vibe/semantics";
-import { generateModule, type GenerateModuleOptions } from "@vibe/codegen";
 import type { Diagnostic } from "@vibe/syntax";
-import { writeFileSync, unlinkSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import {
+  evaluate,
+  createRootEnvironment,
+  lookupVariable,
+} from "@vibe/interpreter";
+import type { Value } from "@vibe/interpreter";
 
 export type ReplIO = {
   readLine?: () => Promise<string | null>;
@@ -43,20 +45,39 @@ const emitDiagnostics = (
   }
 };
 
-const executeGeneratedModule = async (code: string): Promise<unknown> => {
-  const tempDir = join(process.cwd(), "tmp");
-  mkdirSync(tempDir, { recursive: true });
-  const fileName = join(tempDir, `vibe-repl-${randomUUID()}.mjs`);
-  writeFileSync(fileName, code, "utf8");
-  try {
-    const mod = await import(`file://${fileName}`);
-    return mod.default ?? mod;
-  } finally {
-    try {
-      unlinkSync(fileName);
-    } catch {
-      // ignore cleanup errors
+/**
+ * Convert interpreter Value to JavaScript for JSON serialization
+ */
+const valueToJS = (value: Value): unknown => {
+  switch (value.kind) {
+    case "number":
+      return value.value;
+    case "string":
+      return value.value;
+    case "boolean":
+      return value.value;
+    case "nil":
+      return null;
+    case "symbol":
+      return `<symbol ${value.value}>`;
+    case "list":
+    case "vector":
+      return value.elements.map(valueToJS);
+    case "set":
+      return { __set: value.elements.map(valueToJS) };
+    case "map": {
+      const obj: Record<string, unknown> = {};
+      for (const [key, val] of value.entries) {
+        obj[key] = valueToJS(val);
+      }
+      return { __map: obj };
     }
+    case "function":
+      return `<fn arity=${value.params.length}>`;
+    case "builtin":
+      return `<builtin ${value.name}>`;
+    default:
+      throw new Error(`Cannot convert ${(value as Value).kind} to JS`);
   }
 };
 
@@ -107,6 +128,7 @@ export const runRepl = async (
   let buffer = "";
   let history = "";
   let resultCounter = 0;
+  const globalEnv = createRootEnvironment();
 
   // Helper that checks whether parse produced a continuation-worthy diagnostic
   const isIncompleteParse = (
@@ -241,23 +263,40 @@ export const runRepl = async (
         continue;
       }
 
-      const codegen = generateModule(evalParse.program, evalAnalysis.graph, {
-        sourceName: "repl.lang",
-        sourceContent: evalSource,
-      });
-
-      emitDiagnostics(codegen.diagnostics, writeErr);
-      if (!codegen.ok) {
+      // Evaluate using the interpreter (after macros have been expanded by analyzer)
+      let value: Value | undefined;
+      try {
+        // Evaluate each node in the program
+        for (const node of evalParse.program.body) {
+          const result = evaluate(node, globalEnv);
+          if (!result.ok) {
+            emitDiagnostics(result.diagnostics, writeErr);
+            buffer = "";
+            throw new Error("Evaluation failed");
+          }
+          // The last result is what we want
+          value = result.value;
+        }
+        // Get the bound value from environment
+        value = lookupVariable(globalEnv, resultName);
+        if (!value) {
+          writeErr(`ERROR: Failed to retrieve result binding ${resultName}`);
+          buffer = "";
+          continue;
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message !== "Evaluation failed") {
+          writeErr(`ERROR: ${err.message}`);
+        }
         buffer = "";
         continue;
       }
 
-      // Execute and print the result
-      const runtime = await executeGeneratedModule(codegen.moduleText);
-      const value = (runtime as any)[resultName];
-
       // Commit the candidate into history only after successful execution
       history = candidateHistory;
+
+      // Convert interpreter Value to JS
+      const jsValue = valueToJS(value);
 
       // Safe serializer for REPL output that pretty-prints functions, errors,
       // and avoids failing on circular structures.
@@ -293,7 +332,7 @@ export const runRepl = async (
         }
       };
 
-      writeOut(serializeResult(value));
+      writeOut(serializeResult(jsValue));
 
       // Optionally log macro metadata
       if (debugMacros) {

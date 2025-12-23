@@ -487,12 +487,15 @@ describe("analyzeProgram", () => {
     });
 
     test("rejects unsupported expressions inside unquote", async () => {
+      // With the interpreter, most expressions are now supported.
+      // This test now verifies that arithmetic works at compile-time
       const analysis = await analyzeSource(`
-        (defmacro unsupported [] \`(~(+ 1 2)))
-        (unsupported)
+        (defmacro calculate [] \`~(add* 1 2))
+        (calculate)
       `);
 
-      expectDiagnostic(analysis, "SEM_MACRO_UNQUOTE_UNSUPPORTED");
+      // Should succeed now that we have a full interpreter
+      expect(analysis.ok).toBeTrue();
     });
 
     test("rejects unquote splicing at the top level", async () => {

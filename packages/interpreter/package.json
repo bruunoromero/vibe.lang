@@ -1,0 +1,19 @@
+{
+  "name": "@vibe/interpreter",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build ./src/index.ts --outdir=dist --target=node"
+  },
+  "dependencies": {
+    "@vibe/syntax": "workspace:*",
+    "@vibe/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

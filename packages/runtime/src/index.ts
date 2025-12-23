@@ -8,8 +8,6 @@ export const println = (...args: unknown[]) => {
   return args.length === 0 ? null : args[args.length - 1];
 };
 
-export const isTruthy = (v: unknown): boolean => v !== null && v !== false;
-
 // Equality check
 export const eq_STAR = (a: unknown, b: unknown): boolean => a === b;
 
@@ -87,26 +85,204 @@ export const count = (v: unknown): number => {
   return 0;
 };
 
-export const empty_QMARK = (v: unknown): boolean => count(v) === 0;
+// Arithmetic operations (binary)
+export const add_STAR = (a: unknown, b: unknown): number => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("add* requires numeric arguments");
+  }
+  return a + b;
+};
 
-// Type predicates
-export const list_QMARK = (v: unknown): boolean => Array.isArray(v);
-export const vector_QMARK = (v: unknown): boolean => Array.isArray(v);
-export const map_QMARK = (v: unknown): boolean =>
-  typeof v === "object" &&
-  v !== null &&
-  !Array.isArray(v) &&
-  v.constructor === Object;
-export const set_QMARK = (v: unknown): boolean => v instanceof Set;
-export const nil_QMARK = (v: unknown): boolean => v === null;
-export const symbol_QMARK = (v: unknown): boolean => typeof v === "symbol";
-export const string_QMARK = (v: unknown): boolean => typeof v === "string";
-export const number_QMARK = (v: unknown): boolean => typeof v === "number";
-export const fn_QMARK = (v: unknown): boolean => typeof v === "function";
+export const sub_STAR = (a: unknown, b: unknown): number => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("sub* requires numeric arguments");
+  }
+  return a - b;
+};
+
+export const mul_STAR = (a: unknown, b: unknown): number => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("mul* requires numeric arguments");
+  }
+  return a * b;
+};
+
+export const div_STAR = (a: unknown, b: unknown): number => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("div* requires numeric arguments");
+  }
+  if (b === 0) {
+    throw new Error("Division by zero");
+  }
+  return a / b;
+};
+
+export const mod_STAR = (a: unknown, b: unknown): number => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("mod* requires numeric arguments");
+  }
+  return a % b;
+};
+
+// Comparison operations (binary)
+export const lt_STAR = (a: unknown, b: unknown): boolean => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("lt* requires numeric arguments");
+  }
+  return a < b;
+};
+
+export const gt_STAR = (a: unknown, b: unknown): boolean => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("gt* requires numeric arguments");
+  }
+  return a > b;
+};
+
+export const lte_STAR = (a: unknown, b: unknown): boolean => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("lte* requires numeric arguments");
+  }
+  return a <= b;
+};
+
+export const gte_STAR = (a: unknown, b: unknown): boolean => {
+  if (typeof a !== "number" || typeof b !== "number") {
+    throw new Error("gte* requires numeric arguments");
+  }
+  return a >= b;
+};
+
+// Additional sequence operations
+export const nth = (
+  seq: unknown,
+  index: unknown,
+  defaultValue?: unknown
+): unknown => {
+  if (typeof index !== "number") {
+    throw new Error("nth requires a number as second argument");
+  }
+  if (Array.isArray(seq)) {
+    if (index < 0 || index >= seq.length) {
+      if (defaultValue !== undefined) return defaultValue;
+      throw new Error(`Index out of bounds: ${index}`);
+    }
+    return seq[index];
+  }
+  throw new Error("nth requires a sequence as first argument");
+};
+
+export const take = (n: unknown, seq: unknown): unknown[] => {
+  if (typeof n !== "number") {
+    throw new Error("take requires a number as first argument");
+  }
+  if (!Array.isArray(seq)) {
+    throw new Error("take requires a sequence as second argument");
+  }
+  return seq.slice(0, Math.max(0, n));
+};
+
+export const drop = (n: unknown, seq: unknown): unknown[] => {
+  if (typeof n !== "number") {
+    throw new Error("drop requires a number as first argument");
+  }
+  if (!Array.isArray(seq)) {
+    throw new Error("drop requires a sequence as second argument");
+  }
+  return seq.slice(Math.max(0, n));
+};
+
+export const reverse = (seq: unknown): unknown[] => {
+  if (!Array.isArray(seq)) {
+    throw new Error("reverse requires a sequence");
+  }
+  return [...seq].reverse();
+};
+
+export const concat = (...seqs: unknown[]): unknown[] => {
+  const result: unknown[] = [];
+  for (const seq of seqs) {
+    if (!Array.isArray(seq)) {
+      throw new Error("concat requires sequence arguments");
+    }
+    result.push(...seq);
+  }
+  return result;
+};
+
+// String operations
+export const str = (...args: unknown[]): string => {
+  return args
+    .map((arg) => {
+      if (arg === null) return "nil";
+      if (typeof arg === "boolean") return arg ? "true" : "false";
+      return String(arg);
+    })
+    .join("");
+};
+
+// Map operations
+export const get = (
+  map: unknown,
+  key: unknown,
+  defaultValue?: unknown
+): unknown => {
+  if (typeof map !== "object" || map === null || Array.isArray(map)) {
+    throw new Error("get requires a map as first argument");
+  }
+  const value = (map as Record<string, unknown>)[String(key)];
+  return value !== undefined ? value : defaultValue ?? null;
+};
+
+export const assoc = (
+  map: unknown,
+  ...kvs: unknown[]
+): Record<string, unknown> => {
+  if (kvs.length % 2 !== 0) {
+    throw new Error("assoc requires an even number of key-value arguments");
+  }
+  if (typeof map !== "object" || map === null || Array.isArray(map)) {
+    throw new Error("assoc requires a map as first argument");
+  }
+  const result = { ...(map as Record<string, unknown>) };
+  for (let i = 0; i < kvs.length; i += 2) {
+    const key = kvs[i];
+    const value = kvs[i + 1];
+    result[String(key)] = value;
+  }
+  return result;
+};
+
+export const dissoc = (
+  map: unknown,
+  ...keys: unknown[]
+): Record<string, unknown> => {
+  if (typeof map !== "object" || map === null || Array.isArray(map)) {
+    throw new Error("dissoc requires a map as first argument");
+  }
+  const result = { ...(map as Record<string, unknown>) };
+  for (const key of keys) {
+    delete result[String(key)];
+  }
+  return result;
+};
+
+export const keys = (map: unknown): unknown[] => {
+  if (typeof map !== "object" || map === null || Array.isArray(map)) {
+    throw new Error("keys requires a map");
+  }
+  return Object.keys(map);
+};
+
+export const vals = (map: unknown): unknown[] => {
+  if (typeof map !== "object" || map === null || Array.isArray(map)) {
+    throw new Error("vals requires a map");
+  }
+  return Object.values(map);
+};
 
 export default {
   println,
-  isTruthy,
   seq_QMARK,
   first,
   next,
@@ -115,14 +291,25 @@ export default {
   cons,
   conj,
   count,
-  empty_QMARK,
-  list_QMARK,
-  vector_QMARK,
-  map_QMARK,
-  set_QMARK,
-  nil_QMARK,
-  symbol_QMARK,
-  string_QMARK,
-  number_QMARK,
-  fn_QMARK,
+  add_STAR,
+  sub_STAR,
+  mul_STAR,
+  div_STAR,
+  mod_STAR,
+  eq_STAR,
+  lt_STAR,
+  gt_STAR,
+  lte_STAR,
+  gte_STAR,
+  nth,
+  take,
+  drop,
+  reverse,
+  concat,
+  str,
+  get,
+  assoc,
+  dissoc,
+  keys,
+  vals,
 };

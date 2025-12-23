@@ -19,6 +19,14 @@ import {
   type VectorNode,
   BUILTIN_SYMBOLS,
 } from "@vibe/syntax";
+import {
+  evaluate,
+  createRootEnvironment,
+  defineVariable,
+  valueToNode,
+  nodeToValue,
+  type Environment,
+} from "@vibe/interpreter";
 
 export type { ScopeId } from "@vibe/syntax";
 
@@ -1294,210 +1302,49 @@ export class SemanticAnalyzer {
     node: ListNode,
     context: MacroExpansionContext
   ): ExpressionNode | null {
-    const head = node.elements[0];
-    if (!head || head.kind !== NodeKind.Symbol) {
+    // Create an interpreter environment with builtins and macro parameter bindings
+    const env = createRootEnvironment();
+    for (const [name, value] of context.env.entries()) {
+      try {
+        const interpValue = nodeToValue(value);
+        defineVariable(env, name, interpValue);
+      } catch (error) {
+        // If conversion fails, skip this binding
+        continue;
+      }
+    }
+
+    // Evaluate the expression using the full interpreter
+    const result = evaluate(node, env);
+
+    if (!result.ok) {
+      // Report interpreter errors
+      for (const diagnostic of result.diagnostics) {
+        this.report(
+          diagnostic.message,
+          diagnostic.span,
+          diagnostic.code ?? "EVAL_ERROR"
+        );
+      }
       return null;
     }
 
-    const args = node.elements.slice(1);
+    if (!result.value) {
+      return null;
+    }
 
-    switch (head.value) {
-      case "gensym": {
-        const hintNode = args[0];
-        let hint: string | null = null;
-        if (hintNode && hintNode.kind === NodeKind.String) {
-          hint = hintNode.value;
-        } else if (hintNode && hintNode.kind === NodeKind.Symbol) {
-          hint = hintNode.value;
-        }
-        return this.createGensymSymbol(node.span, hint);
-      }
-
-      case "first": {
-        const seqArg = args[0];
-        if (!seqArg) {
-          this.report(
-            "first requires an argument",
-            node.span,
-            "SEM_MACRO_EVAL_ERROR"
-          );
-          return null;
-        }
-        const seq = this.evaluateUnquoteTarget(seqArg, context);
-        if (!seq) return null;
-
-        if (
-          seq.kind === NodeKind.List ||
-          seq.kind === NodeKind.Vector ||
-          seq.kind === NodeKind.Set
-        ) {
-          return seq.elements[0] ?? this.createNilLiteral(node.span);
-        }
-        return this.createNilLiteral(node.span);
-      }
-
-      case "rest": {
-        const seqArg = args[0];
-        if (!seqArg) {
-          this.report(
-            "rest requires an argument",
-            node.span,
-            "SEM_MACRO_EVAL_ERROR"
-          );
-          return null;
-        }
-        const seq = this.evaluateUnquoteTarget(seqArg, context);
-        if (!seq) return null;
-
-        if (
-          seq.kind === NodeKind.List ||
-          seq.kind === NodeKind.Vector ||
-          seq.kind === NodeKind.Set
-        ) {
-          return {
-            kind: seq.kind,
-            span: node.span,
-            elements: seq.elements.slice(1),
-          };
-        }
-        // Non-sequence returns empty vector
-        return { kind: NodeKind.Vector, span: node.span, elements: [] };
-      }
-
-      case "count": {
-        const arg = args[0];
-        if (!arg) {
-          this.report(
-            "count requires an argument",
-            node.span,
-            "SEM_MACRO_EVAL_ERROR"
-          );
-          return null;
-        }
-        const value = this.evaluateUnquoteTarget(arg, context);
-        if (!value) return null;
-
-        let count = 0;
-        if (
-          value.kind === NodeKind.List ||
-          value.kind === NodeKind.Vector ||
-          value.kind === NodeKind.Set
-        ) {
-          count = value.elements.length;
-        }
-        return this.createNumberLiteral(node.span, count);
-      }
-
-      case "eq*": {
-        const [leftArg, rightArg] = args;
-        if (!leftArg || !rightArg) {
-          this.report(
-            "eq* requires two arguments",
-            node.span,
-            "SEM_MACRO_EVAL_ERROR"
-          );
-          return null;
-        }
-        const left = this.evaluateUnquoteTarget(leftArg, context);
-        const right = this.evaluateUnquoteTarget(rightArg, context);
-        if (!left || !right) return null;
-
-        // Simple equality check for compile-time values
-        let isEqual = false;
-        if (left.kind === right.kind) {
-          if (left.kind === NodeKind.Number && right.kind === NodeKind.Number) {
-            isEqual = left.value === right.value;
-          } else if (
-            left.kind === NodeKind.String &&
-            right.kind === NodeKind.String
-          ) {
-            isEqual = left.value === right.value;
-          } else if (
-            left.kind === NodeKind.Boolean &&
-            right.kind === NodeKind.Boolean
-          ) {
-            isEqual = left.value === right.value;
-          } else if (
-            left.kind === NodeKind.Nil &&
-            right.kind === NodeKind.Nil
-          ) {
-            isEqual = true;
-          } else if (
-            left.kind === NodeKind.Symbol &&
-            right.kind === NodeKind.Symbol
-          ) {
-            isEqual = left.value === right.value;
-          }
-        }
-        return this.createBooleanLiteral(node.span, isEqual);
-      }
-
-      case "cons": {
-        const [itemArg, seqArg] = args;
-        if (!itemArg || !seqArg) {
-          this.report(
-            "cons requires two arguments",
-            node.span,
-            "SEM_MACRO_EVAL_ERROR"
-          );
-          return null;
-        }
-        const item = this.evaluateUnquoteTarget(itemArg, context);
-        const seq = this.evaluateUnquoteTarget(seqArg, context);
-        if (!item || !seq) return null;
-
-        if (
-          seq.kind === NodeKind.List ||
-          seq.kind === NodeKind.Vector ||
-          seq.kind === NodeKind.Set
-        ) {
-          return {
-            kind: seq.kind,
-            span: node.span,
-            elements: [item, ...seq.elements],
-          };
-        }
-        return {
-          kind: NodeKind.List,
-          span: node.span,
-          elements: [item],
-        };
-      }
-
-      case "if": {
-        const [condArg, thenArg, elseArg] = args;
-        if (!condArg || !thenArg) {
-          this.report(
-            "if requires at least condition and then branch",
-            node.span,
-            "SEM_MACRO_EVAL_ERROR"
-          );
-          return null;
-        }
-        const cond = this.evaluateUnquoteTarget(condArg, context);
-        if (!cond) return null;
-
-        const isTruthy = !(
-          cond.kind === NodeKind.Nil ||
-          (cond.kind === NodeKind.Boolean && cond.value === false)
-        );
-
-        if (isTruthy) {
-          return this.evaluateUnquoteTarget(thenArg, context);
-        } else if (elseArg) {
-          return this.evaluateUnquoteTarget(elseArg, context);
-        } else {
-          return this.createNilLiteral(node.span);
-        }
-      }
-
-      default:
-        this.report(
-          `Unknown compile-time function: ${head.value}`,
-          node.span,
-          "SEM_MACRO_UNQUOTE_UNSUPPORTED"
-        );
-        return null;
+    // Convert the result value back to an AST node
+    try {
+      return valueToNode(result.value, context.callSpan);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown conversion error";
+      this.report(
+        `Cannot convert compile-time result to AST: ${message}`,
+        context.callSpan,
+        "SEM_MACRO_EVAL_ERROR"
+      );
+      return null;
     }
   }
 

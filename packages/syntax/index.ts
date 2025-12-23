@@ -108,19 +108,55 @@ export enum NodeKind {
 }
 
 export const BUILTIN_SYMBOLS = [
-  "+",
-  "-",
-  "*",
-  "/",
+  // Special forms
   "def",
   "defmacro",
   "let",
   "fn",
   "if",
   "quote",
-  "println",
+  "do",
+  // Binary operators (core runtime primitives)
+  "add*",
+  "sub*",
+  "mul*",
+  "div*",
+  "mod*",
   "eq*",
+  "lt*",
+  "gt*",
+  "lte*",
+  "gte*",
+  // Sequence operations
+  "first",
+  "rest",
+  "cons",
   "count",
+  "nth",
+  "map",
+  "filter",
+  "reduce",
+  "concat",
+  "take",
+  "drop",
+  "reverse",
+  // Map operations
+  "get",
+  "assoc",
+  "dissoc",
+  "keys",
+  "vals",
+  // Type introspection
+  "type",
+  // String operations
+  "str",
+  // Collection constructors
+  "list",
+  "vector",
+  // Utility
+  "gensym",
+  // I/O (for testing)
+  "println",
 ] as const;
 
 export interface AstNode<K extends NodeKind = NodeKind> {

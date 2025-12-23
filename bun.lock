@@ -17,6 +17,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@vibe/codegen": "workspace:*",
+        "@vibe/interpreter": "workspace:*",
         "@vibe/lexer": "workspace:*",
         "@vibe/parser": "workspace:*",
         "@vibe/semantics": "workspace:*",
@@ -44,6 +45,17 @@
     "packages/example-app": {
       "name": "@vibe/example-app",
       "version": "0.1.0",
+    },
+    "packages/interpreter": {
+      "name": "@vibe/interpreter",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vibe/runtime": "workspace:*",
+        "@vibe/syntax": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
     },
     "packages/lexer": {
       "name": "@vibe/lexer",
@@ -74,6 +86,7 @@
       "name": "@vibe/semantics",
       "version": "0.0.0",
       "dependencies": {
+        "@vibe/interpreter": "workspace:*",
         "@vibe/syntax": "workspace:*",
       },
       "devDependencies": {
@@ -101,6 +114,8 @@
     "@vibe/codegen": ["@vibe/codegen@workspace:packages/codegen"],
 
     "@vibe/example-app": ["@vibe/example-app@workspace:packages/example-app"],
+
+    "@vibe/interpreter": ["@vibe/interpreter@workspace:packages/interpreter"],
 
     "@vibe/lexer": ["@vibe/lexer@workspace:packages/lexer"],
 

@@ -13,6 +13,7 @@
     "@vibe/parser": "workspace:*",
     "@vibe/semantics": "workspace:*",
     "@vibe/codegen": "workspace:*",
+    "@vibe/interpreter": "workspace:*",
     "sade": "^1.8.1"
   },
   "devDependencies": {
