@@ -17,6 +17,8 @@ import {
 import type {
   NodeId,
   NodeSymbolInfo,
+  FlattenedImportBinding,
+  ModuleImportRecord,
   ScopeId,
   SemanticGraph,
   SemanticNodeRecord,
@@ -27,6 +29,7 @@ import type {
 
 const DEFAULT_SOURCE_NAME = "vibe-inline";
 const DEFAULT_TARGET_FILE = "vibe-generated.js";
+const LANG_EXTENSION = ".lang";
 
 export interface GenerateModuleOptions {
   readonly includeAst?: boolean;
@@ -164,11 +167,12 @@ interface ModuleEmitterOptions {
 
 interface NamespaceImportSpec {
   readonly kind: NamespaceImportKind;
-  readonly aliasNode: SymbolNode;
+  readonly aliasNode?: SymbolNode | null;
   readonly aliasIdentifier: string;
   readonly importPath: string;
   readonly sourceSpan: SourceSpan;
   readonly statementNode: ExpressionNode;
+  readonly flatten?: readonly FlattenedImportBinding[];
 }
 
 class ModuleEmitter {
@@ -179,6 +183,10 @@ class ModuleEmitter {
     ExpressionNode,
     NamespaceImportSpec
   >();
+  private readonly namespaceAliasMap = new Map<string, NamespaceImportSpec>();
+  private readonly reservedNamespaceAliases = new Set<string>();
+  private anonymousImportCounter = 0;
+  private readonly moduleImportIndex = new Map<string, ModuleImportRecord>();
   private readonly semanticLookup: SemanticLookup;
 
   constructor(
@@ -187,6 +195,9 @@ class ModuleEmitter {
     private readonly options: ModuleEmitterOptions
   ) {
     this.semanticLookup = new SemanticLookup(graph);
+    for (const record of graph.imports) {
+      this.moduleImportIndex.set(this.spanKey(record.span), record);
+    }
     this.mapBuilder = new SourceMapBuilder(
       options.targetFileName,
       options.sourceName,
@@ -201,7 +212,41 @@ class ModuleEmitter {
       if (spec) {
         this.namespaceImports.push(spec);
         this.namespaceImportMap.set(spec.statementNode, spec);
+        if (spec.aliasNode) {
+          this.reserveNamespaceAlias(spec.aliasIdentifier);
+        }
+        if (spec.aliasNode) {
+          this.namespaceAliasMap.set(spec.aliasNode.value, spec);
+        }
       }
+    }
+  }
+
+  private reserveNamespaceAlias(alias: string): void {
+    this.reservedNamespaceAliases.add(alias);
+  }
+
+  private lookupModuleImport(span: SourceSpan): ModuleImportRecord | undefined {
+    return this.moduleImportIndex.get(this.spanKey(span));
+  }
+
+  private spanKey(span: SourceSpan): string {
+    return `${span.start.offset}:${span.end.offset}`;
+  }
+
+  private allocateAnonymousImportAlias(): string {
+    while (true) {
+      const suffix =
+        this.anonymousImportCounter === 0
+          ? ""
+          : `_${this.anonymousImportCounter}`;
+      this.anonymousImportCounter += 1;
+      const candidate = `__import__${suffix}`;
+      if (this.reservedNamespaceAliases.has(candidate)) {
+        continue;
+      }
+      this.reservedNamespaceAliases.add(candidate);
+      return candidate;
     }
   }
 
@@ -213,12 +258,37 @@ class ModuleEmitter {
     }
 
     if (node.kind === NodeKind.NamespaceImport) {
-      const aliasNode = node.alias;
       const targetNode = node.source;
-      if (!aliasNode || aliasNode.kind !== NodeKind.Symbol) {
+      if (!targetNode || targetNode.kind !== NodeKind.String) {
         return null;
       }
-      if (!targetNode || targetNode.kind !== NodeKind.String) {
+      if (node.importKind === "import") {
+        const record = this.lookupModuleImport(targetNode.span);
+        if (!record) {
+          throw new Error(
+            `Missing module import metadata for import form (${targetNode.value})`
+          );
+        }
+        const aliasIdentifier =
+          record.alias && record.alias.length > 0
+            ? record.alias
+            : this.allocateAnonymousImportAlias();
+        return {
+          kind: "import",
+          aliasNode: null,
+          aliasIdentifier,
+          importPath: this.resolveNamespaceImportPath(
+            "import",
+            record.specifier,
+            record
+          ),
+          sourceSpan: targetNode.span,
+          statementNode: node,
+          flatten: record.flatten ?? [],
+        } satisfies NamespaceImportSpec;
+      }
+      const aliasNode = node.alias;
+      if (!aliasNode || aliasNode.kind !== NodeKind.Symbol) {
         return null;
       }
       return this.createNamespaceImportSpec(
@@ -257,13 +327,18 @@ class ModuleEmitter {
     kind: NamespaceImportKind,
     aliasNode: SymbolNode,
     targetNode: StringNode,
-    statementNode: ExpressionNode
+    statementNode: ExpressionNode,
+    importRecord?: ModuleImportRecord
   ): NamespaceImportSpec {
     const aliasIdentifier = this.resolveBindingIdentifier(aliasNode);
-    const importPath =
-      kind === "require"
-        ? this.resolveRequireImportPath(targetNode.value)
-        : targetNode.value;
+    const record = importRecord ?? this.lookupModuleImport(targetNode.span);
+    if (!record) {
+      throw new Error(
+        `Missing module import metadata for ${aliasNode.value} (${targetNode.value})`
+      );
+    }
+    const specifier = record?.specifier ?? targetNode.value;
+    const importPath = this.resolveNamespaceImportPath(kind, specifier, record);
     return {
       kind,
       aliasNode,
@@ -274,14 +349,51 @@ class ModuleEmitter {
     } satisfies NamespaceImportSpec;
   }
 
-  private resolveRequireImportPath(target: string): string {
-    if (target.endsWith(".lang")) {
-      return `${target.slice(0, -5)}.js`;
+  private resolveNamespaceImportPath(
+    kind: NamespaceImportKind,
+    specifier: string,
+    importRecord?: ModuleImportRecord
+  ): string {
+    if (kind !== "require" && kind !== "import") {
+      return specifier;
     }
-    if (target.endsWith(".js")) {
-      return target;
+    return this.rewriteRequireSpecifier(specifier, importRecord);
+  }
+
+  private rewriteRequireSpecifier(
+    specifier: string,
+    importRecord?: ModuleImportRecord
+  ): string {
+    if (specifier.endsWith(".js")) {
+      return specifier;
     }
-    return `${target}.js`;
+    if (isRelativeModuleSpecifier(specifier)) {
+      return this.ensureJsExtension(specifier);
+    }
+    if (specifier.endsWith(LANG_EXTENSION)) {
+      return this.stripLangExtension(specifier);
+    }
+    if (
+      importRecord?.moduleId?.endsWith(LANG_EXTENSION) &&
+      importRecord.specifier.endsWith(LANG_EXTENSION)
+    ) {
+      return this.stripLangExtension(specifier);
+    }
+    return specifier;
+  }
+
+  private ensureJsExtension(value: string): string {
+    if (value.endsWith(".js")) {
+      return value;
+    }
+    if (value.endsWith(LANG_EXTENSION)) {
+      return this.stripLangExtension(value);
+    }
+    return `${value}.js`;
+  }
+
+  private stripLangExtension(value: string): string {
+    return `${value.slice(0, -LANG_EXTENSION.length)}.js`;
   }
 
   emit(): { code: string; sourceMap: RawSourceMap } {
@@ -326,9 +438,7 @@ class ModuleEmitter {
   }
 
   private emitImports(): void {
-    this.addLine(
-      "import { println as __println, eq_STAR as eq_STAR, count } from '@vibe/runtime';"
-    );
+    // Emit all namespace imports from (require) and (external) statements
     for (const spec of this.namespaceImports) {
       const importLiteral = JSON.stringify(spec.importPath);
       this.addLine(
@@ -336,7 +446,9 @@ class ModuleEmitter {
         spec.sourceSpan
       );
     }
-    this.addLine("");
+    if (this.namespaceImports.length > 0) {
+      this.addLine("");
+    }
   }
 
   private emitPrelude(): void {
@@ -357,7 +469,33 @@ class ModuleEmitter {
   }
 
   private emitNamespaceDefinition(spec: NamespaceImportSpec): void {
-    this.addLine(`__result = ${spec.aliasIdentifier};`, spec.aliasNode.span);
+    if (spec.kind === "import") {
+      if (spec.flatten && spec.flatten.length > 0) {
+        for (const binding of spec.flatten) {
+          const access = this.emitNamespaceMemberAccess(
+            spec.aliasIdentifier,
+            binding.exportedName,
+            spec.kind
+          );
+          this.addLine(
+            `const ${binding.identifier} = ${access};`,
+            spec.statementNode.span
+          );
+          this.addLine(
+            `__result = ${binding.identifier};`,
+            spec.statementNode.span
+          );
+        }
+      } else {
+        this.addLine(
+          `__result = ${spec.aliasIdentifier};`,
+          spec.statementNode.span
+        );
+      }
+      return;
+    }
+    const span = spec.aliasNode?.span ?? spec.statementNode.span;
+    this.addLine(`__result = ${spec.aliasIdentifier};`, span);
   }
 
   private isNamespaceImport(node: ExpressionNode): boolean {
@@ -403,7 +541,11 @@ class ModuleEmitter {
       const baseIdentifier = symbolRecord?.alias
         ? symbolRecord.alias
         : this.fallbackIdentifier(namespaceAccess.alias);
-      return this.emitPropertyAccess(baseIdentifier, namespaceAccess.member);
+      const member = this.normalizeNamespaceMember(
+        namespaceAccess.alias,
+        namespaceAccess.member
+      );
+      return this.emitPropertyAccess(baseIdentifier, member);
     }
     if (!symbolRecord) {
       return this.fallbackIdentifier(node.value);
@@ -422,7 +564,7 @@ class ModuleEmitter {
 
   private emitBuiltinSymbol(node: SymbolNode, symbol: SymbolRecord): string {
     if (symbol.name === "println") {
-      return "__println";
+      return "console.log";
     }
     if (this.isArithmeticOperator(symbol.name)) {
       throw new Error(
@@ -446,6 +588,8 @@ class ModuleEmitter {
           return this.emitLet(node);
         case "fn":
           return this.emitFn(node);
+        case "if":
+          return this.emitIf(tail);
         case "get":
           return this.emitGet(node);
         case "+":
@@ -453,8 +597,6 @@ class ModuleEmitter {
         case "*":
         case "/":
           return this.emitArithmetic(head.value, tail);
-        case "println":
-          return this.emitPrintln(tail);
         default:
           break;
       }
@@ -483,6 +625,14 @@ class ModuleEmitter {
       return `${base}.${member}`;
     }
     return `${base}[${JSON.stringify(member)}]`;
+  }
+
+  private normalizeNamespaceMember(alias: string, member: string): string {
+    const spec = this.namespaceAliasMap.get(alias);
+    if (spec?.kind === "external") {
+      return sanitizeExternalIdentifier(member);
+    }
+    return member;
   }
 
   private isIdentifier(value: string): boolean {
@@ -582,6 +732,45 @@ ${bodyBlock}
     return this.emitPropertyAccess(base, memberName);
   }
 
+  private emitNamespaceMemberAccess(
+    baseIdentifier: string,
+    member: string,
+    kind: NamespaceImportKind
+  ): string {
+    const normalized = this.normalizeNamespaceMemberAccess(member, kind);
+    return this.emitPropertyAccess(baseIdentifier, normalized);
+  }
+
+  private normalizeNamespaceMemberAccess(
+    member: string,
+    kind: NamespaceImportKind
+  ): string {
+    if (kind === "external") {
+      return sanitizeExternalIdentifier(member);
+    }
+    if (kind === "import") {
+      return sanitizeImportedMemberName(member);
+    }
+    return member;
+  }
+
+  private emitIf(tail: readonly (ExpressionNode | null | undefined)[]): string {
+    const [condNode, thenNode, elseNode] = tail;
+
+    if (!condNode) {
+      throw new Error("if requires a condition");
+    }
+    if (!thenNode) {
+      throw new Error("if requires a then branch");
+    }
+
+    const cond = this.emitExpression(condNode);
+    const thenExpr = this.emitExpression(thenNode);
+    const elseExpr = elseNode ? this.emitExpression(elseNode) : "null";
+
+    return `(${cond} ? ${thenExpr} : ${elseExpr})`;
+  }
+
   private resolveMemberName(node: ExpressionNode): string {
     if (node.kind === NodeKind.Symbol || node.kind === NodeKind.String) {
       return node.value;
@@ -630,16 +819,6 @@ ${bodyBlock}
       return `(${values.join(" / ")})`;
     }
     return `(${values.join(` ${operator} `)})`;
-  }
-
-  private emitPrintln(
-    args: readonly (ExpressionNode | null | undefined)[]
-  ): string {
-    const argList = args
-      .filter((arg): arg is ExpressionNode => Boolean(arg))
-      .map((arg) => this.emitExpression(arg))
-      .join(", ");
-    return `__println(${argList})`;
   }
 
   private emitMap(node: MapNode): string {
@@ -875,6 +1054,102 @@ const encodeVlq = (value: number): string => {
   return encoded;
 };
 
+const SPECIAL_IDENTIFIER_SERIALIZATIONS = new Map<string, string>([
+  ["*", "_STAR"],
+  ["?", "_QMARK"],
+  ["!", "_BANG"],
+  ["+", "_PLUS"],
+  ["=", "_EQ"],
+  ["<", "_LT"],
+  [">", "_GT"],
+  ["/", "_SLASH"],
+]);
+
+function sanitizeExternalIdentifier(value: string): string {
+  if (!value) {
+    return "_ident";
+  }
+
+  const singleHyphen = value === "-";
+  let result = "";
+  for (const char of value) {
+    if (/^[A-Za-z0-9_]$/.test(char)) {
+      result += char;
+      continue;
+    }
+    if (char === "-") {
+      result += singleHyphen ? "_DASH" : "_";
+      continue;
+    }
+    const replacement = SPECIAL_IDENTIFIER_SERIALIZATIONS.get(char);
+    if (replacement) {
+      result += replacement;
+      continue;
+    }
+    result += "_";
+  }
+
+  if (/^[0-9]/.test(result)) {
+    result = `_${result}`;
+  }
+
+  return result.length === 0 ? "_ident" : result;
+}
+
+const IMPORT_OPERATOR_NAMES = new Map<string, string>([
+  ["<=", "_LT_EQ"],
+  [">=", "_GT_EQ"],
+  ["<", "_LT"],
+  [">", "_GT"],
+  ["=", "_EQ"],
+  ["+", "_PLUS"],
+  ["-", "_DASH"],
+  ["*", "_STAR"],
+  ["/", "_SLASH"],
+  ["!", "_BANG"],
+  ["?", "_QMARK"],
+  ["~", "_TILDE"],
+  ["@", "_AT"],
+]);
+
+const IMPORT_TRAILING_SPECIALS = new Set(["?", "!", "*", "+", "/", "%"]);
+
+function sanitizeImportedMemberName(value: string): string {
+  const operator = IMPORT_OPERATOR_NAMES.get(value);
+  if (operator) {
+    return operator;
+  }
+
+  let baseValue = value;
+  let trailingOperator = "";
+
+  if (value.length > 1) {
+    const lastChar = value.charAt(value.length - 1);
+    if (IMPORT_TRAILING_SPECIALS.has(lastChar)) {
+      const suffix = IMPORT_OPERATOR_NAMES.get(lastChar);
+      if (suffix) {
+        trailingOperator = suffix;
+        baseValue = value.slice(0, -1);
+      }
+    }
+  }
+
+  let result = baseValue.replace(/[^a-zA-Z0-9_]/g, "_");
+  result = result.replace(/_+$/, "");
+  result += trailingOperator;
+
+  if (/^[0-9]/.test(result)) {
+    result = `_${result}`;
+  }
+  if (result.length === 0 || result === "_") {
+    result = "_ident";
+  }
+  if (RESERVED_IDENTIFIERS.has(result)) {
+    result = `_${result}`;
+  }
+  return result;
+}
+
 const RESERVED_IDENTIFIERS = new Set([
   "arguments",
   "await",
@@ -917,3 +1192,7 @@ const RESERVED_IDENTIFIERS = new Set([
   "with",
   "yield",
 ]);
+
+const isRelativeModuleSpecifier = (specifier: string): boolean => {
+  return specifier.startsWith("./") || specifier.startsWith("../");
+};

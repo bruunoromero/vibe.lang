@@ -1,3 +1,39 @@
+export interface RuntimeSymbol {
+  readonly __vibeType: "symbol";
+  readonly name: string;
+}
+
+const isRuntimeSymbol = (value: unknown): value is RuntimeSymbol => {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<RuntimeSymbol>;
+  return (
+    candidate.__vibeType === "symbol" && typeof candidate.name === "string"
+  );
+};
+
+const createRuntimeSymbol = (name: string): RuntimeSymbol => ({
+  __vibeType: "symbol",
+  name,
+});
+
+const coerceKey = (value: unknown): string =>
+  isRuntimeSymbol(value) ? value.name : String(value);
+
+const keyword = (label: string): RuntimeSymbol =>
+  createRuntimeSymbol(label.startsWith(":") ? label : `:${label}`);
+
+export const symbol = (name: unknown): RuntimeSymbol => {
+  if (typeof name !== "string") {
+    throw new Error("symbol requires a string argument");
+  }
+  return createRuntimeSymbol(name);
+};
+
+export const symbol_QMARK = (value: unknown): value is RuntimeSymbol =>
+  isRuntimeSymbol(value);
+
 export const println = (...args: unknown[]) => {
   // Default runtime println delegates to console.log and returns the last arg or null
   // to match previous inline behavior used by codegen.
@@ -8,8 +44,29 @@ export const println = (...args: unknown[]) => {
   return args.length === 0 ? null : args[args.length - 1];
 };
 
+export const type = (v: unknown): RuntimeSymbol => {
+  if (v === null) return keyword("nil");
+  if (isRuntimeSymbol(v)) return keyword("symbol");
+  if (Array.isArray(v)) return keyword("list");
+  if (v instanceof Set) return keyword("set");
+  if (v instanceof Map) return keyword("map");
+  if (typeof v === "boolean") return keyword("boolean");
+  if (typeof v === "number") return keyword("number");
+  if (typeof v === "string") return keyword("string");
+  if (typeof v === "function") return keyword("function");
+  if (typeof v === "undefined") return keyword("undefined");
+  if (typeof v === "bigint") return keyword("bigint");
+  if (typeof v === "symbol") return keyword("js-symbol");
+  return keyword("object");
+};
+
 // Equality check
-export const eq_STAR = (a: unknown, b: unknown): boolean => a === b;
+export const eq_STAR = (a: unknown, b: unknown): boolean => {
+  if (isRuntimeSymbol(a) && isRuntimeSymbol(b)) {
+    return a.name === b.name;
+  }
+  return a === b;
+};
 
 // Sequence helpers for macro operations
 export const seq_QMARK = (v: unknown): boolean => {
@@ -216,6 +273,7 @@ export const str = (...args: unknown[]): string => {
     .map((arg) => {
       if (arg === null) return "nil";
       if (typeof arg === "boolean") return arg ? "true" : "false";
+      if (isRuntimeSymbol(arg)) return arg.name;
       return String(arg);
     })
     .join("");
@@ -230,7 +288,7 @@ export const get = (
   if (typeof map !== "object" || map === null || Array.isArray(map)) {
     throw new Error("get requires a map as first argument");
   }
-  const value = (map as Record<string, unknown>)[String(key)];
+  const value = (map as Record<string, unknown>)[coerceKey(key)];
   return value !== undefined ? value : defaultValue ?? null;
 };
 
@@ -248,7 +306,7 @@ export const assoc = (
   for (let i = 0; i < kvs.length; i += 2) {
     const key = kvs[i];
     const value = kvs[i + 1];
-    result[String(key)] = value;
+    result[coerceKey(key)] = value;
   }
   return result;
 };
@@ -262,7 +320,7 @@ export const dissoc = (
   }
   const result = { ...(map as Record<string, unknown>) };
   for (const key of keys) {
-    delete result[String(key)];
+    delete result[coerceKey(key)];
   }
   return result;
 };
@@ -282,7 +340,10 @@ export const vals = (map: unknown): unknown[] => {
 };
 
 export default {
+  symbol,
+  symbol_QMARK,
   println,
+  type,
   seq_QMARK,
   first,
   next,

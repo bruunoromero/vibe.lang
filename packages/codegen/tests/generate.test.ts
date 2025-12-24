@@ -3,10 +3,16 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { parseSource } from "@vibe/parser";
-import { analyzeProgram } from "@vibe/semantics";
+import {
+  analyzeProgram,
+  type AnalyzeOptions,
+  type ModuleResolver,
+  type ModuleExportsLookup,
+} from "@vibe/semantics";
+import { BUILTIN_SYMBOLS } from "@vibe/syntax";
 import { generateModule, type GenerateModuleOptions } from "../src";
 
-const compile = async (source: string) => {
+const compile = async (source: string, options?: AnalyzeOptions) => {
   const parseResult = await parseSource(source);
   if (!parseResult.ok) {
     throw new Error(
@@ -15,7 +21,17 @@ const compile = async (source: string) => {
         .join("\n")}`
     );
   }
-  const analysis = analyzeProgram(parseResult.program);
+  const analysis = await analyzeProgram(parseResult.program, {
+    builtins: options?.builtins ?? [
+      ...BUILTIN_SYMBOLS,
+      "+",
+      "-",
+      "*",
+      "/",
+      "println",
+    ],
+    ...options,
+  });
   if (!analysis.ok) {
     throw new Error(
       `Analyze failed: ${analysis.diagnostics.map((d) => d.message).join("\n")}`
@@ -145,7 +161,7 @@ describe("generateModule", () => {
     const unique = record.get("unique");
     expect(unique).toBeInstanceOf(Set);
     expect((unique as Set<number>).has(5)).toBeTrue();
-    expect(record.get("echo")).toBe(5);
+    expect(record.get("echo")).toBeUndefined();
     expect(typeof runtime.builder).toBe("function");
   });
 
@@ -192,10 +208,12 @@ describe("generateModule", () => {
   test("emits namespace imports and property access", async () => {
     const fixture = `
       (require math "./math.lang")
+      (require prelude "@vibe/prelude")
       (external path "node:path")
       (def compute (fn [x] (math/add x 1)))
       path/sep
       (get path path-separator)
+      (prelude/println "noop")
       (compute 41)
     `.trim();
 
@@ -205,11 +223,121 @@ describe("generateModule", () => {
     });
 
     expect(result.moduleText).toContain('import * as math from "./math.js";');
+    expect(result.moduleText).toContain(
+      'import * as prelude from "@vibe/prelude";'
+    );
     expect(result.moduleText).toContain('import * as path from "node:path";');
     expect(result.moduleText).toContain("math.add");
     expect(result.moduleText).toContain('path["path-separator"]');
     expect(result.moduleText).not.toContain("export { math };");
     expect(result.moduleText).not.toContain("export { path };");
+  });
+
+  test("invokes runtime symbol helpers via namespace access", async () => {
+    const fixture = `
+      (external runtime "@vibe/runtime")
+      (def result
+        (let [sym (runtime/symbol "delta")
+              ok (runtime/symbol? sym)
+              eq (runtime/eq* sym (runtime/symbol "delta"))]
+          (runtime/str sym ok eq)))
+      result
+    `.trim();
+
+    const { runtime } = await runProgram(fixture);
+    expect(runtime.result).toBe("deltatruetrue");
+  });
+
+  test("rewrites package specifiers that point at .lang files", async () => {
+    const fixture = `
+      (require prelude "@vibe/prelude/src/prelude.lang")
+      (def answer (prelude/plus 1 2))
+      answer
+    `.trim();
+
+    const generated = await generateFromSource(fixture, {
+      sourceName: "package-import.lang",
+      targetFileName: "package-import.js",
+    });
+
+    expect(generated.moduleText).toContain(
+      'import * as prelude from "@vibe/prelude/src/prelude.js";'
+    );
+  });
+
+  test("import statements flatten bindings in generated modules", async () => {
+    const resolver: ModuleResolver = {
+      resolve: () => ({ ok: true, moduleId: "/workspace/prelude.lang" }),
+    };
+    const moduleExports: ModuleExportsLookup = {
+      getExports: (moduleId: string) =>
+        moduleId === "/workspace/prelude.lang" ? ["frob"] : undefined,
+    };
+    const fixture = `
+      (import "./prelude.lang")
+      (def use-frob frob)
+      use-frob
+    `.trim();
+    const { program, graph } = await compile(fixture, {
+      moduleId: "/workspace/main.lang",
+      moduleResolver: resolver,
+      moduleExports,
+    });
+    const generated = generateModule(program, graph, {
+      sourceName: "flatten.lang",
+    });
+
+    expect(generated.moduleText).toContain("import * as __import__");
+    expect(generated.moduleText).toContain("const frob = __import__");
+    expect(generated.moduleText).toContain("export const use_frob");
+  });
+
+  test("multiple import forms allocate unique anonymous aliases", async () => {
+    const resolver: ModuleResolver = {
+      resolve: ({ specifier }) => {
+        if (specifier === "./foo.lang") {
+          return { ok: true, moduleId: "/workspace/foo.lang" };
+        }
+        if (specifier === "./bar.lang") {
+          return { ok: true, moduleId: "/workspace/bar.lang" };
+        }
+        return { ok: false, reason: "unknown module" };
+      },
+    };
+    const moduleExports: ModuleExportsLookup = {
+      getExports: (moduleId: string) => {
+        if (moduleId === "/workspace/foo.lang") {
+          return ["fooValue"];
+        }
+        if (moduleId === "/workspace/bar.lang") {
+          return ["barValue"];
+        }
+        return undefined;
+      },
+    };
+
+    const fixture = `
+      (import "./foo.lang")
+      (import "./bar.lang")
+      fooValue
+      barValue
+    `;
+
+    const { program, graph } = await compile(fixture, {
+      moduleId: "/workspace/main.lang",
+      moduleResolver: resolver,
+      moduleExports,
+    });
+    const generated = generateModule(program, graph, {
+      sourceName: "multi-import.lang",
+    });
+
+    expect(generated.moduleText).toContain(
+      'import * as __import__ from "./foo.js";'
+    );
+    expect(generated.moduleText).toContain(
+      'import * as __import___1 from "./bar.js";'
+    );
   });
 });
 

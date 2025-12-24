@@ -108,7 +108,7 @@ export enum NodeKind {
 }
 
 export const BUILTIN_SYMBOLS = [
-  // Special forms
+  // Special forms (required even without user-provided definitions)
   "def",
   "defmacro",
   "let",
@@ -116,47 +116,10 @@ export const BUILTIN_SYMBOLS = [
   "if",
   "quote",
   "do",
-  // Binary operators (core runtime primitives)
-  "add*",
-  "sub*",
-  "mul*",
-  "div*",
-  "mod*",
-  "eq*",
-  "lt*",
-  "gt*",
-  "lte*",
-  "gte*",
-  // Sequence operations
-  "first",
-  "rest",
-  "cons",
-  "count",
-  "nth",
-  "map",
-  "filter",
-  "reduce",
-  "concat",
-  "take",
-  "drop",
-  "reverse",
-  // Map operations
-  "get",
-  "assoc",
-  "dissoc",
-  "keys",
-  "vals",
-  // Type introspection
-  "type",
-  // String operations
-  "str",
-  // Collection constructors
-  "list",
-  "vector",
-  // Utility
+  "require",
+  "external",
+  "import",
   "gensym",
-  // I/O (for testing)
-  "println",
 ] as const;
 
 export interface AstNode<K extends NodeKind = NodeKind> {
@@ -226,7 +189,7 @@ export interface DispatchNode extends AstNode<NodeKind.Dispatch> {
   readonly target: ExpressionNode | null;
 }
 
-export type NamespaceImportKind = "require" | "external";
+export type NamespaceImportKind = "require" | "external" | "import";
 
 export interface NamespaceImportNode extends AstNode<NodeKind.NamespaceImport> {
   readonly importKind: NamespaceImportKind;

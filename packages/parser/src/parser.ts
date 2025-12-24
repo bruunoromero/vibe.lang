@@ -220,18 +220,29 @@ export class Parser {
     if (!head || head.kind !== NodeKind.Symbol) {
       return node;
     }
-    if (head.value !== "require" && head.value !== "external") {
-      return node;
+    if (head.value === "require" || head.value === "external") {
+      return {
+        kind: NodeKind.NamespaceImport,
+        span: node.span,
+        importKind: head.value,
+        head,
+        alias: node.elements[1] ?? null,
+        source: node.elements[2] ?? null,
+        elements: node.elements,
+      } satisfies NamespaceImportNode;
     }
-    return {
-      kind: NodeKind.NamespaceImport,
-      span: node.span,
-      importKind: head.value,
-      head,
-      alias: node.elements[1] ?? null,
-      source: node.elements[2] ?? null,
-      elements: node.elements,
-    } satisfies NamespaceImportNode;
+    if (head.value === "import") {
+      return {
+        kind: NodeKind.NamespaceImport,
+        span: node.span,
+        importKind: "import",
+        head,
+        alias: null,
+        source: node.elements[1] ?? null,
+        elements: node.elements,
+      } satisfies NamespaceImportNode;
+    }
+    return node;
   }
 
   private async parseMap(open: Token): Promise<MapNode> {

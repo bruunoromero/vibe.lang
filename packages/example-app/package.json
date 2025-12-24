@@ -6,7 +6,19 @@
   "scripts": {
     "clean": "rm -rf dist",
     "dev": "bun run ../cli/index.ts run --file src/main.lang",
-    "build": "mkdir -p dist && bun run ../cli/index.ts compile-all src --out-dir dist",
+    "build": "mkdir -p dist && bun run ../cli/index.ts build",
     "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@vibe/prelude": "workspace:*"
+  },
+  "vibe": {
+    "sources": [
+      "./src"
+    ],
+    "outDir": "./dist",
+    "modules": {
+      ".": "./src/main.lang"
+    }
   }
 }

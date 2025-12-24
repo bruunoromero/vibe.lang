@@ -14,16 +14,23 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
    - Symbol bindings (variables, parameters, macros, built-ins) with stable IDs that reference their defining scope and node.
    - Node metadata records (one per AST node) that describe which scope a node belongs to plus optional symbol resolution info (definition vs. usage, resolved symbol ID, hygiene tag).
 2. Maintain AST immutability by keeping metadata out-of-band. `@vibe/semantics` assigns opaque `nodeId` values while traversing, and maps additional information via plain records in the returned graph.
-3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `defmacro`, `let`, and `fn`. Additional forms can be layered on via feature flags without changing existing consumers.
-4. Export a default list of builtin symbols (e.g., arithmetic ops, `println`) so unresolved symbol diagnostics stay meaningful even before a stdlib is available.
+3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `defmacro`, `let`, `fn`, `if`, `quote`, `do`, plus the import heads (`require`, `external`). Additional forms can be layered on via feature flags without changing existing consumers.
+4. Export a default list of builtin symbols that matches those special forms so unresolved symbol diagnostics stay meaningful even before user code (or the prelude) defines helpers such as arithmetic or collection operations.
 5. Extend the CLI with a new `vibe analyze` command that parses source, invokes the semantic analyzer, prints the AST alongside semantic metadata, and surfaces combined diagnostics.
 
 ### Update – Namespace Imports (2025-12-21)
 
 - Analyzer now validates `(require alias "./path.lang")` and `(external alias "pkg")` forms, ensuring they appear as standalone top-level statements with a symbol alias plus a single string literal argument.
 - These import forms are restricted to the program root scope; attempts to emit `(require ...)` or `(external ...)` inside nested scopes raise dedicated diagnostics so module loading stays deterministic.
-- Namespace-qualified identifiers such as `alias/member` resolve by binding the alias portion; unresolved aliases raise `SEM_UNRESOLVED_NAMESPACE_ALIAS`. The analyzer also exposes `get` as a builtin head so `(get alias member)` can act as canonical access.
+- Namespace-qualified identifiers such as `alias/member` resolve by binding the alias portion; unresolved aliases raise `SEM_UNRESOLVED_NAMESPACE_ALIAS`. The analyzer also treats `get` as a dedicated special form so `(get alias member)` can act as canonical access without requiring an explicit definition.
 - These rules keep ASTs immutable while still threading module metadata into the semantic graph for codegen.
+
+### Update – Import Flattening (2025-12-23)
+
+- The analyzer now recognizes `(import "./module.lang")` as a namespace import that bypasses alias creation and instead queries the CLI-provided export registry for the target module.
+- Each exported binding is synthesized as a top-level `var` symbol (with deterministic `alias` metadata) so `frob` imported via `import` behaves identically to `def`-defined bindings during analysis, codegen, and REPL flows.
+- The `ModuleImportRecord` graph payload gained an optional `flatten` array that enumerates the imported member names and their resolved identifiers, enabling the code generator to destructure namespaces without reaching back into the analyzer.
+- New diagnostics (`SEM_IMPORT_*`) enforce top-level usage, string literal specifiers, export availability, resolver failures, and duplicate-binding conflicts before code generation begins.
 
 ## Semantic Graph Contract
 

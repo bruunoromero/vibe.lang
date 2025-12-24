@@ -88,8 +88,15 @@ These symbols are intercepted by downstream stages for non-generic evaluation:
 - `defmacro` — Defines compile-time macros. Shape: `(defmacro name [params*] \`(template ...))`; the body must begin with a syntax quote so `~`and`~@` can splice arguments during expansion.
 - `let` — Introduces a lexical scope: `(let [name expr ...] body...)`.
 - `fn` — Lambda literal: `(fn [params...] body...)`.
-- Arithmetic operators `+ - * /` — Emitted as infix JS expressions with traditional defaults.
+- `if` — Branching form: `(if condition then [else])`. Missing else defaults to `nil`.
+- `quote` — Prevents evaluation, equivalent to `'form`.
+- `do` — Sequential evaluation in a single expression position: `(do form* expr)`.
+- `require` — Module import (see below). Restricted to the top level.
+- `external` — JavaScript module import (see below). Restricted to the top level.
+- `import` — Module import that flattens the target module's exports into the current scope (see below). Restricted to the top level.
 - `get` — Namespace accessor sugar. `(get alias member)` lowers to `alias.member` (or bracket access when needed) and powers the `alias/member` shorthand documented below.
+
+Arithmetic helpers (`+`, `-`, `*`, `/`, comparisons, sequence utilities, etc.) are implemented in `@vibe/prelude`. User code should `(require prelude "@vibe/prelude")` (or whichever module provides the desired helpers) rather than relying on implicit global definitions.
 
 ## Module Imports & Namespaces
 
@@ -99,8 +106,9 @@ Module-level dependencies opt into explicit `def` bindings that wrap `require` o
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `(require math "./math.lang")` | Imports another Vibe source file and binds the alias `math` to the generated module (`./math.lang` automatically maps to `./math.js` in emitted code). |
 | `(external fs "node:fs")`      | Imports a JavaScript/TypeScript module verbatim (Node/Bun specifiers, package names, or relative `.js` paths) and binds the alias `fs`.                |
+| `(import "@vibe/prelude")`     | Imports a Vibe module without an alias and flattens every exported binding into the current module as if they were defined locally.                    |
 
-- Imports are namespace-only; no selective/destructured imports are supported yet. Every alias receives whatever the referenced module exports.
+- Imports are namespace-only; no selective/destructured imports are supported yet. Every alias receives whatever the referenced module exports. The `import` form is the exception: it loads a module and auto-defines each exported binding in the current scope without requiring an alias.
 - Import aliases remain module-private; `require`/`external` do not implicitly re-export those bindings.
 - Relative `require` paths accept either `.lang` extensions (rewritten to `.js`) or bare paths (a `.js` suffix is appended during codegen).
 - `require`/`external` statements must supply a symbol alias followed by a single string literal argument.
@@ -109,6 +117,7 @@ Module-level dependencies opt into explicit `def` bindings that wrap `require` o
 - `external` specifiers continue to target JavaScript modules directly; they bypass the Lang module resolver and are emitted verbatim in generated code.
 - The parser now emits dedicated namespace-import AST nodes so downstream stages can reason about imports without re-inspecting generic list shapes.
 - Every top-level `def` is exported automatically as a named ES export in generated code; there is no explicit export syntax in the source language. The code generator no longer emits a default export or runtime environment wrapper.
+- `import` depends on module export metadata surfaced by the CLI; analysis reports diagnostics if exports cannot be enumerated or if flattening would overwrite existing bindings. Generated JavaScript destructures the imported namespace into individual bindings so downstream modules can reference them without alias prefixes.
 
 ### Namespace Access
 

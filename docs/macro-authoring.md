@@ -69,41 +69,37 @@ Constraints:
 
 ### Compile-Time Evaluation in Unquotes
 
-Nested expressions inside `~` support compile-time evaluation with a **minimal set of core primitives**:
-
-**Core Primitives:**
-
-- `(gensym "hint")` - Generate unique hygienic symbols
-- `(first coll)` - Get the first element of a sequence
-- `(rest coll)` - Get remaining elements as a sequence
-- `(cons item coll)` - Prepend item to sequence
-- `(count coll)` - Get the number of elements in a sequence
-- `(eq* a b)` - Check equality of two values (binary only)
-- `(if cond then else)` - Conditional evaluation at compile time
-
-These primitives are sufficient to build any higher-level operation. For example:
+Nested expressions inside `~` run through the **full interpreter** while the macro expands. Any construct that works at runtime—`if`, `let`, arithmetic, sequence helpers, even helper functions defined earlier in the same module—can execute during expansion. Macro parameters that represent literal data are converted into interpreter values, letting you inspect or transform them before producing new syntax.
 
 ```
-; empty? can be derived from count + eq*
-~(eq* 0 (count forms))
+(defmacro pick-first [forms]
+  `(vector ~(if (eq* 0 (count forms))
+                nil
+                (first forms))))
 
-; next (like rest but returns nil if empty)
-~(if (eq* 0 (count (rest forms))) nil (rest forms))
-
-; second element
-~(first (rest forms))
-
-; check if exactly one element
-~(eq* 1 (count forms))
-
-; variadic = macro (chained equality)
-(defmacro = [& args]
-  `(if (eq* 1 (count args))
-     true
-     (if (eq* ~(first args) ~(first (rest args)))
-       (= ~@(rest args))
-       false)))
+(pick-first [1 2 3]) ;=> (vector 1)
 ```
+
+- `gensym` continues to share the analyzer's hygiene counter, so compile-time symbol generation stays deterministic.
+- If the interpreter raises an error (unknown symbol, invalid arity, etc.), it is surfaced as `SEM_MACRO_EVAL_ERROR` or a more specific diagnostic and aborts the macro expansion.
+- Referencing undeclared macro parameters (`~missing`) is still rejected with `SEM_MACRO_UNKNOWN_PARAM`.
+
+Use this power sparingly: running large computations during analysis slows the build, but small helpers drastically simplify macro authoring.
+
+## Symbols vs. Strings at Runtime
+
+When code reaches the runtime, symbols are represented as tagged JavaScript objects with `__vibeType: "symbol"`. Use the helpers in `@vibe/runtime` to work with them:
+
+```
+(external runtime "@vibe/runtime")
+
+(def quoted (quote foo))
+(def runtime-sym (runtime/symbol "foo"))
+(runtime/symbol? runtime-sym)  ;=> true
+(runtime/eq* runtime-sym quoted) ;=> true
+```
+
+Because `runtime/symbol` lives in the runtime package, you can build or compare symbols inside macros without adding a new builtin special form. Map helpers such as `runtime/assoc` and `runtime/get` also understand tagged symbols, so you can safely use them as keys without stringifying manually.
 
 Example using core primitives:
 

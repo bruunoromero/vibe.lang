@@ -10,9 +10,23 @@ import {
 } from "@vibe/semantics";
 import { generateModule } from "@vibe/codegen";
 import { existsSync } from "node:fs";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import sade from "sade";
+import {
+  createProjectModuleResolver,
+  findWorkspaceRoot,
+  PackageRegistry,
+} from "./src/module-resolver";
+import { buildPackageGraph } from "./src/package-graph";
+import { resolveVibePackageConfig } from "./src/workspace-config";
+import {
+  ModuleExportsTable,
+  seedModuleExportsFromMetadata,
+  seedModuleExportsFromPackageJson,
+} from "./src/module-exports";
+import { LANG_EXTENSION } from "./src/specifiers";
 
 type TokenizeOptions = {
   file?: string;
@@ -44,7 +58,57 @@ interface FrontendResult {
 }
 
 const DEFAULT_PRETTY = 2;
-const LANG_EXTENSION = ".lang";
+
+const WORKSPACE_ROOT = findWorkspaceRoot(process.cwd());
+const PACKAGE_REGISTRY = PackageRegistry.create(WORKSPACE_ROOT);
+const defaultModuleResolver = createProjectModuleResolver({
+  packageRegistry: PACKAGE_REGISTRY,
+  workspaceRoot: WORKSPACE_ROOT,
+});
+const MODULE_EXPORTS = new ModuleExportsTable();
+const seededPackageRoots = new Set<string>();
+const workspaceExportsPromise = seedWorkspaceModuleExports();
+
+async function seedWorkspaceModuleExports(): Promise<void> {
+  if (!WORKSPACE_ROOT) {
+    return;
+  }
+  const workspacePackages = PACKAGE_REGISTRY.getWorkspacePackages();
+  await Promise.all(
+    workspacePackages.map(async (metadata) => {
+      await seedModuleExportsFromMetadata(metadata, MODULE_EXPORTS);
+      seededPackageRoots.add(metadata.rootDir);
+    })
+  );
+}
+
+const findPackageRootForFile = (filePath: string): string | null => {
+  let currentDir = path.dirname(path.resolve(filePath));
+  while (true) {
+    const manifestPath = path.join(currentDir, "package.json");
+    if (existsSync(manifestPath)) {
+      return currentDir;
+    }
+    const parent = path.dirname(currentDir);
+    if (parent === currentDir) {
+      return null;
+    }
+    currentDir = parent;
+  }
+};
+
+const ensureModuleExportsReady = async (modulePath?: string): Promise<void> => {
+  await workspaceExportsPromise;
+  if (!modulePath) {
+    return;
+  }
+  const packageRoot = findPackageRootForFile(modulePath);
+  if (!packageRoot || seededPackageRoots.has(packageRoot)) {
+    return;
+  }
+  await seedModuleExportsFromPackageJson(packageRoot, MODULE_EXPORTS);
+  seededPackageRoots.add(packageRoot);
+};
 
 const replaceLangExtension = (filePath: string): string => {
   return filePath.endsWith(LANG_EXTENSION)
@@ -77,88 +141,175 @@ const collectLangFiles = async (root: string): Promise<string[]> => {
   return files.sort((a, b) => a.localeCompare(b));
 };
 
+interface LangFileDescriptor {
+  readonly absolutePath: string;
+  readonly relativePath: string;
+  readonly sourceRoot: string;
+}
+
+const collectLangFilesFromRoots = async (
+  roots: readonly string[]
+): Promise<LangFileDescriptor[]> => {
+  const descriptors: LangFileDescriptor[] = [];
+  for (const root of roots) {
+    const absoluteRoot = path.resolve(root);
+    const files = await collectLangFiles(absoluteRoot);
+    for (const file of files) {
+      descriptors.push({
+        absolutePath: file,
+        relativePath: relativeToRoot(absoluteRoot, file),
+        sourceRoot: absoluteRoot,
+      });
+    }
+  }
+  return descriptors.sort((a, b) =>
+    a.absolutePath.localeCompare(b.absolutePath)
+  );
+};
+
+const safeStat = async (filePath: string): Promise<Stats | null> => {
+  try {
+    return await stat(filePath);
+  } catch (error) {
+    if (isEnoent(error)) {
+      return null;
+    }
+    throw error;
+  }
+};
+
+const descriptorNeedsRebuild = async (
+  descriptor: LangFileDescriptor,
+  outDir: string
+): Promise<boolean> => {
+  const outputPath = path.join(
+    outDir,
+    replaceLangExtension(descriptor.relativePath)
+  );
+  const [sourceStats, outputStats] = await Promise.all([
+    safeStat(descriptor.absolutePath),
+    safeStat(outputPath),
+  ]);
+  if (!sourceStats || !outputStats) {
+    return true;
+  }
+  return sourceStats.mtimeMs > outputStats.mtimeMs;
+};
+
+const packageNeedsRebuild = async (
+  descriptors: readonly LangFileDescriptor[],
+  outDir: string
+): Promise<boolean> => {
+  for (const descriptor of descriptors) {
+    if (await descriptorNeedsRebuild(descriptor, outDir)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const isEnoent = (error: unknown): boolean => {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: string }).code === "ENOENT"
+  );
+};
+
+interface CompileSourcesOptions {
+  readonly packageName?: string;
+  readonly sourceRoots: readonly string[];
+  readonly outDir: string;
+  readonly pretty: number;
+  readonly debugMacros?: boolean;
+  readonly logTag?: string;
+  readonly skipIfUpToDate?: boolean;
+}
+
+interface CompileSourcesResult {
+  readonly ok: boolean;
+  readonly fileCount: number;
+}
+
+const compileSources = async (
+  options: CompileSourcesOptions
+): Promise<CompileSourcesResult> => {
+  const logTag = options.logTag ?? "[vibe][build]";
+  const sourceRoots = options.sourceRoots.map((root) => path.resolve(root));
+  const descriptors = await collectLangFilesFromRoots(sourceRoots);
+  if (descriptors.length === 0) {
+    console.error(
+      `${logTag} No .lang files found under ${sourceRoots.join(", ")}`
+    );
+    return { ok: false, fileCount: 0 };
+  }
+  const outDir = path.resolve(options.outDir);
+  if (options.skipIfUpToDate) {
+    const needsBuild = await packageNeedsRebuild(descriptors, outDir);
+    if (!needsBuild) {
+      console.info(
+        `${logTag} up to date; skipping (${descriptors.length} sources)`
+      );
+      return { ok: true, fileCount: descriptors.length };
+    }
+  }
+  const knownModules = new Set(
+    descriptors.map((descriptor) => descriptor.absolutePath)
+  );
+  const moduleResolver = createProjectModuleResolver({
+    knownModules,
+    packageRegistry: PACKAGE_REGISTRY,
+    workspaceRoot: WORKSPACE_ROOT,
+  });
+  await mkdir(outDir, { recursive: true });
+  let hadFailure = false;
+  for (const descriptor of descriptors) {
+    const moduleContext: FrontendContext = {
+      moduleId: descriptor.absolutePath,
+      moduleResolver,
+    };
+    const frontend = await runFrontend(
+      { file: descriptor.absolutePath },
+      moduleContext
+    );
+    if (options.debugMacros) {
+      logMacroDebug(frontend.analysis, options.pretty);
+    }
+    if (!frontend.ok) {
+      hadFailure = true;
+      continue;
+    }
+    const targetFileName = replaceLangExtension(descriptor.relativePath);
+    const outputPath = path.join(outDir, targetFileName);
+    const codegen = generateModule(
+      frontend.parse.program,
+      frontend.analysis.graph,
+      {
+        sourceName: descriptor.relativePath,
+        sourceContent: frontend.sourceText,
+        targetFileName,
+      }
+    );
+    emitDiagnostics(codegen.diagnostics);
+    if (!codegen.ok) {
+      hadFailure = true;
+      continue;
+    }
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    await Bun.write(outputPath, codegen.moduleText);
+    console.info(`${logTag} wrote ${path.relative(process.cwd(), outputPath)}`);
+  }
+  return {
+    ok: !hadFailure,
+    fileCount: descriptors.length,
+  };
+};
+
 interface FrontendContext {
   readonly moduleId?: string;
   readonly moduleResolver?: ModuleResolver;
 }
-
-const isRelativeSpecifier = (specifier: string): boolean =>
-  specifier.startsWith("./") || specifier.startsWith("../");
-
-const ensureLangSpecifier = (specifier: string): string | null => {
-  if (specifier.endsWith(".lang")) {
-    return specifier;
-  }
-  if (specifier.endsWith(".js")) {
-    return null;
-  }
-  return `${specifier}.lang`;
-};
-
-const normalizeRequireTarget = (
-  fromModuleId: string,
-  specifier: string
-): string | null => {
-  if (!isRelativeSpecifier(specifier)) {
-    return null;
-  }
-  const langSpecifier = ensureLangSpecifier(specifier);
-  if (!langSpecifier) {
-    return null;
-  }
-  const fromDir = path.dirname(fromModuleId);
-  return path.resolve(fromDir, langSpecifier);
-};
-
-class FileSystemModuleResolver implements ModuleResolver {
-  resolve({
-    fromModuleId,
-    specifier,
-    kind,
-  }: ModuleResolutionRequest): ModuleResolutionResult {
-    if (kind !== "require") {
-      return { ok: true };
-    }
-    const normalized = normalizeRequireTarget(fromModuleId, specifier);
-    if (!normalized) {
-      return {
-        ok: false,
-        reason: "require expects a relative .lang specifier",
-      };
-    }
-    if (existsSync(normalized)) {
-      return { ok: true, moduleId: normalized };
-    }
-    return { ok: false, reason: `module not found (${specifier})` };
-  }
-}
-
-class WorkspaceModuleResolver implements ModuleResolver {
-  constructor(private readonly knownModules: Set<string>) {}
-
-  resolve({
-    fromModuleId,
-    specifier,
-    kind,
-  }: ModuleResolutionRequest): ModuleResolutionResult {
-    if (kind !== "require") {
-      return { ok: true };
-    }
-    const normalized = normalizeRequireTarget(fromModuleId, specifier);
-    if (!normalized) {
-      return {
-        ok: false,
-        reason: "require expects a relative .lang specifier",
-      };
-    }
-    if (this.knownModules.has(normalized)) {
-      return { ok: true, moduleId: normalized };
-    }
-    return { ok: false, reason: `module not found (${specifier})` };
-  }
-}
-
-const fileSystemModuleResolver = new FileSystemModuleResolver();
 
 const createFileModuleContext = (filePath?: string): FrontendContext => {
   if (!filePath) {
@@ -167,7 +318,7 @@ const createFileModuleContext = (filePath?: string): FrontendContext => {
   const moduleId = path.resolve(filePath);
   return {
     moduleId,
-    moduleResolver: fileSystemModuleResolver,
+    moduleResolver: defaultModuleResolver,
   } satisfies FrontendContext;
 };
 
@@ -276,10 +427,15 @@ const runFrontend = async (
     ...defaultContext,
     ...context,
   };
+  const targetModuleId =
+    mergedContext.moduleId ??
+    (options.file ? path.resolve(options.file) : undefined);
+  await ensureModuleExportsReady(targetModuleId);
   const parse = await parseSource(sourceText);
-  const analysis = analyzeProgram(parse.program, {
+  const analysis = await analyzeProgram(parse.program, {
     moduleId: mergedContext.moduleId,
     moduleResolver: mergedContext.moduleResolver,
+    moduleExports: MODULE_EXPORTS,
   });
   emitDiagnostics([...parse.diagnostics, ...analysis.diagnostics]);
   return {
@@ -505,52 +661,76 @@ const runCompileAll = async (
     const sourceRoot = path.resolve(directory ?? ".");
     const outDir = path.resolve(options.outDir ?? "dist");
     const pretty = options.pretty ?? DEFAULT_PRETTY;
-    const langFiles = await collectLangFiles(sourceRoot);
-    if (langFiles.length === 0) {
+    const debugMacros = options.debugMacros ?? false;
+    const result = await compileSources({
+      sourceRoots: [sourceRoot],
+      outDir,
+      pretty,
+      debugMacros,
+      logTag: "[vibe][compile-all]",
+    });
+    return result.ok ? 0 : 1;
+  } catch (error) {
+    console.error(String(error));
+    return 1;
+  }
+};
+
+const resolveBuildTargetDir = (target: string | undefined): string => {
+  if (!target) {
+    return process.cwd();
+  }
+  const candidate = path.resolve(target);
+  const manifestPath = path.join(candidate, "package.json");
+  if (existsSync(manifestPath)) {
+    return candidate;
+  }
+  const metadata = PACKAGE_REGISTRY.getPackageMetadata(
+    target,
+    WORKSPACE_ROOT ?? process.cwd()
+  );
+  if (metadata) {
+    return metadata.rootDir;
+  }
+  throw new Error(
+    `Unable to resolve build target ${target}. Provide a package name or directory.`
+  );
+};
+
+const runBuild = async (
+  target: string | undefined,
+  options: CompileAllCliOptions
+): Promise<number> => {
+  try {
+    const pretty = options.pretty ?? DEFAULT_PRETTY;
+    const debugMacros = options.debugMacros ?? false;
+    const targetDir = resolveBuildTargetDir(target);
+    const graph = buildPackageGraph(targetDir, PACKAGE_REGISTRY);
+    if (graph.topoOrder.length === 0) {
       console.error(
-        `[vibe][compile-all] No .lang files found under ${sourceRoot}`
+        `[vibe][build] No Vibe sources found starting from ${graph.entry.name}`
       );
       return 1;
     }
-    const knownModules = new Set(langFiles.map((file) => path.resolve(file)));
-    const workspaceResolver = new WorkspaceModuleResolver(knownModules);
-    await mkdir(outDir, { recursive: true });
     let hadFailure = false;
-    for (const filePath of langFiles) {
-      const moduleContext: FrontendContext = {
-        moduleId: path.resolve(filePath),
-        moduleResolver: workspaceResolver,
-      };
-      const frontend = await runFrontend({ file: filePath }, moduleContext);
-      if (options.debugMacros) {
-        logMacroDebug(frontend.analysis, pretty);
-      }
-      if (!frontend.ok) {
-        hadFailure = true;
+    for (const node of graph.topoOrder) {
+      const resolved = resolveVibePackageConfig(node.rootDir, node.vibe);
+      if (resolved.sourceRoots.length === 0) {
         continue;
       }
-      const relativeSource = relativeToRoot(sourceRoot, frontend.sourceName);
-      const targetFileName = replaceLangExtension(relativeSource);
-      const outputPath = path.join(outDir, targetFileName);
-      const codegen = generateModule(
-        frontend.parse.program,
-        frontend.analysis.graph,
-        {
-          sourceName: relativeSource,
-          sourceContent: frontend.sourceText,
-          targetFileName,
-        }
-      );
-      emitDiagnostics(codegen.diagnostics);
-      if (!codegen.ok) {
+      const outDir = resolved.outDir ?? path.resolve(node.rootDir, "dist");
+      const result = await compileSources({
+        packageName: node.name,
+        sourceRoots: resolved.sourceRoots,
+        outDir,
+        pretty,
+        debugMacros,
+        logTag: `[vibe][build:${node.name}]`,
+        skipIfUpToDate: true,
+      });
+      if (!result.ok) {
         hadFailure = true;
-        continue;
       }
-      await mkdir(path.dirname(outputPath), { recursive: true });
-      await Bun.write(outputPath, codegen.moduleText);
-      console.info(
-        `[vibe][compile-all] wrote ${path.relative(process.cwd(), outputPath)}`
-      );
     }
     return hadFailure ? 1 : 0;
   } catch (error) {
@@ -624,9 +804,13 @@ const bootstrapCli = (): void => {
         positionalSource: string | undefined,
         opts: CliOptionBag
       ): Promise<void> => {
+        // If positional looks like a file (has .lang extension), treat it as a file
+        const isFileArg =
+          positionalSource?.endsWith(".lang") ||
+          (positionalSource && existsSync(positionalSource));
         const exitCode = await runAnalyze({
-          file: opts.file,
-          source: opts.source ?? positionalSource,
+          file: opts.file || (isFileArg ? positionalSource : undefined),
+          source: opts.source ?? (isFileArg ? undefined : positionalSource),
           pretty: getNumberOption(opts, "pretty"),
           debugMacros: getBooleanOption(opts, "debug-macros"),
         });
@@ -655,9 +839,13 @@ const bootstrapCli = (): void => {
         positionalSource: string | undefined,
         opts: CliOptionBag
       ): Promise<void> => {
+        // If positional looks like a file (has .lang extension), treat it as a file
+        const isFileArg =
+          positionalSource?.endsWith(".lang") ||
+          (positionalSource && existsSync(positionalSource));
         const exitCode = await runRun({
-          file: opts.file,
-          source: opts.source ?? positionalSource,
+          file: opts.file || (isFileArg ? positionalSource : undefined),
+          source: opts.source ?? (isFileArg ? undefined : positionalSource),
           pretty: getNumberOption(opts, "pretty"),
           debugMacros: getBooleanOption(opts, "debug-macros"),
           showAst: getBooleanOption(opts, "show-ast"),
@@ -690,9 +878,13 @@ const bootstrapCli = (): void => {
         positionalSource: string | undefined,
         opts: CliOptionBag
       ): Promise<void> => {
+        // If positional looks like a file (has .lang extension), treat it as a file
+        const isFileArg =
+          positionalSource?.endsWith(".lang") ||
+          (positionalSource && existsSync(positionalSource));
         const exitCode = await runCompile({
-          file: opts.file,
-          source: opts.source ?? positionalSource,
+          file: opts.file || (isFileArg ? positionalSource : undefined),
+          source: opts.source ?? (isFileArg ? undefined : positionalSource),
           out: opts.out,
           pretty: getNumberOption(opts, "pretty"),
           debugMacros: getBooleanOption(opts, "debug-macros"),
@@ -724,6 +916,32 @@ const bootstrapCli = (): void => {
       ): Promise<void> => {
         const exitCode = await runCompileAll(directory, {
           outDir: getOptionValue<string>(opts, "out-dir"),
+          pretty: getNumberOption(opts, "pretty"),
+          debugMacros: getBooleanOption(opts, "debug-macros"),
+        });
+        process.exit(exitCode);
+      }
+    );
+
+  cli
+    .command("build [target]")
+    .describe(
+      "Recursively compile Vibe packages starting from a package name or directory"
+    )
+    .option(
+      "--pretty, -p <n>",
+      "Pretty-print debug JSON output (default 2)",
+      "2"
+    )
+    .option(
+      "--debug-macros",
+      "Dump macro-expansion metadata to stderr alongside diagnostics"
+    )
+    .example("build packages/example-app")
+    .example("build @vibe/example-app")
+    .action(
+      async (target: string | undefined, opts: CliOptionBag): Promise<void> => {
+        const exitCode = await runBuild(target, {
           pretty: getNumberOption(opts, "pretty"),
           debugMacros: getBooleanOption(opts, "debug-macros"),
         });

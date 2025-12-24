@@ -1,0 +1,25 @@
+{
+  "name": "@vibe/prelude",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/prelude.js",
+  "exports": {
+    ".": "./src/prelude.js"
+  },
+  "scripts": {
+    "build": "bun ../cli/index.ts build .",
+    "test": "echo 'No tests yet'"
+  },
+  "dependencies": {
+    "@vibe/runtime": "workspace:*"
+  },
+  "vibe": {
+    "sources": [
+      "./src"
+    ],
+    "outDir": "./src",
+    "modules": {
+      ".": "./src/prelude.lang"
+    }
+  }
+}

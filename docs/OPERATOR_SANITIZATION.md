@@ -1,118 +1,46 @@
-# Operator Identifier Sanitization Improvement
+# Operator Identifier Sanitization
 
-**Date:** December 22, 2025  
-**Status:** ✅ Implemented and tested
+**Date:** December 23, 2025  
+**Status:** ✅ Updated
 
-## Problem Solved
+## Summary
 
-Previously, operators like `<=` and `>=` would both sanitize to `__` (double underscore), and while the symbol ID suffix prevented collisions at runtime, they generated ugly identifiers like `____symbol_123` and `____symbol_124`.
+- `AliasAllocator` now serializes special characters using the same runtime-friendly fragments that `@vibe/runtime` exports (`eq*` → `eq_STAR`, `seq?` → `seq_QMARK`).
+- The old `operatorNames` table and manual alias reservations were removed in favor of deterministic, character-level serialization.
+- Analyzer and doc tests cover the new naming scheme to ensure user-defined operators line up with runtime helpers and namespace imports.
 
-## Solution
+## Serialization Rules
 
-Implemented a mapping of common operators to readable identifiers:
+Each symbol character is processed left-to-right:
 
-| Operator | Alias   | Operator | Alias     | Operator | Alias   |
-| -------- | ------- | -------- | --------- | -------- | ------- |
-| `<=`     | `lte`   | `<`      | `lt`      | `+`      | `plus`  |
-| `>=`     | `gte`   | `>`      | `gt`      | `-`      | `minus` |
-| `=`      | `eq`    | `!`      | `not`     | `*`      | `mul`   |
-| `?`      | `pred`  | `~`      | `unquote` | `/`      | `div`   |
-| `@`      | `deref` |
+- ASCII letters, digits, and underscores remain unchanged.
+- Hyphens turn into underscores inside compound names (e.g., `foo-bar` → `foo_bar`). A standalone `-` becomes `_DASH` so arithmetic forms stay distinguishable.
+- Characters in the table below expand to their runtime fragment:
 
-## Changes
+| Character | Fragment | Character | Fragment |
+| --------- | -------- | --------- | -------- |
+| `*`       | `_STAR`  | `?`       | `_QMARK` |
+| `!`       | `_BANG`  | `+`       | `_PLUS`  |
+| `=`       | `_EQ`    | `<`       | `_LT`    |
+| `>`       | `_GT`    | `/`       | `_SLASH` |
 
-### 1. Semantic Analyzer (`packages/semantics/src/analyzer.ts`)
+Any other punctuation falls back to `_`. Identifiers that would start with a digit gain a leading underscore, and JavaScript keywords still receive a prefixed underscore via the existing `RESERVED_IDENTIFIERS` guard.
 
-**AliasAllocator improvements:**
+## Examples
 
-- Added `operatorNames` map with friendly names for common operators
-- Updated `sanitize()` to use friendly names when the entire identifier is a known operator
-- Moved sanitization before symbol ID appending to prevent double-underscore issues
+- `(def eq* (fn [a b] (= a b)))` → exports `eq_STAR`
+- `(def is-valid? (fn [x] true))` → exports `is_valid_QMARK`
+- `(def + (fn [a b] a))` → exports `_PLUS`
 
-```typescript
-private readonly operatorNames = new Map<string, string>([
-  ["<=", "lte"],
-  [">=", "gte"],
-  // ... etc
-]);
+These names now match namespace imports from runtime modules, so `(require rt "@vibe/runtime")` followed by `rt/eq*` continues to resolve to `rt.eq_STAR` without additional mapping code.
 
-allocate(name: string, symbolId: SymbolId, preferRaw: boolean): string {
-  const sanitized = this.sanitize(name);
-  const preferred = preferRaw ? sanitized : `${sanitized}__${symbolId}`;
-  return this.reserve(this.ensureIdentifier(preferred));
-}
-```
+## Tests & Documentation
 
-### 2. Tests Added (`packages/semantics/tests/analyze.test.ts`)
-
-- ✅ `generates distinct readable names for comparison operators` — `<=`, `>=`, `<`, `>`
-- ✅ `generates readable names for arithmetic operators` — `+`, `-`, `*`, `/`
-- ✅ `handles compound names with special characters` — `is-valid?`, `set-value!`, `map*`
-
-### 3. Documentation
-
-Updated `packages/semantics/CHANGELOG.md` with the improvement details.
-
-## Before & After
-
-**Before:**
-
-```javascript
-export const ____symbol_0 = (a__symbol_1, b__symbol_2) => {
-  return a__symbol_1;
-}; // <=
-export const ____symbol_3 = (a__symbol_4, b__symbol_5) => {
-  return b__symbol_4;
-}; // >=
-```
-
-**After:**
-
-```javascript
-export const lte = (a__symbol_14, b__symbol_15) => {
-  return a__symbol_14;
-};
-export const gte = (a__symbol_17, b__symbol_18) => {
-  return b__symbol_17;
-};
-```
-
-## Test Results
-
-✅ **114/114 tests pass** (up from 111) — Full end-to-end verification
-
-```
-Exported functions:
-export const lte = (a__symbol_14, b__symbol_15) => {
-export const gte = (a__symbol_17, b__symbol_18) => {
-
-IR Symbols:
-  <= -> lte
-  >= -> gte
-```
+- `packages/semantics/tests/analyze.test.ts` asserts the new `_STAR`, `_QMARK`, `_LT`, etc. aliases for operators and compound names.
+- `docs/CLOJURE_NAMING_FEATURE.md` and `packages/semantics/CHANGELOG.md` describe the runtime-style serialization so downstream tools know what to expect.
 
 ## Impact
 
-- ✅ **Readability** — Generated JavaScript now has human-readable operator function names
-- ✅ **Uniqueness** — No more collisions between different operators
-- ✅ **Backward compatible** — Compound names like `foo-bar` still work correctly
-- ✅ **Well-tested** — Three new test cases verify operator handling
-
-## Example Usage
-
-```vibe
-(def <= (fn [a b] a))
-(def >= (fn [a b] b))
-(<= 1 2)      ; calls the exported lte function
-(>= 5 3)      ; calls the exported gte function
-```
-
-Generates clean JavaScript:
-
-```javascript
-export const lte = (a__symbol_14, b__symbol_15) => a__symbol_14;
-export const gte = (a__symbol_17, b__symbol_18) => b__symbol_17;
-
-lte(1, 2);
-gte(5, 3);
-```
+- ✅ **Consistency** — Analyzer, interpreter, and runtime now agree on how special suffixes are spelled.
+- ✅ **Determinism** — Removing the mutable `used` set means aliases are derived solely from the symbol text plus `symbolId` when necessary.
+- ✅ **Interop** — Namespace imports referencing runtime helpers (e.g., `runtime/eq*`) continue to work without ad-hoc string replacements.

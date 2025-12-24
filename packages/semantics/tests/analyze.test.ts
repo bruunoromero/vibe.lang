@@ -3,9 +3,12 @@ import {
   analyzeProgram,
   type AnalyzeOptions,
   type ModuleResolver,
+  type ModuleExportsLookup,
+  type SymbolId,
 } from "../src";
 import { parseSource } from "@vibe/parser";
 import { NodeKind } from "@vibe/syntax";
+import { TEST_BUILTINS } from "./test-builtins";
 
 const analyzeSource = async (source: string, options?: AnalyzeOptions) => {
   const parseResult = await parseSource(source);
@@ -13,13 +16,23 @@ const analyzeSource = async (source: string, options?: AnalyzeOptions) => {
     const messages = parseResult.diagnostics.map((d) => d.message).join("\n");
     throw new Error(`Failed to parse fixture: ${messages}`);
   }
-  return analyzeProgram(parseResult.program, options);
+  return await analyzeProgram(parseResult.program, {
+    ...options,
+    builtins: options?.builtins ?? TEST_BUILTINS,
+  });
 };
 
-type AnalysisResult = Awaited<ReturnType<typeof analyzeSource>>;
+type AnalysisResult = Awaited<ReturnType<typeof analyzeProgram>>;
 
 const getDiagnosticCodes = (analysis: AnalysisResult) =>
-  analysis.diagnostics.map((diagnostic) => diagnostic.code);
+  analysis.diagnostics.map((d) => d.code);
+const debugDiagnostics = (label: string, analysis: AnalysisResult) => {
+  if (analysis.ok || !process.env.LANG_DEBUG_SEMANTICS) {
+    return;
+  }
+  // eslint-disable-next-line no-console
+  console.error(`[semantics][${label}]`, analysis.diagnostics);
+};
 
 const expectDiagnostic = (analysis: AnalysisResult, code: string) => {
   expect(getDiagnosticCodes(analysis)).toContain(code);
@@ -49,7 +62,7 @@ describe("analyzeProgram", () => {
     const parserScopeId = bindingSymbol.scopeId;
     expect(parserScopeId).toBeDefined();
 
-    const analysis = analyzeProgram(program);
+    const analysis = await analyzeProgram(program);
     expect(analysis.ok).toBeTrue();
 
     const semanticScope = analysis.graph.scopes.find(
@@ -217,7 +230,7 @@ describe("analyzeProgram", () => {
       throw new Error("Missing expected symbol in nested scope fixture");
     }
 
-    const expectUsagesToReference = (name: string, symbolId: string) => {
+    const expectUsagesToReference = (name: string, symbolId: SymbolId) => {
       const usages = analysis.graph.nodes.filter(
         (node) => node.symbol?.name === name && node.symbol.role === "usage"
       );
@@ -302,6 +315,7 @@ describe("analyzeProgram", () => {
       (with-unique 10)
     `);
 
+    debugDiagnostics("gensym-generated bindings", analysis);
     expect(analysis.ok).toBeTrue();
     const generatedSymbol = analysis.graph.symbols.find((symbol) =>
       symbol.name.startsWith("tmp__")
@@ -324,7 +338,6 @@ describe("analyzeProgram", () => {
             b (with-temp 2)]
         (+ a b))
     `);
-
     expect(analysis.ok).toBeTrue();
     expect(getDiagnosticCodes(analysis)).not.toContain("SEM_DUPLICATE_SYMBOL");
 
@@ -344,7 +357,6 @@ describe("analyzeProgram", () => {
     const analysis = await analyzeSource(`
       (defmacro with-temp [expr]
         \`(let [tmp ~expr]
-           (println tmp)
            tmp))
 
       (def answer (with-temp (+ 1 2)))
@@ -486,16 +498,15 @@ describe("analyzeProgram", () => {
       expectDiagnostic(analysis, "SEM_MACRO_UNKNOWN_PARAM");
     });
 
-    test("rejects unsupported expressions inside unquote", async () => {
-      // With the interpreter, most expressions are now supported.
-      // This test now verifies that arithmetic works at compile-time
+    test("evaluates full expressions inside unquote at compile time", async () => {
       const analysis = await analyzeSource(`
-        (defmacro calculate [] \`~(add* 1 2))
-        (calculate)
+        (defmacro simple [] \`~(if true 1 2))
+        (simple)
       `);
 
-      // Should succeed now that we have a full interpreter
+      debugDiagnostics("macro unquote evaluation", analysis);
       expect(analysis.ok).toBeTrue();
+      expect(getDiagnosticCodes(analysis)).toEqual([]);
     });
 
     test("rejects unquote splicing at the top level", async () => {
@@ -654,6 +665,53 @@ describe("analyzeProgram", () => {
 
       expectDiagnostic(failure, "SEM_UNRESOLVED_NAMESPACE_MEMBER");
     });
+
+    test("imports flatten exported bindings into the current module", async () => {
+      const resolver: ModuleResolver = {
+        resolve: () => ({ ok: true, moduleId: "/workspace/prelude.lang" }),
+      };
+      const moduleExports = {
+        getExports: (moduleId: string) =>
+          moduleId === "/workspace/prelude.lang" ? ["frob"] : undefined,
+      } satisfies ModuleExportsLookup;
+
+      const analysis = await analyzeSource(
+        `
+        (import "./prelude.lang")
+        frob
+      `,
+        {
+          moduleId: "/workspace/main.lang",
+          moduleResolver: resolver,
+          moduleExports,
+        }
+      );
+
+      debugDiagnostics("import flatten", analysis);
+      expect(analysis.ok).toBeTrue();
+      const importedSymbol = analysis.graph.symbols.find(
+        (symbol) => symbol.name === "frob"
+      );
+      expect(importedSymbol).toBeDefined();
+      expect(analysis.graph.imports[0]?.kind).toBe("import");
+      const usage = analysis.graph.nodes.find(
+        (node) => node.symbol?.name === "frob" && node.symbol.role === "usage"
+      );
+      expect(usage?.symbol?.symbolId).toBe(importedSymbol?.id);
+    });
+
+    test("reports diagnostics when imports lack export metadata", async () => {
+      const resolver: ModuleResolver = {
+        resolve: () => ({ ok: true, moduleId: "/workspace/prelude.lang" }),
+      };
+
+      const analysis = await analyzeSource('(import "./prelude.lang") frob', {
+        moduleId: "/workspace/main.lang",
+        moduleResolver: resolver,
+      });
+
+      expectDiagnostic(analysis, "SEM_IMPORT_MISSING_EXPORTS");
+    });
   });
 
   describe("operator identifier sanitization", () => {
@@ -675,10 +733,10 @@ describe("analyzeProgram", () => {
       const gt = symbols.find((s) => s.name === ">");
 
       // Aliases include the operator name and symbol ID
-      expect(lte?.alias).toContain("lte");
-      expect(gte?.alias).toContain("gte");
-      expect(lt?.alias).toContain("lt");
-      expect(gt?.alias).toContain("gt");
+      expect(lte?.alias).toMatch(/^_LT_EQ/);
+      expect(gte?.alias).toMatch(/^_GT_EQ/);
+      expect(lt?.alias).toMatch(/^_LT/);
+      expect(gt?.alias).toMatch(/^_GT/);
 
       // Verify they're all distinct
       const aliases = [lte?.alias, gte?.alias, lt?.alias, gt?.alias];
@@ -703,10 +761,10 @@ describe("analyzeProgram", () => {
       const div = symbols.find((s) => s.name === "/");
 
       // Single operators get readable names as base identifier
-      expect(plus?.alias).toContain("plus");
-      expect(minus?.alias).toContain("minus");
-      expect(mul?.alias).toContain("mul");
-      expect(div?.alias).toContain("div");
+      expect(plus?.alias).toMatch(/^_PLUS/);
+      expect(minus?.alias).toMatch(/^_DASH/);
+      expect(mul?.alias).toMatch(/^_STAR/);
+      expect(div?.alias).toMatch(/^_SLASH/);
     });
 
     test("handles compound names with special characters", async () => {
@@ -724,9 +782,9 @@ describe("analyzeProgram", () => {
       const mapVar = symbols.find((s) => s.name === "map*");
 
       // Compound names get sanitized with underscores
-      expect(isValid?.alias).toContain("is_valid_");
-      expect(setValue?.alias).toContain("set_value_");
-      expect(mapVar?.alias).toContain("map_");
+      expect(isValid?.alias).toBe("is_valid_QMARK");
+      expect(setValue?.alias).toBe("set_value_BANG");
+      expect(mapVar?.alias).toBe("map_STAR");
     });
   });
 });

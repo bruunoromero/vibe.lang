@@ -31,7 +31,8 @@ export type Value =
   | SetValue
   | MapValue
   | FunctionValue
-  | BuiltinValue;
+  | BuiltinValue
+  | ExternalNamespaceValue;
 
 export interface NumberValue {
   readonly kind: "number";
@@ -97,6 +98,15 @@ export interface BuiltinValue {
   readonly kind: "builtin";
   readonly name: string;
   readonly fn: BuiltinFunction;
+}
+
+/**
+ * External JavaScript module namespace.
+ * Wraps a JS object and provides dynamic property access.
+ */
+export interface ExternalNamespaceValue {
+  readonly kind: "external";
+  readonly module: any; // The raw JS module object
 }
 
 export type BuiltinFunction = (
@@ -425,4 +435,9 @@ export const makeBuiltin = (
   kind: "builtin",
   name,
   fn,
+});
+
+export const makeExternalNamespace = (module: any): ExternalNamespaceValue => ({
+  kind: "external",
+  module,
 });

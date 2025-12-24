@@ -1,6 +1,10 @@
 # @vibe/syntax Changelog
 
-# @vibe/syntax Changelog
+## 2025-12-23
+
+- Trimmed `BUILTIN_SYMBOLS` down to the language's special forms so runtime helpers now flow through explicit `(require)` calls (e.g., `@vibe/prelude`) instead of being treated as implicit globals.
+- Updated `docs/syntax-spec.md` to document the restricted special form list and point users at the prelude for arithmetic/collection helpers.
+- Documented and surfaced the alias-less `(import "./module.lang")` form by marking it as a built-in special form alongside `require`/`external` so downstream packages can detect and lower flattened imports deterministically.
 
 ## 2025-12-22
 

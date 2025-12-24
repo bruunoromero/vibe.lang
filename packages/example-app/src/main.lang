@@ -1,3 +1,4 @@
+(import "@vibe/prelude")
 (require math "./math.lang")
 (external path "node:path")
 

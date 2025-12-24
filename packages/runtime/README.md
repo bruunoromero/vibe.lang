@@ -2,11 +2,20 @@
 
 Minimal runtime helpers for the `lang` compiler.
 
-Exports:
+## Symbols vs. Strings
 
-- `println(...args)` — prints to console and returns last arg or `null`.
-- `isTruthy(value)` — lightweight truthiness check.
-- `__env()` — placeholder environment accessor (empty by default).
+Runtime symbols are plain JavaScript objects tagged with `__vibeType: "symbol"`:
 
-This package is intentionally minimal. `@vibe/codegen` will import `println` from here
-so generated modules avoid inlining the helper.
+```
+import { symbol, symbol_QMARK } from "@vibe/runtime";
+
+const foo = symbol("foo");
+symbol_QMARK(foo); // true
+symbol_QMARK("foo"); // false
+```
+
+- `eq*` compares symbols by name so `symbol("a")` is distinct from `symbol("b")` and regular strings.
+- `str`, `get`, `assoc`, and `dissoc` now treat these tagged objects as first-class values.
+- `type` returns keyword-style symbols such as `:number`, `:symbol`, etc., making it easy to pattern-match inside macros.
+
+Use `(external runtime "@vibe/runtime")` plus `runtime/symbol` or `runtime/symbol?` to work with tagged symbols inside user code without needing a new builtin form.

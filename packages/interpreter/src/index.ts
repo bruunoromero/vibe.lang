@@ -43,6 +43,7 @@ export {
   makeMap,
   makeFunction,
   makeBuiltin,
+  makeExternalNamespace,
   type Value,
   type NumberValue,
   type StringValue,
@@ -57,5 +58,3 @@ export {
   type BuiltinValue,
   type BuiltinFunction,
 } from "./values";
-
-export { createBuiltins } from "./builtins";

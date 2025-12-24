@@ -1,5 +1,10 @@
 # @vibe/codegen Changelog
 
+## 2025-12-23
+
+- Emitter now understands alias-less `(import "./module.lang")` forms by generating a temporary namespace import and re-exporting each flattened binding individually (`export const foo = __import__0.foo;`). This mirrors the analyzer's new `ModuleImportRecord.flatten` metadata so imported symbols behave like native `def`s in generated JavaScript.
+- Added regression coverage to ensure flattened bindings produce stable identifiers and continue to compile even when no explicit alias is present in the source program.
+
 ## 2025-12-21
 
 - Hoisted the new `(require alias ...)` and `(external alias ...)` forms into explicit `import * as alias from '...';` statements, rewriting `.lang` paths to `.js` and re-exporting the alias so `__env` snapshots keep observing the binding.
@@ -7,6 +12,7 @@
 - Lowered namespace sugar (`alias/member` and `(get alias member)`) into JS property access with automatic fallback to bracket notation for non-identifier members.
 - Added regression tests covering namespace imports plus property access to lock down the new emission strategy.
 - Updated the emitter to consume the parser's new `NamespaceImport` nodes so codegen no longer depends on raw list matching when generating import statements.
+- External namespace members now share the same identifier serialization as the analyzer/runtime (e.g., `runtime/symbol?` maps to `symbol_QMARK`), fixing property lookups for helpers that include suffix punctuation.
 
 ## 2025-12-20
 

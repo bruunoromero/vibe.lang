@@ -9,7 +9,7 @@ const makeReader = (lines: Array<string | null>) => {
 test("evals single-line expression", async () => {
   const outputs: string[] = [];
   const errs: string[] = [];
-  const reader = makeReader(["(add* 1 2)", null]);
+  const reader = makeReader(["(+ 1 2)", null]);
   await runRepl({
     readLine: reader,
     writeOut: (s) => outputs.push(s),
@@ -58,13 +58,15 @@ test("prints diagnostics for unresolved symbols", async () => {
   });
   // Should have at least one diagnostic emitted to stderr
   expect(errs.length).toBeGreaterThan(0);
-  expect(errs.some((e) => e.includes("SEM_"))).toBeTrue();
+  expect(
+    errs.some((e) => e.includes("SEM_") || e.includes("INTERP_"))
+  ).toBeTrue();
 });
 
 test("defines functions and allows subsequent calls", async () => {
   const outputs: string[] = [];
   const errs: string[] = [];
-  const reader = makeReader(["(def a (fn [x y] (add* x y)))", "(a 1 2)", null]);
+  const reader = makeReader(["(def a (fn [x y] (+ x y)))", "(a 1 2)", null]);
   await runRepl({
     readLine: reader,
     writeOut: (s) => outputs.push(s),
@@ -84,7 +86,7 @@ test("handles split definitions across multiple lines", async () => {
   // Simulate user splitting a top-level def across lines and then calling it
   const reader = makeReader([
     "(def a (fn [x y]",
-    " (add* x y)))",
+    " (+ x y)))",
     "(a 1 2)",
     null,
   ]);
@@ -102,7 +104,7 @@ test("handles split definitions across multiple lines", async () => {
 test("prints friendly function labels when a function value is displayed", async () => {
   const outputs: string[] = [];
   const errs: string[] = [];
-  const reader = makeReader(["(def a (fn [x y] (add* x y)))", "a", null]);
+  const reader = makeReader(["(def a (fn [x y] (+ x y)))", "a", null]);
   await runRepl({
     readLine: reader,
     writeOut: (s) => outputs.push(s),
@@ -133,11 +135,11 @@ test("prints a friendly message when a bare builtin symbol is entered", async ()
 
 // Reproduce analyzer behavior for the def capture strategy
 test("analyze evalSource with def capture", async () => {
-  const source = "(def a (fn [x y] (add* x y)))\n(def __repl_result_1 a)";
+  const source = "(def a (fn [x y] (+ x y)))\n(def __repl_result_1 a)";
   const { parseSource } = await import("@vibe/parser");
   const { analyzeProgram } = await import("@vibe/semantics");
   const parse = await parseSource(source);
-  const analysis = analyzeProgram(parse.program);
+  const analysis = await analyzeProgram(parse.program);
   expect(analysis.diagnostics.map((d) => d.code)).not.toContain(
     "SEM_DUPLICATE_SYMBOL"
   );

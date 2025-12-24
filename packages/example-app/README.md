@@ -9,7 +9,7 @@ packages/example-app/
 ├── package.json      # scripts that wrap the Lang CLI
 ├── README.md         # this file
 └── src/
-   ├── main.lang     # sample program using (require math "./math.lang") and (external path "node:path")
+   ├── main.lang     # sample program using (require prelude "@vibe/prelude"), (require math "./math.lang"), and (external path "node:path")
    └── math.lang     # simple namespace imported via (require math "./math.lang")
 ```
 
@@ -60,3 +60,4 @@ Feel free to add more `.lang` files under `src/` and adjust the build script to 
 - Because the Lang CLI already outputs ESM, Node.js can execute the generated files without extra bundling.
 - Pass flags like `--show-ast`, `--show-ir`, or `--debug-macros` to the CLI commands in `package.json` if you want more visibility into the pipeline.
 - `main.lang` demonstrates importing Node/Bun modules via `(external path "node:path")`, so feel free to swap in other externals like `node:fs`.
+- `package.json` now includes a `vibe.modules` map so `(require prelude "@vibe/prelude")` can resolve through the workspace metadata while the emitted JavaScript keeps importing the package's published JS via Node's `exports` field.

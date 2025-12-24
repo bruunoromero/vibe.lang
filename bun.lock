@@ -45,6 +45,9 @@
     "packages/example-app": {
       "name": "@vibe/example-app",
       "version": "0.1.0",
+      "dependencies": {
+        "@vibe/prelude": "workspace:*",
+      },
     },
     "packages/interpreter": {
       "name": "@vibe/interpreter",
@@ -76,6 +79,13 @@
       },
       "devDependencies": {
         "@types/bun": "latest",
+      },
+    },
+    "packages/prelude": {
+      "name": "@vibe/prelude",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vibe/runtime": "workspace:*",
       },
     },
     "packages/runtime": {
@@ -120,6 +130,8 @@
     "@vibe/lexer": ["@vibe/lexer@workspace:packages/lexer"],
 
     "@vibe/parser": ["@vibe/parser@workspace:packages/parser"],
+
+    "@vibe/prelude": ["@vibe/prelude@workspace:packages/prelude"],
 
     "@vibe/runtime": ["@vibe/runtime@workspace:packages/runtime"],
 

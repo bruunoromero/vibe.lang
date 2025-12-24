@@ -6,8 +6,12 @@ import {
   evaluate,
   createRootEnvironment,
   lookupVariable,
+  defineVariable,
+  makeMap,
+  makeBuiltin,
+  type Value,
+  type Environment,
 } from "@vibe/interpreter";
-import type { Value } from "@vibe/interpreter";
 
 export type ReplIO = {
   readLine?: () => Promise<string | null>;
@@ -43,6 +47,28 @@ const emitDiagnostics = (
   for (const d of diagnostics) {
     writeErr(formatDiagnostic(d));
   }
+};
+
+const collectEnvironmentSymbols = (
+  env: Environment | null
+): readonly string[] => {
+  const names = new Set<string>();
+  let current: Environment | null = env;
+  while (current) {
+    for (const name of current.bindings.keys()) {
+      names.add(name);
+    }
+    current = current.parent;
+  }
+  return [...names];
+};
+
+const buildAnalyzerBuiltins = (env: Environment): readonly string[] => {
+  const names = new Set<string>(BUILTIN_SYMBOLS as readonly string[]);
+  for (const symbol of collectEnvironmentSymbols(env)) {
+    names.add(symbol);
+  }
+  return [...names];
 };
 
 /**
@@ -129,6 +155,127 @@ export const runRepl = async (
   let history = "";
   let resultCounter = 0;
   const globalEnv = createRootEnvironment();
+
+  // Auto-load prelude for REPL convenience
+  const loadPrelude = async () => {
+    try {
+      const path = require("path");
+      const fs = require("fs");
+      const { parseSource } = require("@vibe/parser");
+      // Import runtime from relative path
+      const runtime = await import("../../runtime/src/index");
+
+      // Create a runtime namespace with all runtime primitives
+      // so that (external runtime "@vibe/runtime") in prelude can resolve
+      const runtimeNamespace = new Map<string, Value>();
+      for (const [key, value] of Object.entries(runtime)) {
+        if (typeof value === "function") {
+          runtimeNamespace.set(
+            key,
+            makeBuiltin(
+              `runtime/${key}`,
+              (args: readonly Value[], span: any) => {
+                // Convert vibe values to JS, call runtime function, convert back
+                const valueToJS = (v: Value): any => {
+                  switch (v.kind) {
+                    case "number":
+                    case "string":
+                    case "boolean":
+                      return v.value;
+                    case "nil":
+                      return null;
+                    case "list":
+                    case "vector":
+                      return v.elements.map(valueToJS);
+                    case "map":
+                      const obj: Record<string, any> = {};
+                      for (const [k, val] of v.entries) {
+                        obj[k] = valueToJS(val);
+                      }
+                      return obj;
+                    default:
+                      return v;
+                  }
+                };
+                const jsToValue = (jsVal: any): Value => {
+                  if (jsVal === null || jsVal === undefined)
+                    return { kind: "nil" };
+                  if (typeof jsVal === "number")
+                    return { kind: "number", value: jsVal };
+                  if (typeof jsVal === "string")
+                    return { kind: "string", value: jsVal };
+                  if (typeof jsVal === "boolean")
+                    return { kind: "boolean", value: jsVal };
+                  if (Array.isArray(jsVal))
+                    return { kind: "list", elements: jsVal.map(jsToValue) };
+                  return { kind: "nil" };
+                };
+                const jsArgs = args.map(valueToJS);
+                const result = (value as any)(...jsArgs);
+                return jsToValue(result);
+              }
+            )
+          );
+        }
+      }
+      defineVariable(globalEnv, "runtime", makeMap(runtimeNamespace));
+
+      // Try multiple possible locations for the prelude
+      const possiblePaths = [
+        // When running from workspace root with bun packages/cli/index.ts
+        path.resolve(process.cwd(), "packages/prelude/src/prelude.lang"),
+        // When running from packages/cli with relative path
+        path.resolve(__dirname, "../../prelude/src/prelude.lang"),
+        // When compiled/built
+        path.resolve(__dirname, "../../../prelude/src/prelude.lang"),
+      ];
+
+      let preludePath: string | null = null;
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+          preludePath = p;
+          break;
+        }
+      }
+
+      if (preludePath) {
+        const source = fs.readFileSync(preludePath, "utf-8");
+        const parseResult = await parseSource(source, preludePath);
+
+        if (parseResult.ok) {
+          // Evaluate all expressions in the prelude
+          for (const expr of parseResult.program.body) {
+            const result = await evaluate(expr, globalEnv, { callDepth: 0 });
+            if (!result.ok) {
+              writeErr(
+                `Warning: Error loading prelude: ${result.diagnostics
+                  .map((d) => d.message)
+                  .join(", ")}`
+              );
+            }
+          }
+        } else {
+          writeErr(
+            `Warning: Failed to parse prelude: ${parseResult.diagnostics
+              .map((d: { message: string }) => d.message)
+              .join(", ")}`
+          );
+        }
+      } else {
+        writeErr(
+          `Warning: Prelude not found in any of the expected locations, stdlib functions not available`
+        );
+      }
+    } catch (error) {
+      writeErr(
+        `Warning: Failed to load prelude: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+  };
+
+  await loadPrelude();
 
   // Helper that checks whether parse produced a continuation-worthy diagnostic
   const isIncompleteParse = (
@@ -256,11 +403,20 @@ export const runRepl = async (
         continue;
       }
 
-      const evalAnalysis = analyzeProgram(evalParse.program);
-      emitDiagnostics(evalAnalysis.diagnostics, writeErr);
-      if (!evalAnalysis.ok) {
-        buffer = "";
-        continue;
+      const evalAnalysis = await analyzeProgram(evalParse.program, {
+        builtins: buildAnalyzerBuiltins(globalEnv),
+      });
+      // In REPL mode, show analysis warnings but don't fail on them
+      // since symbols might be dynamically loaded (e.g., from prelude)
+      const analysisErrors = evalAnalysis.diagnostics.filter(
+        (d) => d.severity === "error"
+      );
+      if (analysisErrors.length > 0) {
+        // Show warnings but continue
+        emitDiagnostics(
+          evalAnalysis.diagnostics.filter((d) => d.severity === "warning"),
+          writeErr
+        );
       }
 
       // Evaluate using the interpreter (after macros have been expanded by analyzer)
@@ -268,7 +424,7 @@ export const runRepl = async (
       try {
         // Evaluate each node in the program
         for (const node of evalParse.program.body) {
-          const result = evaluate(node, globalEnv);
+          const result = await evaluate(node, globalEnv);
           if (!result.ok) {
             emitDiagnostics(result.diagnostics, writeErr);
             buffer = "";

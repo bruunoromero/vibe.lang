@@ -1,0 +1,108 @@
+;; Vibe Standard Library (Prelude)
+;; Higher-level functions built on top of runtime primitives
+
+;; Import runtime primitives from @vibe/runtime
+(external runtime "@vibe/runtime")
+
+;; ============================================================
+;; Arithmetic Operators (user-friendly names)
+;; ============================================================
+
+(def + (fn [x y]
+  (runtime/add* x y)))
+
+(def - (fn [x y]
+  (runtime/sub* x y)))
+
+(def * (fn [x y]
+  (runtime/mul* x y)))
+
+(def / (fn [x y]
+  (runtime/div* x y)))
+
+(def mod (fn [x y]
+  (runtime/mod* x y)))
+
+;; ============================================================
+;; Comparison Operators (user-friendly names)
+;; ============================================================
+
+(def = (fn [x y]
+  (runtime/eq* x y)))
+
+(def < (fn [x y]
+  (runtime/lt* x y)))
+
+(def > (fn [x y]
+  (runtime/gt* x y)))
+
+(def <= (fn [x y]
+  (runtime/lte* x y)))
+
+(def >= (fn [x y]
+  (runtime/gte* x y)))
+
+;; ============================================================
+;; Higher-Order Sequence Operations
+;; ============================================================
+
+(def map (fn [f coll]
+  (if (runtime/eq* (runtime/count coll) 0)
+    []
+    (runtime/cons (f (runtime/first coll))
+          (map f (runtime/rest coll))))))
+
+(def filter (fn [pred coll]
+  (if (runtime/eq* (runtime/count coll) 0)
+    []
+    (let [x (runtime/first coll)
+          xs (runtime/rest coll)]
+      (if (pred x)
+        (runtime/cons x (filter pred xs))
+        (filter pred xs))))))
+
+(def reduce (fn [f init coll]
+  (if (runtime/eq* (runtime/count coll) 0)
+    init
+    (reduce f (f init (runtime/first coll)) (runtime/rest coll)))))
+
+(def concat (fn [& colls]
+  (reduce (fn [acc coll]
+            (if (runtime/eq* (runtime/count coll) 0)
+              acc
+              (concat acc (runtime/cons (runtime/first coll) (runtime/rest coll)))))
+          []
+          colls)))
+
+(def take (fn [n coll]
+  (if (runtime/lte* n 0)
+    []
+    (if (runtime/eq* (runtime/count coll) 0)
+      []
+      (runtime/cons (runtime/first coll) (take (runtime/add* n -1) (runtime/rest coll)))))))
+
+(def drop (fn [n coll]
+  (if (runtime/lte* n 0)
+    coll
+    (if (runtime/eq* (runtime/count coll) 0)
+      []
+      (drop (runtime/add* n -1) (runtime/rest coll))))))
+
+(def reverse (fn [coll]
+  (reduce (fn [acc x] (runtime/cons x acc)) [] coll)))
+
+;; ============================================================
+;; Collection Constructors
+;; ============================================================
+
+(def list (fn [& items]
+  items))
+
+(def vector (fn [& items]
+  items))
+
+;; ============================================================
+;; I/O Functions
+;; ============================================================
+
+(def println runtime/println)

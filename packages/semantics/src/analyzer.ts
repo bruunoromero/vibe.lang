@@ -25,7 +25,6 @@ import {
   defineVariable,
   valueToNode,
   nodeToValue,
-  type Environment,
 } from "@vibe/interpreter";
 
 export type { ScopeId } from "@vibe/syntax";
@@ -63,6 +62,12 @@ export interface ModuleImportRecord {
   readonly kind: NamespaceImportKind;
   readonly span: SourceSpan;
   readonly moduleId?: string;
+  readonly flatten?: readonly FlattenedImportBinding[];
+}
+
+export interface FlattenedImportBinding {
+  readonly exportedName: string;
+  readonly identifier: string;
 }
 
 export interface ModuleExportRecord {
@@ -135,12 +140,12 @@ interface MacroExpansionContext {
   readonly callSpan: SourceSpan;
 }
 
-export const analyzeProgram = (
+export const analyzeProgram = async (
   program: ProgramNode,
   options: AnalyzeOptions = {}
-): AnalyzeResult => {
+): Promise<AnalyzeResult> => {
   const analyzer = new SemanticAnalyzer(options);
-  analyzer.analyze(program);
+  await analyzer.analyze(program);
   return analyzer.toResult();
 };
 
@@ -182,12 +187,12 @@ export class SemanticAnalyzer {
     this.moduleExportsLookup = options.moduleExports;
   }
 
-  analyze(program: ProgramNode): void {
+  async analyze(program: ProgramNode): Promise<void> {
     const rootScopeId = this.initializeRootScope(program);
     this.recordNode(program, rootScopeId);
     for (const expr of program.body) {
       if (expr) {
-        this.visit(expr, rootScopeId);
+        await this.visit(expr, rootScopeId);
       }
     }
   }
@@ -218,17 +223,17 @@ export class SemanticAnalyzer {
     };
   }
 
-  private visit(node: ExpressionNode, scopeId: ScopeId): void {
+  private async visit(node: ExpressionNode, scopeId: ScopeId): Promise<void> {
     const nodeScopeId = this.getScopeForNode(node, scopeId);
     switch (node.kind) {
       case NodeKind.List:
-        if (!this.expandMacroIfNeeded(node, nodeScopeId)) {
-          this.handleList(node, nodeScopeId);
+        if (!(await this.expandMacroIfNeeded(node, nodeScopeId))) {
+          await this.handleList(node, nodeScopeId);
         }
         break;
       case NodeKind.NamespaceImport:
         this.recordNode(node, nodeScopeId);
-        this.handleNamespaceImport(
+        await this.handleNamespaceImport(
           node as NamespaceImportNode,
           nodeScopeId,
           (node as NamespaceImportNode).importKind
@@ -237,29 +242,29 @@ export class SemanticAnalyzer {
       case NodeKind.Vector:
       case NodeKind.Set:
         this.recordNode(node, nodeScopeId);
-        this.visitSequence(node as VectorNode | SetNode, nodeScopeId);
+        await this.visitSequence(node as VectorNode | SetNode, nodeScopeId);
         break;
       case NodeKind.Map:
         this.recordNode(node, nodeScopeId);
-        this.visitMap(node, nodeScopeId);
+        await this.visitMap(node, nodeScopeId);
         break;
       case NodeKind.Quote:
         this.recordNode(node, nodeScopeId);
-        this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
+        await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
         break;
       case NodeKind.SyntaxQuote:
         this.recordNode(node, nodeScopeId);
-        this.visitSyntaxQuote(node, nodeScopeId);
+        await this.visitSyntaxQuote(node, nodeScopeId);
         break;
       case NodeKind.Unquote:
       case NodeKind.UnquoteSplicing:
         this.recordNode(node, nodeScopeId);
-        this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
+        await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
         break;
       case NodeKind.Deref:
       case NodeKind.Dispatch:
         this.recordNode(node, nodeScopeId);
-        this.visitReaderMacro(
+        await this.visitReaderMacro(
           node as ReaderMacroNode | DispatchNode,
           nodeScopeId
         );
@@ -273,7 +278,10 @@ export class SemanticAnalyzer {
     }
   }
 
-  private expandMacroIfNeeded(node: ListNode, scopeId: ScopeId): boolean {
+  private async expandMacroIfNeeded(
+    node: ListNode,
+    scopeId: ScopeId
+  ): Promise<boolean> {
     const head = node.elements[0];
     if (!head || head.kind !== NodeKind.Symbol) {
       return false;
@@ -345,45 +353,50 @@ export class SemanticAnalyzer {
     }
 
     this.macroExpansionStack.push(binding.id);
-    const expanded = this.expandMacroOnce(definition.template, scopeId, {
-      env,
-      callSpan: node.span,
-    });
-
-    // Recursively expand if the result is also a macro call
-    // Keep the ID on the stack to detect direct recursion
-    if (expanded) {
-      this.fullyExpandAndVisit(expanded, scopeId, 0);
+    let expanded: ExpressionNode | null = null;
+    try {
+      expanded = await this.expandMacroOnce(definition.template, scopeId, {
+        env,
+        callSpan: node.span,
+      });
+    } finally {
+      this.macroExpansionStack.pop();
     }
 
-    this.macroExpansionStack.pop();
+    // Recursively expand if the result is also a macro call
+    // Pass the current macro ID to detect direct recursion
+    if (expanded) {
+      await this.fullyExpandAndVisit(expanded, scopeId, 0, 100, binding.id);
+    }
+
     return true;
   }
 
-  private expandMacroOnce(
+  private async expandMacroOnce(
     template: ReaderMacroNode<NodeKind.SyntaxQuote>,
     scopeId: ScopeId,
     context: MacroExpansionContext
-  ): ExpressionNode | null {
+  ): Promise<ExpressionNode | null> {
     if (!template.target) {
       return null;
     }
-    return this.instantiateTemplate(template.target, context);
+    return await this.instantiateTemplate(template.target, context);
   }
 
-  private fullyExpandAndVisit(
+  private async fullyExpandAndVisit(
     node: ExpressionNode,
     scopeId: ScopeId,
     depth: number,
-    maxDepth: number = 100
-  ): void {
+    maxDepth: number = 100,
+    parentMacroId?: string
+  ): Promise<void> {
     if (depth >= maxDepth) {
       this.report(
         `Macro expansion depth limit (${maxDepth}) exceeded`,
         node.span,
         "SEM_MACRO_MAX_DEPTH"
       );
-      this.visit(node, scopeId);
+      await this.visit(node, scopeId);
       return;
     }
 
@@ -399,7 +412,8 @@ export class SemanticAnalyzer {
             this.recordNode(node, scopeId);
             this.recordSymbolUsage(head, scopeId, "usage");
 
-            if (this.macroExpansionStack.includes(binding.id)) {
+            // Check for direct recursion: if this macro is the immediate parent
+            if (parentMacroId === binding.id) {
               this.report(
                 `Recursive macro expansion detected for ${head.value}`,
                 node.span,
@@ -429,8 +443,7 @@ export class SemanticAnalyzer {
               env.set(definition.rest, restVector);
             }
 
-            this.macroExpansionStack.push(binding.id);
-            const expanded = this.expandMacroOnce(
+            const expanded = await this.expandMacroOnce(
               definition.template,
               scopeId,
               {
@@ -438,11 +451,16 @@ export class SemanticAnalyzer {
                 callSpan: node.span,
               }
             );
-            this.macroExpansionStack.pop();
 
             if (expanded) {
-              // Recursively expand with increased depth
-              this.fullyExpandAndVisit(expanded, scopeId, depth + 1, maxDepth);
+              // Recursively expand with increased depth, passing current macro as parent
+              await this.fullyExpandAndVisit(
+                expanded,
+                scopeId,
+                depth + 1,
+                maxDepth,
+                binding.id
+              );
             }
             return;
           }
@@ -451,10 +469,10 @@ export class SemanticAnalyzer {
     }
 
     // Not a macro call, visit normally
-    this.visit(node, scopeId);
+    await this.visit(node, scopeId);
   }
 
-  private handleList(node: ListNode, scopeId: ScopeId): void {
+  private async handleList(node: ListNode, scopeId: ScopeId): Promise<void> {
     this.recordNode(node, scopeId);
     const [head] = node.elements;
     if (!head) {
@@ -462,67 +480,67 @@ export class SemanticAnalyzer {
     }
 
     if (head.kind === NodeKind.Symbol) {
-      if (this.applySpecialForm(head, node, scopeId)) {
+      if (await this.applySpecialForm(head, node, scopeId)) {
         return;
       }
       this.recordSymbolUsage(head, scopeId, "usage");
     } else {
-      this.visit(head, scopeId);
+      await this.visit(head, scopeId);
     }
 
     for (let index = 1; index < node.elements.length; index += 1) {
       const element = node.elements[index];
       if (element) {
-        this.visit(element, scopeId);
+        await this.visit(element, scopeId);
       }
     }
   }
 
-  private applySpecialForm(
+  private async applySpecialForm(
     head: SymbolNode,
     node: ListNode,
     scopeId: ScopeId
-  ): boolean {
+  ): Promise<boolean> {
     switch (head.value) {
       case "def":
         this.recordSymbolUsage(head, scopeId, "usage");
-        this.handleDef(node, scopeId);
+        await this.handleDef(node, scopeId);
         return true;
       case "defmacro":
         this.recordSymbolUsage(head, scopeId, "usage");
-        this.handleDefMacro(node, scopeId);
+        await this.handleDefMacro(node, scopeId);
         return true;
       case "let":
         this.recordSymbolUsage(head, scopeId, "usage");
-        this.handleLet(node, scopeId);
+        await this.handleLet(node, scopeId);
         return true;
       case "fn":
         this.recordSymbolUsage(head, scopeId, "usage");
-        this.handleFn(node, scopeId);
+        await this.handleFn(node, scopeId);
         return true;
       case "get":
         this.recordBuiltinUsage(head, scopeId);
-        this.handleGet(node, scopeId);
+        await this.handleGet(node, scopeId);
         return true;
       case "require":
         this.recordBuiltinUsage(head, scopeId);
-        this.handleNamespaceImport(node, scopeId, "require");
+        await this.handleNamespaceImport(node, scopeId, "require");
         return true;
       case "external":
         this.recordBuiltinUsage(head, scopeId);
-        this.handleNamespaceImport(node, scopeId, "external");
+        await this.handleNamespaceImport(node, scopeId, "external");
         return true;
       default:
         return false;
     }
   }
 
-  private handleDef(node: ListNode, scopeId: ScopeId): void {
+  private async handleDef(node: ListNode, scopeId: ScopeId): Promise<void> {
     const bindingNode = node.elements[1];
     const valueNode = node.elements[2];
     if (!bindingNode || bindingNode.kind !== NodeKind.Symbol) {
       if (bindingNode) {
-        this.visit(bindingNode, scopeId);
+        await this.visit(bindingNode, scopeId);
       }
       this.report(
         "Definition forms require a symbol name",
@@ -542,18 +560,21 @@ export class SemanticAnalyzer {
     }
 
     if (valueNode) {
-      this.visit(valueNode, scopeId);
+      await this.visit(valueNode, scopeId);
     }
 
     for (let index = 3; index < node.elements.length; index += 1) {
       const element = node.elements[index];
       if (element) {
-        this.visit(element, scopeId);
+        await this.visit(element, scopeId);
       }
     }
   }
 
-  private handleDefMacro(node: ListNode, scopeId: ScopeId): void {
+  private async handleDefMacro(
+    node: ListNode,
+    scopeId: ScopeId
+  ): Promise<void> {
     const nameNode = node.elements[1];
     const paramsNode = node.elements[2];
     const bodyNodes = node.elements
@@ -566,7 +587,7 @@ export class SemanticAnalyzer {
         : null;
     if (!nameNode || nameNode.kind !== NodeKind.Symbol) {
       if (nameNode) {
-        this.visit(nameNode, scopeId);
+        await this.visit(nameNode, scopeId);
       }
       this.report(
         "defmacro requires a symbol name",
@@ -577,7 +598,7 @@ export class SemanticAnalyzer {
 
     if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
       if (paramsNode) {
-        this.visit(paramsNode, scopeId);
+        await this.visit(paramsNode, scopeId);
       }
       this.report(
         "defmacro requires a vector of parameter symbols",
@@ -598,7 +619,7 @@ export class SemanticAnalyzer {
         continue;
       }
       if (param.kind !== NodeKind.Symbol) {
-        this.visit(param, scopeId);
+        await this.visit(param, scopeId);
         this.report(
           "Macro parameters must be symbols",
           param.span,
@@ -688,18 +709,18 @@ export class SemanticAnalyzer {
     }
   }
 
-  private handleLet(node: ListNode, scopeId: ScopeId): void {
+  private async handleLet(node: ListNode, scopeId: ScopeId): Promise<void> {
     const bindingsNode = node.elements[1];
     if (!bindingsNode || bindingsNode.kind !== NodeKind.Vector) {
       if (bindingsNode) {
-        this.visit(bindingsNode, scopeId);
+        await this.visit(bindingsNode, scopeId);
       }
       this.report(
         "let requires a vector of binding pairs",
         node.span,
         "SEM_LET_EXPECTS_VECTOR"
       );
-      this.visitLetBody(node, scopeId);
+      await this.visitLetBody(node, scopeId);
       return;
     }
 
@@ -727,7 +748,7 @@ export class SemanticAnalyzer {
       const target = bindings[index];
       const init = bindings[index + 1];
       if (init) {
-        this.visit(init, childScopeId);
+        await this.visit(init, childScopeId);
       }
       if (!target) {
         continue;
@@ -735,7 +756,7 @@ export class SemanticAnalyzer {
       if (target.kind === NodeKind.Symbol) {
         this.defineSymbol(target, childScopeId, "var", "definition");
       } else {
-        this.visit(target, childScopeId);
+        await this.visit(target, childScopeId);
         this.report(
           "Binding targets inside let must be symbols",
           target.span,
@@ -744,19 +765,19 @@ export class SemanticAnalyzer {
       }
     }
 
-    this.visitLetBody(node, childScopeId);
+    await this.visitLetBody(node, childScopeId);
   }
 
-  private visitLetBody(node: ListNode, scopeId: ScopeId): void {
+  private async visitLetBody(node: ListNode, scopeId: ScopeId): Promise<void> {
     for (let index = 2; index < node.elements.length; index += 1) {
       const element = node.elements[index];
       if (element) {
-        this.visit(element, scopeId);
+        await this.visit(element, scopeId);
       }
     }
   }
 
-  private handleFn(node: ListNode, scopeId: ScopeId): void {
+  private async handleFn(node: ListNode, scopeId: ScopeId): Promise<void> {
     const paramsNode = node.elements[1];
     const paramHints =
       paramsNode && paramsNode.kind === NodeKind.Vector
@@ -776,7 +797,7 @@ export class SemanticAnalyzer {
 
     if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
       if (paramsNode) {
-        this.visit(paramsNode, scopeId);
+        await this.visit(paramsNode, scopeId);
       }
       this.report(
         "fn requires a vector of parameter symbols",
@@ -829,7 +850,7 @@ export class SemanticAnalyzer {
         if (param.kind === NodeKind.Symbol) {
           this.defineSymbol(param, fnScopeId, "parameter", "parameter");
         } else {
-          this.visit(param, fnScopeId);
+          await this.visit(param, fnScopeId);
           this.report(
             "Parameters inside fn must be symbols",
             param.span,
@@ -842,12 +863,12 @@ export class SemanticAnalyzer {
     for (let index = 2; index < node.elements.length; index += 1) {
       const element = node.elements[index];
       if (element) {
-        this.visit(element, fnScopeId);
+        await this.visit(element, fnScopeId);
       }
     }
   }
 
-  private handleGet(node: ListNode, scopeId: ScopeId): void {
+  private async handleGet(node: ListNode, scopeId: ScopeId): Promise<void> {
     const aliasNode = node.elements[1];
     const memberNode = node.elements[2];
     if (!aliasNode) {
@@ -857,7 +878,7 @@ export class SemanticAnalyzer {
         "SEM_GET_EXPECTS_ALIAS"
       );
     } else {
-      this.visit(aliasNode, scopeId);
+      await this.visit(aliasNode, scopeId);
     }
     if (!memberNode) {
       this.report(
@@ -874,27 +895,31 @@ export class SemanticAnalyzer {
         memberNode.span,
         "SEM_GET_EXPECTS_MEMBER"
       );
-      this.visit(memberNode, scopeId);
+      await this.visit(memberNode, scopeId);
     }
 
     for (let index = 3; index < node.elements.length; index += 1) {
       const element = node.elements[index];
       if (element) {
-        this.visit(element, scopeId);
+        await this.visit(element, scopeId);
       }
     }
   }
 
-  private handleNamespaceImport(
+  private async handleNamespaceImport(
     node: NamespaceImportNode | ListNode,
     scopeId: ScopeId,
     kind: NamespaceImportKind
-  ): void {
+  ): Promise<void> {
     if (!this.isTopLevelScope(scopeId)) {
       this.report(
         `${kind} is only supported at the top level`,
         node.span,
-        kind === "require" ? "SEM_REQUIRE_TOP_LEVEL" : "SEM_EXTERNAL_TOP_LEVEL"
+        kind === "require"
+          ? "SEM_REQUIRE_TOP_LEVEL"
+          : kind === "import"
+          ? "SEM_IMPORT_TOP_LEVEL"
+          : "SEM_EXTERNAL_TOP_LEVEL"
       );
     }
 
@@ -908,41 +933,59 @@ export class SemanticAnalyzer {
     const pathNode =
       pathOperand && pathOperand.kind === NodeKind.String ? pathOperand : null;
 
-    if (!aliasNode) {
-      if (aliasOperand) {
-        this.visit(aliasOperand, scopeId);
+    // For 'import' (without alias), handle differently
+    if (kind === "import") {
+      // Import doesn't need an alias - it flattens bindings
+      if (!pathNode) {
+        if (pathOperand) {
+          await this.visit(pathOperand, scopeId);
+        }
+        this.report(
+          `import expects a string literal path`,
+          (pathOperand ?? node).span,
+          "SEM_IMPORT_EXPECTS_STRING"
+        );
+      } else {
+        this.recordImportWithFlattening(node, pathNode, scopeId);
       }
-      this.report(
-        `${kind} expects a symbol alias`,
-        (aliasOperand ?? node).span,
-        kind === "require"
-          ? "SEM_REQUIRE_EXPECTS_ALIAS"
-          : "SEM_EXTERNAL_EXPECTS_ALIAS"
-      );
     } else {
-      this.defineSymbol(aliasNode, scopeId, "var", "definition");
-    }
-
-    if (!pathNode) {
-      if (pathOperand) {
-        this.visit(pathOperand, scopeId);
+      // require and external need an alias
+      if (!aliasNode) {
+        if (aliasOperand) {
+          await this.visit(aliasOperand, scopeId);
+        }
+        this.report(
+          `${kind} expects a symbol alias`,
+          (aliasOperand ?? node).span,
+          kind === "require"
+            ? "SEM_REQUIRE_EXPECTS_ALIAS"
+            : "SEM_EXTERNAL_EXPECTS_ALIAS"
+        );
+      } else {
+        this.defineSymbol(aliasNode, scopeId, "var", "definition");
       }
-      this.report(
-        `${kind} expects a string literal path`,
-        (pathOperand ?? node).span,
-        kind === "require"
-          ? "SEM_REQUIRE_EXPECTS_STRING"
-          : "SEM_EXTERNAL_EXPECTS_STRING"
-      );
-    } else if (aliasNode) {
-      this.recordNamespaceImport(aliasNode, pathNode, kind);
+
+      if (!pathNode) {
+        if (pathOperand) {
+          await this.visit(pathOperand, scopeId);
+        }
+        this.report(
+          `${kind} expects a string literal path`,
+          (pathOperand ?? node).span,
+          kind === "require"
+            ? "SEM_REQUIRE_EXPECTS_STRING"
+            : "SEM_EXTERNAL_EXPECTS_STRING"
+        );
+      } else if (aliasNode) {
+        this.recordNamespaceImport(aliasNode, pathNode, kind);
+      }
     }
 
     const elements = this.resolveImportElements(node);
     for (let index = 3; index < elements.length; index += 1) {
       const element = elements[index];
       if (element) {
-        this.visit(element, scopeId);
+        await this.visit(element, scopeId);
       }
     }
   }
@@ -991,6 +1034,85 @@ export class SemanticAnalyzer {
     this.moduleImportsByAlias.set(aliasNode.value, record);
   }
 
+  private recordImportWithFlattening(
+    node: NamespaceImportNode | ListNode,
+    pathNode: StringNode,
+    scopeId: ScopeId
+  ): void {
+    let moduleId: string | undefined;
+    if (this.moduleResolver && this.moduleId) {
+      const resolution = this.moduleResolver.resolve({
+        fromModuleId: this.moduleId,
+        specifier: pathNode.value,
+        kind: "import",
+      });
+      if (!resolution.ok) {
+        const suffix = resolution.reason ? `: ${resolution.reason}` : "";
+        this.report(
+          `Unable to resolve module ${pathNode.value}${suffix}`,
+          pathNode.span,
+          "SEM_IMPORT_RESOLVE_FAILED"
+        );
+        return;
+      }
+      moduleId = resolution.moduleId;
+    }
+
+    let flattenBindings: FlattenedImportBinding[] | undefined;
+
+    if (moduleId) {
+      if (!this.moduleExportsLookup) {
+        this.report(
+          `Module ${pathNode.value} does not provide export metadata`,
+          pathNode.span,
+          "SEM_IMPORT_MISSING_EXPORTS"
+        );
+        return;
+      }
+
+      const exports = this.moduleExportsLookup.getExports(moduleId);
+      if (!exports) {
+        this.report(
+          `Module ${pathNode.value} does not provide export metadata`,
+          pathNode.span,
+          "SEM_IMPORT_MISSING_EXPORTS"
+        );
+        return;
+      }
+
+      flattenBindings = [];
+      for (const exportedName of exports) {
+        const syntheticNode: SymbolNode = {
+          kind: NodeKind.Symbol,
+          span: node.span,
+          value: exportedName,
+          lexeme: exportedName,
+        };
+        const record = this.defineSymbol(
+          syntheticNode,
+          scopeId,
+          "var",
+          "definition"
+        );
+        if (record) {
+          flattenBindings.push({
+            exportedName,
+            identifier: record.alias,
+          });
+        }
+      }
+    }
+
+    this.moduleImports.push({
+      alias: "", // No alias for flattened imports
+      specifier: pathNode.value,
+      kind: "import",
+      span: pathNode.span,
+      moduleId,
+      flatten: flattenBindings,
+    });
+  }
+
   private resolveRequireTarget(pathNode: StringNode): string | undefined {
     if (!this.moduleResolver || !this.moduleId) {
       return undefined;
@@ -1035,33 +1157,36 @@ export class SemanticAnalyzer {
     });
   }
 
-  private visitSequence(node: VectorNode | SetNode, scopeId: ScopeId): void {
+  private async visitSequence(
+    node: VectorNode | SetNode,
+    scopeId: ScopeId
+  ): Promise<void> {
     for (const element of node.elements) {
       if (element) {
-        this.visit(element, scopeId);
+        await this.visit(element, scopeId);
       }
     }
   }
 
-  private visitMap(node: MapNode, scopeId: ScopeId): void {
+  private async visitMap(node: MapNode, scopeId: ScopeId): Promise<void> {
     for (const entry of node.entries) {
       this.recordNode(entry, scopeId);
       if (entry.key) {
-        this.visit(entry.key, scopeId);
+        await this.visit(entry.key, scopeId);
       }
       if (entry.value) {
-        this.visit(entry.value, scopeId);
+        await this.visit(entry.value, scopeId);
       }
     }
   }
 
-  private visitSyntaxQuote(
+  private async visitSyntaxQuote(
     node: ReaderMacroNode,
     scopeId: ScopeId,
     context?: MacroExpansionContext
-  ): void {
+  ): Promise<void> {
     if (node.kind !== NodeKind.SyntaxQuote) {
-      this.visitReaderMacro(node, scopeId);
+      await this.visitReaderMacro(node, scopeId);
       return;
     }
     if (!node.target) {
@@ -1069,54 +1194,54 @@ export class SemanticAnalyzer {
     }
     // When not in a macro expansion context, just visit the target normally
     if (!context) {
-      this.visit(node.target, scopeId);
+      await this.visit(node.target, scopeId);
       return;
     }
     // This path is no longer used - macro expansion now goes through expandMacroOnce
-    const expanded = this.instantiateTemplate(node.target, context);
+    const expanded = await this.instantiateTemplate(node.target, context);
     if (expanded) {
-      this.visit(expanded, scopeId);
+      await this.visit(expanded, scopeId);
     }
   }
 
-  private visitReaderMacro(
+  private async visitReaderMacro(
     node: ReaderMacroNode | DispatchNode,
     scopeId: ScopeId
-  ): void {
+  ): Promise<void> {
     if (node.target) {
-      this.visit(node.target, scopeId);
+      await this.visit(node.target, scopeId);
     }
   }
 
-  private instantiateTemplate(
+  private async instantiateTemplate(
     node: ExpressionNode,
     context: MacroExpansionContext
-  ): ExpressionNode | null {
+  ): Promise<ExpressionNode | null> {
     switch (node.kind) {
       case NodeKind.List:
-        return this.instantiateSequence(node, context);
+        return await this.instantiateSequence(node, context);
       case NodeKind.Vector:
-        return this.instantiateSequence(node, context) as VectorNode;
+        return (await this.instantiateSequence(node, context)) as VectorNode;
       case NodeKind.Set:
-        return this.instantiateSequence(node, context) as SetNode;
+        return (await this.instantiateSequence(node, context)) as SetNode;
       case NodeKind.Map:
-        return this.instantiateMap(node, context);
+        return await this.instantiateMap(node, context);
       case NodeKind.Quote:
       case NodeKind.Deref:
-        return this.instantiateReader(node as ReaderMacroNode, context);
+        return await this.instantiateReader(node as ReaderMacroNode, context);
       case NodeKind.Dispatch:
-        return this.instantiateDispatch(node as DispatchNode, context);
+        return await this.instantiateDispatch(node as DispatchNode, context);
       case NodeKind.SyntaxQuote:
         if (!node.target) {
           return null;
         }
-        return this.instantiateTemplate(node.target, context);
+        return await this.instantiateTemplate(node.target, context);
       case NodeKind.Unquote:
         return (
-          this.materializeArgument(
+          (await this.materializeArgument(
             node as ReaderMacroNode<NodeKind.Unquote>,
             context
-          ) ?? this.createNilLiteral(context.callSpan)
+          )) ?? this.createNilLiteral(context.callSpan)
         );
       case NodeKind.UnquoteSplicing:
         this.report(
@@ -1130,17 +1255,17 @@ export class SemanticAnalyzer {
     }
   }
 
-  private instantiateSequence(
+  private async instantiateSequence(
     node: ListNode | VectorNode | SetNode,
     context: MacroExpansionContext
-  ): ListNode | VectorNode | SetNode {
+  ): Promise<ListNode | VectorNode | SetNode> {
     const elements: ExpressionNode[] = [];
     for (const element of node.elements) {
       if (!element) {
         continue;
       }
       if (element.kind === NodeKind.Unquote) {
-        const value = this.materializeArgument(
+        const value = await this.materializeArgument(
           element as ReaderMacroNode<NodeKind.Unquote>,
           context
         );
@@ -1150,14 +1275,14 @@ export class SemanticAnalyzer {
         continue;
       }
       if (element.kind === NodeKind.UnquoteSplicing) {
-        const values = this.materializeSplicedArgument(
+        const values = await this.materializeSplicedArgument(
           element as ReaderMacroNode<NodeKind.UnquoteSplicing>,
           context
         );
         elements.push(...values);
         continue;
       }
-      const expanded = this.instantiateTemplate(element, context);
+      const expanded = await this.instantiateTemplate(element, context);
       if (expanded) {
         elements.push(expanded);
       }
@@ -1168,51 +1293,56 @@ export class SemanticAnalyzer {
     } as ListNode | VectorNode | SetNode;
   }
 
-  private instantiateMap(
+  private async instantiateMap(
     node: MapNode,
     context: MacroExpansionContext
-  ): MapNode {
-    const entries = node.entries.map((entry) => ({
-      ...entry,
-      key: entry.key ? this.instantiateTemplate(entry.key, context) : null,
-      value: entry.value
-        ? this.instantiateTemplate(entry.value, context)
-        : null,
-    }));
+  ): Promise<MapNode> {
+    const entries = [];
+    for (const entry of node.entries) {
+      entries.push({
+        ...entry,
+        key: entry.key
+          ? await this.instantiateTemplate(entry.key, context)
+          : null,
+        value: entry.value
+          ? await this.instantiateTemplate(entry.value, context)
+          : null,
+      });
+    }
     return {
       ...node,
       entries,
     };
   }
 
-  private instantiateReader(
+  private async instantiateReader(
     node: ReaderMacroNode,
     context: MacroExpansionContext
-  ): ReaderMacroNode {
+  ): Promise<ReaderMacroNode> {
     return {
       ...node,
       target: node.target
-        ? this.instantiateTemplate(node.target, context)
+        ? await this.instantiateTemplate(node.target, context)
         : null,
     };
   }
 
-  private instantiateDispatch(
+  private async instantiateDispatch(
     node: DispatchNode,
     context: MacroExpansionContext
-  ): DispatchNode {
+  ): Promise<DispatchNode> {
     return {
       ...node,
       target: node.target
-        ? this.instantiateTemplate(node.target, context)
+        ? await this.instantiateTemplate(node.target, context)
         : null,
     };
   }
 
-  private materializeArgument(
+  private async materializeArgument(
     node: ReaderMacroNode<NodeKind.Unquote>,
     context: MacroExpansionContext
-  ): ExpressionNode | null {
+  ): Promise<ExpressionNode | null> {
     if (!node.target) {
       this.report(
         "Unquote requires a target expression",
@@ -1221,13 +1351,13 @@ export class SemanticAnalyzer {
       );
       return null;
     }
-    return this.evaluateUnquoteTarget(node.target, context);
+    return await this.evaluateUnquoteTarget(node.target, context);
   }
 
-  private materializeSplicedArgument(
+  private async materializeSplicedArgument(
     node: ReaderMacroNode<NodeKind.UnquoteSplicing>,
     context: MacroExpansionContext
-  ): ExpressionNode[] {
+  ): Promise<ExpressionNode[]> {
     if (!node.target) {
       this.report(
         "Unquote splicing requires a target expression",
@@ -1236,7 +1366,7 @@ export class SemanticAnalyzer {
       );
       return [];
     }
-    const value = this.evaluateUnquoteTarget(node.target, context);
+    const value = await this.evaluateUnquoteTarget(node.target, context);
     if (!value) {
       return [];
     }
@@ -1257,10 +1387,10 @@ export class SemanticAnalyzer {
     return [value];
   }
 
-  private evaluateUnquoteTarget(
+  private async evaluateUnquoteTarget(
     target: ExpressionNode,
     context: MacroExpansionContext
-  ): ExpressionNode | null {
+  ): Promise<ExpressionNode | null> {
     // Direct parameter substitution
     if (target.kind === NodeKind.Symbol) {
       const value = context.env.get(target.value);
@@ -1275,34 +1405,14 @@ export class SemanticAnalyzer {
       return this.cloneExpression(value);
     }
 
-    // Compile-time function evaluation
-    if (target.kind === NodeKind.List) {
-      const head = target.elements[0];
-      if (!head || head.kind !== NodeKind.Symbol) {
-        this.report(
-          "Unquote expression must be a symbol or list with symbol head",
-          target.span,
-          "SEM_MACRO_UNQUOTE_UNSUPPORTED"
-        );
-        return null;
-      }
-
-      return this.evaluateCompileTimeCall(target, context);
-    }
-
-    this.report(
-      "Unsupported unquote expression inside macro body",
-      target.span,
-      "SEM_MACRO_UNQUOTE_UNSUPPORTED"
-    );
-    return null;
+    return await this.evaluateCompileTimeExpression(target, context);
   }
 
-  private evaluateCompileTimeCall(
-    node: ListNode,
+  private async evaluateCompileTimeExpression(
+    node: ExpressionNode,
     context: MacroExpansionContext
-  ): ExpressionNode | null {
-    // Create an interpreter environment with builtins and macro parameter bindings
+  ): Promise<ExpressionNode | null> {
+    // Create an interpreter environment with macro parameter bindings
     const env = createRootEnvironment();
     for (const [name, value] of context.env.entries()) {
       try {
@@ -1315,7 +1425,15 @@ export class SemanticAnalyzer {
     }
 
     // Evaluate the expression using the full interpreter
-    const result = evaluate(node, env);
+    // Share the analyzer's gensym counter with the interpreter context
+    const evalContext = {
+      callDepth: 0,
+      gensymCounter: { value: this.nextGensymId },
+    };
+    const result = await evaluate(node, env, evalContext);
+
+    // Update the analyzer's counter after evaluation
+    this.nextGensymId = evalContext.gensymCounter.value;
 
     if (!result.ok) {
       // Report interpreter errors
@@ -1346,27 +1464,6 @@ export class SemanticAnalyzer {
       );
       return null;
     }
-  }
-
-  private createBooleanLiteral(
-    span: SourceSpan,
-    value: boolean
-  ): ExpressionNode {
-    return {
-      kind: NodeKind.Boolean,
-      span,
-      lexeme: value ? "true" : "false",
-      value,
-    };
-  }
-
-  private createNumberLiteral(span: SourceSpan, value: number): ExpressionNode {
-    return {
-      kind: NodeKind.Number,
-      span,
-      lexeme: value.toString(),
-      value,
-    };
   }
 
   private cloneExpression<T extends ExpressionNode>(node: T): T {
@@ -1766,22 +1863,22 @@ class AliasAllocator {
 
   private readonly operatorNames = new Map<string, string>([
     // Comparison operators
-    ["<=", "lte"],
-    [">=", "gte"],
-    ["<", "lt"],
-    [">", "gt"],
-    ["=", "eq"],
+    ["<=", "_LT_EQ"],
+    [">=", "_GT_EQ"],
+    ["<", "_LT"],
+    [">", "_GT"],
+    ["=", "_EQ"],
     // Arithmetic operators
-    ["+", "plus"],
-    ["-", "minus"],
-    ["*", "mul"],
-    ["/", "div"],
+    ["+", "_PLUS"],
+    ["-", "_DASH"],
+    ["*", "_STAR"],
+    ["/", "_SLASH"],
     // Logical operators
-    ["!", "not"],
-    ["?", "pred"],
+    ["!", "_BANG"],
+    ["?", "_QMARK"],
     // Special
-    ["~", "unquote"],
-    ["@", "deref"],
+    ["~", "_TILDE"],
+    ["@", "_AT"],
   ]);
 
   allocate(name: string, symbolId: SymbolId, preferRaw: boolean): string {
@@ -1798,15 +1895,42 @@ class AliasAllocator {
       return operatorName;
     }
 
-    // For compound names, preserve alphanumerics and replace special chars with underscores
-    // Only convert whole operator tokens when they appear as isolated parts
-    let base = value.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^([0-9])/, "_$1");
+    // For compound names, check for trailing special characters first
+    const trailingSpecialChars = new Set(["?", "!", "*", "+", "/", "%"]);
+    let trailingOp = "";
+    let baseValue = value;
 
-    if (base.length === 0 || base === "_") {
-      base = "_ident";
+    // Check if the value ends with a special char that should be preserved
+    if (value.length > 1) {
+      const lastChar = value.charAt(value.length - 1);
+      if (lastChar && trailingSpecialChars.has(lastChar)) {
+        const opName = this.operatorNames.get(lastChar);
+        if (opName) {
+          trailingOp = opName; // opName already includes leading underscore
+          baseValue = value.slice(0, -1);
+        }
+      }
     }
 
-    return base;
+    // Convert the base to underscores (without the trailing operator)
+    let result = baseValue.replace(/[^a-zA-Z0-9_]/g, "_");
+
+    // Remove trailing underscores before adding the operator suffix
+    result = result.replace(/_+$/, "");
+
+    // Add the trailing operator name
+    result += trailingOp;
+
+    // Ensure result doesn't start with a digit
+    if (/^[0-9]/.test(result)) {
+      result = "_" + result;
+    }
+
+    if (result.length === 0 || result === "_") {
+      result = "_ident";
+    }
+
+    return result;
   }
 
   private ensureIdentifier(value: string): string {

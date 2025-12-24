@@ -1,5 +1,10 @@
 # @vibe/parser Changelog
 
+## 2025-12-23
+
+- Promoted `(import "./module.lang")` into the existing `NamespaceImport` AST node (with `importKind = "import"`) so downstream stages can distinguish alias-less imports without re-parsing list literals.
+- Added regression tests covering the new syntax to lock the node shape and ensure the parser enforces the "string-literal only" argument contract.
+
 ## 2025-12-22
 
 - **Feature: Clojure-style identifier parsing** — Added test coverage for symbols with special-character suffixes (`?`, `!`, `*`, etc.). Parser now correctly handles function definitions and usage sites with Clojure-style names like `is-valid?` and `set-value!`.

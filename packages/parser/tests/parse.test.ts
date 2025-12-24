@@ -404,6 +404,21 @@ describe("parseSource", () => {
     expect(externalNode.source?.kind).toBe(NodeKind.String);
   });
 
+  test("parses import forms without aliases", async () => {
+    const result = await parseSource('(import "./prelude.lang")');
+
+    expect(result.ok).toBeTrue();
+    const [importNode] = result.program.body;
+    expect(importNode?.kind).toBe(NodeKind.NamespaceImport);
+    if (!importNode || importNode.kind !== NodeKind.NamespaceImport) {
+      throw new Error("Expected namespace import node");
+    }
+    expect(importNode.importKind).toBe("import");
+    expect(importNode.alias).toBeNull();
+    expect(importNode.source?.kind).toBe(NodeKind.String);
+    expect(importNode.elements).toHaveLength(2);
+  });
+
   test("parses function definitions with Clojure-style names", async () => {
     const result = await parseSource(`
       (def is-valid? (fn [x] (> x 0)))

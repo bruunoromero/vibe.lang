@@ -1,9 +1,10 @@
-export { analyzeProgram, SemanticAnalyzer } from "./analyzer";
+export { analyzeProgram } from "./analyzer";
 export type {
   AnalyzeOptions,
   AnalyzeResult,
   SemanticGraph,
   ModuleImportRecord,
+  FlattenedImportBinding,
   ModuleExportRecord,
   ModuleResolver,
   ModuleResolutionRequest,

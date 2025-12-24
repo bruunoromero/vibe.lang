@@ -35,3 +35,39 @@ Start an interactive REPL that parses, analyzes, compiles, and executes Lang for
 - Notes:
   - The REPL preserves definitions for the session (each input is evaluated in the cumulative session context).
   - Diagnostics (parse/semantic/codegen) are printed to stderr in human-readable form.
+
+## Workspace Builds (`vibe build`) 🚀
+
+`vibe build [package|path]` walks `package.json#dependencies` starting from the selected package, topologically sorts every package that declares Lang sources, and compiles each `.lang` file into the package's configured output directory.
+
+- Declare Lang inputs inside each package manifest using the `vibe` block:
+
+  ```jsonc
+  {
+    "name": "@vibe/example-app",
+    "dependencies": {
+      "@vibe/prelude": "workspace:*"
+    },
+    "vibe": {
+      "sources": ["./src"],
+      "outDir": "./dist",
+      "modules": {
+        ".": "./src/main.lang",
+        "./math": "./src/math.lang"
+      }
+    }
+  }
+  ```
+
+- Run the build:
+
+  ```bash
+  bun packages/cli/index.ts build packages/example-app
+  # or by package name when it's published/linked
+  bun packages/cli/index.ts build @vibe/example-app
+  ```
+
+- The build:
+  - Compiles dependency packages (e.g., `@vibe/prelude`) before dependents.
+  - Mirrors the `sources` directory structure under `outDir`, swapping `.lang` → `.js`.
+  - Leaves package-level `require` imports as bare specifiers so Node can honor each package's `exports` map while forcing relative imports to reference their `.js` siblings.

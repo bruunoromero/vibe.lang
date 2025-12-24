@@ -1,3 +1,5 @@
+(import "@vibe/prelude")
+
 (def add (fn [x y]
   (+ x y)))
 

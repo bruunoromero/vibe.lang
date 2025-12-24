@@ -68,11 +68,18 @@ Valid Clojure-style function names are now supported:
 (def path/resolver (fn [] nil))     ; namespace with slash
 ```
 
-Generated JavaScript correctly sanitizes these names to valid JavaScript identifiers:
+Generated JavaScript now reuses the runtime fragments for punctuation:
 
-- `is-valid?` → `is_valid_`
-- `set-value!` → `set_value_`
-- `splat*` → `splat_`
+- `is-valid?` → `is_valid_QMARK`
+- `set-value!` → `set_value_BANG`
+- `splat*` → `splat_STAR`
+
+To build or inspect symbols that carry these names at runtime, import the helpers from `@vibe/runtime`:
+
+```
+(external runtime "@vibe/runtime")
+(runtime/symbol? (runtime/symbol "set-value!"))  ;=> true
+```
 
 ## Impact
 
