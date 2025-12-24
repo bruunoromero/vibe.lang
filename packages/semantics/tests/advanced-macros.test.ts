@@ -3,6 +3,16 @@ import { parseSource } from "@vibe/parser";
 import { analyzeProgram } from "../src/analyzer";
 import { TEST_BUILTINS } from "./test-builtins";
 
+const ARITHMETIC_STUB = `
+  (def + (fn [& xs] xs))
+  (def - (fn [& xs] xs))
+  (def * (fn [& xs] xs))
+  (def / (fn [& xs] xs))
+`;
+
+const withArithmeticPrelude = (source: string) =>
+  `${ARITHMETIC_STUB}\n${source}`;
+
 const analyzeSource = async (source: string) => {
   const parseResult = await parseSource(source);
   const analyzeResult = await analyzeProgram(parseResult.program, {
@@ -38,11 +48,13 @@ describe("advanced macros", () => {
   });
 
   test("threading macro pattern", async () => {
-    const result = await analyzeSource(`
-      (defmacro thread-first [x & forms]
-        \`~x)
-      (thread-first 5 (+ 3) (* 2))
-    `);
+    const result = await analyzeSource(
+      withArithmeticPrelude(`
+        (defmacro thread-first [x & forms]
+          \`~x)
+        (thread-first 5 (+ 3) (* 2))
+      `)
+    );
 
     expect(result.ok).toBeTrue();
   });

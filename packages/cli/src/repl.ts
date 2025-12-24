@@ -1,7 +1,7 @@
 import { parseSource } from "@vibe/parser";
 import { BUILTIN_SYMBOLS } from "@vibe/syntax";
 import { analyzeProgram } from "@vibe/semantics";
-import type { Diagnostic } from "@vibe/syntax";
+import type { Diagnostic, ExpressionNode } from "@vibe/syntax";
 import {
   evaluate,
   createRootEnvironment,
@@ -21,6 +21,8 @@ export type ReplIO = {
 
 const DEFAULT_PROMPT = "vibe> ";
 const CONT_PROMPT = "... ";
+
+const ARITHMETIC_OPERATORS = new Set(["+", "-", "*", "/"]);
 
 const UNTERMINATED_CODES = new Set([
   "PARSE_LIST_UNTERMINATED",
@@ -66,9 +68,20 @@ const collectEnvironmentSymbols = (
 const buildAnalyzerBuiltins = (env: Environment): readonly string[] => {
   const names = new Set<string>(BUILTIN_SYMBOLS as readonly string[]);
   for (const symbol of collectEnvironmentSymbols(env)) {
+    if (ARITHMETIC_OPERATORS.has(symbol)) {
+      continue;
+    }
     names.add(symbol);
   }
   return [...names];
+};
+
+const isDefmacroNode = (node: ExpressionNode | null | undefined): boolean => {
+  if (!node || node.kind !== "list") {
+    return false;
+  }
+  const head = node.elements[0];
+  return Boolean(head && head.kind === "symbol" && head.value === "defmacro");
 };
 
 /**
@@ -157,7 +170,8 @@ export const runRepl = async (
   const globalEnv = createRootEnvironment();
 
   // Auto-load prelude for REPL convenience
-  const loadPrelude = async () => {
+  const loadPrelude = async (): Promise<string> => {
+    let loadedSource = "";
     try {
       const path = require("path");
       const fs = require("fs");
@@ -243,8 +257,11 @@ export const runRepl = async (
         const parseResult = await parseSource(source, preludePath);
 
         if (parseResult.ok) {
-          // Evaluate all expressions in the prelude
+          // Evaluate all expressions in the prelude, skipping macro definitions
           for (const expr of parseResult.program.body) {
+            if (isDefmacroNode(expr)) {
+              continue;
+            }
             const result = await evaluate(expr, globalEnv, { callDepth: 0 });
             if (!result.ok) {
               writeErr(
@@ -254,6 +271,7 @@ export const runRepl = async (
               );
             }
           }
+          loadedSource = source;
         } else {
           writeErr(
             `Warning: Failed to parse prelude: ${parseResult.diagnostics
@@ -273,9 +291,13 @@ export const runRepl = async (
         }`
       );
     }
+    return loadedSource;
   };
 
-  await loadPrelude();
+  const preludeSource = await loadPrelude();
+  if (preludeSource.trim().length > 0) {
+    history = preludeSource;
+  }
 
   // Helper that checks whether parse produced a continuation-worthy diagnostic
   const isIncompleteParse = (
@@ -424,6 +446,9 @@ export const runRepl = async (
       try {
         // Evaluate each node in the program
         for (const node of evalParse.program.body) {
+          if (isDefmacroNode(node)) {
+            continue;
+          }
           const result = await evaluate(node, globalEnv);
           if (!result.ok) {
             emitDiagnostics(result.diagnostics, writeErr);

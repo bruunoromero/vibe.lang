@@ -18,7 +18,7 @@ The CLI currently stops at semantic analysis. To validate end-to-end wiring and 
 ### Update – Module Imports (2025-12-21)
 
 - `generateModule` now recognizes standalone `(require alias ...)` and `(external alias ...)` statements. The emitter hoists them to `import * as alias from '...';` statements (rewriting `.lang` inputs to `.js`) and re-exports the alias so CLI consumers still observe the binding in `__env`.
-- Namespace-qualified symbols (`alias/member`) and explicit `(get alias member)` forms compile down to property access. Dotted access is used for identifier-safe members while bracket notation preserves punctuation-heavy names.
+- Namespace-qualified symbols (`alias/member`) compile down to property access. Dotted access is used for identifier-safe members while bracket notation preserves punctuation-heavy names, so library helpers such as `prelude/get` can build on top without needing bespoke emitter logic.
 
 ## Consequences
 

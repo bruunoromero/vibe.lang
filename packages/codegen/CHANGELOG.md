@@ -1,5 +1,17 @@
 # @vibe/codegen Changelog
 
+## 2025-12-24
+
+- Removed the `(get alias member)` lowering branch. Namespace access now relies solely on the existing `alias/member` syntax, and any `get` usage is treated as a normal function call (e.g., `prelude/get`). Tests now cover both slash access and the library helper to ensure bracket-notation regressions stay caught.
+
+- Removed the temporary `__result` sink variable from generated modules. Top-level forms now emit as regular statements/exports, trimming runtime noise and matching the interpreter-based REPL pipeline.
+
+- Top-level `defmacro` forms are now treated as compile-time declarations only, so the emitter skips them and relies on the analyzer's expanded AST when producing runtime JavaScript. This prevents crashes when a program defines macros alongside regular definitions.
+
+- Deleted the arithmetic fast-path (`emitArithmetic`) so `+`, `-`, `*`, and `/` lower exactly like user-defined functions. Generated modules now call the prelude/runtime helpers instead of inlining JS operators, which keeps semantics consistent with the interpreter and lets arithmetic symbols be referenced as ordinary values.
+
+- Removed the legacy `println` builtin shortcut from `emitSymbol()`. Programs now reference `println` through the prelude/runtime just like any other binding, which keeps analyzer, interpreter, and emitter behavior aligned.
+
 ## 2025-12-23
 
 - Emitter now understands alias-less `(import "./module.lang")` forms by generating a temporary namespace import and re-exporting each flattened binding individually (`export const foo = __import__0.foo;`). This mirrors the analyzer's new `ModuleImportRecord.flatten` metadata so imported symbols behave like native `def`s in generated JavaScript.

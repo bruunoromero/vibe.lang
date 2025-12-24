@@ -2,13 +2,14 @@
 
 ## 2025-12-24
 
-- Seeded module-export metadata from every workspace package that declares `package.json#vibe.modules`, so `vibe run/compile/compile-all/build` can satisfy `(import "@pkg/entry")` without emitting `SEM_IMPORT_MISSING_EXPORTS`. Packages that rely on flattened imports (like `packages/example-app` pulling in `@vibe/prelude`) now compile with a single `bun ../cli/index.ts compile ./src/main.lang` invocation.
+- Dropped `package.json#vibe.modules` in favor of a single `vibe.sources` folder plus `vibe.entry`. Package imports now resolve by crawling each `.lang` file under the declared sources, seed module-export metadata automatically, and fall back to `vibe.entry` for bare specifiers like `(require "@vibe/prelude")` without emitting `SEM_IMPORT_MISSING_EXPORTS`.
+- The REPL now embeds the auto-loaded prelude into the analyzer history and filters `+`, `-`, `*`, and `/` out of the builtin seeding so those operators behave like ordinary vars supplied by `@vibe/prelude` instead of analyzer-defined builtins.
 
 ## 2025-12-23
 
 - Added `vibe build [package|path]`, which walks `package.json#dependencies`, topo-sorts packages that declare `vibe.sources`, and compiles every `.lang` file into the configured `vibe.outDir` so dependents import the emitted JavaScript directly.
 - `package.json#vibe` now supports `sources` (one or more Lang roots) and `outDir` (where compiled JS should be written). The CLI normalizes these paths and surfaces helpful errors when packages omit them.
-- `vibe run`, `vibe compile`, and `vibe compile-all` now read each dependency's `package.json#vibe.modules` metadata so `(require foo "@scope/pkg")` resolves to the right `.lang` file during analysis while the emitted JavaScript keeps importing the package's published JS entry.
+- `vibe run`, `vibe compile`, and `vibe compile-all` now read each dependency's `package.json#vibe.sources` (plus optional `vibe.entry`) metadata so `(require foo "@scope/pkg")` resolves to the right `.lang` file during analysis while the emitted JavaScript keeps importing the package's published JS entry.
 - The compile-all resolver learned how to combine workspace metadata with filesystem discovery, allowing package-based requires to be validated alongside relative imports.
 - The REPL now feeds analyzer-builtins derived from the live interpreter environment, so prelude-loaded globals (e.g., `println`, `map`, `filter`) no longer rely on an oversized default builtin list.
 - Module resolution now treats `(import "./module.lang")` the same as `(require ...)`, providing the analyzer/codegen pipeline with consistent module IDs even though the source form omits an alias.

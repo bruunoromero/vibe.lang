@@ -49,12 +49,9 @@ Start an interactive REPL that parses, analyzes, compiles, and executes Lang for
       "@vibe/prelude": "workspace:*"
     },
     "vibe": {
-      "sources": ["./src"],
-      "outDir": "./dist",
-      "modules": {
-        ".": "./src/main.lang",
-        "./math": "./src/math.lang"
-      }
+      "sources": "./src",
+      "entry": "./src/main.lang",
+      "outDir": "./dist"
     }
   }
   ```
@@ -71,3 +68,4 @@ Start an interactive REPL that parses, analyzes, compiles, and executes Lang for
   - Compiles dependency packages (e.g., `@vibe/prelude`) before dependents.
   - Mirrors the `sources` directory structure under `outDir`, swapping `.lang` → `.js`.
   - Leaves package-level `require` imports as bare specifiers so Node can honor each package's `exports` map while forcing relative imports to reference their `.js` siblings.
+  - Resolves package imports by looking inside the `sources` tree and falls back to `vibe.entry` when the specifier is bare (e.g., `(require "@vibe/prelude")`).

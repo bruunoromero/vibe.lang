@@ -12,6 +12,48 @@ import {
 import { BUILTIN_SYMBOLS } from "@vibe/syntax";
 import { generateModule, type GenerateModuleOptions } from "../src";
 
+const RUNTIME_PRELUDE = `
+  (external runtime "@vibe/runtime")
+
+  (def println runtime/println)
+`.trim();
+
+const withRuntimePrelude = (source: string) => `${RUNTIME_PRELUDE}\n${source}`;
+
+const ARITHMETIC_PRELUDE = `
+${RUNTIME_PRELUDE}
+
+  (def reduce (fn [f init coll]
+    (if (runtime/eq* (runtime/count coll) 0)
+      init
+      (reduce f (f init (runtime/first coll)) (runtime/rest coll)))))
+
+  (def + (fn [& xs]
+    (reduce runtime/add* 0 xs)))
+
+  (def - (fn [& xs]
+    (let [cnt (runtime/count xs)]
+      (if (runtime/eq* cnt 0)
+        0
+        (if (runtime/eq* cnt 1)
+          (runtime/sub* 0 (runtime/first xs))
+          (reduce runtime/sub* (runtime/first xs) (runtime/rest xs)))))))
+
+  (def * (fn [& xs]
+    (reduce runtime/mul* 1 xs)))
+
+  (def / (fn [& xs]
+    (let [cnt (runtime/count xs)]
+      (if (runtime/eq* cnt 0)
+        0
+        (if (runtime/eq* cnt 1)
+          (runtime/div* 1 (runtime/first xs))
+          (reduce runtime/div* (runtime/first xs) (runtime/rest xs)))))))
+`.trim();
+
+const withArithmeticPrelude = (source: string) =>
+  `${ARITHMETIC_PRELUDE}\n${source}`;
+
 const compile = async (source: string, options?: AnalyzeOptions) => {
   const parseResult = await parseSource(source);
   if (!parseResult.ok) {
@@ -22,14 +64,7 @@ const compile = async (source: string, options?: AnalyzeOptions) => {
     );
   }
   const analysis = await analyzeProgram(parseResult.program, {
-    builtins: options?.builtins ?? [
-      ...BUILTIN_SYMBOLS,
-      "+",
-      "-",
-      "*",
-      "/",
-      "println",
-    ],
+    builtins: options?.builtins ?? [...BUILTIN_SYMBOLS],
     ...options,
   });
   if (!analysis.ok) {
@@ -70,7 +105,8 @@ const runProgram = async (source: string, options?: GenerateModuleOptions) => {
   return { result, runtime };
 };
 
-const macroPipelineSource = `
+const macroPipelineSource = withArithmeticPrelude(
+  `
   (def build-pipeline
     (fn [seed]
       (fn [value]
@@ -89,7 +125,8 @@ const macroPipelineSource = `
       (+ first second)))
 
   total
-`.trim();
+`.trim()
+);
 
 const macroPipelineOptions: GenerateModuleOptions = {
   sourceName: "snapshots/macros.lang",
@@ -125,7 +162,9 @@ describe("generateModule", () => {
   });
 
   test("lowers let bindings and arithmetic", async () => {
-    const fixture = "(def answer (let [x 1 y (+ x 2)] (* y 3)))";
+    const fixture = withArithmeticPrelude(
+      "(def answer (let [x 1 y (+ x 2)] (* y 3)))"
+    );
     const { runtime } = await runProgram(fixture, {
       sourceName: "calc.lang",
     });
@@ -133,7 +172,7 @@ describe("generateModule", () => {
   });
 
   test("can export the AST payload", async () => {
-    const fixture = "(println :ok)";
+    const fixture = withRuntimePrelude("(println :ok)");
     const result = await generateFromSource(fixture, {
       includeAst: true,
       pretty: 0,
@@ -144,7 +183,8 @@ describe("generateModule", () => {
   });
 
   test("emits functions, vectors, sets, and maps", async () => {
-    const fixture = `
+    const fixture = withArithmeticPrelude(
+      `
       (def builder
         (fn [x]
           (let [nums [x (+ x 1)]]
@@ -152,7 +192,8 @@ describe("generateModule", () => {
              :unique #{x}
              :echo (println "value" x)})))
       (def result (builder 5))
-    `.trim();
+    `.trim()
+    );
 
     const { runtime } = await runProgram(fixture);
     expect(runtime.result).toBeInstanceOf(Map);
@@ -161,7 +202,7 @@ describe("generateModule", () => {
     const unique = record.get("unique");
     expect(unique).toBeInstanceOf(Set);
     expect((unique as Set<number>).has(5)).toBeTrue();
-    expect(record.get("echo")).toBeUndefined();
+    expect(record.get("echo")).toBe(5);
     expect(typeof runtime.builder).toBe("function");
   });
 
@@ -211,8 +252,10 @@ describe("generateModule", () => {
       (require prelude "@vibe/prelude")
       (external path "node:path")
       (def compute (fn [x] (math/add x 1)))
+      (def path-info path)
       path/sep
-      (get path path-separator)
+      path-info/path-separator
+      (prelude/get path "path-separator")
       (prelude/println "noop")
       (compute 41)
     `.trim();
@@ -228,7 +271,8 @@ describe("generateModule", () => {
     );
     expect(result.moduleText).toContain('import * as path from "node:path";');
     expect(result.moduleText).toContain("math.add");
-    expect(result.moduleText).toContain('path["path-separator"]');
+    expect(result.moduleText).toContain('path_info["path-separator"]');
+    expect(result.moduleText).toContain('prelude.get(path, "path-separator")');
     expect(result.moduleText).not.toContain("export { math };");
     expect(result.moduleText).not.toContain("export { path };");
   });
@@ -339,6 +383,12 @@ describe("generateModule", () => {
       'import * as __import___1 from "./bar.js";'
     );
   });
+
+  test("allows referencing arithmetic operators as values", async () => {
+    const fixture = withArithmeticPrelude("(def alias +)\nalias");
+    const { runtime } = await runProgram(fixture);
+    expect(typeof runtime.alias).toBe("function");
+  });
 });
 
 describe("generateModule IR summaries", () => {
@@ -361,13 +411,6 @@ describe("generateModule errors", () => {
     const { program, graph } = await compile("(let [] (def foo 1))");
     expect(() => generateModule(program, graph)).toThrow(
       "def is only supported at the top level"
-    );
-  });
-
-  test("throws when arithmetic operators are referenced as values", async () => {
-    const { program, graph } = await compile("(let [plus +] plus)");
-    expect(() => generateModule(program, graph)).toThrow(
-      "Cannot reference arithmetic operator + as a value yet"
     );
   });
 });

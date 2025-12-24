@@ -70,6 +70,7 @@ pi                    ; => 3.14159
 - `import` is implemented in the semantic analyzer which handles proper scoping and conflict detection at compile time
 - At runtime (interpreter), import uses `evaluateAsync()` to handle asynchronous module loading
 - The codegen phase properly emits ES module imports with destructuring for flat imports
+- Package-level imports rely on each dependency's `package.json#vibe.sources` directory for resolution, and bare specifiers (e.g., `(import "@vibe/prelude")`) load the manifest's `vibe.entry` file by default while nested specifiers map to `.lang` files under that sources folder.
 
 ## Error Handling
 

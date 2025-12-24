@@ -271,6 +271,35 @@ describe("Interpreter - Special Forms", () => {
     expect(result.value?.kind).toBe("list");
   });
 
+  test("syntax quote produces literal structures", async () => {
+    const result = await evalSource("`(alpha beta)");
+    expect(result.ok).toBeTrue();
+    expect(result.value).toMatchObject({
+      kind: "list",
+      elements: [
+        { kind: "symbol", value: "alpha" },
+        { kind: "symbol", value: "beta" },
+      ],
+    });
+  });
+
+  test("syntax quote evaluates unquote and splicing", async () => {
+    const result = await evalMulti(`
+      (def xs (quote (1 2)))
+      \`(list ~@xs ~(if true 3 4))
+    `);
+    expect(result.ok).toBeTrue();
+    expect(result.value).toMatchObject({
+      kind: "list",
+      elements: [
+        { kind: "symbol", value: "list" },
+        { kind: "number", value: 1 },
+        { kind: "number", value: 2 },
+        { kind: "number", value: 3 },
+      ],
+    });
+  });
+
   test("do evaluates multiple forms", async () => {
     const result = await evalSource(
       "(do (def x 1) (def y 2) (runtime/add* x y))",

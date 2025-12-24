@@ -5,12 +5,10 @@ import {
   analyzeProgram,
   type AnalyzeResult,
   type ModuleResolver,
-  type ModuleResolutionRequest,
-  type ModuleResolutionResult,
 } from "@vibe/semantics";
 import { generateModule } from "@vibe/codegen";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
 import sade from "sade";
@@ -297,7 +295,7 @@ const compileSources = async (
       continue;
     }
     await mkdir(path.dirname(outputPath), { recursive: true });
-    await Bun.write(outputPath, codegen.moduleText);
+    await writeFile(outputPath, codegen.moduleText, "utf8");
     console.info(`${logTag} wrote ${path.relative(process.cwd(), outputPath)}`);
   }
   return {
@@ -402,11 +400,14 @@ const emitDiagnostics = (diagnostics: readonly Diagnostic[]): void => {
 
 const resolveSource = async (options: TokenizeOptions): Promise<string> => {
   if (options.file) {
-    const file = Bun.file(options.file);
-    if (!(await file.exists())) {
-      throw new Error(`Cannot read file: ${options.file}`);
+    try {
+      return await readFile(options.file, "utf8");
+    } catch (error) {
+      if (isEnoent(error)) {
+        throw new Error(`Cannot read file: ${options.file}`);
+      }
+      throw error;
     }
-    return file.text();
   }
 
   if (options.source !== undefined) {
@@ -642,7 +643,9 @@ const runCompile = async (options: AnalyzeCliOptions): Promise<number> => {
       logJsonBlock("ir", codegen.ir, pretty);
     }
     if (options.out) {
-      await Bun.write(options.out, codegen.moduleText);
+      const outputPath = path.resolve(options.out);
+      await mkdir(path.dirname(outputPath), { recursive: true });
+      await writeFile(outputPath, codegen.moduleText, "utf8");
     } else {
       console.log(codegen.moduleText);
     }

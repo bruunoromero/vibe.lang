@@ -17,7 +17,8 @@ Rules enforced by the analyzer:
 
 - The macro name must be a symbol.
 - Parameters must be provided via a vector of symbols. Duplicate parameters trigger `SEM_MACRO_DUPLICATE_PARAM`.
-- Exactly one body expression is supported, and it must be wrapped in a syntax quote `` `(...) ``.
+- Exactly one body expression is supported. The body is evaluated with the interpreter at analysis time and must produce a form.
+- Returning a syntax-quoted template `` `(...) `` is still the most ergonomic way to use `~`/`~@`, but it is optional—macros can also construct lists, vectors, or maps manually and return them directly.
 - A body is required (`SEM_MACRO_REQUIRES_BODY`).
 
 ### Variadic Macros
@@ -86,6 +87,10 @@ Nested expressions inside `~` run through the **full interpreter** while the mac
 
 Use this power sparingly: running large computations during analysis slows the build, but small helpers drastically simplify macro authoring.
 
+## Returning Plain Forms Without Syntax Quote
+
+Because the macro body itself runs through the interpreter, you can return any data structure that mirrors the surface syntax. For example, `(list 'let bindings body)` or `(vector 'foo)` are both valid macro results even though they never use `` `(...) ``. The analyzer will convert the returned value back into an AST node via `valueToNode`, so choose whichever style (raw data or syntax quote) keeps the macro simplest. Syntax quotes remain ideal when you want `~`/`~@` splicing, while raw data works well for generated forms that are easier to assemble with regular list helpers.
+
 ## Symbols vs. Strings at Runtime
 
 When code reaches the runtime, symbols are represented as tagged JavaScript objects with `__vibeType: "symbol"`. Use the helpers in `@vibe/runtime` to work with them:
@@ -149,7 +154,6 @@ Macro expansion happens during semantic analysis. Common diagnostics include:
 - `SEM_MACRO_ARITY_MISMATCH` / `SEM_MACRO_ARG_MISSING` for argument count issues (variadic macros check minimum arity).
 - `SEM_MACRO_RECURSION` when a macro expands to itself directly or indirectly.
 - `SEM_MACRO_MAX_DEPTH` when expansion exceeds the depth limit (100 levels).
-- `SEM_MACRO_EXPECTS_SYNTAX_QUOTE` when the body is not syntax-quoted.
 - `SEM_MACRO_REST_REQUIRES_SYMBOL` when `&` is not followed by a symbol.
 - `SEM_MACRO_DUPLICATE_REST` when multiple `&` parameters are declared.
 - `SEM_MACRO_PARAMS_AFTER_REST` when parameters appear after the rest parameter.

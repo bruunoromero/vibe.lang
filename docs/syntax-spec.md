@@ -85,7 +85,7 @@ If a reader or dispatch macro lacks a following form, the parser emits `PARSE_MA
 These symbols are intercepted by downstream stages for non-generic evaluation:
 
 - `def` — Top-level definition only. Emits exported bindings in codegen.
-- `defmacro` — Defines compile-time macros. Shape: `(defmacro name [params*] \`(template ...))`; the body must begin with a syntax quote so `~`and`~@` can splice arguments during expansion.
+- `defmacro` — Defines compile-time macros. Shape: `(defmacro name [params*] body)`; the body is evaluated at analysis time and must return a form. Returning a syntax-quoted template (e.g., `` `(template ...) ``) still enables `~`/`~@` splicing, but macros can also build data manually and return it directly.
 - `let` — Introduces a lexical scope: `(let [name expr ...] body...)`.
 - `fn` — Lambda literal: `(fn [params...] body...)`.
 - `if` — Branching form: `(if condition then [else])`. Missing else defaults to `nil`.
@@ -94,7 +94,6 @@ These symbols are intercepted by downstream stages for non-generic evaluation:
 - `require` — Module import (see below). Restricted to the top level.
 - `external` — JavaScript module import (see below). Restricted to the top level.
 - `import` — Module import that flattens the target module's exports into the current scope (see below). Restricted to the top level.
-- `get` — Namespace accessor sugar. `(get alias member)` lowers to `alias.member` (or bracket access when needed) and powers the `alias/member` shorthand documented below.
 
 Arithmetic helpers (`+`, `-`, `*`, `/`, comparisons, sequence utilities, etc.) are implemented in `@vibe/prelude`. User code should `(require prelude "@vibe/prelude")` (or whichever module provides the desired helpers) rather than relying on implicit global definitions.
 
@@ -121,10 +120,9 @@ Module-level dependencies opt into explicit `def` bindings that wrap `require` o
 
 ### Namespace Access
 
-- `alias/member` is syntactic sugar for `(get alias member)`.
-- `member` must be a symbol (or string literal inside `get`) and translates directly into a property access.
+- `alias/member` stays a single symbol; the analyzer resolves the alias binding while preserving the member lexeme for codegen so property access can be emitted without rewriting the AST.
 - When `member` is a valid JavaScript identifier the emitted code uses dot notation (`math/add` → `math.add`). Otherwise bracket notation preserves the original lexeme (`path/path-separator` → `path["path-separator"]`).
-- `(get alias member)` is available as the canonical form should tooling need to avoid slash syntax.
+- For dynamic property lookups or fallback values use the library helper exposed as `prelude/get` (wrapping `runtime/get`), which accepts regular arguments such as `(prelude/get alias "member" default)`.
 
 ```
 program        ::= form*

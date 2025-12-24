@@ -13,12 +13,8 @@
     "@vibe/prelude": "workspace:*"
   },
   "vibe": {
-    "sources": [
-      "./src"
-    ],
+    "sources": "./src",
     "outDir": "./dist",
-    "modules": {
-      ".": "./src/main.lang"
-    }
+    "entry": "./src/main.lang"
   }
 }

@@ -35,6 +35,20 @@ describe("runtime symbols", () => {
     expect(get(updated, key)).toBe(42);
   });
 
+  test("get reads namespace-like objects", () => {
+    const namespace = { "path-separator": ":", value: 10 };
+    expect(get(namespace, "path-separator")).toBe(":");
+    expect(get(namespace, "missing")).toBeNull();
+  });
+
+  test("get supports Map targets", () => {
+    const entries = new Map<unknown, unknown>();
+    entries.set("alpha", 1);
+    entries.set("beta", 2);
+    expect(get(entries, "alpha")).toBe(1);
+    expect(get(entries, symbol("beta"))).toBe(2);
+  });
+
   test("type returns keyword-like symbols", () => {
     const result = type(symbol("foo"));
     expect(symbol_QMARK(result)).toBeTrue();

@@ -1,15 +1,15 @@
 import path from "node:path";
 
 export interface VibePackageConfig {
-  readonly modules?: Record<string, string>;
   readonly sources?: readonly string[];
   readonly outDir?: string;
+  readonly entry?: string;
 }
 
 export interface ResolvedVibePackageConfig {
-  readonly modules: Record<string, string>;
   readonly sourceRoots: readonly string[];
   readonly outDir?: string;
+  readonly entry?: string;
 }
 
 export const parseVibeConfig = (
@@ -20,35 +20,25 @@ export const parseVibeConfig = (
   }
 
   const record = value as Record<string, unknown>;
-  let modules: Record<string, string> | undefined;
-  if (record.modules && typeof record.modules === "object") {
-    modules = {};
-    for (const [key, modulePath] of Object.entries(
-      record.modules as Record<string, unknown>
-    )) {
-      if (typeof modulePath === "string") {
-        modules[key] = modulePath;
-      }
-    }
-    if (Object.keys(modules).length === 0) {
-      modules = undefined;
-    }
-  }
 
   const sources = normalizeStringArray(record.sources);
   const outDir =
     typeof record.outDir === "string" && record.outDir.length > 0
       ? record.outDir
       : undefined;
+  const entry =
+    typeof record.entry === "string" && record.entry.length > 0
+      ? record.entry
+      : undefined;
 
-  if (!modules && (!sources || sources.length === 0) && !outDir) {
+  if ((!sources || sources.length === 0) && !outDir && !entry) {
     return undefined;
   }
 
   return {
-    ...(modules ? { modules } : {}),
     ...(sources ? { sources } : {}),
     ...(outDir ? { outDir } : {}),
+    ...(entry ? { entry } : {}),
   };
 };
 
@@ -56,15 +46,15 @@ export const resolveVibePackageConfig = (
   rootDir: string,
   vibe?: VibePackageConfig
 ): ResolvedVibePackageConfig => {
-  const modules = { ...(vibe?.modules ?? {}) };
   const sourceRoots = (vibe?.sources ?? []).map((source) =>
     path.resolve(rootDir, source)
   );
   const outDir = vibe?.outDir ? path.resolve(rootDir, vibe.outDir) : undefined;
+  const entry = vibe?.entry ? path.resolve(rootDir, vibe.entry) : undefined;
   return {
-    modules,
     sourceRoots,
     ...(outDir ? { outDir } : {}),
+    ...(entry ? { entry } : {}),
   };
 };
 

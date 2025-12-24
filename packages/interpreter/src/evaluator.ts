@@ -8,6 +8,7 @@ import type {
   MapNode,
   Diagnostic,
   NamespaceImportNode,
+  ReaderMacroNode,
 } from "@vibe/syntax";
 import { DiagnosticSeverity, NodeKind as NK } from "@vibe/syntax";
 import {
@@ -148,6 +149,21 @@ export const evaluate = async (
         };
       }
       return evaluateQuote(node.target, env);
+    case NK.SyntaxQuote:
+      return await evaluateSyntaxQuote(node as ReaderMacroNode, env, context);
+    case NK.Unquote:
+    case NK.UnquoteSplicing:
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            message: "unquote forms may only appear inside a syntax quote",
+            span: node.span,
+            severity: DiagnosticSeverity.Error,
+            code: "INTERP_SYNTAX_UNQUOTE_CONTEXT",
+          },
+        ],
+      };
     default:
       return {
         ok: false,
@@ -749,6 +765,255 @@ const evaluateQuote = (node: ExpressionNode, env: Environment): EvalResult => {
         ],
       };
   }
+};
+
+const evaluateSyntaxQuote = async (
+  node: ReaderMacroNode,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult> => {
+  if (!node.target) {
+    return { ok: true, value: makeNil(), diagnostics: [] };
+  }
+  return await instantiateSyntaxNode(node.target, env, context);
+};
+
+const instantiateSyntaxNode = async (
+  node: ExpressionNode,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult<Value>> => {
+  switch (node.kind) {
+    case NK.List:
+      return await instantiateSyntaxSequence(
+        node.elements,
+        env,
+        context,
+        "list",
+        node.span
+      );
+    case NK.Vector:
+      return await instantiateSyntaxSequence(
+        node.elements,
+        env,
+        context,
+        "vector",
+        node.span
+      );
+    case NK.Set:
+      return await instantiateSyntaxSequence(
+        node.elements,
+        env,
+        context,
+        "set",
+        node.span
+      );
+    case NK.Map:
+      return await instantiateSyntaxMap(node as MapNode, env, context);
+    case NK.SyntaxQuote: {
+      const target = (node as ReaderMacroNode).target;
+      if (!target) {
+        return { ok: true, value: makeNil(), diagnostics: [] };
+      }
+      return await instantiateSyntaxNode(target, env, context);
+    }
+    case NK.Unquote:
+      return await evaluateUnquoteNode(
+        node as ReaderMacroNode<NodeKind.Unquote>,
+        env,
+        context
+      );
+    case NK.UnquoteSplicing:
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            message:
+              "Unquote splicing cannot appear outside of list/vector/set literals",
+            span: node.span,
+            severity: DiagnosticSeverity.Error,
+            code: "INTERP_SYNTAX_SPLICE_CONTEXT",
+          },
+        ],
+      };
+    default:
+      return evaluateQuote(node, env);
+  }
+};
+
+const instantiateSyntaxSequence = async (
+  elements: readonly (ExpressionNode | null)[],
+  env: Environment,
+  context: EvalContext,
+  container: "list" | "vector" | "set",
+  span: SourceSpan
+): Promise<EvalResult<Value>> => {
+  const values: Value[] = [];
+  for (const element of elements) {
+    if (!element) {
+      continue;
+    }
+    if (element.kind === NK.Unquote) {
+      const result = await evaluateUnquoteNode(
+        element as ReaderMacroNode<NodeKind.Unquote>,
+        env,
+        context
+      );
+      if (!result.ok) {
+        return result;
+      }
+      if (result.value) {
+        values.push(result.value);
+      }
+      continue;
+    }
+    if (element.kind === NK.UnquoteSplicing) {
+      const result = await evaluateUnquoteSplicing(
+        element as ReaderMacroNode<NodeKind.UnquoteSplicing>,
+        env,
+        context
+      );
+      if (!result.ok) {
+        return { ok: false, diagnostics: result.diagnostics };
+      }
+      values.push(...(result.value ?? []));
+      continue;
+    }
+    const nested = await instantiateSyntaxNode(element, env, context);
+    if (!nested.ok) {
+      return nested;
+    }
+    if (nested.value) {
+      values.push(nested.value);
+    }
+  }
+
+  switch (container) {
+    case "list":
+      return { ok: true, value: makeList(values), diagnostics: [] };
+    case "vector":
+      return { ok: true, value: makeVector(values), diagnostics: [] };
+    case "set":
+      return { ok: true, value: makeSet(values), diagnostics: [] };
+    default:
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            message: "Unsupported syntax-quote container",
+            span,
+            severity: DiagnosticSeverity.Error,
+            code: "INTERP_SYNTAX_CONTAINER",
+          },
+        ],
+      };
+  }
+};
+
+const instantiateSyntaxMap = async (
+  node: MapNode,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult<Value>> => {
+  const entries = new Map<string, Value>();
+  for (const entry of node.entries) {
+    if (!entry.key || !entry.value) {
+      continue;
+    }
+    const keyResult = await instantiateSyntaxNode(entry.key, env, context);
+    if (!keyResult.ok) {
+      return keyResult;
+    }
+    const keyValue = keyResult.value;
+    if (!keyValue || (!isSymbol(keyValue) && !isString(keyValue))) {
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            message: "Map keys must be symbols or strings",
+            span: entry.key.span,
+            severity: DiagnosticSeverity.Error,
+            code: "INTERP_SYNTAX_MAP_KEY_TYPE",
+          },
+        ],
+      };
+    }
+    const valueResult = await instantiateSyntaxNode(entry.value, env, context);
+    if (!valueResult.ok) {
+      return valueResult;
+    }
+    const keyName = keyValue.value;
+    entries.set(keyName, valueResult.value ?? makeNil());
+  }
+  return { ok: true, value: makeMap(entries), diagnostics: [] };
+};
+
+const evaluateUnquoteNode = async (
+  node: ReaderMacroNode<NodeKind.Unquote>,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult<Value>> => {
+  if (!node.target) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "Unquote requires a target expression",
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SYNTAX_UNQUOTE_EMPTY",
+        },
+      ],
+    };
+  }
+  const result = await evaluate(node.target, env, context);
+  if (!result.ok) {
+    return result;
+  }
+  return {
+    ok: true,
+    value: result.value ?? makeNil(),
+    diagnostics: [],
+  };
+};
+
+const evaluateUnquoteSplicing = async (
+  node: ReaderMacroNode<NodeKind.UnquoteSplicing>,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult<readonly Value[]>> => {
+  if (!node.target) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "Unquote splicing requires a target expression",
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SYNTAX_SPLICE_EMPTY",
+        },
+      ],
+    };
+  }
+  const result = await evaluate(node.target, env, context);
+  if (!result.ok) {
+    return { ok: false, diagnostics: result.diagnostics };
+  }
+  const value = result.value ?? makeNil();
+  if (!isSequence(value)) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "Unquote splicing requires a sequence expression",
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SYNTAX_SPLICE_SEQUENCE",
+        },
+      ],
+    };
+  }
+  return { ok: true, value: value.elements, diagnostics: [] };
 };
 
 const evaluateLet = async (

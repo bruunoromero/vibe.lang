@@ -1,8 +1,8 @@
 import { parseSource } from "@vibe/parser";
 import { NodeKind, type ListNode, type ProgramNode } from "@vibe/syntax";
 import type { ModuleExportsLookup } from "@vibe/semantics";
-import { existsSync, readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { Dirent, existsSync, readFileSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { PackageMetadata } from "./module-resolver";
 import { parseVibeConfig, resolveVibePackageConfig } from "./workspace-config";
@@ -76,12 +76,17 @@ export const seedModuleExportsFromMetadata = async (
   table: ModuleExportsTable
 ): Promise<void> => {
   const resolved = resolveVibePackageConfig(metadata.rootDir, metadata.vibe);
-  const moduleEntries = Object.values(resolved.modules);
-  if (moduleEntries.length === 0) {
-    return;
+  const moduleCandidates = new Set<string>();
+  if (resolved.entry) {
+    moduleCandidates.add(resolved.entry);
   }
-  for (const entry of moduleEntries) {
-    const modulePath = path.resolve(metadata.rootDir, entry);
+  for (const sourceRoot of resolved.sourceRoots) {
+    const langFiles = await collectLangFiles(sourceRoot);
+    for (const file of langFiles) {
+      moduleCandidates.add(file);
+    }
+  }
+  for (const modulePath of moduleCandidates) {
     if (table.has(modulePath)) {
       continue;
     }
@@ -123,4 +128,38 @@ const readPackageMetadata = (dir: string): PackageMetadata | null => {
   } catch {
     return null;
   }
+};
+
+const collectLangFiles = async (root: string): Promise<string[]> => {
+  const files: string[] = [];
+  const visit = async (dir: string): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (isEnoent(error)) {
+        return;
+      }
+      throw error;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(LANG_EXTENSION)) {
+        files.push(fullPath);
+      }
+    }
+  };
+  await visit(root);
+  return files;
+};
+
+const isEnoent = (error: unknown): error is NodeJS.ErrnoException => {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 };

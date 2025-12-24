@@ -10,6 +10,16 @@ import { parseSource } from "@vibe/parser";
 import { NodeKind } from "@vibe/syntax";
 import { TEST_BUILTINS } from "./test-builtins";
 
+const ARITHMETIC_STUB = `
+  (def + (fn [& xs] xs))
+  (def - (fn [& xs] xs))
+  (def * (fn [& xs] xs))
+  (def / (fn [& xs] xs))
+`;
+
+const withArithmeticPrelude = (source: string) =>
+  `${ARITHMETIC_STUB}\n${source}`;
+
 const analyzeSource = async (source: string, options?: AnalyzeOptions) => {
   const parseResult = await parseSource(source);
   if (!parseResult.ok) {
@@ -114,7 +124,9 @@ describe("analyzeProgram", () => {
   });
 
   test("creates scoped bindings for let and fn", async () => {
-    const analysis = await analyzeSource("(let [x 1] (fn [y] (+ x y)))");
+    const analysis = await analyzeSource(
+      withArithmeticPrelude("(let [x 1] (fn [y] (+ x y)))")
+    );
 
     expect(analysis.ok).toBeTrue();
     expect(analysis.graph.scopes.length).toBeGreaterThan(1);
@@ -133,7 +145,7 @@ describe("analyzeProgram", () => {
   });
 
   test("reports unresolved symbols", async () => {
-    const analysis = await analyzeSource("(+ mystery)");
+    const analysis = await analyzeSource(withArithmeticPrelude("(+ mystery)"));
 
     expect(analysis.ok).toBeFalse();
     expect(analysis.diagnostics.map((d) => d.code)).toContain(
@@ -142,7 +154,7 @@ describe("analyzeProgram", () => {
   });
 
   test("attaches spans to unresolved symbol diagnostics", async () => {
-    const analysis = await analyzeSource("(+ mystery)");
+    const analysis = await analyzeSource(withArithmeticPrelude("(+ mystery)"));
 
     const diagnostic = analysis.diagnostics.find(
       (d) => d.code === "SEM_UNRESOLVED_SYMBOL"
@@ -198,14 +210,16 @@ describe("analyzeProgram", () => {
   });
 
   test("resolves identifiers across deeply nested scopes", async () => {
-    const analysis = await analyzeSource(`
-      (def root 0)
-      (let [outer 1]
-        (fn [mid]
-          (let [inner (+ outer mid root)]
-            (fn [leaf]
-              (+ root outer mid inner leaf)))))
-    `);
+    const analysis = await analyzeSource(
+      withArithmeticPrelude(`
+        (def root 0)
+        (let [outer 1]
+          (fn [mid]
+            (let [inner (+ outer mid root)]
+              (fn [leaf]
+                (+ root outer mid inner leaf)))))
+      `)
+    );
 
     expect(analysis.ok).toBeTrue();
 
@@ -329,15 +343,17 @@ describe("analyzeProgram", () => {
   });
 
   test("assigns unique hygiene tags to macro-generated bindings", async () => {
-    const analysis = await analyzeSource(`
-      (defmacro with-temp [value]
-        \`(let [tmp ~value]
-           tmp))
+    const analysis = await analyzeSource(
+      withArithmeticPrelude(`
+        (defmacro with-temp [value]
+          \`(let [tmp ~value]
+             tmp))
 
-      (let [a (with-temp 1)
-            b (with-temp 2)]
-        (+ a b))
-    `);
+        (let [a (with-temp 1)
+              b (with-temp 2)]
+          (+ a b))
+      `)
+    );
     expect(analysis.ok).toBeTrue();
     expect(getDiagnosticCodes(analysis)).not.toContain("SEM_DUPLICATE_SYMBOL");
 
@@ -354,13 +370,15 @@ describe("analyzeProgram", () => {
   });
 
   test("expands macros and analyzes introduced bindings", async () => {
-    const analysis = await analyzeSource(`
-      (defmacro with-temp [expr]
-        \`(let [tmp ~expr]
-           tmp))
+    const analysis = await analyzeSource(
+      withArithmeticPrelude(`
+        (defmacro with-temp [expr]
+          \`(let [tmp ~expr]
+             tmp))
 
-      (def answer (with-temp (+ 1 2)))
-    `);
+        (def answer (with-temp (+ 1 2)))
+      `)
+    );
 
     expect(analysis.ok).toBeTrue();
     const tmpDefinition = analysis.graph.nodes.find(
@@ -463,10 +481,27 @@ describe("analyzeProgram", () => {
       expectDiagnostic(analysis, "SEM_MACRO_REQUIRES_BODY");
     });
 
-    test("requires macro bodies to be syntax quoted", async () => {
-      const analysis = await analyzeSource("(defmacro foo [x] (list x))");
+    test("allows macro bodies to return raw forms", async () => {
+      const analysis = await analyzeSource(`
+        (defmacro passthrough [x] x)
+        (passthrough 42)
+      `);
 
-      expectDiagnostic(analysis, "SEM_MACRO_EXPECTS_SYNTAX_QUOTE");
+      expect(analysis.ok).toBeTrue();
+      expect(getDiagnosticCodes(analysis)).toEqual([]);
+    });
+
+    test("evaluates syntax-quoted templates produced by interpreter logic", async () => {
+      const analysis = await analyzeSource(`
+        (defmacro wrap [expr]
+          (let [tmp (gensym "wrap")]
+            \`(let [~tmp ~expr]
+               ~tmp)))
+        (wrap 1)
+      `);
+
+      expect(analysis.ok).toBeTrue();
+      expect(getDiagnosticCodes(analysis)).toEqual([]);
     });
 
     test("supports only a single macro body expression", async () => {
@@ -534,7 +569,7 @@ describe("analyzeProgram", () => {
         (require math "./math.lang")
         (external paths "node:path")
         math/add
-        (get paths sep)
+        paths/path-separator
       `);
 
       expect(analysis.ok).toBeTrue();

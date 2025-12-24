@@ -14,12 +14,8 @@
     "@vibe/runtime": "workspace:*"
   },
   "vibe": {
-    "sources": [
-      "./src"
-    ],
+    "sources": "./src",
     "outDir": "./src",
-    "modules": {
-      ".": "./src/prelude.lang"
-    }
+    "entry": "./src/prelude.lang"
   }
 }

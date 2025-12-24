@@ -17,9 +17,8 @@ describe("module exports helpers", () => {
       name: "@vibe/example-fixture",
       rootDir: fixturesRoot,
       vibe: {
-        modules: {
-          ".": "./module-a.lang",
-        },
+        sources: ["./"],
+        entry: "./module-a.lang",
       },
     };
 

@@ -19,7 +19,7 @@ We have a working lexer that produces rich token streams, but there is no parser
 ### Update – Module Imports (2025-12-21)
 
 - `require`/`external` forms now promote to a dedicated `NamespaceImport` AST node during parsing. The node preserves the original list elements but annotates the import kind, alias expression, and string literal specifier so downstream stages no longer have to pattern-match generic lists.
-- Namespace-qualified tokens (e.g., `alias/member`) continue to lex as single `SymbolNode`s. The parser does not introduce bespoke AST nodes for them; instead, later stages desugar them into `(get alias member)` semantics when needed.
+- Namespace-qualified tokens (e.g., `alias/member`) continue to lex as single `SymbolNode`s. The parser does not introduce bespoke AST nodes for them; downstream stages interpret the alias/member pair directly when resolving symbols or emitting property access.
 - The semantic analyzer is expected to consult a workspace-provided module resolver when it encounters `require` imports (allowing diagnostics such as `SEM_REQUIRE_RESOLVE_FAILED`), while `external` imports continue to pass through verbatim for JavaScript modules.
 - All top-level `def` forms are auto-exported at codegen time as named ES exports; the language surface itself does not expose explicit module/export declarations.
 

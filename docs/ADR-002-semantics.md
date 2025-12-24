@@ -22,7 +22,7 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
 
 - Analyzer now validates `(require alias "./path.lang")` and `(external alias "pkg")` forms, ensuring they appear as standalone top-level statements with a symbol alias plus a single string literal argument.
 - These import forms are restricted to the program root scope; attempts to emit `(require ...)` or `(external ...)` inside nested scopes raise dedicated diagnostics so module loading stays deterministic.
-- Namespace-qualified identifiers such as `alias/member` resolve by binding the alias portion; unresolved aliases raise `SEM_UNRESOLVED_NAMESPACE_ALIAS`. The analyzer also treats `get` as a dedicated special form so `(get alias member)` can act as canonical access without requiring an explicit definition.
+- Namespace-qualified identifiers such as `alias/member` resolve by binding the alias portion; unresolved aliases raise `SEM_UNRESOLVED_NAMESPACE_ALIAS`. The analyzer no longer reserves a `get` builtin head—slash syntax is resolved directly while any `get` invocation behaves like an ordinary function call supplied by user code (e.g., the prelude).
 - These rules keep ASTs immutable while still threading module metadata into the semantic graph for codegen.
 
 ### Update – Import Flattening (2025-12-23)
@@ -120,7 +120,7 @@ Consumers must treat these artifacts as derived metadata. No AST interfaces gain
 
 ## Macro Expansion Pipeline (Update)
 
-- `defmacro` now registers macro symbols alongside their parameter lists and syntax-quoted bodies. The analyzer stores these templates out-of-band and only expands them on demand.
+- `defmacro` now registers macro symbols alongside their parameter lists and body expressions. Bodies are evaluated via the interpreter at analysis time; if the body returns a syntax-quoted template the analyzer instantiates it, otherwise the returned data is converted directly into AST nodes.
 - During analysis, list forms whose head resolves to a macro symbol are expanded before any further traversal. Arguments are bound as raw AST nodes (no evaluation) and injected via `~` and `~@` inside the stored syntax quote.
 - The expander detects recursion (`SEM_MACRO_RECURSION`), arity mismatches, missing operands, and unsupported unquote expressions, surfacing diagnostics with spans at the callsite.
 - `gensym` is recognized inside macro bodies (via `~(gensym "hint")`) to generate hygienic synthetic symbols suffixed with a monotonically increasing counter.

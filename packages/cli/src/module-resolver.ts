@@ -5,8 +5,16 @@ import type {
   ModuleResolutionResult,
   ModuleResolver,
 } from "@vibe/semantics";
-import { isRelativeSpecifier, normalizeRequireTarget } from "./specifiers";
-import { parseVibeConfig, type VibePackageConfig } from "./workspace-config";
+import {
+  LANG_EXTENSION,
+  isRelativeSpecifier,
+  normalizeRequireTarget,
+} from "./specifiers";
+import {
+  parseVibeConfig,
+  resolveVibePackageConfig,
+  type VibePackageConfig,
+} from "./workspace-config";
 
 export interface PackageMetadata {
   readonly name: string;
@@ -201,6 +209,16 @@ const normalizePackageSubpath = (value: string): string => {
   return `.${trimmed}`;
 };
 
+const ensureLangSubpath = (subpath: string): string => {
+  const trimmed = subpath.startsWith("./") ? subpath.slice(2) : subpath;
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.endsWith(LANG_EXTENSION)
+    ? trimmed
+    : `${trimmed}${LANG_EXTENSION}`;
+};
+
 export class PackageRegistry {
   private readonly packageCache = new Map<string, PackageMetadata | null>();
 
@@ -228,28 +246,51 @@ export class PackageRegistry {
     if (!pkg) {
       return { ok: false, reason: `package not found (${parsed.packageName})` };
     }
-    const targetMap = pkg.vibe?.modules;
-    if (!targetMap) {
+    if (!pkg.vibe) {
       return {
         ok: false,
-        reason: `${parsed.packageName} does not declare any vibe.modules`,
+        reason: `${parsed.packageName} does not declare vibe.sources`,
       };
     }
-    const relativePath = targetMap[parsed.subpath];
-    if (!relativePath) {
+    const resolvedConfig = resolveVibePackageConfig(pkg.rootDir, pkg.vibe);
+    if (parsed.subpath === ".") {
+      if (!resolvedConfig.entry) {
+        return {
+          ok: false,
+          reason: `${parsed.packageName} does not declare vibe.entry`,
+        };
+      }
+      if (!existsSync(resolvedConfig.entry)) {
+        return {
+          ok: false,
+          reason: `module not found (${path.relative(
+            pkg.rootDir,
+            resolvedConfig.entry
+          )})`,
+        };
+      }
+      return { ok: true, moduleId: resolvedConfig.entry };
+    }
+
+    if (resolvedConfig.sourceRoots.length === 0) {
       return {
         ok: false,
-        reason: `${parsed.packageName} does not expose ${parsed.subpath}`,
+        reason: `${parsed.packageName} does not declare vibe.sources`,
       };
     }
-    const absolutePath = path.resolve(pkg.rootDir, relativePath);
-    if (!existsSync(absolutePath)) {
-      return {
-        ok: false,
-        reason: `module not found (${relativePath})`,
-      };
+
+    const relativeTarget = ensureLangSubpath(parsed.subpath);
+    for (const sourceRoot of resolvedConfig.sourceRoots) {
+      const candidate = path.join(sourceRoot, relativeTarget);
+      if (existsSync(candidate)) {
+        return { ok: true, moduleId: candidate };
+      }
     }
-    return { ok: true, moduleId: absolutePath };
+
+    return {
+      ok: false,
+      reason: `module not found (${relativeTarget})`,
+    };
   }
 
   getPackageMetadata(

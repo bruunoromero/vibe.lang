@@ -2,8 +2,17 @@
 
 ## 2025-12-24
 
+- Macro bodies defined via `defmacro` are now analyzed as general expressions instead of requiring a top-level syntax quote. During expansion the analyzer evaluates the body with the interpreter when necessary, allowing macros to compute templates in `let`/`if` blocks or return raw data structures without wrapping everything in `` `(...) ``.
+- Removed the `get` builtin special form. Namespace-qualified symbols (`alias/member`) now provide the entire surface for compile-time namespace validation, while ordinary `get` calls flow through user-defined functions (e.g., the prelude helper) without bespoke analyzer plumbing.
+
+- Removed the unused `__result` alias reservation now that codegen no longer emits the sink variable, freeing the name for user-defined bindings.
+
+- Analyzer fixtures now inject stub definitions for `+`, `-`, `*`, and `/` so tests exercise the same prelude-supplied operators users rely on instead of extending the builtin list beyond the core special forms.
+
+- Preserved scope metadata for unquoted arguments and spliced sequences so macro-expanded references keep their original bindings, preventing generated JavaScript from falling back to raw symbol names.
 - Compile-time unquote expressions now execute through the full interpreter instead of the previous `gensym`-only restriction, so macros can run arbitrary helpers (`if`, arithmetic, sequence inspection, etc.) when constructing new syntax.
 - Removed the `SEM_MACRO_COMPILE_TIME_UNSUPPORTED` diagnostic; compile-time evaluation now only reports interpreter failures (`SEM_MACRO_EVAL_ERROR`) or missing macro parameters (`SEM_MACRO_UNKNOWN_PARAM`).
+- Macro expansions now scrub inherited scope metadata and overwrite the original AST node, ensuring analyzer + downstream stages treat macro-generated usages as part of the caller's scope and allowing codegen to consume the expanded forms instead of the raw `(defmacro ...)` call sites.
 
 ## 2025-12-23
 

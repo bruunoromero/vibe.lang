@@ -411,8 +411,6 @@ class ModuleEmitter {
       this.addLine("");
     }
 
-    this.emitPrelude();
-
     for (const expr of this.program.body) {
       if (!expr) {
         continue;
@@ -424,11 +422,15 @@ class ModuleEmitter {
         }
         continue;
       }
+      if (this.isTopLevelDefMacro(expr)) {
+        // Macros are compile-time only and should not emit runtime code.
+        continue;
+      }
       if (this.isTopLevelDef(expr)) {
         this.emitTopLevelDef(expr);
         continue;
       }
-      this.addLine(`__result = ${this.emitExpression(expr)};`, expr.span);
+      this.emitTopLevelExpression(expr);
     }
 
     return {
@@ -451,11 +453,6 @@ class ModuleEmitter {
     }
   }
 
-  private emitPrelude(): void {
-    this.addLine("let __result = null;");
-    this.addLine("");
-  }
-
   private emitTopLevelDef(node: ListNode): void {
     const nameNode = node.elements[1];
     const valueNode = node.elements[2];
@@ -465,37 +462,26 @@ class ModuleEmitter {
     const identifier = this.resolveBindingIdentifier(nameNode);
     const valueExpr = valueNode ? this.emitExpression(valueNode) : "null";
     this.addLine(`export const ${identifier} = ${valueExpr};`, node.span);
-    this.addLine(`__result = ${identifier};`);
   }
 
   private emitNamespaceDefinition(spec: NamespaceImportSpec): void {
-    if (spec.kind === "import") {
-      if (spec.flatten && spec.flatten.length > 0) {
-        for (const binding of spec.flatten) {
-          const access = this.emitNamespaceMemberAccess(
-            spec.aliasIdentifier,
-            binding.exportedName,
-            spec.kind
-          );
-          this.addLine(
-            `const ${binding.identifier} = ${access};`,
-            spec.statementNode.span
-          );
-          this.addLine(
-            `__result = ${binding.identifier};`,
-            spec.statementNode.span
-          );
-        }
-      } else {
+    if (spec.kind === "import" && spec.flatten && spec.flatten.length > 0) {
+      for (const binding of spec.flatten) {
+        const access = this.emitNamespaceMemberAccess(
+          spec.aliasIdentifier,
+          binding.exportedName,
+          spec.kind
+        );
         this.addLine(
-          `__result = ${spec.aliasIdentifier};`,
+          `const ${binding.identifier} = ${access};`,
           spec.statementNode.span
         );
       }
-      return;
     }
-    const span = spec.aliasNode?.span ?? spec.statementNode.span;
-    this.addLine(`__result = ${spec.aliasIdentifier};`, span);
+  }
+
+  private emitTopLevelExpression(node: ExpressionNode): void {
+    this.addLine(`${this.emitExpression(node)};`, node.span);
   }
 
   private isNamespaceImport(node: ExpressionNode): boolean {
@@ -552,7 +538,9 @@ class ModuleEmitter {
     }
 
     if (symbolRecord.kind === "builtin") {
-      return this.emitBuiltinSymbol(node, symbolRecord);
+      throw new Error(
+        `Cannot reference builtin ${node.value} as a value at runtime`
+      );
     }
 
     if (symbolRecord.kind === "macro") {
@@ -560,18 +548,6 @@ class ModuleEmitter {
     }
 
     return symbolRecord.alias;
-  }
-
-  private emitBuiltinSymbol(node: SymbolNode, symbol: SymbolRecord): string {
-    if (symbol.name === "println") {
-      return "console.log";
-    }
-    if (this.isArithmeticOperator(symbol.name)) {
-      throw new Error(
-        `Cannot reference arithmetic operator ${symbol.name} as a value yet`
-      );
-    }
-    throw new Error(`Cannot reference builtin ${node.value} as a value yet`);
   }
 
   private emitListExpression(node: ListNode): string {
@@ -590,13 +566,6 @@ class ModuleEmitter {
           return this.emitFn(node);
         case "if":
           return this.emitIf(tail);
-        case "get":
-          return this.emitGet(node);
-        case "+":
-        case "-":
-        case "*":
-        case "/":
-          return this.emitArithmetic(head.value, tail);
         default:
           break;
       }
@@ -718,20 +687,6 @@ ${bodyBlock}
 }`;
   }
 
-  private emitGet(node: ListNode): string {
-    const aliasNode = node.elements[1];
-    const memberNode = node.elements[2];
-    if (!aliasNode || aliasNode.kind !== NodeKind.Symbol) {
-      throw new Error("get requires a namespace alias symbol");
-    }
-    if (!memberNode) {
-      throw new Error("get requires a member expression");
-    }
-    const base = this.emitSymbol(aliasNode);
-    const memberName = this.resolveMemberName(memberNode);
-    return this.emitPropertyAccess(base, memberName);
-  }
-
   private emitNamespaceMemberAccess(
     baseIdentifier: string,
     member: string,
@@ -771,54 +726,12 @@ ${bodyBlock}
     return `(${cond} ? ${thenExpr} : ${elseExpr})`;
   }
 
-  private resolveMemberName(node: ExpressionNode): string {
-    if (node.kind === NodeKind.Symbol || node.kind === NodeKind.String) {
-      return node.value;
-    }
-    throw new Error("get member name must be a symbol or string literal");
-  }
-
   private resolveBindingIdentifier(node: SymbolNode): string {
     const symbolRecord = this.semanticLookup.getSymbolRecord(node);
     if (!symbolRecord) {
       return this.fallbackIdentifier(node.value);
     }
     return symbolRecord.alias;
-  }
-
-  private emitArithmetic(
-    operator: string,
-    args: readonly (ExpressionNode | null | undefined)[]
-  ): string {
-    const values = args
-      .filter((arg): arg is ExpressionNode => Boolean(arg))
-      .map((arg) => this.emitExpression(arg));
-    if (values.length === 0) {
-      switch (operator) {
-        case "+":
-          return "0";
-        case "*":
-          return "1";
-        case "-":
-        case "/":
-          return "0";
-        default:
-          return "0";
-      }
-    }
-    if (operator === "-") {
-      if (values.length === 1) {
-        return `(-${values[0]})`;
-      }
-      return `(${values.join(" - ")})`;
-    }
-    if (operator === "/") {
-      if (values.length === 1) {
-        return `(1 / ${values[0]})`;
-      }
-      return `(${values.join(" / ")})`;
-    }
-    return `(${values.join(` ${operator} `)})`;
   }
 
   private emitMap(node: MapNode): string {
@@ -870,6 +783,16 @@ ${bodyBlock}
     );
   }
 
+  private isTopLevelDefMacro(node: ExpressionNode): node is ListNode {
+    if (node.kind !== NodeKind.List) {
+      return false;
+    }
+    const head = node.elements[0];
+    return Boolean(
+      head && head.kind === NodeKind.Symbol && head.value === "defmacro"
+    );
+  }
+
   private fallbackIdentifier(name: string): string {
     let base = name.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^([0-9])/, "_$1");
     if (base.length === 0) {
@@ -879,10 +802,6 @@ ${bodyBlock}
       return `_${base}`;
     }
     return base;
-  }
-
-  private isArithmeticOperator(name: string): boolean {
-    return name === "+" || name === "-" || name === "*" || name === "/";
   }
 
   private unsupported(node: ExpressionNode): never {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2025-12-24
+
+- Added syntax-quote evaluation to the interpreter so `` `(...) `` forms, along with `~`/`~@`, produce the same data structures macros expect at analysis time. This enables `defmacro` bodies to run arbitrary control flow before returning either a template or a manually assembled form.
+
 ## [0.1.0] - 2025-12-23
 
 ### Added

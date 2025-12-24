@@ -128,11 +128,21 @@ export interface SemanticNodeRecord {
   readonly symbol?: NodeSymbolInfo;
 }
 
+type MacroBody =
+  | {
+      readonly kind: "template";
+      readonly template: ReaderMacroNode<NodeKind.SyntaxQuote>;
+    }
+  | {
+      readonly kind: "expression";
+      readonly expression: ExpressionNode;
+    };
+
 interface MacroDefinition {
   readonly symbolId: SymbolId;
   readonly params: readonly string[];
   readonly rest?: string;
-  readonly template: ReaderMacroNode<NodeKind.SyntaxQuote>;
+  readonly body: MacroBody;
 }
 
 interface MacroExpansionContext {
@@ -278,6 +288,17 @@ export class SemanticAnalyzer {
     }
   }
 
+  private replaceNodeWithExpansion(
+    target: ExpressionNode,
+    expansion: ExpressionNode
+  ): void {
+    const targetRecord = target as unknown as Record<string, unknown>;
+    for (const key of Object.keys(targetRecord)) {
+      delete targetRecord[key];
+    }
+    Object.assign(targetRecord, expansion);
+  }
+
   private async expandMacroIfNeeded(
     node: ListNode,
     scopeId: ScopeId
@@ -355,7 +376,7 @@ export class SemanticAnalyzer {
     this.macroExpansionStack.push(binding.id);
     let expanded: ExpressionNode | null = null;
     try {
-      expanded = await this.expandMacroOnce(definition.template, scopeId, {
+      expanded = await this.expandMacro(definition, {
         env,
         callSpan: node.span,
       });
@@ -367,20 +388,28 @@ export class SemanticAnalyzer {
     // Pass the current macro ID to detect direct recursion
     if (expanded) {
       await this.fullyExpandAndVisit(expanded, scopeId, 0, 100, binding.id);
+      this.replaceNodeWithExpansion(node, expanded);
     }
 
     return true;
   }
 
-  private async expandMacroOnce(
-    template: ReaderMacroNode<NodeKind.SyntaxQuote>,
-    scopeId: ScopeId,
+  private async expandMacro(
+    definition: MacroDefinition,
     context: MacroExpansionContext
   ): Promise<ExpressionNode | null> {
-    if (!template.target) {
-      return null;
+    if (definition.body.kind === "template") {
+      const template = definition.body.template;
+      if (!template.target) {
+        return null;
+      }
+      return await this.instantiateTemplate(template.target, context);
     }
-    return await this.instantiateTemplate(template.target, context);
+
+    return await this.evaluateCompileTimeExpression(
+      definition.body.expression,
+      context
+    );
   }
 
   private async fullyExpandAndVisit(
@@ -443,14 +472,10 @@ export class SemanticAnalyzer {
               env.set(definition.rest, restVector);
             }
 
-            const expanded = await this.expandMacroOnce(
-              definition.template,
-              scopeId,
-              {
-                env,
-                callSpan: node.span,
-              }
-            );
+            const expanded = await this.expandMacro(definition, {
+              env,
+              callSpan: node.span,
+            });
 
             if (expanded) {
               // Recursively expand with increased depth, passing current macro as parent
@@ -517,10 +542,6 @@ export class SemanticAnalyzer {
       case "fn":
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleFn(node, scopeId);
-        return true;
-      case "get":
-        this.recordBuiltinUsage(head, scopeId);
-        await this.handleGet(node, scopeId);
         return true;
       case "require":
         this.recordBuiltinUsage(head, scopeId);
@@ -674,7 +695,7 @@ export class SemanticAnalyzer {
 
     if (bodyNodes.length === 0) {
       this.report(
-        "defmacro requires a syntax-quoted body",
+        "defmacro requires a body expression",
         node.span,
         "SEM_MACRO_REQUIRES_BODY"
       );
@@ -689,22 +710,33 @@ export class SemanticAnalyzer {
       );
     }
 
-    const template = bodyNodes[0];
-    if (!template || template.kind !== NodeKind.SyntaxQuote) {
+    const bodyNode = bodyNodes[0];
+    if (!bodyNode) {
       this.report(
-        "Macro bodies must be wrapped in a syntax quote (use `...`)",
-        (template ?? node).span,
-        "SEM_MACRO_EXPECTS_SYNTAX_QUOTE"
+        "defmacro requires a body expression",
+        node.span,
+        "SEM_MACRO_REQUIRES_BODY"
       );
       return;
     }
+
+    const body: MacroBody =
+      bodyNode.kind === NodeKind.SyntaxQuote
+        ? {
+            kind: "template",
+            template: bodyNode as ReaderMacroNode<NodeKind.SyntaxQuote>,
+          }
+        : {
+            kind: "expression",
+            expression: bodyNode,
+          };
 
     if (macroSymbol) {
       this.macros.set(macroSymbol.id, {
         symbolId: macroSymbol.id,
         params,
         rest,
-        template: template as ReaderMacroNode<NodeKind.SyntaxQuote>,
+        body,
       });
     }
   }
@@ -864,44 +896,6 @@ export class SemanticAnalyzer {
       const element = node.elements[index];
       if (element) {
         await this.visit(element, fnScopeId);
-      }
-    }
-  }
-
-  private async handleGet(node: ListNode, scopeId: ScopeId): Promise<void> {
-    const aliasNode = node.elements[1];
-    const memberNode = node.elements[2];
-    if (!aliasNode) {
-      this.report(
-        "get requires a namespace alias",
-        node.span,
-        "SEM_GET_EXPECTS_ALIAS"
-      );
-    } else {
-      await this.visit(aliasNode, scopeId);
-    }
-    if (!memberNode) {
-      this.report(
-        "get requires a member name",
-        node.span,
-        "SEM_GET_EXPECTS_MEMBER"
-      );
-    } else if (
-      memberNode.kind !== NodeKind.Symbol &&
-      memberNode.kind !== NodeKind.String
-    ) {
-      this.report(
-        "get member names must be symbols or string literals",
-        memberNode.span,
-        "SEM_GET_EXPECTS_MEMBER"
-      );
-      await this.visit(memberNode, scopeId);
-    }
-
-    for (let index = 3; index < node.elements.length; index += 1) {
-      const element = node.elements[index];
-      if (element) {
-        await this.visit(element, scopeId);
       }
     }
   }
@@ -1287,19 +1281,21 @@ export class SemanticAnalyzer {
         elements.push(expanded);
       }
     }
-    return {
+    const instantiated = {
       ...node,
       elements,
     } as ListNode | VectorNode | SetNode;
+    this.clearScopeMetadata(instantiated);
+    return instantiated;
   }
 
   private async instantiateMap(
     node: MapNode,
     context: MacroExpansionContext
   ): Promise<MapNode> {
-    const entries = [];
+    const entries: MapEntryNode[] = [];
     for (const entry of node.entries) {
-      entries.push({
+      const entryCopy: MapEntryNode = {
         ...entry,
         key: entry.key
           ? await this.instantiateTemplate(entry.key, context)
@@ -1307,36 +1303,44 @@ export class SemanticAnalyzer {
         value: entry.value
           ? await this.instantiateTemplate(entry.value, context)
           : null,
-      });
+      };
+      this.clearScopeMetadata(entryCopy);
+      entries.push(entryCopy);
     }
-    return {
+    const instantiated: MapNode = {
       ...node,
       entries,
     };
+    this.clearScopeMetadata(instantiated);
+    return instantiated;
   }
 
   private async instantiateReader(
     node: ReaderMacroNode,
     context: MacroExpansionContext
   ): Promise<ReaderMacroNode> {
-    return {
+    const instantiated = {
       ...node,
       target: node.target
         ? await this.instantiateTemplate(node.target, context)
         : null,
     };
+    this.clearScopeMetadata(instantiated);
+    return instantiated;
   }
 
   private async instantiateDispatch(
     node: DispatchNode,
     context: MacroExpansionContext
   ): Promise<DispatchNode> {
-    return {
+    const instantiated = {
       ...node,
       target: node.target
         ? await this.instantiateTemplate(node.target, context)
         : null,
     };
+    this.clearScopeMetadata(instantiated);
+    return instantiated;
   }
 
   private async materializeArgument(
@@ -1377,7 +1381,9 @@ export class SemanticAnalyzer {
     ) {
       return value.elements
         .filter((element): element is ExpressionNode => Boolean(element))
-        .map((element) => this.cloneExpression(element));
+        .map((element) =>
+          this.cloneExpression(element, { preserveScopeMetadata: true })
+        );
     }
     this.report(
       "Unquote splicing requires a sequence expression",
@@ -1402,7 +1408,7 @@ export class SemanticAnalyzer {
         );
         return null;
       }
-      return this.cloneExpression(value);
+      return this.cloneExpression(value, { preserveScopeMetadata: true });
     }
 
     return await this.evaluateCompileTimeExpression(target, context);
@@ -1466,9 +1472,14 @@ export class SemanticAnalyzer {
     }
   }
 
-  private cloneExpression<T extends ExpressionNode>(node: T): T {
+  private cloneExpression<T extends ExpressionNode>(
+    node: T,
+    options?: { preserveScopeMetadata?: boolean }
+  ): T {
     const copy = this.duplicate(node);
-    this.stripScopeMetadata(copy);
+    if (!options?.preserveScopeMetadata) {
+      this.stripScopeMetadata(copy);
+    }
     return copy;
   }
 
@@ -1484,13 +1495,22 @@ export class SemanticAnalyzer {
     return JSON.parse(JSON.stringify(value)) as T;
   }
 
-  private stripScopeMetadata(
+  private clearScopeMetadata(
     node: ExpressionNode | MapEntryNode | ProgramNode | null | undefined
   ): void {
     if (!node) {
       return;
     }
     delete (node as { scopeId?: ScopeId }).scopeId;
+  }
+
+  private stripScopeMetadata(
+    node: ExpressionNode | MapEntryNode | ProgramNode | null | undefined
+  ): void {
+    if (!node) {
+      return;
+    }
+    this.clearScopeMetadata(node);
     switch (node.kind) {
       case NodeKind.List:
       case NodeKind.Vector:
@@ -1854,12 +1874,7 @@ export class SemanticAnalyzer {
 }
 
 class AliasAllocator {
-  private readonly used = new Set<string>([
-    "__println",
-    "__result",
-    "eq",
-    "count",
-  ]);
+  private readonly used = new Set<string>(["__println", "eq", "count"]);
 
   private readonly operatorNames = new Map<string, string>([
     // Comparison operators

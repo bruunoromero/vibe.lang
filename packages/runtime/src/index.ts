@@ -143,42 +143,43 @@ export const count = (v: unknown): number => {
 };
 
 // Arithmetic operations (binary)
-export const add_STAR = (a: unknown, b: unknown): number => {
-  if (typeof a !== "number" || typeof b !== "number") {
-    throw new Error("add* requires numeric arguments");
+const expectBinaryNumbers = (
+  label: string,
+  left: unknown,
+  right: unknown
+): [number, number] => {
+  if (typeof left !== "number" || typeof right !== "number") {
+    throw new Error(`${label} requires numeric arguments`);
   }
-  return a + b;
+  return [left, right];
+};
+
+export const add_STAR = (a: unknown, b: unknown): number => {
+  const [left, right] = expectBinaryNumbers("add*", a, b);
+  return left + right;
 };
 
 export const sub_STAR = (a: unknown, b: unknown): number => {
-  if (typeof a !== "number" || typeof b !== "number") {
-    throw new Error("sub* requires numeric arguments");
-  }
-  return a - b;
+  const [left, right] = expectBinaryNumbers("sub*", a, b);
+  return left - right;
 };
 
 export const mul_STAR = (a: unknown, b: unknown): number => {
-  if (typeof a !== "number" || typeof b !== "number") {
-    throw new Error("mul* requires numeric arguments");
-  }
-  return a * b;
+  const [left, right] = expectBinaryNumbers("mul*", a, b);
+  return left * right;
 };
 
 export const div_STAR = (a: unknown, b: unknown): number => {
-  if (typeof a !== "number" || typeof b !== "number") {
-    throw new Error("div* requires numeric arguments");
-  }
-  if (b === 0) {
+  const [left, right] = expectBinaryNumbers("div*", a, b);
+  if (right === 0) {
     throw new Error("Division by zero");
   }
-  return a / b;
+  return left / right;
 };
 
 export const mod_STAR = (a: unknown, b: unknown): number => {
-  if (typeof a !== "number" || typeof b !== "number") {
-    throw new Error("mod* requires numeric arguments");
-  }
-  return a % b;
+  const [left, right] = expectBinaryNumbers("mod*", a, b);
+  return left % right;
 };
 
 // Comparison operations (binary)
@@ -281,15 +282,26 @@ export const str = (...args: unknown[]): string => {
 
 // Map operations
 export const get = (
-  map: unknown,
+  target: unknown,
   key: unknown,
   defaultValue?: unknown
 ): unknown => {
-  if (typeof map !== "object" || map === null || Array.isArray(map)) {
-    throw new Error("get requires a map as first argument");
+  if (target instanceof Map) {
+    const direct = target.get(key);
+    if (direct !== undefined) {
+      return direct;
+    }
+    const fallback = target.get(coerceKey(key));
+    if (fallback !== undefined) {
+      return fallback;
+    }
+    return defaultValue ?? null;
   }
-  const value = (map as Record<string, unknown>)[coerceKey(key)];
-  return value !== undefined ? value : defaultValue ?? null;
+  if (typeof target === "object" && target !== null && !Array.isArray(target)) {
+    const value = (target as Record<string, unknown>)[coerceKey(key)];
+    return value !== undefined ? value : defaultValue ?? null;
+  }
+  throw new Error("get requires a map or namespace object as first argument");
 };
 
 export const assoc = (

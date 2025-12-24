@@ -1,10 +1,6 @@
 import { BUILTIN_SYMBOLS } from "@vibe/syntax";
 
 const EXTRA_SYMBOLS = [
-  "+",
-  "-",
-  "*",
-  "/",
   "=",
   "<",
   ">",
@@ -32,7 +28,6 @@ const EXTRA_SYMBOLS = [
   "type",
   "str",
   "gensym",
-  "println",
 ] as const;
 
 export const TEST_BUILTINS: readonly string[] = [
