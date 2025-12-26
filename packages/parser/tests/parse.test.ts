@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseSource } from "../src";
-import { NodeKind, type ReaderMacroKind } from "@vibe/syntax";
+import { NodeKind, type ReaderMacroKind, type SymbolNode } from "@vibe/syntax";
 
 describe("parseSource", () => {
   test("parses nested collections", async () => {
@@ -460,5 +460,37 @@ describe("parseSource", () => {
     if (nameSym4?.kind === NodeKind.Symbol) {
       expect(nameSym4.value).toBe("foo-bar?");
     }
+  });
+
+  test("parses gensym placeholders inside syntax quotes", async () => {
+    const source = "`(let [foo# 1 bar# foo#] bar#)";
+    const result = await parseSource(source);
+
+    expect(result.ok).toBeTrue();
+    expect(result.diagnostics).toHaveLength(0);
+    const programBody = result.program.body[0];
+    expect(programBody?.kind).toBe(NodeKind.SyntaxQuote);
+    if (!programBody || programBody.kind !== NodeKind.SyntaxQuote) {
+      throw new Error("Expected syntax quote node");
+    }
+    const target = programBody.target;
+    if (!target || target.kind !== NodeKind.List) {
+      throw new Error("Expected list expression inside syntax quote");
+    }
+    const vector = target.elements[1];
+    if (!vector || vector.kind !== NodeKind.Vector) {
+      throw new Error("Expected binding vector inside syntax quote");
+    }
+    const placeholderSymbols = target.elements
+      .concat(vector.elements)
+      .filter(
+        (node): node is SymbolNode =>
+          Boolean(node) && node.kind === NodeKind.Symbol
+      )
+      .map((node) => node.value);
+    const placeholders = placeholderSymbols.filter((value) =>
+      value.endsWith("#")
+    );
+    expect(placeholders).toEqual(["bar#", "foo#", "bar#", "foo#"]);
   });
 });

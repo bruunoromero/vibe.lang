@@ -417,7 +417,7 @@ Notes
 
 Goal
 
-- Support variadic parameter lists using `&` in parameter vectors for function definitions and `defmacro`, enabling forms like `(defmacro and [& expr] ...)` and `(fn [& xs] ...)`.
+- Support variadic parameter lists using `&` in parameter vectors for function definitions and macro literals, enabling forms like `(def and (macro [& expr] ...))` and `(fn [& xs] ...)`.
 
 Rationale
 
@@ -437,7 +437,7 @@ Acceptance criteria
 
 Files changed
 
-- `packages/semantics/src/analyzer.ts` — variadic parameter parsing and validation for both defmacro and fn
+- `packages/semantics/src/analyzer.ts` — variadic parameter parsing and validation for both macro literals and fn
 - `packages/codegen/src/generator.ts` — emit JS rest parameters in generated functions
 - `packages/semantics/tests/advanced-macros.test.ts` — comprehensive variadic tests (NEW)
 - `docs/macro-authoring.md` — documented variadic macro syntax and diagnostics
@@ -446,7 +446,7 @@ Actionable subtasks
 
 All completed:
 
-1. ✅ Modified defmacro and fn parameter parsing to detect `&` and bind rest parameter
+1. ✅ Modified macro literal and fn parameter parsing to detect `&` and bind rest parameter
 2. ✅ Added validation: `SEM_MACRO_DUPLICATE_REST`, `SEM_MACRO_REST_REQUIRES_SYMBOL`, `SEM_MACRO_PARAMS_AFTER_REST` (and FN equivalents)
 3. ✅ Updated macro expansion to collect remaining args into a vector for rest parameter
 4. ✅ Modified codegen to emit `...restParam` syntax in generated JS functions

@@ -1,5 +1,10 @@
 # @vibe/parser Changelog
 
+## 2025-12-25
+
+- Syntax-quoted forms now preserve trailing `#` symbols as standalone `SymbolNode`s so auto-gensym placeholders survive parsing. Added regression coverage for `` `(let [foo# 1] foo#) `` to ensure scope metadata keeps these placeholders inside the template until macro expansion replaces them.
+- Scope annotator now understands multi-arity `fn` forms, allocating deterministic clause-specific scope IDs so the analyzer can reuse parser hints when validating each parameter vector.
+
 ## 2025-12-23
 
 - Promoted `(import "./module.lang")` into the existing `NamespaceImport` AST node (with `importKind = "import"`) so downstream stages can distinguish alias-less imports without re-parsing list literals.

@@ -1,7 +1,18 @@
 # @vibe/codegen Changelog
 
+## 2025-12-26
+
+- Top-level macro skipping now keys off `(def name (macro ...))` instead of the removed `defmacro` head. The emitter inspects `def` forms for macro literals and omits them from generated JavaScript so compile-time declarations never leak into runtime output regardless of the surface syntax.
+- `let` emission now consults semantic symbol metadata and drops any bindings whose identifiers are macros, ensuring local macro helpers remain compile-time only and no longer cause the emitter to choke on `(macro ...)` literals or output dead runtime code.
+
+## 2025-12-25
+
+- Alias sanitizer now preserves the new `foo#` gensym placeholders by mapping trailing `#` characters to `_HASH` in emitted identifiers. This keeps analyzer and emitter serialization in lockstep once auto gensyms expand to sanitized JavaScript bindings.
+- `fn` emission now mirrors the interpreter's multi-arity semantics. Single-clause functions continue to emit concise arrows, while multi-clause forms generate a dispatcher that selects the appropriate clause (or variadic fallback) based on argument count. This keeps compiled JavaScript in lockstep with runtime arity validation.
+
 ## 2025-12-24
 
+- Flattened `(import ...)` namespaces now skip macro exports entirely, so the emitter only generates destructured bindings for runtime values. This pairs with the analyzer's new macro-metadata pipeline to keep runtime output free of compile-time-only helpers like `and`/`or`.
 - Removed the `(get alias member)` lowering branch. Namespace access now relies solely on the existing `alias/member` syntax, and any `get` usage is treated as a normal function call (e.g., `prelude/get`). Tests now cover both slash access and the library helper to ensure bracket-notation regressions stay caught.
 
 - Removed the temporary `__result` sink variable from generated modules. Top-level forms now emit as regular statements/exports, trimming runtime noise and matching the interpreter-based REPL pipeline.

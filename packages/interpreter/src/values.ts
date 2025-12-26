@@ -78,15 +78,19 @@ export interface MapValue {
   readonly entries: ReadonlyMap<string, Value>;
 }
 
+export interface FunctionClauseValue {
+  readonly params: readonly string[];
+  readonly rest?: string;
+  readonly body: readonly ExpressionNode[];
+}
+
 /**
  * User-defined function with closure.
  * Captures the lexical environment at definition time.
  */
 export interface FunctionValue {
   readonly kind: "function";
-  readonly params: readonly string[];
-  readonly rest?: string;
-  readonly body: readonly ExpressionNode[];
+  readonly clauses: readonly FunctionClauseValue[];
   readonly closure: Environment;
   readonly span: SourceSpan;
 }
@@ -414,16 +418,12 @@ export const makeMap = (entries: Map<string, Value>): MapValue => ({
 });
 
 export const makeFunction = (
-  params: readonly string[],
-  body: readonly ExpressionNode[],
+  clauses: readonly FunctionClauseValue[],
   closure: Environment,
-  span: SourceSpan,
-  rest?: string
+  span: SourceSpan
 ): FunctionValue => ({
   kind: "function",
-  params,
-  rest,
-  body,
+  clauses,
   closure,
   span,
 });

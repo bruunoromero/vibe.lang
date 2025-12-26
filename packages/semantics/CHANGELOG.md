@@ -1,7 +1,23 @@
 # @vibe/semantics Changelog
 
+# @vibe/semantics Changelog
+
+## 2025-12-26
+
+- Replaced the `defmacro` special form with `macro` literals that bind via ordinary forms like `def` and `let`. The analyzer now detects `(macro ...)` initializers, registers macro metadata (clauses, dependencies) for those bindings, and skips runtime analysis of macro literals while still allowing macros to be scoped lexically. Non-top-level macros remain private because only top-level `def` exports are recorded, and standalone `(macro ...)` expressions emit `SEM_MACRO_LITERAL_CONTEXT` so macros stay restricted to binding initializers.
+
+## 2025-12-25
+
+- Syntax-quoted templates now understand Clojure-style auto gensym placeholders (`foo#`). During macro expansion the analyzer replaces each placeholder with a deterministic hygiene-safe symbol, shares counters with `(gensym)`, and surfaces targeted diagnostics when placeholders escape syntax quotes (`SEM_GENSYM_PLACEHOLDER_CONTEXT`) or include namespace qualifiers (`SEM_GENSYM_PLACEHOLDER_NAMESPACE`). Nested syntax quotes now allocate independent placeholder scopes.
+- `fn` now supports multiple parameter clauses. The analyzer allocates a clause scope for every vector, enforces unique fixed arities, restricts each function to a single trailing variadic clause, and reports targeted diagnostics (`SEM_FN_DUPLICATE_ARITY`, `SEM_FN_MULTIPLE_REST_CLAUSES`, `SEM_FN_REST_POSITION`, `SEM_FN_CLAUSE_REQUIRES_BODY`). The resulting semantic graph keeps per-clause parameter bindings and hygiene metadata aligned with the parser's scope hints.
+- `defmacro` now mirrors the same multi-clause semantics. Macro definitions can provide multiple parameter vectors, and the analyzer validates duplicate arities, multiple variadic clauses, and clause ordering (`SEM_MACRO_DUPLICATE_ARITY`, `SEM_MACRO_MULTIPLE_REST_CLAUSES`, `SEM_MACRO_REST_POSITION`). Macro metadata (including flattened imports) now preserves every clause so imported macros retain their dispatch tables.
+
 ## 2025-12-24
 
+- Namespaced `(require alias ...)` statements now register exported macros as `alias/name` bindings so imported macros retain their metadata (parameters, dependencies, hygiene) just like flattened `(import ...)` forms.
+- Macro dependency seeding resolves both `external` and `require` aliases, so compile-time evaluation autoloads any JS module a macro depends on (including relative `require` paths) instead of only handling externals.
+- Flattened imports now carry full macro metadata, so macros exported from other modules (`@vibe/prelude`'s `and`, `or`, etc.) expand during analysis instead of leaking raw macro calls into generated JavaScript or failing at runtime.
+- Macro expansion automatically loads any `external` dependencies recorded in imported macro metadata (e.g., `runtime` for prelude macros), so compile-time evaluation no longer surfaces `INTERP_UNDEFINED_NAMESPACE` when macros rely on runtime helpers.
 - Macro bodies defined via `defmacro` are now analyzed as general expressions instead of requiring a top-level syntax quote. During expansion the analyzer evaluates the body with the interpreter when necessary, allowing macros to compute templates in `let`/`if` blocks or return raw data structures without wrapping everything in `` `(...) ``.
 - Removed the `get` builtin special form. Namespace-qualified symbols (`alias/member`) now provide the entire surface for compile-time namespace validation, while ordinary `get` calls flow through user-defined functions (e.g., the prelude helper) without bespoke analyzer plumbing.
 

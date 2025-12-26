@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   DiagnosticSeverity,
   NodeKind,
@@ -25,6 +27,9 @@ import {
   defineVariable,
   valueToNode,
   nodeToValue,
+  makeExternalNamespace,
+  type Environment,
+  type Value,
 } from "@vibe/interpreter";
 
 export type { ScopeId } from "@vibe/syntax";
@@ -70,6 +75,31 @@ export interface FlattenedImportBinding {
   readonly identifier: string;
 }
 
+export type ModuleExportKind = "var" | "macro";
+
+export interface ModuleMacroDependency {
+  readonly kind: "external" | "require";
+  readonly alias: string;
+  readonly specifier: string;
+}
+
+export interface ModuleExportedMacroClause {
+  readonly params: readonly string[];
+  readonly rest?: string;
+  readonly body: ExpressionNode;
+}
+
+export interface ModuleExportedMacro {
+  readonly clauses: readonly ModuleExportedMacroClause[];
+  readonly dependencies?: readonly ModuleMacroDependency[];
+}
+
+export interface ModuleExportEntry {
+  readonly name: string;
+  readonly kind: ModuleExportKind;
+  readonly macro?: ModuleExportedMacro;
+}
+
 export interface ModuleExportRecord {
   readonly name: string;
   readonly identifier: string;
@@ -93,7 +123,7 @@ export interface ModuleResolver {
 }
 
 export interface ModuleExportsLookup {
-  getExports(moduleId: string): readonly string[] | undefined;
+  getExports(moduleId: string): readonly ModuleExportEntry[] | undefined;
 }
 
 export interface ScopeRecord {
@@ -128,6 +158,12 @@ export interface SemanticNodeRecord {
   readonly symbol?: NodeSymbolInfo;
 }
 
+interface FnClauseDescriptor {
+  readonly paramsNode: ExpressionNode | null;
+  readonly bodyNodes: readonly ExpressionNode[];
+  readonly span: SourceSpan;
+}
+
 type MacroBody =
   | {
       readonly kind: "template";
@@ -138,16 +174,43 @@ type MacroBody =
       readonly expression: ExpressionNode;
     };
 
-interface MacroDefinition {
-  readonly symbolId: SymbolId;
+interface MacroClauseDescriptor {
+  readonly paramsNode: ExpressionNode | null;
+  readonly bodyNodes: readonly ExpressionNode[];
+  readonly span: SourceSpan;
+}
+
+interface MacroClauseDefinition {
   readonly params: readonly string[];
   readonly rest?: string;
   readonly body: MacroBody;
 }
 
+interface MacroLiteralDefinition {
+  readonly clauses: readonly MacroClauseDefinition[];
+  readonly dependencies?: readonly ModuleMacroDependency[];
+}
+
+interface MacroDefinition {
+  readonly symbolId: SymbolId;
+  readonly clauses: readonly MacroClauseDefinition[];
+  readonly dependencies?: readonly ModuleMacroDependency[];
+  readonly originModuleId?: string;
+}
+
+type MacroClauseSelectionStatus = "exact" | "variadic" | "tooFew" | "tooMany";
+
+interface MacroClauseSelection {
+  readonly clause: MacroClauseDefinition;
+  readonly status: MacroClauseSelectionStatus;
+}
+
 interface MacroExpansionContext {
   readonly env: Map<string, ExpressionNode>;
   readonly callSpan: SourceSpan;
+  readonly dependencies?: readonly ModuleMacroDependency[];
+  readonly originModuleId?: string;
+  autoGensyms?: Map<string, string>;
 }
 
 export const analyzeProgram = async (
@@ -179,6 +242,7 @@ export class SemanticAnalyzer {
   private readonly moduleImportsByAlias = new Map<string, ModuleImportRecord>();
   private readonly macros = new Map<SymbolId, MacroDefinition>();
   private readonly macroExpansionStack: SymbolId[] = [];
+  private readonly macroDependencyCache = new Map<string, Value>();
   private readonly builtins: readonly string[];
   private readonly moduleId?: string;
   private readonly moduleResolver?: ModuleResolver;
@@ -189,6 +253,7 @@ export class SemanticAnalyzer {
   private nextNodeId = 0;
   private nextGensymId = 0;
   private rootScopeId: ScopeId | null = null;
+  private syntaxQuoteDepth = 0;
 
   constructor(options: AnalyzeOptions = {}) {
     this.builtins = options.builtins ?? (BUILTIN_SYMBOLS as readonly string[]);
@@ -280,6 +345,16 @@ export class SemanticAnalyzer {
         );
         break;
       case NodeKind.Symbol:
+        if (
+          this.syntaxQuoteDepth === 0 &&
+          this.isAutoGensymPlaceholder(node.value)
+        ) {
+          this.report(
+            `Auto gensym placeholder ${node.value} may only appear inside a syntax-quoted template`,
+            node.span,
+            "SEM_GENSYM_PLACEHOLDER_CONTEXT"
+          );
+        }
         this.recordSymbolUsage(node, nodeScopeId, "usage");
         break;
       default:
@@ -331,55 +406,16 @@ export class SemanticAnalyzer {
     }
 
     const args = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
-    const minArity = definition.params.length;
-    const isVariadic = definition.rest !== undefined;
-
-    if (!isVariadic && args.length !== minArity) {
-      this.report(
-        `Macro ${head.value} expects ${minArity} argument(s) but received ${args.length}`,
-        node.span,
-        "SEM_MACRO_ARITY_MISMATCH"
-      );
-    } else if (isVariadic && args.length < minArity) {
-      this.report(
-        `Macro ${head.value} expects at least ${minArity} argument(s) but received ${args.length}`,
-        node.span,
-        "SEM_MACRO_ARITY_MISMATCH"
-      );
-    }
-
-    const env = new Map<string, ExpressionNode>();
-    definition.params.forEach((param, index) => {
-      const arg = args[index];
-      if (!arg) {
-        this.report(
-          `Missing argument for macro parameter ${param}`,
-          node.span,
-          "SEM_MACRO_ARG_MISSING"
-        );
-        return;
-      }
-      env.set(param, arg);
-    });
-
-    // Handle rest parameter by collecting remaining args into a vector
-    if (definition.rest) {
-      const restArgs = args.slice(definition.params.length);
-      const restVector: VectorNode = {
-        kind: NodeKind.Vector,
-        span: node.span,
-        elements: restArgs,
-      };
-      env.set(definition.rest, restVector);
-    }
 
     this.macroExpansionStack.push(binding.id);
     let expanded: ExpressionNode | null = null;
     try {
-      expanded = await this.expandMacro(definition, {
-        env,
-        callSpan: node.span,
-      });
+      expanded = await this.expandMacroCall(
+        definition,
+        head.value,
+        args,
+        node.span
+      );
     } finally {
       this.macroExpansionStack.pop();
     }
@@ -394,22 +430,126 @@ export class SemanticAnalyzer {
     return true;
   }
 
-  private async expandMacro(
+  private async expandMacroCall(
     definition: MacroDefinition,
+    macroName: string,
+    args: readonly ExpressionNode[],
+    callSpan: SourceSpan
+  ): Promise<ExpressionNode | null> {
+    if (definition.clauses.length === 0) {
+      return null;
+    }
+
+    const selection = this.selectMacroClause(definition, args.length);
+    if (!selection) {
+      return null;
+    }
+
+    if (selection.status === "tooFew") {
+      this.report(
+        `Macro ${macroName} expects at least ${selection.clause.params.length} argument(s) but received ${args.length}`,
+        callSpan,
+        "SEM_MACRO_ARITY_MISMATCH"
+      );
+    } else if (selection.status === "tooMany") {
+      this.report(
+        `Macro ${macroName} expects ${selection.clause.params.length} argument(s) but received ${args.length}`,
+        callSpan,
+        "SEM_MACRO_ARITY_MISMATCH"
+      );
+    }
+
+    const env = this.bindMacroArguments(selection.clause, args, callSpan);
+    return await this.expandMacroBody(selection.clause.body, {
+      env,
+      callSpan,
+      dependencies: definition.dependencies,
+      originModuleId: definition.originModuleId ?? this.moduleId,
+    });
+  }
+
+  private selectMacroClause(
+    definition: MacroDefinition,
+    argCount: number
+  ): MacroClauseSelection | null {
+    if (definition.clauses.length === 0) {
+      return null;
+    }
+
+    const fixedClauses = definition.clauses.filter((clause) => !clause.rest);
+    const variadicClause = definition.clauses.find((clause) => clause.rest);
+
+    const exactMatch = fixedClauses.find(
+      (clause) => clause.params.length === argCount
+    );
+    if (exactMatch) {
+      return { clause: exactMatch, status: "exact" };
+    }
+
+    if (variadicClause && argCount >= variadicClause.params.length) {
+      return { clause: variadicClause, status: "variadic" };
+    }
+
+    const sorted = [...definition.clauses].sort(
+      (a, b) => a.params.length - b.params.length
+    );
+    for (const clause of sorted) {
+      if (argCount < clause.params.length) {
+        return { clause, status: "tooFew" };
+      }
+    }
+
+    return {
+      clause: sorted[sorted.length - 1]!,
+      status: "tooMany",
+    };
+  }
+
+  private bindMacroArguments(
+    clause: MacroClauseDefinition,
+    args: readonly ExpressionNode[],
+    callSpan: SourceSpan
+  ): Map<string, ExpressionNode> {
+    const env = new Map<string, ExpressionNode>();
+    clause.params.forEach((param, index) => {
+      const arg = args[index];
+      if (!arg) {
+        this.report(
+          `Missing argument for macro parameter ${param}`,
+          callSpan,
+          "SEM_MACRO_ARG_MISSING"
+        );
+        return;
+      }
+      env.set(param, arg);
+    });
+
+    if (clause.rest) {
+      const restArgs = args.slice(clause.params.length);
+      const restVector: VectorNode = {
+        kind: NodeKind.Vector,
+        span: callSpan,
+        elements: restArgs,
+      };
+      env.set(clause.rest, restVector);
+    }
+
+    return env;
+  }
+
+  private async expandMacroBody(
+    body: MacroBody,
     context: MacroExpansionContext
   ): Promise<ExpressionNode | null> {
-    if (definition.body.kind === "template") {
-      const template = definition.body.template;
+    if (body.kind === "template") {
+      const template = body.template;
       if (!template.target) {
         return null;
       }
       return await this.instantiateTemplate(template.target, context);
     }
 
-    return await this.evaluateCompileTimeExpression(
-      definition.body.expression,
-      context
-    );
+    return await this.evaluateCompileTimeExpression(body.expression, context);
   }
 
   private async fullyExpandAndVisit(
@@ -455,27 +595,12 @@ export class SemanticAnalyzer {
             const args = node.elements
               .slice(1)
               .filter(Boolean) as ExpressionNode[];
-            const env = new Map<string, ExpressionNode>();
-            definition.params.forEach((param, index) => {
-              if (args[index]) {
-                env.set(param, args[index]!);
-              }
-            });
-
-            if (definition.rest) {
-              const restArgs = args.slice(definition.params.length);
-              const restVector: VectorNode = {
-                kind: NodeKind.Vector,
-                span: node.span,
-                elements: restArgs,
-              };
-              env.set(definition.rest, restVector);
-            }
-
-            const expanded = await this.expandMacro(definition, {
-              env,
-              callSpan: node.span,
-            });
+            const expanded = await this.expandMacroCall(
+              definition,
+              head.value,
+              args,
+              node.span
+            );
 
             if (expanded) {
               // Recursively expand with increased depth, passing current macro as parent
@@ -531,10 +656,6 @@ export class SemanticAnalyzer {
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleDef(node, scopeId);
         return true;
-      case "defmacro":
-        this.recordSymbolUsage(head, scopeId, "usage");
-        await this.handleDefMacro(node, scopeId);
-        return true;
       case "let":
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleLet(node, scopeId);
@@ -542,6 +663,14 @@ export class SemanticAnalyzer {
       case "fn":
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleFn(node, scopeId);
+        return true;
+      case "macro":
+        this.recordSymbolUsage(head, scopeId, "usage");
+        this.report(
+          "macro literals are only supported inside binding forms",
+          node.span,
+          "SEM_MACRO_LITERAL_CONTEXT"
+        );
         return true;
       case "require":
         this.recordBuiltinUsage(head, scopeId);
@@ -559,6 +688,14 @@ export class SemanticAnalyzer {
   private async handleDef(node: ListNode, scopeId: ScopeId): Promise<void> {
     const bindingNode = node.elements[1];
     const valueNode = node.elements[2];
+    const macroLiteralNode =
+      valueNode && this.isMacroLiteralNode(valueNode)
+        ? (valueNode as ListNode)
+        : null;
+    const macroLiteral = macroLiteralNode
+      ? await this.analyzeMacroLiteral(macroLiteralNode, scopeId)
+      : null;
+    const isMacroBinding = Boolean(macroLiteralNode);
     if (!bindingNode || bindingNode.kind !== NodeKind.Symbol) {
       if (bindingNode) {
         await this.visit(bindingNode, scopeId);
@@ -569,18 +706,19 @@ export class SemanticAnalyzer {
         "SEM_BINDING_REQUIRES_SYMBOL"
       );
     } else {
-      const record = this.defineSymbol(
-        bindingNode,
-        scopeId,
-        "var",
-        "definition"
-      );
-      if (record && this.isTopLevelScope(scopeId)) {
-        this.recordModuleExport(record, node.span);
+      const symbolKind: SymbolKind = isMacroBinding ? "macro" : "var";
+      const role: NodeSymbolRole = isMacroBinding ? "macro" : "definition";
+      const record = this.defineSymbol(bindingNode, scopeId, symbolKind, role);
+      if (record) {
+        if (macroLiteral) {
+          this.registerMacroLiteral(record, macroLiteral);
+        } else if (this.isTopLevelScope(scopeId) && !isMacroBinding) {
+          this.recordModuleExport(record, node.span);
+        }
       }
     }
 
-    if (valueNode) {
+    if (!isMacroBinding && valueNode) {
       await this.visit(valueNode, scopeId);
     }
 
@@ -592,153 +730,161 @@ export class SemanticAnalyzer {
     }
   }
 
-  private async handleDefMacro(
+  private createMacroBody(node: ExpressionNode): MacroBody {
+    return node.kind === NodeKind.SyntaxQuote
+      ? {
+          kind: "template",
+          template: node as ReaderMacroNode<NodeKind.SyntaxQuote>,
+        }
+      : {
+          kind: "expression",
+          expression: node,
+        };
+  }
+
+  private collectInScopeDependencies(
+    scopeId: ScopeId
+  ): readonly ModuleMacroDependency[] | undefined {
+    const scope = this.scopes.get(scopeId);
+    if (!scope) {
+      return undefined;
+    }
+    const dependencies: ModuleMacroDependency[] = [];
+    for (const record of this.moduleImports) {
+      if (
+        (record.kind !== "external" && record.kind !== "require") ||
+        !record.alias
+      ) {
+        continue;
+      }
+      const depKind: ModuleMacroDependency["kind"] =
+        record.kind === "external" ? "external" : "require";
+      dependencies.push({
+        kind: depKind,
+        alias: record.alias,
+        specifier: record.specifier,
+      });
+    }
+    return dependencies.length > 0 ? dependencies : undefined;
+  }
+
+  private async analyzeMacroLiteral(
     node: ListNode,
     scopeId: ScopeId
-  ): Promise<void> {
-    const nameNode = node.elements[1];
-    const paramsNode = node.elements[2];
-    const bodyNodes = node.elements
-      .slice(3)
-      .filter(Boolean) as ExpressionNode[];
-
-    const macroSymbol =
-      nameNode && nameNode.kind === NodeKind.Symbol
-        ? this.defineSymbol(nameNode, scopeId, "macro", "macro")
-        : null;
-    if (!nameNode || nameNode.kind !== NodeKind.Symbol) {
-      if (nameNode) {
-        await this.visit(nameNode, scopeId);
-      }
-      this.report(
-        "defmacro requires a symbol name",
-        node.span,
-        "SEM_MACRO_REQUIRES_SYMBOL"
-      );
-    }
-
-    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+  ): Promise<MacroLiteralDefinition | null> {
+    const clauseDescriptors = this.extractMacroLiteralClauses(node);
+    if (clauseDescriptors.length === 0) {
+      const paramsNode = node.elements[1];
       if (paramsNode) {
         await this.visit(paramsNode, scopeId);
       }
       this.report(
-        "defmacro requires a vector of parameter symbols",
+        "macro requires a vector of parameter symbols",
         node.span,
         "SEM_MACRO_EXPECTS_VECTOR"
       );
-      return;
+      return null;
     }
 
-    this.recordNode(paramsNode, scopeId);
-    const params: string[] = [];
-    let rest: string | undefined = undefined;
-    let sawAmpersand = false;
+    const macroClauses: MacroClauseDefinition[] = [];
+    const seenFixedArities = new Set<number>();
+    let variadicClauseIndex: number | null = null;
 
-    for (let i = 0; i < paramsNode.elements.length; i++) {
-      const param = paramsNode.elements[i];
-      if (!param) {
-        continue;
-      }
-      if (param.kind !== NodeKind.Symbol) {
-        await this.visit(param, scopeId);
-        this.report(
-          "Macro parameters must be symbols",
-          param.span,
-          "SEM_MACRO_PARAM_SYMBOL"
-        );
+    for (
+      let clauseIndex = 0;
+      clauseIndex < clauseDescriptors.length;
+      clauseIndex++
+    ) {
+      const clause = clauseDescriptors[clauseIndex]!;
+      const paramInfo = await this.analyzeMacroClauseParameters(
+        clause,
+        scopeId
+      );
+      if (!paramInfo) {
         continue;
       }
 
-      if (param.value === "&") {
-        if (sawAmpersand) {
+      if (paramInfo.rest) {
+        if (variadicClauseIndex !== null) {
           this.report(
-            "Only one & rest parameter allowed",
-            param.span,
-            "SEM_MACRO_DUPLICATE_REST"
-          );
-          continue;
-        }
-        sawAmpersand = true;
-        const nextParam = paramsNode.elements[i + 1];
-        if (!nextParam || nextParam.kind !== NodeKind.Symbol) {
-          this.report(
-            "& must be followed by a symbol",
-            param.span,
-            "SEM_MACRO_REST_REQUIRES_SYMBOL"
+            "macro allows only one variadic clause",
+            clause.paramsNode?.span ?? clause.span,
+            "SEM_MACRO_MULTIPLE_REST_CLAUSES"
           );
         } else {
-          rest = nextParam.value;
-          i++; // Skip the next parameter since we just consumed it
-        }
-        continue;
-      }
-
-      if (sawAmpersand) {
-        this.report(
-          "No parameters allowed after & rest parameter",
-          param.span,
-          "SEM_MACRO_PARAMS_AFTER_REST"
-        );
-        continue;
-      }
-
-      if (params.includes(param.value) || param.value === rest) {
-        this.report(
-          `Duplicate macro parameter ${param.value}`,
-          param.span,
-          "SEM_MACRO_DUPLICATE_PARAM"
-        );
-        continue;
-      }
-      params.push(param.value);
-    }
-
-    if (bodyNodes.length === 0) {
-      this.report(
-        "defmacro requires a body expression",
-        node.span,
-        "SEM_MACRO_REQUIRES_BODY"
-      );
-      return;
-    }
-
-    if (bodyNodes.length > 1) {
-      this.report(
-        "defmacro currently supports a single body expression",
-        bodyNodes[1]!.span,
-        "SEM_MACRO_SINGLE_BODY"
-      );
-    }
-
-    const bodyNode = bodyNodes[0];
-    if (!bodyNode) {
-      this.report(
-        "defmacro requires a body expression",
-        node.span,
-        "SEM_MACRO_REQUIRES_BODY"
-      );
-      return;
-    }
-
-    const body: MacroBody =
-      bodyNode.kind === NodeKind.SyntaxQuote
-        ? {
-            kind: "template",
-            template: bodyNode as ReaderMacroNode<NodeKind.SyntaxQuote>,
+          variadicClauseIndex = clauseIndex;
+          if (clauseIndex !== clauseDescriptors.length - 1) {
+            this.report(
+              "Variadic macro clause must appear last",
+              clause.paramsNode?.span ?? clause.span,
+              "SEM_MACRO_REST_POSITION"
+            );
           }
-        : {
-            kind: "expression",
-            expression: bodyNode,
-          };
+        }
+      } else {
+        const arity = paramInfo.params.length;
+        if (seenFixedArities.has(arity)) {
+          this.report(
+            `macro already defines a clause for ${arity} argument(s)`,
+            clause.paramsNode?.span ?? clause.span,
+            "SEM_MACRO_DUPLICATE_ARITY"
+          );
+        } else {
+          seenFixedArities.add(arity);
+        }
+      }
 
-    if (macroSymbol) {
-      this.macros.set(macroSymbol.id, {
-        symbolId: macroSymbol.id,
-        params,
-        rest,
-        body,
+      if (clause.bodyNodes.length === 0) {
+        this.report(
+          "macro requires a body expression",
+          clause.span,
+          "SEM_MACRO_REQUIRES_BODY"
+        );
+        continue;
+      }
+      if (clause.bodyNodes.length > 1) {
+        this.report(
+          "macro currently supports a single body expression",
+          clause.bodyNodes[1]!.span,
+          "SEM_MACRO_SINGLE_BODY"
+        );
+      }
+
+      const bodyNode = clause.bodyNodes[0];
+      if (!bodyNode) {
+        continue;
+      }
+
+      macroClauses.push({
+        params: paramInfo.params,
+        ...(paramInfo.rest ? { rest: paramInfo.rest } : {}),
+        body: this.createMacroBody(bodyNode),
       });
     }
+
+    if (macroClauses.length === 0) {
+      return null;
+    }
+
+    return {
+      clauses: macroClauses,
+      dependencies: this.collectInScopeDependencies(scopeId),
+    };
+  }
+
+  private registerMacroLiteral(
+    symbol: SymbolRecord,
+    literal: MacroLiteralDefinition
+  ): void {
+    if (literal.clauses.length === 0) {
+      return;
+    }
+    this.macros.set(symbol.id, {
+      symbolId: symbol.id,
+      clauses: literal.clauses,
+      dependencies: literal.dependencies,
+      originModuleId: this.moduleId,
+    });
   }
 
   private async handleLet(node: ListNode, scopeId: ScopeId): Promise<void> {
@@ -779,14 +925,30 @@ export class SemanticAnalyzer {
     for (let index = 0; index < bindings.length; index += 2) {
       const target = bindings[index];
       const init = bindings[index + 1];
-      if (init) {
+      const macroLiteralNode =
+        init && this.isMacroLiteralNode(init) ? (init as ListNode) : null;
+      const macroLiteral = macroLiteralNode
+        ? await this.analyzeMacroLiteral(macroLiteralNode, childScopeId)
+        : null;
+      const isMacroBinding = Boolean(macroLiteralNode);
+      if (!macroLiteralNode && init) {
         await this.visit(init, childScopeId);
       }
       if (!target) {
         continue;
       }
       if (target.kind === NodeKind.Symbol) {
-        this.defineSymbol(target, childScopeId, "var", "definition");
+        const symbolKind: SymbolKind = isMacroBinding ? "macro" : "var";
+        const role: NodeSymbolRole = isMacroBinding ? "macro" : "definition";
+        const record = this.defineSymbol(
+          target,
+          childScopeId,
+          symbolKind,
+          role
+        );
+        if (record && macroLiteral) {
+          this.registerMacroLiteral(record, macroLiteral);
+        }
       } else {
         await this.visit(target, childScopeId);
         this.report(
@@ -810,24 +972,9 @@ export class SemanticAnalyzer {
   }
 
   private async handleFn(node: ListNode, scopeId: ScopeId): Promise<void> {
-    const paramsNode = node.elements[1];
-    const paramHints =
-      paramsNode && paramsNode.kind === NodeKind.Vector
-        ? paramsNode.elements.filter((element): element is ExpressionNode =>
-            Boolean(element)
-          )
-        : paramsNode
-        ? [paramsNode]
-        : [];
-    const bodyHints = node.elements
-      .slice(2)
-      .filter((element): element is ExpressionNode => Boolean(element));
-    const fnScopeId = this.resolveChildScopeId(scopeId, [
-      ...paramHints,
-      ...bodyHints,
-    ]);
-
-    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+    const clauses = this.extractFnClauses(node);
+    if (clauses.length === 0) {
+      const paramsNode = node.elements[1];
       if (paramsNode) {
         await this.visit(paramsNode, scopeId);
       }
@@ -836,68 +983,331 @@ export class SemanticAnalyzer {
         node.span,
         "SEM_FN_EXPECTS_VECTOR"
       );
-    } else {
-      this.recordNode(paramsNode, scopeId);
-      let sawAmpersand = false;
-
-      for (let i = 0; i < paramsNode.elements.length; i++) {
-        const param = paramsNode.elements[i];
-        if (!param) {
-          continue;
+      for (let index = 2; index < node.elements.length; index += 1) {
+        const element = node.elements[index];
+        if (element) {
+          await this.visit(element, scopeId);
         }
+      }
+      return;
+    }
 
-        if (param.kind === NodeKind.Symbol && param.value === "&") {
-          if (sawAmpersand) {
+    const seenFixedArities = new Set<number>();
+    let variadicClauseIndex: number | null = null;
+
+    for (let clauseIndex = 0; clauseIndex < clauses.length; clauseIndex += 1) {
+      const clause = clauses[clauseIndex]!;
+      const clauseScopeId = this.resolveChildScopeId(scopeId, [
+        ...this.collectFnParamHints(clause.paramsNode),
+        ...clause.bodyNodes,
+      ]);
+
+      const paramInfo = await this.analyzeFnClauseParameters(
+        clause,
+        clauseScopeId,
+        scopeId
+      );
+
+      if (paramInfo) {
+        if (paramInfo.isVariadic) {
+          if (variadicClauseIndex !== null) {
             this.report(
-              "Only one & rest parameter allowed",
-              param.span,
-              "SEM_FN_DUPLICATE_REST"
-            );
-            continue;
-          }
-          sawAmpersand = true;
-          const nextParam = paramsNode.elements[i + 1];
-          if (!nextParam || nextParam.kind !== NodeKind.Symbol) {
-            this.report(
-              "& must be followed by a symbol",
-              param.span,
-              "SEM_FN_REST_REQUIRES_SYMBOL"
+              "fn allows only one variadic clause",
+              clause.paramsNode?.span ?? clause.span,
+              "SEM_FN_MULTIPLE_REST_CLAUSES"
             );
           } else {
-            this.defineSymbol(nextParam, fnScopeId, "parameter", "parameter");
-            i++; // Skip the next parameter since we just consumed it
+            variadicClauseIndex = clauseIndex;
+            if (clauseIndex !== clauses.length - 1) {
+              this.report(
+                "Variadic fn clause must appear last",
+                clause.paramsNode?.span ?? clause.span,
+                "SEM_FN_REST_POSITION"
+              );
+            }
           }
-          continue;
+        } else if (seenFixedArities.has(paramInfo.arity)) {
+          this.report(
+            `fn already defines a clause for ${paramInfo.arity} argument(s)`,
+            clause.paramsNode?.span ?? clause.span,
+            "SEM_FN_DUPLICATE_ARITY"
+          );
+        } else {
+          seenFixedArities.add(paramInfo.arity);
         }
+      }
 
+      if (clause.bodyNodes.length === 0) {
+        this.report(
+          "fn clause requires a body expression",
+          clause.span,
+          "SEM_FN_CLAUSE_REQUIRES_BODY"
+        );
+      }
+      for (const bodyNode of clause.bodyNodes) {
+        await this.visit(bodyNode, clauseScopeId);
+      }
+    }
+  }
+
+  private collectFnParamHints(
+    node: ExpressionNode | null
+  ): readonly ExpressionNode[] {
+    if (!node) {
+      return [];
+    }
+    if (node.kind === NodeKind.Vector) {
+      return node.elements.filter((element): element is ExpressionNode =>
+        Boolean(element)
+      );
+    }
+    return [node];
+  }
+
+  private extractFnClauses(node: ListNode): readonly FnClauseDescriptor[] {
+    const paramsNode = node.elements[1];
+    if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+      return [
+        {
+          paramsNode,
+          bodyNodes: node.elements
+            .slice(2)
+            .filter((element): element is ExpressionNode => Boolean(element)),
+          span: node.span,
+        },
+      ];
+    }
+
+    const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    if (tail.length === 0) {
+      return [];
+    }
+
+    const clauseLists = tail.filter(
+      (element): element is ListNode => element.kind === NodeKind.List
+    );
+    if (clauseLists.length !== tail.length) {
+      return [];
+    }
+
+    return clauseLists.map((clause) => ({
+      paramsNode: clause.elements[0] ?? null,
+      bodyNodes: clause.elements
+        .slice(1)
+        .filter((element): element is ExpressionNode => Boolean(element)),
+      span: clause.span,
+    }));
+  }
+
+  private extractMacroLiteralClauses(
+    node: ListNode
+  ): readonly MacroClauseDescriptor[] {
+    const paramsNode = node.elements[1];
+    if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+      return [
+        {
+          paramsNode,
+          bodyNodes: node.elements
+            .slice(2)
+            .filter((element): element is ExpressionNode => Boolean(element)),
+          span: node.span,
+        },
+      ];
+    }
+
+    const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    if (tail.length === 0) {
+      return [];
+    }
+
+    const clauseLists = tail.filter(
+      (element): element is ListNode => element.kind === NodeKind.List
+    );
+    if (clauseLists.length !== tail.length) {
+      return [];
+    }
+
+    return clauseLists.map((clause) => ({
+      paramsNode: clause.elements[0] ?? null,
+      bodyNodes: clause.elements
+        .slice(1)
+        .filter((element): element is ExpressionNode => Boolean(element)),
+      span: clause.span,
+    }));
+  }
+
+  private isMacroLiteralNode(node: ExpressionNode | null): node is ListNode {
+    if (!node || node.kind !== NodeKind.List) {
+      return false;
+    }
+    const head = node.elements[0];
+    return Boolean(
+      head && head.kind === NodeKind.Symbol && head.value === "macro"
+    );
+  }
+
+  private async analyzeFnClauseParameters(
+    clause: FnClauseDescriptor,
+    clauseScopeId: ScopeId,
+    parentScopeId: ScopeId
+  ): Promise<{ arity: number; isVariadic: boolean } | null> {
+    const { paramsNode } = clause;
+    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+      if (paramsNode) {
+        await this.visit(paramsNode, parentScopeId);
+      }
+      this.report(
+        "fn requires a vector of parameter symbols",
+        paramsNode?.span ?? clause.span,
+        "SEM_FN_EXPECTS_VECTOR"
+      );
+      return null;
+    }
+
+    this.recordNode(paramsNode, parentScopeId);
+    let arity = 0;
+    let sawAmpersand = false;
+    let isVariadic = false;
+
+    for (let i = 0; i < paramsNode.elements.length; i += 1) {
+      const param = paramsNode.elements[i];
+      if (!param) {
+        continue;
+      }
+
+      if (param.kind === NodeKind.Symbol && param.value === "&") {
         if (sawAmpersand) {
           this.report(
-            "No parameters allowed after & rest parameter",
+            "Only one & rest parameter allowed",
             param.span,
-            "SEM_FN_PARAMS_AFTER_REST"
+            "SEM_FN_DUPLICATE_REST"
           );
           continue;
         }
-
-        if (param.kind === NodeKind.Symbol) {
-          this.defineSymbol(param, fnScopeId, "parameter", "parameter");
-        } else {
-          await this.visit(param, fnScopeId);
+        sawAmpersand = true;
+        const nextParam = paramsNode.elements[i + 1];
+        if (!nextParam || nextParam.kind !== NodeKind.Symbol) {
           this.report(
-            "Parameters inside fn must be symbols",
+            "& must be followed by a symbol",
             param.span,
-            "SEM_BINDING_REQUIRES_SYMBOL"
+            "SEM_FN_REST_REQUIRES_SYMBOL"
           );
+        } else {
+          this.defineSymbol(nextParam, clauseScopeId, "parameter", "parameter");
+          isVariadic = true;
+          i += 1;
         }
+        continue;
+      }
+
+      if (sawAmpersand) {
+        this.report(
+          "No parameters allowed after & rest parameter",
+          param.span,
+          "SEM_FN_PARAMS_AFTER_REST"
+        );
+        continue;
+      }
+
+      if (param.kind === NodeKind.Symbol) {
+        this.defineSymbol(param, clauseScopeId, "parameter", "parameter");
+        arity += 1;
+      } else {
+        await this.visit(param, clauseScopeId);
+        this.report(
+          "Parameters inside fn must be symbols",
+          param.span,
+          "SEM_BINDING_REQUIRES_SYMBOL"
+        );
       }
     }
 
-    for (let index = 2; index < node.elements.length; index += 1) {
-      const element = node.elements[index];
-      if (element) {
-        await this.visit(element, fnScopeId);
+    return { arity, isVariadic };
+  }
+
+  private async analyzeMacroClauseParameters(
+    clause: MacroClauseDescriptor,
+    scopeId: ScopeId
+  ): Promise<{ params: string[]; rest?: string } | null> {
+    const { paramsNode } = clause;
+    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+      if (paramsNode) {
+        await this.visit(paramsNode, scopeId);
       }
+      this.report(
+        "macro requires a vector of parameter symbols",
+        paramsNode?.span ?? clause.span,
+        "SEM_MACRO_EXPECTS_VECTOR"
+      );
+      return null;
     }
+
+    this.recordNode(paramsNode, scopeId);
+    const params: string[] = [];
+    let rest: string | undefined;
+    let sawAmpersand = false;
+
+    for (let index = 0; index < paramsNode.elements.length; index += 1) {
+      const param = paramsNode.elements[index];
+      if (!param) {
+        continue;
+      }
+
+      if (param.kind !== NodeKind.Symbol) {
+        await this.visit(param, scopeId);
+        this.report(
+          "macro parameters must be symbols",
+          param.span,
+          "SEM_MACRO_PARAM_SYMBOL"
+        );
+        continue;
+      }
+
+      if (param.value === "&") {
+        if (sawAmpersand) {
+          this.report(
+            "Only one & rest parameter allowed",
+            param.span,
+            "SEM_MACRO_DUPLICATE_REST"
+          );
+          continue;
+        }
+        sawAmpersand = true;
+        const nextParam = paramsNode.elements[index + 1];
+        if (!nextParam || nextParam.kind !== NodeKind.Symbol) {
+          this.report(
+            "& must be followed by a symbol",
+            param.span,
+            "SEM_MACRO_REST_REQUIRES_SYMBOL"
+          );
+        } else {
+          rest = nextParam.value;
+          index += 1;
+        }
+        continue;
+      }
+
+      if (sawAmpersand) {
+        this.report(
+          "No parameters allowed after & rest parameter",
+          param.span,
+          "SEM_MACRO_PARAMS_AFTER_REST"
+        );
+        continue;
+      }
+
+      if (params.includes(param.value) || param.value === rest) {
+        this.report(
+          `Duplicate macro parameter ${param.value}`,
+          param.span,
+          "SEM_MACRO_DUPLICATE_PARAM"
+        );
+        continue;
+      }
+      params.push(param.value);
+    }
+
+    return { params, rest };
   }
 
   private async handleNamespaceImport(
@@ -959,6 +1369,8 @@ export class SemanticAnalyzer {
         this.defineSymbol(aliasNode, scopeId, "var", "definition");
       }
 
+      let importRecord: ModuleImportRecord | null = null;
+
       if (!pathNode) {
         if (pathOperand) {
           await this.visit(pathOperand, scopeId);
@@ -971,7 +1383,19 @@ export class SemanticAnalyzer {
             : "SEM_EXTERNAL_EXPECTS_STRING"
         );
       } else if (aliasNode) {
-        this.recordNamespaceImport(aliasNode, pathNode, kind);
+        importRecord = this.recordNamespaceImport(aliasNode, pathNode, kind);
+        if (
+          kind === "require" &&
+          importRecord.moduleId &&
+          this.moduleExportsLookup
+        ) {
+          this.registerRequireMacroBindings(
+            aliasNode,
+            scopeId,
+            importRecord.moduleId,
+            pathNode.span
+          );
+        }
       }
     }
 
@@ -1012,7 +1436,7 @@ export class SemanticAnalyzer {
     aliasNode: SymbolNode,
     pathNode: StringNode,
     kind: NamespaceImportKind
-  ): void {
+  ): ModuleImportRecord {
     let moduleId: string | undefined;
     if (kind === "require") {
       moduleId = this.resolveRequireTarget(pathNode);
@@ -1026,6 +1450,46 @@ export class SemanticAnalyzer {
     };
     this.moduleImports.push(record);
     this.moduleImportsByAlias.set(aliasNode.value, record);
+    return record;
+  }
+
+  private registerRequireMacroBindings(
+    aliasNode: SymbolNode,
+    scopeId: ScopeId,
+    moduleId: string,
+    span: SourceSpan
+  ): void {
+    if (!this.moduleExportsLookup) {
+      return;
+    }
+    const exports = this.moduleExportsLookup.getExports(moduleId);
+    if (!exports) {
+      return;
+    }
+    for (const entry of exports) {
+      if (entry.kind !== "macro") {
+        continue;
+      }
+      if (!entry.macro) {
+        continue;
+      }
+      const namespaced = `${aliasNode.value}/${entry.name}`;
+      const syntheticNode: SymbolNode = {
+        kind: NodeKind.Symbol,
+        span: aliasNode.span,
+        value: namespaced,
+        lexeme: namespaced,
+      };
+      const record = this.defineSymbol(
+        syntheticNode,
+        scopeId,
+        "macro",
+        "macro"
+      );
+      if (record) {
+        this.registerImportedMacro(record, entry.macro, moduleId);
+      }
+    }
   }
 
   private recordImportWithFlattening(
@@ -1074,26 +1538,45 @@ export class SemanticAnalyzer {
         return;
       }
 
-      flattenBindings = [];
-      for (const exportedName of exports) {
+      const bindings: FlattenedImportBinding[] = [];
+      for (const entry of exports) {
+        const exportedName = entry.name;
         const syntheticNode: SymbolNode = {
           kind: NodeKind.Symbol,
           span: node.span,
           value: exportedName,
           lexeme: exportedName,
         };
+        const symbolKind: SymbolKind = entry.kind === "macro" ? "macro" : "var";
+        const role: NodeSymbolRole =
+          entry.kind === "macro" ? "macro" : "definition";
         const record = this.defineSymbol(
           syntheticNode,
           scopeId,
-          "var",
-          "definition"
+          symbolKind,
+          role
         );
         if (record) {
-          flattenBindings.push({
+          if (entry.kind === "macro") {
+            if (!entry.macro) {
+              this.report(
+                `Module ${pathNode.value} is missing macro metadata for ${exportedName}`,
+                pathNode.span,
+                "SEM_IMPORT_MACRO_METADATA"
+              );
+              continue;
+            }
+            this.registerImportedMacro(record, entry.macro, moduleId);
+            continue;
+          }
+          bindings.push({
             exportedName,
             identifier: record.alias,
           });
         }
+      }
+      if (bindings.length > 0) {
+        flattenBindings = bindings;
       }
     }
 
@@ -1104,6 +1587,31 @@ export class SemanticAnalyzer {
       span: pathNode.span,
       moduleId,
       flatten: flattenBindings,
+    });
+  }
+
+  private registerImportedMacro(
+    symbol: SymbolRecord,
+    metadata: ModuleExportedMacro,
+    originModuleId?: string
+  ): void {
+    if (!metadata.clauses || metadata.clauses.length === 0) {
+      return;
+    }
+    const clauses: MacroClauseDefinition[] = metadata.clauses.map((clause) => {
+      const bodyClone = this.cloneExpression(clause.body);
+      return {
+        params: [...clause.params],
+        ...(clause.rest ? { rest: clause.rest } : {}),
+        body: this.createMacroBody(bodyClone),
+      };
+    });
+
+    this.macros.set(symbol.id, {
+      symbolId: symbol.id,
+      clauses,
+      dependencies: metadata.dependencies?.map((dep) => ({ ...dep })),
+      originModuleId: originModuleId ?? this.moduleId,
     });
   }
 
@@ -1188,7 +1696,12 @@ export class SemanticAnalyzer {
     }
     // When not in a macro expansion context, just visit the target normally
     if (!context) {
-      await this.visit(node.target, scopeId);
+      this.syntaxQuoteDepth += 1;
+      try {
+        await this.visit(node.target, scopeId);
+      } finally {
+        this.syntaxQuoteDepth -= 1;
+      }
       return;
     }
     // This path is no longer used - macro expansion now goes through expandMacroOnce
@@ -1229,7 +1742,12 @@ export class SemanticAnalyzer {
         if (!node.target) {
           return null;
         }
-        return await this.instantiateTemplate(node.target, context);
+        return await this.instantiateTemplate(
+          node.target,
+          this.forkAutoGensymContext(context)
+        );
+      case NodeKind.Symbol:
+        return this.instantiateSymbolNode(node as SymbolNode, context);
       case NodeKind.Unquote:
         return (
           (await this.materializeArgument(
@@ -1343,6 +1861,56 @@ export class SemanticAnalyzer {
     return instantiated;
   }
 
+  private instantiateSymbolNode(
+    node: SymbolNode,
+    context: MacroExpansionContext
+  ): SymbolNode {
+    if (!this.isAutoGensymPlaceholder(node.value)) {
+      return this.cloneExpression(node);
+    }
+
+    if (node.value.includes("/")) {
+      this.report(
+        `Auto gensym placeholder ${node.value} cannot include a namespace`,
+        node.span,
+        "SEM_GENSYM_PLACEHOLDER_NAMESPACE"
+      );
+      return this.cloneExpression(node);
+    }
+
+    const placeholders = this.ensureAutoGensymMap(context);
+    const existing = placeholders.get(node.value);
+    if (existing) {
+      return this.createSymbolLiteral(node.span, existing);
+    }
+
+    const hint = node.value.slice(0, -1);
+    const generated = this.createGensymSymbol(
+      node.span,
+      hint.length > 0 ? hint : null
+    );
+    placeholders.set(node.value, generated.value);
+    return generated;
+  }
+
+  private forkAutoGensymContext(
+    context: MacroExpansionContext
+  ): MacroExpansionContext {
+    return {
+      ...context,
+      autoGensyms: new Map<string, string>(),
+    };
+  }
+
+  private ensureAutoGensymMap(
+    context: MacroExpansionContext
+  ): Map<string, string> {
+    if (!context.autoGensyms) {
+      context.autoGensyms = new Map<string, string>();
+    }
+    return context.autoGensyms;
+  }
+
   private async materializeArgument(
     node: ReaderMacroNode<NodeKind.Unquote>,
     context: MacroExpansionContext
@@ -1420,6 +1988,12 @@ export class SemanticAnalyzer {
   ): Promise<ExpressionNode | null> {
     // Create an interpreter environment with macro parameter bindings
     const env = createRootEnvironment();
+    await this.seedMacroDependencies(
+      env,
+      context.dependencies,
+      context.callSpan,
+      context.originModuleId
+    );
     for (const [name, value] of context.env.entries()) {
       try {
         const interpValue = nodeToValue(value);
@@ -1470,6 +2044,86 @@ export class SemanticAnalyzer {
       );
       return null;
     }
+  }
+
+  private async seedMacroDependencies(
+    env: Environment,
+    dependencies: readonly ModuleMacroDependency[] | undefined,
+    span: SourceSpan,
+    originModuleId?: string
+  ): Promise<void> {
+    if (!dependencies || dependencies.length === 0) {
+      return;
+    }
+    for (const dependency of dependencies) {
+      const resolvedSpecifier = this.resolveMacroDependencySpecifier(
+        dependency,
+        originModuleId,
+        span
+      );
+      if (!resolvedSpecifier) {
+        continue;
+      }
+      const cacheKey = this.dependencyCacheKey(
+        dependency.kind,
+        resolvedSpecifier
+      );
+      let cached = this.macroDependencyCache.get(cacheKey);
+      if (!cached) {
+        try {
+          const module = await import(resolvedSpecifier);
+          cached = makeExternalNamespace(module);
+          this.macroDependencyCache.set(cacheKey, cached);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this.report(
+            `Failed to load ${dependency.kind} dependency ${dependency.alias} (${dependency.specifier}): ${message}`,
+            span,
+            "SEM_MACRO_DEPENDENCY_FAILED"
+          );
+          continue;
+        }
+      }
+      defineVariable(env, dependency.alias, cached);
+    }
+  }
+
+  private dependencyCacheKey(
+    kind: ModuleMacroDependency["kind"],
+    specifier: string
+  ): string {
+    return `${kind}:${specifier}`;
+  }
+
+  private resolveMacroDependencySpecifier(
+    dependency: ModuleMacroDependency,
+    originModuleId: string | undefined,
+    span: SourceSpan
+  ): string | null {
+    if (dependency.kind === "external") {
+      return dependency.specifier;
+    }
+    if (dependency.kind === "require") {
+      const specifier = dependency.specifier;
+      if (specifier.startsWith("./") || specifier.startsWith("../")) {
+        if (!originModuleId) {
+          this.report(
+            `Cannot resolve relative macro dependency ${specifier} without module context`,
+            span,
+            "SEM_MACRO_DEPENDENCY_FAILED"
+          );
+          return null;
+        }
+        const resolved = path.resolve(path.dirname(originModuleId), specifier);
+        return pathToFileURL(resolved).href;
+      }
+      if (specifier.startsWith("/")) {
+        return pathToFileURL(specifier).href;
+      }
+      return specifier;
+    }
+    return null;
   }
 
   private cloneExpression<T extends ExpressionNode>(
@@ -1558,12 +2212,20 @@ export class SemanticAnalyzer {
   ): SymbolNode {
     const base = hint && hint.length > 0 ? hint : "g";
     const unique = `${base}__${this.nextGensymId++}`;
+    return this.createSymbolLiteral(span, unique);
+  }
+
+  private createSymbolLiteral(span: SourceSpan, name: string): SymbolNode {
     return {
       kind: NodeKind.Symbol,
       span,
-      lexeme: unique,
-      value: unique,
+      lexeme: name,
+      value: name,
     };
+  }
+
+  private isAutoGensymPlaceholder(value: string): boolean {
+    return value.endsWith("#");
   }
 
   private initializeRootScope(program: ProgramNode): ScopeId {
@@ -1708,7 +2370,10 @@ export class SemanticAnalyzer {
         const moduleId = importRecord?.moduleId;
         if (moduleId && this.moduleExportsLookup) {
           const exports = this.moduleExportsLookup.getExports(moduleId);
-          if (exports && !exports.includes(namespaceRef.member)) {
+          if (
+            exports &&
+            !exports.some((entry) => entry.name === namespaceRef.member)
+          ) {
             this.report(
               `Namespace ${namespaceRef.alias} does not export ${namespaceRef.member}`,
               node.span,
@@ -1894,6 +2559,7 @@ class AliasAllocator {
     // Special
     ["~", "_TILDE"],
     ["@", "_AT"],
+    ["#", "_HASH"],
   ]);
 
   allocate(name: string, symbolId: SymbolId, preferRaw: boolean): string {
@@ -1911,7 +2577,7 @@ class AliasAllocator {
     }
 
     // For compound names, check for trailing special characters first
-    const trailingSpecialChars = new Set(["?", "!", "*", "+", "/", "%"]);
+    const trailingSpecialChars = new Set(["?", "!", "*", "+", "/", "%", "#"]);
     let trailingOp = "";
     let baseValue = value;
 

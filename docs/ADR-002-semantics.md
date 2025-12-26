@@ -14,7 +14,7 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
    - Symbol bindings (variables, parameters, macros, built-ins) with stable IDs that reference their defining scope and node.
    - Node metadata records (one per AST node) that describe which scope a node belongs to plus optional symbol resolution info (definition vs. usage, resolved symbol ID, hygiene tag).
 2. Maintain AST immutability by keeping metadata out-of-band. `@vibe/semantics` assigns opaque `nodeId` values while traversing, and maps additional information via plain records in the returned graph.
-3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `defmacro`, `let`, `fn`, `if`, `quote`, `do`, plus the import heads (`require`, `external`). Additional forms can be layered on via feature flags without changing existing consumers.
+3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `macro` (as a literal restricted to binding positions), `let`, `fn`, `if`, `quote`, `do`, plus the import heads (`require`, `external`). Additional forms can be layered on via feature flags without changing existing consumers.
 4. Export a default list of builtin symbols that matches those special forms so unresolved symbol diagnostics stay meaningful even before user code (or the prelude) defines helpers such as arithmetic or collection operations.
 5. Extend the CLI with a new `vibe analyze` command that parses source, invokes the semantic analyzer, prints the AST alongside semantic metadata, and surfaces combined diagnostics.
 
@@ -31,6 +31,18 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
 - Each exported binding is synthesized as a top-level `var` symbol (with deterministic `alias` metadata) so `frob` imported via `import` behaves identically to `def`-defined bindings during analysis, codegen, and REPL flows.
 - The `ModuleImportRecord` graph payload gained an optional `flatten` array that enumerates the imported member names and their resolved identifiers, enabling the code generator to destructure namespaces without reaching back into the analyzer.
 - New diagnostics (`SEM_IMPORT_*`) enforce top-level usage, string literal specifiers, export availability, resolver failures, and duplicate-binding conflicts before code generation begins.
+
+### Update – Multi-arity Functions (2025-12-25)
+
+- `fn` forms now support multiple parameter clauses. The analyzer allocates a dedicated child scope per clause, defines parameters within that scope, and visits each body independently so hygiene and alias metadata stay deterministic.
+- Clause validation enforces deterministic dispatch: only one variadic clause (one that uses `& rest`) is allowed per function, and it must appear last. Duplicate fixed-arity clauses emit `SEM_FN_DUPLICATE_ARITY`, while out-of-order variadic clauses raise `SEM_FN_REST_POSITION`.
+- Each clause requires at least one body expression; missing bodies surface `SEM_FN_CLAUSE_REQUIRES_BODY` to keep the semantic graph from emitting empty execution blocks downstream.
+
+### Update – Multi-arity Macros (2025-12-25)
+
+- Macro literals now mirror the multi-clause surface of `fn`. Authors can provide one or more clauses inside `(macro ...)`, each with its own parameter vector and single body expression, and the analyzer dispatches to the first clause whose arity matches the call, falling back to the sole variadic clause when present.
+- Clause validation parallels lambdas: duplicate fixed-arity clauses emit `SEM_MACRO_DUPLICATE_ARITY`, multiple variadic clauses trigger `SEM_MACRO_MULTIPLE_REST_CLAUSES`, and a variadic clause that does not appear last raises `SEM_MACRO_REST_POSITION`.
+- Module export metadata now records every macro clause (params, optional rest, body) so imported macros retain the full dispatch table during analysis.
 
 ## Semantic Graph Contract
 
@@ -120,7 +132,7 @@ Consumers must treat these artifacts as derived metadata. No AST interfaces gain
 
 ## Macro Expansion Pipeline (Update)
 
-- `defmacro` now registers macro symbols alongside their parameter lists and body expressions. Bodies are evaluated via the interpreter at analysis time; if the body returns a syntax-quoted template the analyzer instantiates it, otherwise the returned data is converted directly into AST nodes.
+- Macro literals register macro symbols alongside their parameter lists and body expressions whenever a `def` (or other binding) is initialized with `(macro ...)`. Bodies are evaluated via the interpreter at analysis time; if the body returns a syntax-quoted template the analyzer instantiates it, otherwise the returned data is converted directly into AST nodes.
 - During analysis, list forms whose head resolves to a macro symbol are expanded before any further traversal. Arguments are bound as raw AST nodes (no evaluation) and injected via `~` and `~@` inside the stored syntax quote.
 - The expander detects recursion (`SEM_MACRO_RECURSION`), arity mismatches, missing operands, and unsupported unquote expressions, surfacing diagnostics with spans at the callsite.
 - `gensym` is recognized inside macro bodies (via `~(gensym "hint")`) to generate hygienic synthetic symbols suffixed with a monotonically increasing counter.

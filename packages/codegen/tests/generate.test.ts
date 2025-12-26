@@ -206,6 +206,44 @@ describe("generateModule", () => {
     expect(typeof runtime.builder).toBe("function");
   });
 
+  test("skips macro bindings inside let expressions", async () => {
+    const fixture = `
+      (def answer
+        (let [local-macro
+                (macro
+                  ([x] \`(+ ~x ~x)))
+              value 21]
+          value))
+      answer
+    `.trim();
+
+    const { runtime } = await runProgram(fixture, {
+      sourceName: "let-macro.lang",
+    });
+
+    expect(runtime.answer).toBe(21);
+  });
+
+  test("emits multi-arity functions with runtime dispatch", async () => {
+    const fixture = withArithmeticPrelude(
+      `
+      (def picker
+        (fn
+          ([x] 1)
+          ([x y] 2)
+          ([x y & rest] 3)))
+      (def one (picker 5))
+      (def two (picker 5 6))
+      (def three (picker 5 6 7))
+    `.trim()
+    );
+
+    const { runtime } = await runProgram(fixture);
+    expect(runtime.one).toBe(1);
+    expect(runtime.two).toBe(2);
+    expect(runtime.three).toBe(3);
+  });
+
   test("sanitizes reserved identifiers and deduplicates collisions", async () => {
     const fixture = `
       (def class 1)
@@ -315,7 +353,9 @@ describe("generateModule", () => {
     };
     const moduleExports: ModuleExportsLookup = {
       getExports: (moduleId: string) =>
-        moduleId === "/workspace/prelude.lang" ? ["frob"] : undefined,
+        moduleId === "/workspace/prelude.lang"
+          ? [{ name: "frob", kind: "var" as const }]
+          : undefined,
     };
     const fixture = `
       (import "./prelude.lang")
@@ -351,10 +391,10 @@ describe("generateModule", () => {
     const moduleExports: ModuleExportsLookup = {
       getExports: (moduleId: string) => {
         if (moduleId === "/workspace/foo.lang") {
-          return ["fooValue"];
+          return [{ name: "fooValue", kind: "var" as const }];
         }
         if (moduleId === "/workspace/bar.lang") {
-          return ["barValue"];
+          return [{ name: "barValue", kind: "var" as const }];
         }
         return undefined;
       },

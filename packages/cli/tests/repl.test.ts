@@ -115,7 +115,7 @@ test("prints friendly function labels when a function value is displayed", async
   }
   // Expect printing of the function value to include our friendly <fn ...> label
   expect(
-    outputs.some((o) => o.includes("<fn") && o.includes("arity=2"))
+    outputs.some((o) => o.includes("<fn") && o.includes("arities=[2]"))
   ).toBeTrue();
 });
 

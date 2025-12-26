@@ -1,5 +1,10 @@
 # @vibe/syntax Changelog
 
+## 2025-12-26
+
+- Replaced the `defmacro` builtin head with the new `macro` literal. `BUILTIN_SYMBOLS` now includes `macro` (so analyzers/repls treat it as a reserved special form) and documentation highlights `(def name (macro ...))` as the canonical declaration style.
+- Parser snapshots were refreshed to showcase the new `def` + `macro` structure so downstream tooling can reference up-to-date AST shapes.
+
 ## 2025-12-23
 
 - Trimmed `BUILTIN_SYMBOLS` down to the language's special forms so runtime helpers now flow through explicit `(require)` calls (e.g., `@vibe/prelude`) instead of being treated as implicit globals.

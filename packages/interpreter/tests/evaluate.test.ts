@@ -368,6 +368,32 @@ describe("Interpreter - Functions", () => {
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "number", value: 42 });
   });
+
+  test("multi-arity function dispatches the matching clause", async () => {
+    const result = await evalMulti(`
+      (def picker
+        (fn
+          ([x] 1)
+          ([x y] 2)
+          ([x y & rest] 3)))
+      [(picker 10) (picker 1 2) (picker 1 2 3)]
+    `);
+    expect(result.ok).toBeTrue();
+    const vector = result.value as any;
+    expect(vector.kind).toBe("vector");
+    expect(vector.elements.map((elem: any) => elem.value)).toEqual([1, 2, 3]);
+  });
+
+  test("multi-arity function reports missing clauses", async () => {
+    const result = await evalMulti(`
+      (def only-one (fn ([x] x)))
+      (only-one 1 2)
+    `);
+    expect(result.ok).toBeFalse();
+    expect(
+      result.diagnostics.some((d) => d.code === "INTERP_ARITY_MISMATCH")
+    ).toBeTrue();
+  });
 });
 
 describe("Interpreter - Collections", () => {
@@ -468,25 +494,18 @@ describe("Interpreter - Type Predicates", () => {
     expect(result.value).toEqual({ kind: "symbol", value: ":number" });
   });
 
-  test.skip("type returns :string", async () => {
+  test("type returns :string", async () => {
     // TODO: Implement type function in @vibe/runtime
     const result = await evalSource('(runtime/type "hello")', true);
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "symbol", value: ":string" });
   });
 
-  test.skip("type returns :nil", async () => {
+  test("type returns :nil", async () => {
     // TODO: Implement type function in @vibe/runtime
     const result = await evalSource("(runtime/type nil)", true);
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "symbol", value: ":nil" });
-  });
-
-  test.skip("type returns :vector", async () => {
-    // TODO: Implement type function in @vibe/runtime
-    const result = await evalSource("(runtime/type [1 2 3])", true);
-    expect(result.ok).toBeTrue();
-    expect(result.value).toEqual({ kind: "symbol", value: ":vector" });
   });
 });
 
@@ -524,6 +543,39 @@ describe("Interpreter - Utility", () => {
     expect(result.value?.kind).toBe("symbol");
     expect((result.value as any).value).toContain("temp");
   });
+
+  test("syntax quote auto gensym placeholders reuse generated names", async () => {
+    const result = await evalSource("`(let [foo# 1] foo#)");
+    expect(result.ok).toBeTrue();
+    const quoted = result.value;
+    expect(quoted?.kind).toBe("list");
+    if (!quoted || quoted.kind !== "list") {
+      throw new Error("Expected list value");
+    }
+    const [_letSym, bindings, usage] = quoted.elements;
+    expect(bindings?.kind).toBe("vector");
+    if (!bindings || bindings.kind !== "vector") {
+      throw new Error("Expected vector bindings");
+    }
+    const bindingSymbol = bindings.elements[0];
+    expect(bindingSymbol?.kind).toBe("symbol");
+    expect(usage?.kind).toBe("symbol");
+    if (
+      bindingSymbol?.kind === "symbol" &&
+      usage?.kind === "symbol"
+    ) {
+      expect(bindingSymbol.value).toBe(usage.value);
+      expect(bindingSymbol.value).toMatch(/^foo__\d+/);
+    }
+  });
+
+  test("syntax quote forbids namespace-qualified auto gensyms", async () => {
+    const result = await evalSource("`alias/foo#");
+    expect(result.ok).toBeFalse();
+    expect(result.diagnostics[0]?.code).toBe(
+      "INTERP_SYNTAX_GENSYM_NAMESPACE"
+    );
+  });
 });
 
 describe("Interpreter - Module Imports", () => {
@@ -548,7 +600,7 @@ describe("Interpreter - Module Imports", () => {
     const importExpr = parseResult.program.body[0];
     const result = await evaluate(importExpr!, env);
     expect(result.ok).toBeTrue();
-    
+
     // Check that the bindings are directly in the environment
     expect(env.bindings.has("pulled")).toBeTrue();
     expect(env.bindings.has("greet")).toBeTrue();

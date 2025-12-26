@@ -671,6 +671,12 @@ class ScopeAnnotator {
   }
 
   private annotateFn(node: ListNode, parentScopeId: ScopeId): void {
+    const clauseNodes = this.extractFnClauses(node);
+    if (clauseNodes.length > 0) {
+      this.annotateFnClauses(clauseNodes, parentScopeId);
+      return;
+    }
+
     const fnScopeId = this.allocateScopeId();
     const paramsNode = node.elements[1];
     if (paramsNode && paramsNode.kind === NodeKind.Vector) {
@@ -688,6 +694,47 @@ class ScopeAnnotator {
       const element = node.elements[index];
       if (element) {
         this.annotateExpression(element, fnScopeId);
+      }
+    }
+  }
+
+  private extractFnClauses(node: ListNode): readonly ListNode[] {
+    const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    if (tail.length === 0) {
+      return [];
+    }
+    const clauseLists = tail.filter(
+      (element): element is ListNode => element.kind === NodeKind.List
+    );
+    if (clauseLists.length === tail.length) {
+      return clauseLists;
+    }
+    return [];
+  }
+
+  private annotateFnClauses(
+    clauses: readonly ListNode[],
+    parentScopeId: ScopeId
+  ): void {
+    for (const clause of clauses) {
+      this.assignScope(clause, parentScopeId);
+      const clauseScopeId = this.allocateScopeId();
+      const paramsNode = clause.elements[0];
+      if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+        this.assignScope(paramsNode, parentScopeId);
+        for (const param of paramsNode.elements) {
+          if (param) {
+            this.annotateExpression(param, clauseScopeId);
+          }
+        }
+      } else if (paramsNode) {
+        this.annotateExpression(paramsNode, parentScopeId);
+      }
+      for (let index = 1; index < clause.elements.length; index += 1) {
+        const element = clause.elements[index];
+        if (element) {
+          this.annotateExpression(element, clauseScopeId);
+        }
       }
     }
   }

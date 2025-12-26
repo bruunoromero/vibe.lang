@@ -1,6 +1,20 @@
 import { parseSource } from "@vibe/parser";
-import { NodeKind, type ListNode, type ProgramNode } from "@vibe/syntax";
-import type { ModuleExportsLookup } from "@vibe/semantics";
+import {
+  NodeKind,
+  type ExpressionNode,
+  type ListNode,
+  type NamespaceImportNode,
+  type ProgramNode,
+  type SymbolNode,
+  type VectorNode,
+} from "@vibe/syntax";
+import type {
+  ModuleExportEntry,
+  ModuleExportedMacro,
+  ModuleExportedMacroClause,
+  ModuleExportsLookup,
+  ModuleMacroDependency,
+} from "@vibe/semantics";
 import { Dirent, existsSync, readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -9,9 +23,9 @@ import { parseVibeConfig, resolveVibePackageConfig } from "./workspace-config";
 import { LANG_EXTENSION } from "./specifiers";
 
 export class ModuleExportsTable implements ModuleExportsLookup {
-  private readonly cache = new Map<string, readonly string[]>();
+  private readonly cache = new Map<string, readonly ModuleExportEntry[]>();
 
-  getExports(moduleId: string): readonly string[] | undefined {
+  getExports(moduleId: string): readonly ModuleExportEntry[] | undefined {
     return this.cache.get(path.resolve(moduleId));
   }
 
@@ -19,20 +33,23 @@ export class ModuleExportsTable implements ModuleExportsLookup {
     return this.cache.has(path.resolve(moduleId));
   }
 
-  register(moduleId: string, symbols: readonly string[]): void {
+  register(moduleId: string, symbols: readonly ModuleExportEntry[]): void {
     const normalized = path.resolve(moduleId);
-    const unique = Array.from(new Set(symbols));
-    this.cache.set(normalized, unique);
+    this.cache.set(normalized, dedupeExports(symbols));
   }
 }
 
 export const extractTopLevelExports = (
   program: ProgramNode
-): readonly string[] => {
-  const exports: string[] = [];
+): readonly ModuleExportEntry[] => {
+  const exports: ModuleExportEntry[] = [];
   const seen = new Set<string>();
+  const namespaceAliases: ModuleMacroDependency[] = [];
   for (const form of program.body) {
     if (!form || form.kind !== NodeKind.List) {
+      if (form && form.kind === NodeKind.NamespaceImport) {
+        recordNamespaceImportAlias(namespaceAliases, form);
+      }
       continue;
     }
     const list = form as ListNode;
@@ -40,7 +57,11 @@ export const extractTopLevelExports = (
     if (!head || head.kind !== NodeKind.Symbol) {
       continue;
     }
-    if (head.value !== "def" && head.value !== "defmacro") {
+    if (head.value === "external" || head.value === "require") {
+      recordNamespaceAlias(namespaceAliases, list, head.value);
+      continue;
+    }
+    if (head.value !== "def") {
       continue;
     }
     const binding = list.elements[1];
@@ -51,14 +72,222 @@ export const extractTopLevelExports = (
       continue;
     }
     seen.add(binding.value);
-    exports.push(binding.value);
+    const valueNode = list.elements[2];
+    if (isMacroLiteralNode(valueNode)) {
+      const macro = createMacroExport(valueNode as ListNode, binding, [
+        ...namespaceAliases,
+      ]);
+      exports.push(macro ?? { name: binding.value, kind: "macro" });
+      continue;
+    }
+    exports.push({
+      name: binding.value,
+      kind: "var",
+    });
   }
   return exports;
 };
 
+const dedupeExports = (
+  entries: readonly ModuleExportEntry[]
+): ModuleExportEntry[] => {
+  const byName = new Map<string, ModuleExportEntry>();
+  for (const entry of entries) {
+    if (!byName.has(entry.name)) {
+      byName.set(entry.name, entry);
+    }
+  }
+  return [...byName.values()];
+};
+
+const createMacroExport = (
+  macroNode: ListNode,
+  binding: SymbolNode,
+  namespaceAliases: readonly ModuleMacroDependency[]
+): ModuleExportEntry | null => {
+  const clauseNodes = extractMacroClauses(macroNode);
+  if (clauseNodes.length === 0) {
+    return null;
+  }
+
+  const clauses = clauseNodes.map((clause) => {
+    const paramsNode = clause.paramsNode;
+    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+      return null;
+    }
+    const parsedParams = parseMacroParams(paramsNode);
+    if (!parsedParams) {
+      return null;
+    }
+    const bodyNode = clause.bodyNodes.find((expr): expr is ExpressionNode =>
+      Boolean(expr)
+    );
+    if (!bodyNode) {
+      return null;
+    }
+    return {
+      params: parsedParams.params,
+      ...(parsedParams.rest ? { rest: parsedParams.rest } : {}),
+      body: cloneExpression(bodyNode),
+    } satisfies ModuleExportedMacroClause;
+  });
+
+  if (clauses.some((clause) => clause === null)) {
+    return null;
+  }
+
+  return {
+    name: binding.value,
+    kind: "macro",
+    macro: {
+      clauses: clauses as ModuleExportedMacroClause[],
+      dependencies:
+        namespaceAliases && namespaceAliases.length > 0
+          ? namespaceAliases.map((dep) => ({ ...dep }))
+          : undefined,
+    },
+  } satisfies ModuleExportEntry;
+};
+
+const recordNamespaceAlias = (
+  aliases: ModuleMacroDependency[],
+  form: ListNode,
+  kind: "external" | "require"
+): void => {
+  const aliasNode = form.elements[1];
+  const specifierNode = form.elements[2];
+  if (!aliasNode || aliasNode.kind !== NodeKind.Symbol) {
+    return;
+  }
+  if (!specifierNode || specifierNode.kind !== NodeKind.String) {
+    return;
+  }
+  aliases.push({
+    kind,
+    alias: aliasNode.value,
+    specifier: specifierNode.value,
+  });
+};
+
+const recordNamespaceImportAlias = (
+  aliases: ModuleMacroDependency[],
+  node: NamespaceImportNode
+): void => {
+  if (node.importKind !== "external" && node.importKind !== "require") {
+    return;
+  }
+  const aliasNode = node.alias;
+  const sourceNode = node.source;
+  if (!aliasNode || aliasNode.kind !== NodeKind.Symbol) {
+    return;
+  }
+  if (!sourceNode || sourceNode.kind !== NodeKind.String) {
+    return;
+  }
+  aliases.push({
+    kind: node.importKind,
+    alias: aliasNode.value,
+    specifier: sourceNode.value,
+  });
+};
+
+interface MacroClauseNodeDescriptor {
+  readonly paramsNode: ExpressionNode | null;
+  readonly bodyNodes: readonly ExpressionNode[];
+}
+
+const isMacroLiteralNode = (
+  node: ExpressionNode | null | undefined
+): node is ListNode => {
+  if (!node || node.kind !== NodeKind.List) {
+    return false;
+  }
+  const head = node.elements[0];
+  return Boolean(
+    head && head.kind === NodeKind.Symbol && head.value === "macro"
+  );
+};
+
+const extractMacroClauses = (node: ListNode): MacroClauseNodeDescriptor[] => {
+  const paramsNode = node.elements[1];
+  if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+    return [
+      {
+        paramsNode,
+        bodyNodes: node.elements
+          .slice(2)
+          .filter((expr): expr is ExpressionNode => Boolean(expr)),
+      },
+    ];
+  }
+
+  const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+  if (tail.length === 0) {
+    return [];
+  }
+
+  const clauseLists = tail.filter(
+    (expr): expr is ListNode => expr.kind === NodeKind.List
+  );
+  if (clauseLists.length !== tail.length) {
+    return [];
+  }
+
+  return clauseLists.map((clause) => ({
+    paramsNode: clause.elements[0] ?? null,
+    bodyNodes: clause.elements
+      .slice(1)
+      .filter((expr): expr is ExpressionNode => Boolean(expr)),
+  }));
+};
+
+const parseMacroParams = (
+  node: VectorNode
+): { params: string[]; rest?: string } | null => {
+  const params: string[] = [];
+  let rest: string | undefined;
+  let sawRest = false;
+  for (let index = 0; index < node.elements.length; index += 1) {
+    const element = node.elements[index];
+    if (!element) {
+      continue;
+    }
+    if (element.kind !== NodeKind.Symbol) {
+      return null;
+    }
+    if (element.value === "&") {
+      if (sawRest) {
+        return null;
+      }
+      sawRest = true;
+      const next = node.elements[index + 1];
+      if (!next || next.kind !== NodeKind.Symbol) {
+        return null;
+      }
+      rest = next.value;
+      index += 1;
+      continue;
+    }
+    if (sawRest) {
+      return null;
+    }
+    params.push(element.value);
+  }
+  return { params, rest };
+};
+
+const cloneExpression = <T extends ExpressionNode>(node: T): T => {
+  const structured = (globalThis as { structuredClone?: <S>(input: S) => S })
+    .structuredClone;
+  if (structured) {
+    return structured(node);
+  }
+  return JSON.parse(JSON.stringify(node)) as T;
+};
+
 export const discoverModuleExports = async (
   modulePath: string
-): Promise<readonly string[] | undefined> => {
+): Promise<readonly ModuleExportEntry[] | undefined> => {
   if (!modulePath.endsWith(LANG_EXTENSION)) {
     return undefined;
   }

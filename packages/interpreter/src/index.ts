@@ -54,6 +54,7 @@ export {
   type VectorValue,
   type SetValue,
   type MapValue,
+  type FunctionClauseValue,
   type FunctionValue,
   type BuiltinValue,
   type BuiltinFunction,

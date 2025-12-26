@@ -1,7 +1,18 @@
 # @vibe/cli Changelog
 
+## 2025-12-26
+
+- REPL macro detection now looks for `(def name (macro ...))` definitions instead of relying on the removed `defmacro` head, ensuring compile-time macros are skipped during prelude loading and interactive evaluation regardless of where they are defined.
+- Module export discovery inspects `def` forms for macro literals and emits macro metadata accordingly, so downstream analyzers still receive full clause/dependency information even though `defmacro` no longer exists.
+
+## 2025-12-25
+
+- The REPL's value printer now summarizes function arities using the new multi-clause metadata (e.g., `<fn arities=[1, 2, 3+]>`), so users can see every available clause instead of a single fixed arity.
+- Module export discovery now records every macro clause (parameters, optional rest, and body) rather than a single signature, enabling downstream analyzers to import multi-arity macros without losing their dispatch tables.
+
 ## 2025-12-24
 
+- Module export discovery now records whether a binding is a `def` or `defmacro` (plus the macro signature, body, and any `external`/`require` dependencies), enabling downstream analyzers to import macros from packages and expand them correctly when `(import "@scope/pkg")` flattens the namespace.
 - Dropped `package.json#vibe.modules` in favor of a single `vibe.sources` folder plus `vibe.entry`. Package imports now resolve by crawling each `.lang` file under the declared sources, seed module-export metadata automatically, and fall back to `vibe.entry` for bare specifiers like `(require "@vibe/prelude")` without emitting `SEM_IMPORT_MISSING_EXPORTS`.
 - The REPL now embeds the auto-loaded prelude into the analyzer history and filters `+`, `-`, `*`, and `/` out of the builtin seeding so those operators behave like ordinary vars supplied by `@vibe/prelude` instead of analyzer-defined builtins.
 

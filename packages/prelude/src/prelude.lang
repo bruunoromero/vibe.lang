@@ -65,33 +65,25 @@
 ;; Logic Macros (short-circuiting)
 ;; ============================================================
 
-(defmacro and [& forms]
-  (let [cnt (runtime/count forms)]
-      (if (runtime/eq* cnt 0)
-        true
-        (if (runtime/eq* cnt 1)
-          (runtime/first forms)
-          (let [first-form (runtime/first forms)
-                rest-forms (runtime/rest forms)
-                temp (gensym "and")]
-            `(let [~temp ~first-form]
-               (if ~temp
-                 (and ~@rest-forms)
-                 ~temp)))))))
+(def and
+  (macro
+    ([] true)
+    ([x] x)
+    ([x & rest]
+      `(let [temp# ~x]
+         (if temp#
+           (and ~@rest)
+           temp#)))))
 
-(defmacro or [& forms]
-  (let [cnt (runtime/count forms)]
-      (if (runtime/eq* cnt 0)
-        nil
-        (if (runtime/eq* cnt 1)
-          (runtime/first forms)
-          (let [first-form (runtime/first forms)
-                rest-forms (runtime/rest forms)
-                temp (gensym "or")]
-            `(let [~temp ~first-form]
-               (if ~temp
-                 ~temp
-                 (or ~@rest-forms))))))))
+(def or
+  (macro
+    ([] nil)
+    ([x] x)
+    ([x & rest]
+      `(let [temp# ~x]
+         (if temp#
+           temp#
+           (or ~@rest))))))
 
 ;; ============================================================
 ;; Higher-Order Sequence Operations

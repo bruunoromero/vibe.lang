@@ -76,12 +76,28 @@ const buildAnalyzerBuiltins = (env: Environment): readonly string[] => {
   return [...names];
 };
 
-const isDefmacroNode = (node: ExpressionNode | null | undefined): boolean => {
+const isMacroLiteralNode = (
+  node: ExpressionNode | null | undefined
+): boolean => {
   if (!node || node.kind !== "list") {
     return false;
   }
   const head = node.elements[0];
-  return Boolean(head && head.kind === "symbol" && head.value === "defmacro");
+  return Boolean(head && head.kind === "symbol" && head.value === "macro");
+};
+
+const isMacroDefinitionNode = (
+  node: ExpressionNode | null | undefined
+): boolean => {
+  if (!node || node.kind !== "list") {
+    return false;
+  }
+  const head = node.elements[0];
+  if (!head || head.kind !== "symbol" || head.value !== "def") {
+    return false;
+  }
+  const valueNode = node.elements[2];
+  return isMacroLiteralNode(valueNode as ExpressionNode);
 };
 
 /**
@@ -112,7 +128,13 @@ const valueToJS = (value: Value): unknown => {
       return { __map: obj };
     }
     case "function":
-      return `<fn arity=${value.params.length}>`;
+      // Represent each clause as its arity (variadic clauses gain a trailing +)
+      const arities = value.clauses
+        .map((clause) =>
+          clause.rest ? `${clause.params.length}+` : `${clause.params.length}`
+        )
+        .join(", ");
+      return `<fn arities=[${arities}]>`;
     case "builtin":
       return `<builtin ${value.name}>`;
     default:
@@ -259,7 +281,7 @@ export const runRepl = async (
         if (parseResult.ok) {
           // Evaluate all expressions in the prelude, skipping macro definitions
           for (const expr of parseResult.program.body) {
-            if (isDefmacroNode(expr)) {
+            if (isMacroDefinitionNode(expr)) {
               continue;
             }
             const result = await evaluate(expr, globalEnv, { callDepth: 0 });
@@ -446,7 +468,7 @@ export const runRepl = async (
       try {
         // Evaluate each node in the program
         for (const node of evalParse.program.body) {
-          if (isDefmacroNode(node)) {
+          if (isMacroDefinitionNode(node)) {
             continue;
           }
           const result = await evaluate(node, globalEnv);

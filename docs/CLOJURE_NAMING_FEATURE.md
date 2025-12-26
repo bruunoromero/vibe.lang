@@ -81,6 +81,25 @@ To build or inspect symbols that carry these names at runtime, import the helper
 (runtime/symbol? (runtime/symbol "set-value!"))  ;=> true
 ```
 
+## Auto Gensym Placeholders (`foo#`)
+
+- Inside syntax-quoted forms (`` `(…) ``), any simple symbol that ends with `#` becomes an **auto gensym placeholder**. Each placeholder is replaced with a deterministic, hygiene-safe symbol such as `foo__0` during macro expansion or runtime syntax-quote evaluation.
+- Placeholders may only appear inside syntax-quoted templates. Using `foo#` in regular code now triggers the `SEM_GENSYM_PLACEHOLDER_CONTEXT` diagnostic to mirror Clojure's reader semantics.
+- The placeholder name cannot be namespace-qualified (`alias/foo#`)—`SEM_GENSYM_PLACEHOLDER_NAMESPACE` guides authors to pick simple hints and rely on hygiene tags instead.
+- Analyzer and interpreter share the same gensym counter, so `(gensym "tmp")` and `tmp#` produce consistent aliases across compile-time and runtime quoting.
+- Nested syntax quotes each receive their own placeholder scope, matching Clojure's behavior:
+
+```
+(def capture
+	(macro [expr]
+		`(let [foo# ~expr]
+			 foo#)))
+
+; Expands to something like (let [foo__0 expr] foo__0)
+```
+
+Macro authors can freely mix explicit `(gensym)` calls with placeholder sugar; both feed the same hygiene metadata and downstream aliasing rules (`foo#` → `foo__symbol_7`, sanitized to `foo__symbol_7` / `foo__symbol_7__symbol_12` in codegen as needed).
+
 ## Impact
 
 ✅ **Backward compatible** — No breaking changes; existing code continues to work  

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   analyzeProgram,
   type AnalyzeOptions,
@@ -7,7 +9,7 @@ import {
   type SymbolId,
 } from "../src";
 import { parseSource } from "@vibe/parser";
-import { NodeKind } from "@vibe/syntax";
+import { NodeKind, type ExpressionNode } from "@vibe/syntax";
 import { TEST_BUILTINS } from "./test-builtins";
 
 const ARITHMETIC_STUB = `
@@ -46,6 +48,14 @@ const debugDiagnostics = (label: string, analysis: AnalysisResult) => {
 
 const expectDiagnostic = (analysis: AnalysisResult, code: string) => {
   expect(getDiagnosticCodes(analysis)).toContain(code);
+};
+
+const expectBooleanNode = (node: ExpressionNode | null | undefined) => {
+  expect(node?.kind).toBe(NodeKind.Boolean);
+  if (!node || node.kind !== NodeKind.Boolean) {
+    throw new Error("Expected boolean node");
+  }
+  return node;
 };
 
 describe("analyzeProgram", () => {
@@ -142,6 +152,48 @@ describe("analyzeProgram", () => {
     expect(letBindingNode).toBeDefined();
 
     expect(parameterNode?.scopeId).not.toBe(letBindingNode?.scopeId);
+  });
+
+  test("analyzes multi-arity fn clauses", async () => {
+    const analysis = await analyzeSource(
+      withArithmeticPrelude(`
+        (def picker
+          (fn
+            ([x] (+ x 1))
+            ([x y] (+ x y))
+            ([x y & rest] x)))
+        picker
+      `)
+    );
+
+    expect(analysis.ok).toBeTrue();
+    expect(getDiagnosticCodes(analysis)).not.toContain(
+      "SEM_FN_DUPLICATE_ARITY"
+    );
+  });
+
+  test("rejects duplicate fixed-arity fn clauses", async () => {
+    const analysis = await analyzeSource(
+      withArithmeticPrelude(`
+        (fn
+          ([x] x)
+          ([y] y))
+      `)
+    );
+
+    expectDiagnostic(analysis, "SEM_FN_DUPLICATE_ARITY");
+  });
+
+  test("requires variadic fn clause to be last", async () => {
+    const analysis = await analyzeSource(
+      withArithmeticPrelude(`
+        (fn
+          ([x & rest] x)
+          ([x y] y))
+      `)
+    );
+
+    expectDiagnostic(analysis, "SEM_FN_REST_POSITION");
   });
 
   test("reports unresolved symbols", async () => {
@@ -322,9 +374,10 @@ describe("analyzeProgram", () => {
 
   test("records gensym-generated bindings with unique names", async () => {
     const analysis = await analyzeSource(`
-      (defmacro with-unique [expr]
-        \`(let [~(gensym "tmp") ~expr]
-           42))
+      (def with-unique
+        (macro [expr]
+          \`(let [~(gensym "tmp") ~expr]
+             42)))
 
       (with-unique 10)
     `);
@@ -342,12 +395,48 @@ describe("analyzeProgram", () => {
     expect(definitionNode?.symbol?.role).toBe("definition");
   });
 
+  test("instantiates auto gensym placeholders inside syntax quotes", async () => {
+    const analysis = await analyzeSource(`
+      (def capture
+        (macro [expr]
+          \`(let [foo# ~expr]
+             foo#)))
+
+      (capture 99)
+    `);
+
+    debugDiagnostics("auto gensym placeholders", analysis);
+    expect(getDiagnosticCodes(analysis)).not.toContain(
+      "SEM_GENSYM_PLACEHOLDER_CONTEXT"
+    );
+    const gensymSymbol = analysis.graph.symbols.find((symbol) =>
+      symbol.name.startsWith("foo__")
+    );
+    expect(gensymSymbol).toBeDefined();
+    const usages = analysis.graph.nodes.filter(
+      (node) => node.symbol?.symbolId === gensymSymbol?.id
+    );
+    expect(
+      usages.some((node) => node.symbol?.role === "definition")
+    ).toBeTrue();
+    expect(usages.some((node) => node.symbol?.role === "usage")).toBeTrue();
+  });
+
+  test("rejects gensym placeholders outside syntax quotes", async () => {
+    const analysis = await analyzeSource("(def bad foo#)");
+
+    expect(getDiagnosticCodes(analysis)).toContain(
+      "SEM_GENSYM_PLACEHOLDER_CONTEXT"
+    );
+  });
+
   test("assigns unique hygiene tags to macro-generated bindings", async () => {
     const analysis = await analyzeSource(
       withArithmeticPrelude(`
-        (defmacro with-temp [value]
-          \`(let [tmp ~value]
-             tmp))
+        (def with-temp
+          (macro [value]
+            \`(let [tmp ~value]
+               tmp)))
 
         (let [a (with-temp 1)
               b (with-temp 2)]
@@ -372,9 +461,10 @@ describe("analyzeProgram", () => {
   test("expands macros and analyzes introduced bindings", async () => {
     const analysis = await analyzeSource(
       withArithmeticPrelude(`
-        (defmacro with-temp [expr]
-          \`(let [tmp ~expr]
-             tmp))
+        (def with-temp
+          (macro [expr]
+            \`(let [tmp ~expr]
+               tmp)))
 
         (def answer (with-temp (+ 1 2)))
       `)
@@ -394,7 +484,7 @@ describe("analyzeProgram", () => {
 
   test("detects recursive macros", async () => {
     const analysis = await analyzeSource(`
-      (defmacro looped [] \`(looped))
+      (def looped (macro [] \`(looped)))
       (looped)
     `);
 
@@ -450,40 +540,42 @@ describe("analyzeProgram", () => {
     });
   });
 
-  describe("defmacro validation", () => {
+  describe("macro literal validation", () => {
     test("requires macro names to be symbols", async () => {
-      const analysis = await analyzeSource("(defmacro 1 [] `42)");
+      const analysis = await analyzeSource("(def 1 (macro [] `42))");
 
-      expectDiagnostic(analysis, "SEM_MACRO_REQUIRES_SYMBOL");
+      expectDiagnostic(analysis, "SEM_BINDING_REQUIRES_SYMBOL");
     });
 
     test("requires macro parameters to be provided via vectors", async () => {
-      const analysis = await analyzeSource("(defmacro foo 1 `42)");
+      const analysis = await analyzeSource("(def foo (macro 1 `42))");
 
       expectDiagnostic(analysis, "SEM_MACRO_EXPECTS_VECTOR");
     });
 
     test("requires macro parameters to be symbols", async () => {
-      const analysis = await analyzeSource("(defmacro foo [1] `42)");
+      const analysis = await analyzeSource("(def foo (macro [1] `42))");
 
       expectDiagnostic(analysis, "SEM_MACRO_PARAM_SYMBOL");
     });
 
     test("reports duplicate macro parameters", async () => {
-      const analysis = await analyzeSource("(defmacro foo [x x] `(list ~x))");
+      const analysis = await analyzeSource(
+        "(def foo (macro [x x] `(list ~x)))"
+      );
 
       expectDiagnostic(analysis, "SEM_MACRO_DUPLICATE_PARAM");
     });
 
     test("requires macro bodies", async () => {
-      const analysis = await analyzeSource("(defmacro foo [x])");
+      const analysis = await analyzeSource("(def foo (macro [x]))");
 
       expectDiagnostic(analysis, "SEM_MACRO_REQUIRES_BODY");
     });
 
     test("allows macro bodies to return raw forms", async () => {
       const analysis = await analyzeSource(`
-        (defmacro passthrough [x] x)
+        (def passthrough (macro [x] x))
         (passthrough 42)
       `);
 
@@ -493,10 +585,11 @@ describe("analyzeProgram", () => {
 
     test("evaluates syntax-quoted templates produced by interpreter logic", async () => {
       const analysis = await analyzeSource(`
-        (defmacro wrap [expr]
-          (let [tmp (gensym "wrap")]
-            \`(let [~tmp ~expr]
-               ~tmp)))
+        (def wrap
+          (macro [expr]
+            (let [tmp (gensym "wrap")]
+              \`(let [~tmp ~expr]
+                 ~tmp))))
         (wrap 1)
       `);
 
@@ -506,17 +599,55 @@ describe("analyzeProgram", () => {
 
     test("supports only a single macro body expression", async () => {
       const analysis = await analyzeSource(
-        "(defmacro foo [x] `(list ~x) `(list ~x))"
+        "(def foo (macro [x] `(list ~x) `(list ~x)))"
       );
 
       expectDiagnostic(analysis, "SEM_MACRO_SINGLE_BODY");
+    });
+
+    test("supports multi-clause macros", async () => {
+      const analysis = await analyzeSource(`
+        (def pick
+          (macro
+            ([x] x)
+            ([x y] y)))
+        (pick 1)
+        (pick 1 2)
+      `);
+
+      expect(analysis.ok).toBeTrue();
+      expect(getDiagnosticCodes(analysis)).not.toContain(
+        "SEM_MACRO_DUPLICATE_ARITY"
+      );
+    });
+
+    test("rejects duplicate macro clause arities", async () => {
+      const analysis = await analyzeSource(`
+        (def dup
+          (macro
+            ([x] x)
+            ([y] y)))
+      `);
+
+      expectDiagnostic(analysis, "SEM_MACRO_DUPLICATE_ARITY");
+    });
+
+    test("requires variadic macro clause to be last", async () => {
+      const analysis = await analyzeSource(`
+        (def reorder
+          (macro
+            ([x & rest] x)
+            ([x y] y)))
+      `);
+
+      expectDiagnostic(analysis, "SEM_MACRO_REST_POSITION");
     });
   });
 
   describe("macro expansion diagnostics", () => {
     test("reports macro arity mismatches and missing args", async () => {
       const analysis = await analyzeSource(`
-        (defmacro pair [a b] \`(vector ~a ~b))
+        (def pair (macro [a b] \`(vector ~a ~b)))
         (pair 1)
       `);
 
@@ -526,7 +657,7 @@ describe("analyzeProgram", () => {
 
     test("reports unknown parameters referenced via unquote", async () => {
       const analysis = await analyzeSource(`
-        (defmacro uses-missing [] \`(~ missing))
+        (def uses-missing (macro [] \`(~ missing)))
         (uses-missing)
       `);
 
@@ -535,7 +666,7 @@ describe("analyzeProgram", () => {
 
     test("evaluates full expressions inside unquote at compile time", async () => {
       const analysis = await analyzeSource(`
-        (defmacro simple [] \`~(if true 1 2))
+        (def simple (macro [] \`~(if true 1 2)))
         (simple)
       `);
 
@@ -546,7 +677,7 @@ describe("analyzeProgram", () => {
 
     test("rejects unquote splicing at the top level", async () => {
       const analysis = await analyzeSource(`
-        (defmacro spread [items] \`~@items)
+        (def spread (macro [items] \`~@items))
         (spread [1 2])
       `);
 
@@ -555,7 +686,7 @@ describe("analyzeProgram", () => {
 
     test("requires unquote splicing targets to produce sequences", async () => {
       const analysis = await analyzeSource(`
-        (defmacro spread [item] \`(list ~@item))
+        (def spread (macro [item] \`(list ~@item)))
         (spread 42)
       `);
 
@@ -665,7 +796,9 @@ describe("analyzeProgram", () => {
       };
       const moduleExports = {
         getExports: (moduleId: string) =>
-          moduleId === "/workspace/math.lang" ? ["add"] : undefined,
+          moduleId === "/workspace/math.lang"
+            ? [{ name: "add", kind: "var" as const }]
+            : undefined,
       };
 
       const okAnalysis = await analyzeSource(
@@ -707,7 +840,9 @@ describe("analyzeProgram", () => {
       };
       const moduleExports = {
         getExports: (moduleId: string) =>
-          moduleId === "/workspace/prelude.lang" ? ["frob"] : undefined,
+          moduleId === "/workspace/prelude.lang"
+            ? [{ name: "frob", kind: "var" as const }]
+            : undefined,
       } satisfies ModuleExportsLookup;
 
       const analysis = await analyzeSource(
@@ -733,6 +868,213 @@ describe("analyzeProgram", () => {
         (node) => node.symbol?.name === "frob" && node.symbol.role === "usage"
       );
       expect(usage?.symbol?.symbolId).toBe(importedSymbol?.id);
+    });
+
+    test("imports register macro exports for expansion", async () => {
+      const resolver: ModuleResolver = {
+        resolve: () => ({ ok: true, moduleId: "/workspace/macros.lang" }),
+      };
+
+      const macroParse = await parseSource("(def inline-true (macro [] true))");
+      if (!macroParse.ok) {
+        throw new Error("Failed to parse macro fixture");
+      }
+      const macroForm = macroParse.program.body[0];
+      if (!macroForm || macroForm.kind !== NodeKind.List) {
+        throw new Error("Expected macro list form");
+      }
+      const macroLiteral = macroForm.elements[2];
+      if (!macroLiteral || macroLiteral.kind !== NodeKind.List) {
+        throw new Error("Macro literal missing in def form");
+      }
+      const macroBody = macroLiteral.elements[2];
+      if (!macroBody) {
+        throw new Error("Macro body missing in fixture");
+      }
+
+      const moduleExports: ModuleExportsLookup = {
+        getExports: (moduleId: string) =>
+          moduleId === "/workspace/macros.lang"
+            ? [
+                {
+                  name: "inline-true",
+                  kind: "macro",
+                  macro: {
+                    clauses: [
+                      {
+                        params: [],
+                        body: macroBody,
+                      },
+                    ],
+                  },
+                },
+              ]
+            : undefined,
+      };
+
+      const source = `
+        (import "./macros.lang")
+        (inline-true)
+      `;
+      const parseResult = await parseSource(source);
+      if (!parseResult.ok) {
+        throw new Error("Failed to parse macro usage fixture");
+      }
+
+      const analysis = await analyzeProgram(parseResult.program, {
+        moduleId: "/workspace/main.lang",
+        moduleResolver: resolver,
+        moduleExports,
+        builtins: TEST_BUILTINS,
+      });
+
+      expect(analysis.ok).toBeTrue();
+      const invocation = expectBooleanNode(parseResult.program.body[1]);
+      expect(invocation.value).toBeTrue();
+      expect(analysis.graph.imports[0]?.flatten).toBeUndefined();
+    });
+
+    test("imports load external dependencies for macro expansion", async () => {
+      const resolver: ModuleResolver = {
+        resolve: () => ({ ok: true, moduleId: "/workspace/macro-deps.lang" }),
+      };
+
+      const runtimeDepSpecifier = new URL(
+        "./fixtures/runtime-macro-dep.js",
+        import.meta.url
+      ).href;
+
+      const macroBody = await parseSource(
+        "(if (runtime/alwaysTrue) true false)"
+      );
+      if (!macroBody.ok) {
+        throw new Error("Failed to parse macro dependency body");
+      }
+      const macroNode = macroBody.program.body[0];
+      if (!macroNode) {
+        throw new Error("Missing macro body node");
+      }
+
+      const moduleExports: ModuleExportsLookup = {
+        getExports: (moduleId: string) =>
+          moduleId === "/workspace/macro-deps.lang"
+            ? [
+                {
+                  name: "runtime-macro",
+                  kind: "macro",
+                  macro: {
+                    clauses: [
+                      {
+                        params: [],
+                        body: macroNode,
+                      },
+                    ],
+                    dependencies: [
+                      {
+                        kind: "external",
+                        alias: "runtime",
+                        specifier: runtimeDepSpecifier,
+                      },
+                    ],
+                  },
+                },
+              ]
+            : undefined,
+      } satisfies ModuleExportsLookup;
+
+      const source = `
+        (import "./macro-deps.lang")
+        (runtime-macro)
+      `;
+      const parseResult = await parseSource(source);
+      if (!parseResult.ok) {
+        throw new Error("Failed to parse macro dependency fixture");
+      }
+
+      const analysis = await analyzeProgram(parseResult.program, {
+        moduleId: "/workspace/main.lang",
+        moduleResolver: resolver,
+        moduleExports,
+        builtins: TEST_BUILTINS,
+      });
+
+      expect(analysis.ok).toBeTrue();
+      expect(getDiagnosticCodes(analysis)).not.toContain(
+        "SEM_MACRO_DEPENDENCY_FAILED"
+      );
+      const invocation = expectBooleanNode(parseResult.program.body[1]);
+      expect(invocation.value).toBeTrue();
+    });
+
+    test("imports load require dependencies for macro expansion", async () => {
+      const fixturesDir = fileURLToPath(
+        new URL("./fixtures/", import.meta.url)
+      );
+      const moduleId = path.join(fixturesDir, "macro-require.lang");
+      const resolver: ModuleResolver = {
+        resolve: () => ({ ok: true, moduleId }),
+      };
+
+      const macroBody = await parseSource(
+        "(if (runtime/alwaysTrue) true false)"
+      );
+      if (!macroBody.ok) {
+        throw new Error("Failed to parse macro dependency body");
+      }
+      const macroNode = macroBody.program.body[0];
+      if (!macroNode) {
+        throw new Error("Missing macro body node");
+      }
+
+      const moduleExports: ModuleExportsLookup = {
+        getExports: (candidate) =>
+          candidate === moduleId
+            ? [
+                {
+                  name: "runtime-macro",
+                  kind: "macro",
+                  macro: {
+                    clauses: [
+                      {
+                        params: [],
+                        body: macroNode,
+                      },
+                    ],
+                    dependencies: [
+                      {
+                        kind: "require",
+                        alias: "runtime",
+                        specifier: "./runtime-macro-dep.js",
+                      },
+                    ],
+                  },
+                },
+              ]
+            : undefined,
+      } satisfies ModuleExportsLookup;
+
+      const source = `
+        (import "./macro-deps.lang")
+        (runtime-macro)
+      `;
+      const parseResult = await parseSource(source);
+      if (!parseResult.ok) {
+        throw new Error("Failed to parse macro dependency fixture");
+      }
+
+      const analysis = await analyzeProgram(parseResult.program, {
+        moduleId: "/workspace/main.lang",
+        moduleResolver: resolver,
+        moduleExports,
+        builtins: TEST_BUILTINS,
+      });
+
+      expect(analysis.ok).toBeTrue();
+      expect(getDiagnosticCodes(analysis)).not.toContain(
+        "SEM_MACRO_DEPENDENCY_FAILED"
+      );
+      const invocation = expectBooleanNode(parseResult.program.body[1]);
+      expect(invocation.value).toBeTrue();
     });
 
     test("reports diagnostics when imports lack export metadata", async () => {

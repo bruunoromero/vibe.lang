@@ -38,7 +38,7 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 | Numbers | `42` `-3.14` `6.022e23` | Optional sign, decimal part, exponent |
 | Strings | `"hello"` | Double-quoted with escapes |
 | Characters | `\a` `\newline` `\u03bb` | Backslash-prefixed literals |
-| Symbols | `foo` `user/name` `*main*` `foo?` `bar!` `baz*` | Cannot start with digits or delimiters; may end with `?`, `!`, `*`, `+`, `-`, `=`, `<`, `>`, `/` (Clojure-style naming) |
+| Symbols | `foo` `user/name` `*main*` `foo?` `bar!` `baz*` `foo#` | Cannot start with digits or delimiters; may end with `?`, `!`, `*`, `+`, `-`, `=`, `<`, `>`, `/`. A trailing `#` is reserved for auto-gensym placeholders inside syntax-quoted forms. |
 | Keywords | `:ok` `::auto` | Optional double-colon auto-namespace |
 | Boolean/Nil | `true` `false` `nil` | Case-insensitive |
 
@@ -84,10 +84,17 @@ If a reader or dispatch macro lacks a following form, the parser emits `PARSE_MA
 
 These symbols are intercepted by downstream stages for non-generic evaluation:
 
-- `def` — Top-level definition only. Emits exported bindings in codegen.
-- `defmacro` — Defines compile-time macros. Shape: `(defmacro name [params*] body)`; the body is evaluated at analysis time and must return a form. Returning a syntax-quoted template (e.g., `` `(template ...) ``) still enables `~`/`~@` splicing, but macros can also build data manually and return it directly.
+- `def` — Top-level definition only. Emits exported bindings in codegen. When the value is a macro literal (see below), the analyzer registers the binding as a macro so downstream compilation stages can expand it while still exporting the symbol through the module metadata.
+- `macro` — Macro literal that mirrors `fn` clause syntax. Must appear as the initializer of a binding form such as `def` or `let` (standalone `(macro ...)` expressions are rejected). Single-clause macros look like `(def name (macro [params*] body))`. Multi-clause macros reuse `fn` semantics: `(def name (macro ([params*] body) ([params2*] body2) ...))`. Clauses are matched by arity from top to bottom; only one variadic clause (one that uses `& rest`) is allowed and it must appear last. Each clause body is a single expression that the analyzer evaluates at analysis time, and it must return a form. Returning a syntax-quoted template (e.g., `` `(template ...) ``) still enables `~`/`~@` splicing, but macros can also build data manually and return it directly. Macros bound via `def` are exported; macros introduced inside other bindings remain scoped to that binding.
 - `let` — Introduces a lexical scope: `(let [name expr ...] body...)`.
-- `fn` — Lambda literal: `(fn [params...] body...)`.
+- `fn` — Lambda literal. The single-clause form `(fn [params...] body...)` remains valid, and multi-clause forms follow Clojure's syntax: `(fn ([params...] body...) ([params2...] body2...) ...)`. Clauses are evaluated in order; the first clause whose fixed arity matches the call is selected, falling back to a single variadic clause (one that uses `& rest`) when present. Only one variadic clause is allowed per function and it must appear last. Each clause requires at least one body expression.
+  Example:
+  ```
+  (fn
+  	([x] x)
+  	([x y] (+ x y))
+  	([x y & rest] x))
+  ```
 - `if` — Branching form: `(if condition then [else])`. Missing else defaults to `nil`.
 - `quote` — Prevents evaluation, equivalent to `'form`.
 - `do` — Sequential evaluation in a single expression position: `(do form* expr)`.
@@ -140,6 +147,13 @@ deref          ::= "@" form
 dispatch       ::= '#' form
 atom           ::= number | string | character | keyword | symbol | boolean | nil
 ```
+
+### Auto Gensym Placeholders
+
+- Within syntax-quoted forms, simple symbols that end with `#` (e.g., `temp#`) act as auto gensym placeholders. Each placeholder is replaced with a deterministic, hygiene-preserving symbol (`temp__0`, `temp__1`, …) during macro expansion or runtime syntax-quote evaluation.
+- Every syntax quote resets its placeholder scope, so nested quotes receive fresh gensym counters rather than leaking `temp#` bindings from surrounding templates.
+- Placeholders are rejected outside syntax quotes (`SEM_GENSYM_PLACEHOLDER_CONTEXT`) and must be simple symbols without namespace qualifiers (`SEM_GENSYM_PLACEHOLDER_NAMESPACE`). When in doubt, keep the hint portion alphanumeric and let the compiler handle alias sanitization.
+- Manual `(gensym "hint")` calls and placeholder sugar share the same hygiene counter, ensuring predictable codegen aliases.
 
 ## Diagnostics Overview
 

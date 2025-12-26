@@ -476,7 +476,17 @@ export class Lexer {
   }
 
   private async readSymbol(start: SourcePosition): Promise<void> {
+    let length = 0;
     while (this.isSymbolChar(await this.peek())) {
+      await this.advance();
+      length += 1;
+    }
+
+    if (
+      length > 0 &&
+      (await this.peek()) === "#" &&
+      this.isAutoGensymSuffixBoundary(await this.peek(1))
+    ) {
       await this.advance();
     }
 
@@ -675,8 +685,8 @@ export class Lexer {
   }
 
   private isSymbolSuffix(ch: string): boolean {
-    // Allow Clojure-style suffixes: ?, !, *, +, -, =, <, >, etc.
-    return /[?!*+\-=<>/]/.test(ch);
+    // Allow Clojure-style suffixes: ?, !, *, +, -, =, <, >, /, #, etc.
+    return /[?!*+\-=<>/#]/.test(ch);
   }
 
   private isSymbolStart(ch: string): boolean {
@@ -704,6 +714,16 @@ export class Lexer {
       return true;
     }
     return true;
+  }
+
+  private isAutoGensymSuffixBoundary(next: string): boolean {
+    if (next === "{") {
+      return false;
+    }
+    if (next === "") {
+      return true;
+    }
+    return this.isDelimiter(next);
   }
 }
 

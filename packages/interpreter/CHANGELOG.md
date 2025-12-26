@@ -1,5 +1,10 @@
 # Changelog
 
+## 2025-12-25
+
+- Syntax-quote evaluation now mirrors Clojure's auto gensym reader sugar. Symbols ending with `#` (e.g., `temp#`) are replaced with shared gensymmed names per syntax-quote scope, reuse the interpreter's gensym counter, and emit `INTERP_SYNTAX_GENSYM_NAMESPACE` when namespace-qualified placeholders appear. Tests cover both placeholder reuse and the new diagnostics.
+- `fn` now accepts multiple clauses at runtime. The interpreter evaluates clause lists, records every clause (including variadic ones) in the new `FunctionClauseValue` shape, dispatches calls based on argument count, and surfaces `INTERP_FN_*` diagnostics for duplicate arities, misplaced variadic clauses, and unmatched argument counts. REPL-friendly pretty printing keeps working via the updated value metadata.
+
 ## 2025-12-24
 
 - Added syntax-quote evaluation to the interpreter so `` `(...) `` forms, along with `~`/`~@`, produce the same data structures macros expect at analysis time. This enables `defmacro` bodies to run arbitrary control flow before returning either a template or a manually assembled form.

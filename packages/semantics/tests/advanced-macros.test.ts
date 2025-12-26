@@ -27,7 +27,7 @@ const analyzeSource = async (source: string) => {
 describe("advanced macros", () => {
   test("variadic macro with & rest parameter", async () => {
     const result = await analyzeSource(`
-      (defmacro my-list [& items] \`[~@items])
+      (def my-list (macro [& items] \`[~@items]))
       (my-list 1 2 3)
     `);
 
@@ -38,8 +38,9 @@ describe("advanced macros", () => {
   test("recursive macro expansion - and macro", async () => {
     // Simplified version that doesn't require runtime functions
     const result = await analyzeSource(`
-      (defmacro simple-and [a b]
-        \`(if ~a ~b false))
+      (def simple-and
+        (macro [a b]
+          \`(if ~a ~b false)))
       (simple-and true false)
     `);
 
@@ -50,8 +51,9 @@ describe("advanced macros", () => {
   test("threading macro pattern", async () => {
     const result = await analyzeSource(
       withArithmeticPrelude(`
-        (defmacro thread-first [x & forms]
-          \`~x)
+        (def thread-first
+          (macro [x & forms]
+            \`~x))
         (thread-first 5 (+ 3) (* 2))
       `)
     );
@@ -61,8 +63,9 @@ describe("advanced macros", () => {
 
   test("variadic macro collects remaining args", async () => {
     const result = await analyzeSource(`
-      (defmacro variadic-test [first & rest]
-        \`[~first ~@rest])
+      (def variadic-test
+        (macro [first & rest]
+          \`[~first ~@rest]))
       (variadic-test :a :b :c :d)
     `);
 
@@ -71,8 +74,9 @@ describe("advanced macros", () => {
 
   test("empty variadic args", async () => {
     const result = await analyzeSource(`
-      (defmacro maybe-list [& items]
-        \`[~@items])
+      (def maybe-list
+        (macro [& items]
+          \`[~@items]))
       (maybe-list)
     `);
 
@@ -81,8 +85,9 @@ describe("advanced macros", () => {
 
   test("compile-time count and eq* check", async () => {
     const result = await analyzeSource(`
-      (defmacro is-empty [& items]
-        \`(eq* 0 (count ~items)))
+      (def is-empty
+        (macro [& items]
+          \`(eq* 0 (count ~items))))
       (is-empty)
       (is-empty 42)
     `);
@@ -93,10 +98,8 @@ describe("advanced macros", () => {
 
   test("nested variadic macro expansion", async () => {
     const result = await analyzeSource(`
-      (defmacro outer [& args]
-        \`[~@args])
-      (defmacro inner [x]
-        \`(outer ~x :extra))
+      (def outer (macro [& args] \`[~@args]))
+      (def inner (macro [x] \`(outer ~x :extra)))
       (inner 42)
     `);
 
@@ -105,7 +108,7 @@ describe("advanced macros", () => {
 
   test("detects when & is not followed by symbol", async () => {
     const result = await analyzeSource(`
-      (defmacro bad [&] \`nil)
+      (def bad (macro [&] \`nil))
     `);
 
     expect(result.ok).toBeFalse();
@@ -118,7 +121,7 @@ describe("advanced macros", () => {
 
   test("detects multiple & parameters", async () => {
     const result = await analyzeSource(`
-      (defmacro bad [& a & b] \`nil)
+      (def bad (macro [& a & b] \`nil))
     `);
 
     expect(result.ok).toBeFalse();
@@ -129,7 +132,7 @@ describe("advanced macros", () => {
 
   test("detects params after & rest", async () => {
     const result = await analyzeSource(`
-      (defmacro bad [& rest extra] \`nil)
+      (def bad (macro [& rest extra] \`nil))
     `);
 
     expect(result.ok).toBeFalse();

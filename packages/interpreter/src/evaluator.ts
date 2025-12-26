@@ -9,6 +9,7 @@ import type {
   Diagnostic,
   NamespaceImportNode,
   ReaderMacroNode,
+  SymbolNode,
 } from "@vibe/syntax";
 import { DiagnosticSeverity, NodeKind as NK } from "@vibe/syntax";
 import {
@@ -23,7 +24,7 @@ import {
   lookupVariable,
   defineVariable,
 } from "./environment";
-import type { Value } from "./values";
+import type { FunctionClauseValue, FunctionValue, Value } from "./values";
 import {
   isCallable,
   isFunction,
@@ -58,7 +59,10 @@ const EXTERNAL_MEMBER_SERIALIZATIONS: Record<string, string> = {
   ">": "_GT",
   "=": "_EQ",
   "/": "_SLASH",
+  "#": "_HASH",
 };
+
+type AutoGensymScope = Map<string, string>;
 
 const sanitizeExternalMemberName = (member: string): string => {
   let result = "";
@@ -72,6 +76,12 @@ const sanitizeExternalMemberName = (member: string): string => {
   }
   return result.length === 0 ? "_member" : result;
 };
+
+interface EvaluatorFnClause {
+  readonly paramsNode: ExpressionNode | null;
+  readonly bodyNodes: readonly ExpressionNode[];
+  readonly span: SourceSpan;
+}
 
 export interface EvalResult<T = Value> {
   readonly ok: boolean;
@@ -533,113 +543,173 @@ const evaluateDef = async (
 };
 
 const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
-  const paramsNode = node.elements[1];
+  const clauses = collectFnClauses(node);
+  const errorResult = (message: string, span: SourceSpan, code: string) => ({
+    ok: false,
+    diagnostics: [
+      {
+        message,
+        span,
+        severity: DiagnosticSeverity.Error,
+        code,
+      },
+    ],
+  });
 
-  if (!paramsNode || paramsNode.kind !== NK.Vector) {
-    return {
-      ok: false,
-      diagnostics: [
-        {
-          message: "fn requires a parameter vector",
-          span: node.span,
-          severity: DiagnosticSeverity.Error,
-          code: "INTERP_FN_REQUIRES_VECTOR",
-        },
-      ],
-    };
+  if (clauses.length === 0) {
+    return errorResult(
+      "fn requires a parameter vector",
+      node.span,
+      "INTERP_FN_REQUIRES_VECTOR"
+    );
   }
 
-  const params: string[] = [];
-  let restParam: string | undefined;
-  let sawRestMarker = false;
+  const functionClauses: FunctionClauseValue[] = [];
+  const seenFixedArities = new Set<number>();
+  let variadicClauseIndex: number | null = null;
 
-  for (let i = 0; i < paramsNode.elements.length; i++) {
-    const paramNode = paramsNode.elements[i];
-    if (!paramNode) {
-      continue;
-    }
-    if (paramNode.kind !== NK.Symbol) {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: "fn parameter must be a symbol",
-            span: paramNode.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_FN_PARAM_SYMBOL",
-          },
-        ],
-      };
+  for (let clauseIndex = 0; clauseIndex < clauses.length; clauseIndex += 1) {
+    const clause = clauses[clauseIndex]!;
+    const paramsNode = clause.paramsNode;
+    if (!paramsNode || paramsNode.kind !== NK.Vector) {
+      return errorResult(
+        "fn requires a parameter vector",
+        paramsNode?.span ?? clause.span,
+        "INTERP_FN_REQUIRES_VECTOR"
+      );
     }
 
-    if (paramNode.value === "&") {
+    const params: string[] = [];
+    let restParam: string | undefined;
+    let sawRestMarker = false;
+
+    for (let i = 0; i < paramsNode.elements.length; i += 1) {
+      const paramNode = paramsNode.elements[i];
+      if (!paramNode) {
+        continue;
+      }
+
+      if (paramNode.kind !== NK.Symbol) {
+        return errorResult(
+          "fn parameter must be a symbol",
+          paramNode.span,
+          "INTERP_FN_PARAM_SYMBOL"
+        );
+      }
+
+      if (paramNode.value === "&") {
+        if (sawRestMarker) {
+          return errorResult(
+            "fn allows only a single & rest parameter",
+            paramNode.span,
+            "INTERP_FN_DUPLICATE_REST"
+          );
+        }
+        sawRestMarker = true;
+        const restNode = paramsNode.elements[i + 1];
+        if (!restNode || restNode.kind !== NK.Symbol) {
+          return errorResult(
+            "& must be followed by a symbol name",
+            paramNode.span,
+            "INTERP_FN_REST_REQUIRES_SYMBOL"
+          );
+        }
+        restParam = restNode.value;
+        i += 1;
+        continue;
+      }
+
       if (sawRestMarker) {
-        return {
-          ok: false,
-          diagnostics: [
-            {
-              message: "fn allows only a single & rest parameter",
-              span: paramNode.span,
-              severity: DiagnosticSeverity.Error,
-              code: "INTERP_FN_DUPLICATE_REST",
-            },
-          ],
-        };
+        return errorResult(
+          "Parameters cannot appear after & rest parameter",
+          paramNode.span,
+          "INTERP_FN_PARAMS_AFTER_REST"
+        );
       }
-      sawRestMarker = true;
-      const restNode = paramsNode.elements[i + 1];
-      if (!restNode || restNode.kind !== NK.Symbol) {
-        return {
-          ok: false,
-          diagnostics: [
-            {
-              message: "& must be followed by a symbol name",
-              span: paramNode.span,
-              severity: DiagnosticSeverity.Error,
-              code: "INTERP_FN_REST_REQUIRES_SYMBOL",
-            },
-          ],
-        };
-      }
-      restParam = restNode.value;
-      i += 1;
-      continue;
+
+      params.push(paramNode.value);
     }
 
-    if (sawRestMarker) {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: "Parameters cannot appear after & rest parameter",
-            span: paramNode.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_FN_PARAMS_AFTER_REST",
-          },
-        ],
-      };
+    if (restParam) {
+      if (variadicClauseIndex !== null) {
+        return errorResult(
+          "fn allows only one variadic clause",
+          paramsNode.span,
+          "INTERP_FN_MULTIPLE_REST"
+        );
+      }
+      variadicClauseIndex = clauseIndex;
+      if (clauseIndex !== clauses.length - 1) {
+        return errorResult(
+          "Variadic fn clause must appear last",
+          paramsNode.span,
+          "INTERP_FN_REST_POSITION"
+        );
+      }
+    } else {
+      const arity = params.length;
+      if (seenFixedArities.has(arity)) {
+        return errorResult(
+          `Function already defines a clause for ${arity} argument(s)`,
+          paramsNode.span,
+          "INTERP_FN_DUPLICATE_ARITY"
+        );
+      }
+      seenFixedArities.add(arity);
     }
 
-    params.push(paramNode.value);
+    if (clause.bodyNodes.length === 0) {
+      return errorResult(
+        "fn requires a body",
+        clause.span,
+        "INTERP_FN_REQUIRES_BODY"
+      );
+    }
+
+    functionClauses.push({
+      params,
+      ...(restParam ? { rest: restParam } : {}),
+      body: clause.bodyNodes,
+    });
   }
 
-  const body = node.elements.slice(2);
-  if (body.length === 0) {
-    return {
-      ok: false,
-      diagnostics: [
-        {
-          message: "fn requires a body",
-          span: node.span,
-          severity: DiagnosticSeverity.Error,
-          code: "INTERP_FN_REQUIRES_BODY",
-        },
-      ],
-    };
-  }
-
-  const fn = makeFunction(params, body, env, node.span, restParam);
+  const fn = makeFunction(functionClauses, env, node.span);
   return { ok: true, value: fn, diagnostics: [] };
+};
+
+const collectFnClauses = (node: ListNode): EvaluatorFnClause[] => {
+  const paramsNode = node.elements[1];
+  if (paramsNode && paramsNode.kind === NK.Vector) {
+    return [
+      {
+        paramsNode,
+        bodyNodes: node.elements
+          .slice(2)
+          .filter((element): element is ExpressionNode => Boolean(element)),
+        span: node.span,
+      },
+    ];
+  }
+
+  const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+  if (tail.length === 0) {
+    return [];
+  }
+
+  const clauseLists = tail.filter(
+    (element): element is ListNode => element.kind === NK.List
+  );
+  if (clauseLists.length !== tail.length) {
+    return [];
+  }
+
+  return clauseLists.map((clause) => ({
+    paramsNode: clause.elements[0] ?? null,
+    bodyNodes: clause.elements
+      .slice(1)
+      .filter((element): element is ExpressionNode => Boolean(element)),
+    span: clause.span,
+  }));
 };
 
 const evaluateQuoteForm = (node: ListNode, env: Environment): EvalResult => {
@@ -775,13 +845,60 @@ const evaluateSyntaxQuote = async (
   if (!node.target) {
     return { ok: true, value: makeNil(), diagnostics: [] };
   }
-  return await instantiateSyntaxNode(node.target, env, context);
+  const gensyms: AutoGensymScope = new Map();
+  return await instantiateSyntaxNode(node.target, env, context, gensyms);
+};
+
+const isAutoGensymPlaceholder = (value: string): boolean => value.endsWith("#");
+
+const ensureGensymCounter = (context: EvalContext): { value: number } => {
+  if (!context.gensymCounter) {
+    context.gensymCounter = { value: 0 };
+  }
+  return context.gensymCounter;
+};
+
+const allocateRuntimeGensym = (hint: string, context: EvalContext): string => {
+  const counter = ensureGensymCounter(context);
+  const base = hint.length > 0 ? hint : "g";
+  const unique = `${base}__${counter.value++}`;
+  return unique;
+};
+
+const instantiateAutoGensymSymbol = (
+  node: SymbolNode,
+  gensyms: AutoGensymScope,
+  context: EvalContext
+): EvalResult<Value> => {
+  if (node.value.includes("/")) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: `Auto gensym placeholder ${node.value} cannot include a namespace`,
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SYNTAX_GENSYM_NAMESPACE",
+        },
+      ],
+    };
+  }
+
+  const key = node.value;
+  let replacement = gensyms.get(key);
+  if (!replacement) {
+    const hint = key.slice(0, -1);
+    replacement = allocateRuntimeGensym(hint, context);
+    gensyms.set(key, replacement);
+  }
+  return { ok: true, value: makeSymbol(replacement), diagnostics: [] };
 };
 
 const instantiateSyntaxNode = async (
   node: ExpressionNode,
   env: Environment,
-  context: EvalContext
+  context: EvalContext,
+  gensyms: AutoGensymScope
 ): Promise<EvalResult<Value>> => {
   switch (node.kind) {
     case NK.List:
@@ -789,6 +906,7 @@ const instantiateSyntaxNode = async (
         node.elements,
         env,
         context,
+        gensyms,
         "list",
         node.span
       );
@@ -797,6 +915,7 @@ const instantiateSyntaxNode = async (
         node.elements,
         env,
         context,
+        gensyms,
         "vector",
         node.span
       );
@@ -805,17 +924,23 @@ const instantiateSyntaxNode = async (
         node.elements,
         env,
         context,
+        gensyms,
         "set",
         node.span
       );
     case NK.Map:
-      return await instantiateSyntaxMap(node as MapNode, env, context);
+      return await instantiateSyntaxMap(node as MapNode, env, context, gensyms);
     case NK.SyntaxQuote: {
       const target = (node as ReaderMacroNode).target;
       if (!target) {
         return { ok: true, value: makeNil(), diagnostics: [] };
       }
-      return await instantiateSyntaxNode(target, env, context);
+      return await instantiateSyntaxNode(
+        target,
+        env,
+        context,
+        new Map<string, string>()
+      );
     }
     case NK.Unquote:
       return await evaluateUnquoteNode(
@@ -836,6 +961,15 @@ const instantiateSyntaxNode = async (
           },
         ],
       };
+    case NK.Symbol:
+      if (isAutoGensymPlaceholder(node.value)) {
+        return instantiateAutoGensymSymbol(
+          node as SymbolNode,
+          gensyms,
+          context
+        );
+      }
+      return evaluateQuote(node, env);
     default:
       return evaluateQuote(node, env);
   }
@@ -845,6 +979,7 @@ const instantiateSyntaxSequence = async (
   elements: readonly (ExpressionNode | null)[],
   env: Environment,
   context: EvalContext,
+  gensyms: AutoGensymScope,
   container: "list" | "vector" | "set",
   span: SourceSpan
 ): Promise<EvalResult<Value>> => {
@@ -879,7 +1014,7 @@ const instantiateSyntaxSequence = async (
       values.push(...(result.value ?? []));
       continue;
     }
-    const nested = await instantiateSyntaxNode(element, env, context);
+    const nested = await instantiateSyntaxNode(element, env, context, gensyms);
     if (!nested.ok) {
       return nested;
     }
@@ -913,14 +1048,20 @@ const instantiateSyntaxSequence = async (
 const instantiateSyntaxMap = async (
   node: MapNode,
   env: Environment,
-  context: EvalContext
+  context: EvalContext,
+  gensyms: AutoGensymScope
 ): Promise<EvalResult<Value>> => {
   const entries = new Map<string, Value>();
   for (const entry of node.entries) {
     if (!entry.key || !entry.value) {
       continue;
     }
-    const keyResult = await instantiateSyntaxNode(entry.key, env, context);
+    const keyResult = await instantiateSyntaxNode(
+      entry.key,
+      env,
+      context,
+      gensyms
+    );
     if (!keyResult.ok) {
       return keyResult;
     }
@@ -938,7 +1079,12 @@ const instantiateSyntaxMap = async (
         ],
       };
     }
-    const valueResult = await instantiateSyntaxNode(entry.value, env, context);
+    const valueResult = await instantiateSyntaxNode(
+      entry.value,
+      env,
+      context,
+      gensyms
+    );
     if (!valueResult.ok) {
       return valueResult;
     }
@@ -1163,16 +1309,18 @@ const applyFunction = async (
   }
 
   if (isFunction(fn)) {
-    // Check arity
-    const minArity = fn.params.length;
-    const isVariadic = fn.rest !== undefined;
-
-    if (!isVariadic && args.length !== minArity) {
+    const clause = selectFunctionClause(fn, args.length);
+    if (!clause) {
+      const available = fn.clauses
+        .map((c) => (c.rest ? `${c.params.length}+` : `${c.params.length}`))
+        .join(", ");
+      const signatureInfo =
+        available.length > 0 ? ` (available: ${available})` : "";
       return {
         ok: false,
         diagnostics: [
           {
-            message: `Function expects ${minArity} argument(s) but received ${args.length}`,
+            message: `Function cannot accept ${args.length} argument(s)${signatureInfo}`,
             span,
             severity: DiagnosticSeverity.Error,
             code: "INTERP_ARITY_MISMATCH",
@@ -1181,42 +1329,22 @@ const applyFunction = async (
       };
     }
 
-    if (isVariadic && args.length < minArity) {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: `Function expects at least ${minArity} argument(s) but received ${args.length}`,
-            span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_ARITY_MISMATCH",
-          },
-        ],
-      };
-    }
-
-    // Create new environment extending the function's closure
     const fnEnv = extendEnvironment(fn.closure);
-
-    // Bind parameters
-    fn.params.forEach((param, index) => {
+    clause.params.forEach((param, index) => {
       defineVariable(fnEnv, param, args[index]!);
     });
-
-    // Bind rest parameter if present
-    if (fn.rest) {
-      const restArgs = args.slice(fn.params.length);
-      defineVariable(fnEnv, fn.rest, makeList(restArgs));
+    if (clause.rest) {
+      const restArgs = args.slice(clause.params.length);
+      defineVariable(fnEnv, clause.rest, makeList(restArgs));
     }
 
-    // Evaluate body
     const newContext: EvalContext = { callDepth: context.callDepth + 1 };
     let lastResult: EvalResult = {
       ok: true,
       value: makeNil(),
       diagnostics: [],
     };
-    for (const expr of fn.body) {
+    for (const expr of clause.body) {
       lastResult = await evaluate(expr, fnEnv, newContext);
       if (!lastResult.ok) {
         return lastResult;
@@ -1237,6 +1365,26 @@ const applyFunction = async (
       },
     ],
   };
+};
+
+const selectFunctionClause = (
+  fn: FunctionValue,
+  argCount: number
+): FunctionClauseValue | null => {
+  let variadicClause: FunctionClauseValue | null = null;
+  for (const clause of fn.clauses) {
+    if (clause.rest) {
+      variadicClause = clause;
+      continue;
+    }
+    if (clause.params.length === argCount) {
+      return clause;
+    }
+  }
+  if (variadicClause && argCount >= variadicClause.params.length) {
+    return variadicClause;
+  }
+  return null;
 };
 
 /**
@@ -1497,11 +1645,6 @@ const evaluateGensym = (
   env: Environment,
   context: EvalContext
 ): EvalResult => {
-  // Initialize gensym counter if not present
-  if (!context.gensymCounter) {
-    context.gensymCounter = { value: 0 };
-  }
-
   // Optional hint argument
   const hintNode = node.elements[1];
   let hint = "g";
@@ -1523,7 +1666,7 @@ const evaluateGensym = (
     hint = hintNode.value;
   }
 
-  const unique = `${hint}__${context.gensymCounter.value++}`;
+  const unique = allocateRuntimeGensym(hint, context);
   return { ok: true, value: makeSymbol(unique), diagnostics: [] };
 };
 

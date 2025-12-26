@@ -4,8 +4,9 @@
 
 (def favorite-number 42)
 
-(defmacro a [x]
-  `(println ~x))
+(def a
+  (macro [x]
+    `(println ~x)))
 
 (def greet (fn [name]
   (a name)
@@ -17,4 +18,4 @@
 (println "Path separator:" path/sep)
 (println "Joined path:" (path/join "/tmp" "example"))
 (greet "Node")
-(and true false)
+(and true false 10)

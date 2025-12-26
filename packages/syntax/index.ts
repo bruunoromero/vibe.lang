@@ -110,7 +110,7 @@ export enum NodeKind {
 export const BUILTIN_SYMBOLS = [
   // Special forms (required even without user-provided definitions)
   "def",
-  "defmacro",
+  "macro",
   "let",
   "fn",
   "if",

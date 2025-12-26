@@ -906,13 +906,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
       "elements": [
         {
           "kind": "symbol",
-          "lexeme": "defmacro",
+          "lexeme": "def",
           "scopeId": "scope_0",
           "span": {
             "end": {
-              "column": 15,
+              "column": 10,
               "line": 1,
-              "offset": 16,
+              "offset": 11,
             },
             "start": {
               "column": 7,
@@ -920,7 +920,7 @@ exports[`parser snapshots macro declaration and usage 1`] = `
               "offset": 8,
             },
           },
-          "value": "defmacro",
+          "value": "def",
         },
         {
           "kind": "symbol",
@@ -928,14 +928,14 @@ exports[`parser snapshots macro declaration and usage 1`] = `
           "scopeId": "scope_0",
           "span": {
             "end": {
-              "column": 25,
+              "column": 20,
               "line": 1,
-              "offset": 26,
+              "offset": 21,
             },
             "start": {
-              "column": 16,
+              "column": 11,
               "line": 1,
-              "offset": 17,
+              "offset": 12,
             },
           },
           "value": "with-temp",
@@ -944,162 +944,216 @@ exports[`parser snapshots macro declaration and usage 1`] = `
           "elements": [
             {
               "kind": "symbol",
-              "lexeme": "expr",
+              "lexeme": "macro",
               "scopeId": "scope_0",
               "span": {
                 "end": {
-                  "column": 31,
-                  "line": 1,
-                  "offset": 32,
+                  "column": 14,
+                  "line": 2,
+                  "offset": 36,
                 },
                 "start": {
-                  "column": 27,
-                  "line": 1,
-                  "offset": 28,
+                  "column": 9,
+                  "line": 2,
+                  "offset": 31,
                 },
               },
-              "value": "expr",
+              "value": "macro",
             },
-          ],
-          "kind": "vector",
-          "scopeId": "scope_0",
-          "span": {
-            "end": {
-              "column": 32,
-              "line": 1,
-              "offset": 33,
-            },
-            "start": {
-              "column": 26,
-              "line": 1,
-              "offset": 27,
-            },
-          },
-        },
-        {
-          "kind": "syntax_quote",
-          "scopeId": "scope_0",
-          "span": {
-            "end": {
-              "column": 15,
-              "line": 4,
-              "offset": 100,
-            },
-            "start": {
-              "column": 8,
-              "line": 2,
-              "offset": 42,
-            },
-          },
-          "target": {
-            "elements": [
-              {
-                "kind": "symbol",
-                "lexeme": "let",
-                "scopeId": "scope_0",
-                "span": {
-                  "end": {
-                    "column": 13,
-                    "line": 2,
-                    "offset": 47,
+            {
+              "elements": [
+                {
+                  "kind": "symbol",
+                  "lexeme": "expr",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 20,
+                      "line": 2,
+                      "offset": 42,
+                    },
+                    "start": {
+                      "column": 16,
+                      "line": 2,
+                      "offset": 38,
+                    },
                   },
-                  "start": {
-                    "column": 10,
-                    "line": 2,
-                    "offset": 44,
-                  },
+                  "value": "expr",
                 },
-                "value": "let",
+              ],
+              "kind": "vector",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 21,
+                  "line": 2,
+                  "offset": 43,
+                },
+                "start": {
+                  "column": 15,
+                  "line": 2,
+                  "offset": 37,
+                },
               },
-              {
+            },
+            {
+              "kind": "syntax_quote",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 17,
+                  "line": 5,
+                  "offset": 116,
+                },
+                "start": {
+                  "column": 10,
+                  "line": 3,
+                  "offset": 54,
+                },
+              },
+              "target": {
                 "elements": [
                   {
                     "kind": "symbol",
-                    "lexeme": "tmp",
-                    "scopeId": "scope_1",
+                    "lexeme": "let",
+                    "scopeId": "scope_0",
                     "span": {
                       "end": {
-                        "column": 18,
-                        "line": 2,
-                        "offset": 52,
-                      },
-                      "start": {
                         "column": 15,
-                        "line": 2,
-                        "offset": 49,
-                      },
-                    },
-                    "value": "tmp",
-                  },
-                  {
-                    "kind": "unquote",
-                    "scopeId": "scope_1",
-                    "span": {
-                      "end": {
-                        "column": 24,
-                        "line": 2,
-                        "offset": 58,
-                      },
-                      "start": {
-                        "column": 19,
-                        "line": 2,
-                        "offset": 53,
-                      },
-                    },
-                    "target": {
-                      "kind": "symbol",
-                      "lexeme": "expr",
-                      "scopeId": "scope_1",
-                      "span": {
-                        "end": {
-                          "column": 24,
-                          "line": 2,
-                          "offset": 58,
-                        },
-                        "start": {
-                          "column": 20,
-                          "line": 2,
-                          "offset": 54,
-                        },
-                      },
-                      "value": "expr",
-                    },
-                  },
-                ],
-                "kind": "vector",
-                "scopeId": "scope_0",
-                "span": {
-                  "end": {
-                    "column": 25,
-                    "line": 2,
-                    "offset": 59,
-                  },
-                  "start": {
-                    "column": 14,
-                    "line": 2,
-                    "offset": 48,
-                  },
-                },
-              },
-              {
-                "elements": [
-                  {
-                    "kind": "symbol",
-                    "lexeme": "println",
-                    "scopeId": "scope_1",
-                    "span": {
-                      "end": {
-                        "column": 19,
                         "line": 3,
-                        "offset": 79,
+                        "offset": 59,
                       },
                       "start": {
                         "column": 12,
                         "line": 3,
-                        "offset": 72,
+                        "offset": 56,
                       },
                     },
-                    "value": "println",
+                    "value": "let",
+                  },
+                  {
+                    "elements": [
+                      {
+                        "kind": "symbol",
+                        "lexeme": "tmp",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 20,
+                            "line": 3,
+                            "offset": 64,
+                          },
+                          "start": {
+                            "column": 17,
+                            "line": 3,
+                            "offset": 61,
+                          },
+                        },
+                        "value": "tmp",
+                      },
+                      {
+                        "kind": "unquote",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 26,
+                            "line": 3,
+                            "offset": 70,
+                          },
+                          "start": {
+                            "column": 21,
+                            "line": 3,
+                            "offset": 65,
+                          },
+                        },
+                        "target": {
+                          "kind": "symbol",
+                          "lexeme": "expr",
+                          "scopeId": "scope_1",
+                          "span": {
+                            "end": {
+                              "column": 26,
+                              "line": 3,
+                              "offset": 70,
+                            },
+                            "start": {
+                              "column": 22,
+                              "line": 3,
+                              "offset": 66,
+                            },
+                          },
+                          "value": "expr",
+                        },
+                      },
+                    ],
+                    "kind": "vector",
+                    "scopeId": "scope_0",
+                    "span": {
+                      "end": {
+                        "column": 27,
+                        "line": 3,
+                        "offset": 71,
+                      },
+                      "start": {
+                        "column": 16,
+                        "line": 3,
+                        "offset": 60,
+                      },
+                    },
+                  },
+                  {
+                    "elements": [
+                      {
+                        "kind": "symbol",
+                        "lexeme": "println",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 21,
+                            "line": 4,
+                            "offset": 93,
+                          },
+                          "start": {
+                            "column": 14,
+                            "line": 4,
+                            "offset": 86,
+                          },
+                        },
+                        "value": "println",
+                      },
+                      {
+                        "kind": "symbol",
+                        "lexeme": "tmp",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 25,
+                            "line": 4,
+                            "offset": 97,
+                          },
+                          "start": {
+                            "column": 22,
+                            "line": 4,
+                            "offset": 94,
+                          },
+                        },
+                        "value": "tmp",
+                      },
+                    ],
+                    "kind": "list",
+                    "scopeId": "scope_1",
+                    "span": {
+                      "end": {
+                        "column": 26,
+                        "line": 4,
+                        "offset": 98,
+                      },
+                      "start": {
+                        "column": 13,
+                        "line": 4,
+                        "offset": 85,
+                      },
+                    },
                   },
                   {
                     "kind": "symbol",
@@ -1107,66 +1161,48 @@ exports[`parser snapshots macro declaration and usage 1`] = `
                     "scopeId": "scope_1",
                     "span": {
                       "end": {
-                        "column": 23,
-                        "line": 3,
-                        "offset": 83,
+                        "column": 16,
+                        "line": 5,
+                        "offset": 115,
                       },
                       "start": {
-                        "column": 20,
-                        "line": 3,
-                        "offset": 80,
+                        "column": 13,
+                        "line": 5,
+                        "offset": 112,
                       },
                     },
                     "value": "tmp",
                   },
                 ],
                 "kind": "list",
-                "scopeId": "scope_1",
+                "scopeId": "scope_0",
                 "span": {
                   "end": {
-                    "column": 24,
-                    "line": 3,
-                    "offset": 84,
+                    "column": 17,
+                    "line": 5,
+                    "offset": 116,
                   },
                   "start": {
                     "column": 11,
                     "line": 3,
-                    "offset": 71,
+                    "offset": 55,
                   },
                 },
               },
-              {
-                "kind": "symbol",
-                "lexeme": "tmp",
-                "scopeId": "scope_1",
-                "span": {
-                  "end": {
-                    "column": 14,
-                    "line": 4,
-                    "offset": 99,
-                  },
-                  "start": {
-                    "column": 11,
-                    "line": 4,
-                    "offset": 96,
-                  },
-                },
-                "value": "tmp",
-              },
-            ],
-            "kind": "list",
-            "scopeId": "scope_0",
-            "span": {
-              "end": {
-                "column": 15,
-                "line": 4,
-                "offset": 100,
-              },
-              "start": {
-                "column": 9,
-                "line": 2,
-                "offset": 43,
-              },
+            },
+          ],
+          "kind": "list",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 18,
+              "line": 5,
+              "offset": 117,
+            },
+            "start": {
+              "column": 8,
+              "line": 2,
+              "offset": 30,
             },
           },
         },
@@ -1175,9 +1211,9 @@ exports[`parser snapshots macro declaration and usage 1`] = `
       "scopeId": "scope_0",
       "span": {
         "end": {
-          "column": 16,
-          "line": 4,
-          "offset": 101,
+          "column": 19,
+          "line": 5,
+          "offset": 118,
         },
         "start": {
           "column": 6,
@@ -1195,13 +1231,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
           "span": {
             "end": {
               "column": 10,
-              "line": 6,
-              "offset": 113,
+              "line": 7,
+              "offset": 130,
             },
             "start": {
               "column": 7,
-              "line": 6,
-              "offset": 110,
+              "line": 7,
+              "offset": 127,
             },
           },
           "value": "def",
@@ -1213,13 +1249,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
           "span": {
             "end": {
               "column": 17,
-              "line": 6,
-              "offset": 120,
+              "line": 7,
+              "offset": 137,
             },
             "start": {
               "column": 11,
-              "line": 6,
-              "offset": 114,
+              "line": 7,
+              "offset": 131,
             },
           },
           "value": "answer",
@@ -1233,13 +1269,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
               "span": {
                 "end": {
                   "column": 28,
-                  "line": 6,
-                  "offset": 131,
+                  "line": 7,
+                  "offset": 148,
                 },
                 "start": {
                   "column": 19,
-                  "line": 6,
-                  "offset": 122,
+                  "line": 7,
+                  "offset": 139,
                 },
               },
               "value": "with-temp",
@@ -1253,13 +1289,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
                   "span": {
                     "end": {
                       "column": 31,
-                      "line": 6,
-                      "offset": 134,
+                      "line": 7,
+                      "offset": 151,
                     },
                     "start": {
                       "column": 30,
-                      "line": 6,
-                      "offset": 133,
+                      "line": 7,
+                      "offset": 150,
                     },
                   },
                   "value": "+",
@@ -1271,13 +1307,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
                   "span": {
                     "end": {
                       "column": 33,
-                      "line": 6,
-                      "offset": 136,
+                      "line": 7,
+                      "offset": 153,
                     },
                     "start": {
                       "column": 32,
-                      "line": 6,
-                      "offset": 135,
+                      "line": 7,
+                      "offset": 152,
                     },
                   },
                   "value": 1,
@@ -1289,13 +1325,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
                   "span": {
                     "end": {
                       "column": 35,
-                      "line": 6,
-                      "offset": 138,
+                      "line": 7,
+                      "offset": 155,
                     },
                     "start": {
                       "column": 34,
-                      "line": 6,
-                      "offset": 137,
+                      "line": 7,
+                      "offset": 154,
                     },
                   },
                   "value": 2,
@@ -1306,13 +1342,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
               "span": {
                 "end": {
                   "column": 36,
-                  "line": 6,
-                  "offset": 139,
+                  "line": 7,
+                  "offset": 156,
                 },
                 "start": {
                   "column": 29,
-                  "line": 6,
-                  "offset": 132,
+                  "line": 7,
+                  "offset": 149,
                 },
               },
             },
@@ -1322,13 +1358,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
           "span": {
             "end": {
               "column": 37,
-              "line": 6,
-              "offset": 140,
+              "line": 7,
+              "offset": 157,
             },
             "start": {
               "column": 18,
-              "line": 6,
-              "offset": 121,
+              "line": 7,
+              "offset": 138,
             },
           },
         },
@@ -1338,13 +1374,13 @@ exports[`parser snapshots macro declaration and usage 1`] = `
       "span": {
         "end": {
           "column": 38,
-          "line": 6,
-          "offset": 141,
+          "line": 7,
+          "offset": 158,
         },
         "start": {
           "column": 6,
-          "line": 6,
-          "offset": 109,
+          "line": 7,
+          "offset": 126,
         },
       },
     },
@@ -1354,8 +1390,8 @@ exports[`parser snapshots macro declaration and usage 1`] = `
   "span": {
     "end": {
       "column": 38,
-      "line": 6,
-      "offset": 141,
+      "line": 7,
+      "offset": 158,
     },
     "start": {
       "column": 6,

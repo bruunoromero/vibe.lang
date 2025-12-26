@@ -422,7 +422,7 @@ class ModuleEmitter {
         }
         continue;
       }
-      if (this.isTopLevelDefMacro(expr)) {
+      if (this.isMacroDefinition(expr)) {
         // Macros are compile-time only and should not emit runtime code.
         continue;
       }
@@ -633,6 +633,9 @@ class ModuleEmitter {
       if (!nameNode || nameNode.kind !== NodeKind.Symbol || !initNode) {
         continue;
       }
+      if (this.isMacroBinding(nameNode)) {
+        continue;
+      }
       const identifier = this.resolveBindingIdentifier(nameNode);
       const initExpr = this.emitExpression(initNode);
       declarations.push(`const ${identifier} = ${initExpr};`);
@@ -646,16 +649,120 @@ class ModuleEmitter {
   }
 
   private emitFn(node: ListNode): string {
+    const clauses = this.collectFnClauses(node);
+    if (clauses.length === 0) {
+      throw new Error("fn requires at least one clause");
+    }
+    if (clauses.length === 1) {
+      const clause = clauses[0]!;
+      return this.emitFnClause(clause.paramsNode, clause.bodyNodes);
+    }
+    return this.emitMultiClauseFn(clauses);
+  }
+
+  private collectFnClauses(node: ListNode): readonly FnClauseEmitDescriptor[] {
     const paramsNode = node.elements[1];
-    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
-      throw new Error("fn requires a vector of parameter symbols");
+    if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+      return [
+        {
+          paramsNode,
+          bodyNodes: node.elements
+            .slice(2)
+            .filter((element): element is ExpressionNode => Boolean(element)),
+        },
+      ];
     }
 
+    const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    if (tail.length === 0) {
+      return [];
+    }
+
+    const clauseLists = tail.filter(
+      (element): element is ListNode => element.kind === NodeKind.List
+    );
+    if (clauseLists.length !== tail.length) {
+      throw new Error("fn clauses must be provided as list literals");
+    }
+
+    return clauseLists.map((clause) => {
+      const clauseParams = clause.elements[0];
+      if (!clauseParams || clauseParams.kind !== NodeKind.Vector) {
+        throw new Error("fn clause requires a parameter vector");
+      }
+      return {
+        paramsNode: clauseParams,
+        bodyNodes: clause.elements
+          .slice(1)
+          .filter((element): element is ExpressionNode => Boolean(element)),
+      } satisfies FnClauseEmitDescriptor;
+    });
+  }
+
+  private emitFnClause(
+    paramsNode: VectorNode,
+    bodyNodes: readonly ExpressionNode[]
+  ): string {
+    const { params, restParam } = this.parseFnParameters(paramsNode);
+    return this.buildArrowFunction(params, restParam, bodyNodes);
+  }
+
+  private emitMultiClauseFn(
+    clauses: readonly FnClauseEmitDescriptor[]
+  ): string {
+    const argsIdent = "__args";
+    const dispatchLines: string[] = [`const __arity = ${argsIdent}.length;`];
+    let variadicClause: {
+      readonly arity: number;
+      readonly expression: string;
+    } | null = null;
+
+    for (const clause of clauses) {
+      const { params, restParam } = this.parseFnParameters(clause.paramsNode);
+      const clauseExpr = `(${this.buildArrowFunction(
+        params,
+        restParam,
+        clause.bodyNodes
+      )})`;
+      if (restParam) {
+        variadicClause = {
+          arity: params.length,
+          expression: clauseExpr,
+        };
+        continue;
+      }
+      dispatchLines.push(
+        `if (__arity === ${params.length}) {`,
+        `  return ${clauseExpr}(...${argsIdent});`,
+        `}`
+      );
+    }
+
+    if (variadicClause) {
+      dispatchLines.push(
+        `if (__arity >= ${variadicClause.arity}) {`,
+        `  return ${variadicClause.expression}(...${argsIdent});`,
+        `}`
+      );
+    }
+
+    dispatchLines.push('throw new Error("Arity mismatch in fn call");');
+
+    const dispatchBlock = this.indentBlock(dispatchLines);
+    return `((...${argsIdent}) => {
+${dispatchBlock}
+})`;
+  }
+
+  private parseFnParameters(paramsNode: VectorNode): {
+    params: string[];
+    restParam?: string;
+  } {
     const params: string[] = [];
-    let restParam: string | undefined = undefined;
+    let restParam: string | undefined;
     let sawAmpersand = false;
 
-    for (let i = 0; i < paramsNode.elements.length; i++) {
+    for (let i = 0; i < paramsNode.elements.length; i += 1) {
       const param = paramsNode.elements[i];
       if (!param || param.kind !== NodeKind.Symbol) {
         continue;
@@ -666,22 +773,30 @@ class ModuleEmitter {
         const nextParam = paramsNode.elements[i + 1];
         if (nextParam && nextParam.kind === NodeKind.Symbol) {
           restParam = this.resolveBindingIdentifier(nextParam);
-          i++; // Skip the next parameter
+          i += 1;
         }
         continue;
       }
 
-      if (!sawAmpersand) {
-        params.push(this.resolveBindingIdentifier(param));
+      if (sawAmpersand) {
+        continue;
       }
+
+      params.push(this.resolveBindingIdentifier(param));
     }
 
+    return { params, restParam };
+  }
+
+  private buildArrowFunction(
+    params: readonly string[],
+    restParam: string | undefined,
+    bodyNodes: readonly ExpressionNode[]
+  ): string {
     const paramList = restParam
       ? [...params, `...${restParam}`].join(", ")
       : params.join(", ");
-
-    const body = node.elements.slice(2).filter(Boolean) as ExpressionNode[];
-    const bodyBlock = this.emitFunctionBody(body);
+    const bodyBlock = this.emitFunctionBody(bodyNodes);
     return `(${paramList}) => {
 ${bodyBlock}
 }`;
@@ -783,14 +898,25 @@ ${bodyBlock}
     );
   }
 
-  private isTopLevelDefMacro(node: ExpressionNode): node is ListNode {
+  private isMacroDefinition(node: ExpressionNode): node is ListNode {
     if (node.kind !== NodeKind.List) {
       return false;
     }
     const head = node.elements[0];
-    return Boolean(
-      head && head.kind === NodeKind.Symbol && head.value === "defmacro"
-    );
+    if (!head || head.kind !== NodeKind.Symbol || head.value !== "def") {
+      return false;
+    }
+    return this.isMacroBinding(node.elements[1]);
+  }
+
+  private isMacroBinding(
+    node: ExpressionNode | null | undefined
+  ): node is SymbolNode {
+    if (!node || node.kind !== NodeKind.Symbol) {
+      return false;
+    }
+    const record = this.semanticLookup.getSymbolRecord(node);
+    return record?.kind === "macro";
   }
 
   private fallbackIdentifier(name: string): string {
@@ -832,7 +958,15 @@ class SemanticLookup {
   constructor(graph: SemanticGraph) {
     this.entryScopeId = graph.scopes[0]?.id ?? null;
     for (const node of graph.nodes) {
-      this.nodeIndex.set(this.keyFor(node.scopeId, node.kind, node.span), node);
+      this.nodeIndex.set(
+        this.keyFor(
+          node.scopeId,
+          node.kind,
+          node.span,
+          node.symbol?.name ?? null
+        ),
+        node
+      );
     }
     for (const symbol of graph.symbols) {
       this.symbolIndex.set(symbol.id, symbol);
@@ -854,18 +988,22 @@ class SemanticLookup {
     scopeId?: ScopeId;
   }): SemanticNodeRecord | null {
     const scopeId = node.scopeId ?? this.entryScopeId ?? null;
-    const key = this.keyFor(scopeId, node.kind, node.span);
+    const symbolName =
+      node.kind === NodeKind.Symbol ? (node as SymbolNode).value : null;
+    const key = this.keyFor(scopeId, node.kind, node.span, symbolName);
     return this.nodeIndex.get(key) ?? null;
   }
 
   private keyFor(
     scopeId: ScopeId | null,
     kind: NodeKind,
-    span: SourceSpan
+    span: SourceSpan,
+    name: string | null
   ): string {
+    const namePart = name ?? "";
     return `${scopeId ?? "root"}:${kind}:${span.start.offset}:${
       span.end.offset
-    }`;
+    }:${namePart}`;
   }
 }
 
@@ -875,6 +1013,11 @@ interface MappingSegment {
   readonly sourceIndex: number;
   readonly originalLine: number;
   readonly originalColumn: number;
+}
+
+interface FnClauseEmitDescriptor {
+  readonly paramsNode: VectorNode;
+  readonly bodyNodes: readonly ExpressionNode[];
 }
 
 class SourceMapBuilder {

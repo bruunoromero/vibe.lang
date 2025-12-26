@@ -3,7 +3,7 @@
 ## 1. Semantic Analysis
 
 - [x] Build the `@vibe/semantics` resolver + macro expander: construct symbol tables, assign hygiene tags, and run expansion passes.
-  - Implemented `defmacro` registration, syntax-quote templating, `~`/`~@` substitution, simple `gensym` support, and expansion-at-callsite in `packages/semantics/src/analyzer.ts`.
+  - Implemented `macro` literal registration (bound via `def`), syntax-quote templating, `~`/`~@` substitution, simple `gensym` support, and expansion-at-callsite in `packages/semantics/src/analyzer.ts`.
   - Added tests in `packages/semantics/tests/analyze.test.ts` covering expansion, introduced bindings, and recursion diagnostics.
 - [x] Define the IR contract (scope graph, symbols, nodes) in an ADR and expose `analyze(program, options)` that returns `{ graph, diagnostics }`. **(Completed)** — ADR-002 now documents the semantic graph schema, invariants, and sample payload shape.
 - [x] Expand tests in `packages/semantics/tests` to cover shadowing, gensyms, macro recursion, unresolved identifiers, and span-accurate failures. **(Completed)** — new cases in `packages/semantics/tests/analyze.test.ts` exercise shadowed bindings, gensym-generated symbols, and diagnostic span accuracy.
