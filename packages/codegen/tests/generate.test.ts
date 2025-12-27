@@ -152,6 +152,18 @@ describe("generateModule", () => {
     expect(result.sourceMap.sources[0]).toBe("repl.lang");
   });
 
+  test("defp emits private const bindings", async () => {
+    const fixture = "(defp hidden 7) (def shown 8) shown";
+    const { result, runtime } = await runProgram(fixture, {
+      sourceName: "private.lang",
+    });
+
+    expect(result.moduleText).toContain("const hidden = 7");
+    expect(result.moduleText).not.toContain("export const hidden");
+    expect(runtime.hidden).toBeUndefined();
+    expect(runtime.shown).toBe(8);
+  });
+
   test("preserves sanitized export names", async () => {
     const fixture = "(def foo-bar 2)";
     const { result, runtime } = await runProgram(fixture, {
@@ -198,12 +210,45 @@ describe("generateModule", () => {
     const { runtime } = await runProgram(fixture);
     expect(runtime.result).toBeInstanceOf(Map);
     const record = runtime.result as Map<string, unknown>;
-    expect(Array.isArray(record.get("nums"))).toBeTrue();
-    const unique = record.get("unique");
+    expect(Array.isArray(record.get(":nums"))).toBeTrue();
+    const unique = record.get(":unique");
     expect(unique).toBeInstanceOf(Set);
     expect((unique as Set<number>).has(5)).toBeTrue();
-    expect(record.get("echo")).toBe(5);
+    expect(record.get(":echo")).toBe(5);
     expect(typeof runtime.builder).toBe("function");
+  });
+
+  test("emits destructuring for let bindings and function parameters", async () => {
+    const fixture = withRuntimePrelude(
+      `
+      (def describe
+        (fn [[x y & tail :as original]
+             {:keys [bonus extra] :or {bonus (runtime/add* x y) extra 5} :as opts}]
+          {:original original
+           :tail tail
+           :bonus bonus
+           :extra extra
+           :opts opts}))
+
+      (def output
+        (let [[a b & rest :as raw] [10 20 30 40]
+              {:keys [note] :or {note (runtime/add* a 1)}} {}]
+          (describe raw {:bonus note})))
+
+      output
+    `.trim()
+    );
+
+    const { runtime } = await runProgram(fixture);
+    expect(runtime.output).toBeInstanceOf(Map);
+    const record = runtime.output as Map<string, unknown>;
+    expect(record.get(":original")).toEqual([10, 20, 30, 40]);
+    expect(record.get(":tail")).toEqual([30, 40]);
+    expect(record.get(":bonus")).toBe(11);
+    expect(record.get(":extra")).toBe(5);
+    expect(record.get(":opts")).toBeInstanceOf(Map);
+    const opts = record.get(":opts") as Map<string, unknown>;
+    expect(opts.get(":bonus")).toBe(11);
   });
 
   test("skips macro bindings inside let expressions", async () => {

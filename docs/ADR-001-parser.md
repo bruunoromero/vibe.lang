@@ -5,7 +5,7 @@
 
 ## Context
 
-We have a working lexer that produces rich token streams, but there is no parser or AST schema to move toward semantic analysis or code generation. The language targets a Lisp-like syntax similar to Clojure, meaning the parser must understand lists, vectors, maps, sets, reader macros (quote, syntax-quote, unquote, unquote-splicing, deref), and generic dispatch forms. Downstream stages will require immutable AST nodes with precise source spans, all centralized within `@vibe/syntax`.
+We have a working lexer that produces rich token streams, but there is no parser or AST schema to move toward semantic analysis or code generation. The language targets a Lisp-like syntax similar to Clojure, meaning the parser must understand lists, vectors, maps, sets, reader macros (quote, syntax-quote, unquote, unquote-splicing), and generic dispatch forms. Downstream stages will require immutable AST nodes with precise source spans, all centralized within `@vibe/syntax`.
 
 ## Decision
 
@@ -32,6 +32,10 @@ We have a working lexer that produces rich token streams, but there is no parser
 ### Implementation Status (2025-12-22)
 
 - **Completed**: We implemented implicit file-level modules where every top-level `def` is considered exported. Changes were made across parser, semantics, codegen, runtime, and CLI to support namespace imports, module export recording, and named ES exports only. Tests and example builds (`packages/example-app`) were updated and the full test suite passes.
+
+### Update – Deref Reader Removal (2025-12-27)
+
+- Removed the `@form` reader macro from the surface grammar. Dereferencing can be reintroduced later as a regular function (`(deref form)`) without requiring a dedicated reader. This keeps the reader set lean (quote, syntax-quote, unquote, unquote-splicing) and simplifies the lexer/parser pipeline.
 
 ## Consequences
 

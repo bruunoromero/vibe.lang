@@ -1,5 +1,20 @@
 # @vibe/codegen Changelog
 
+## 2025-12-30
+
+- Top-level emission now distinguishes between `def` and `defp`. Public defs still emit `export const` declarations while private defs emit unexported `const` bindings, keeping generated modules aligned with the new visibility semantics.
+- Macro filtering inspects both `def` and `defp` heads so private macros remain compile-time only. A new regression test in `packages/codegen/tests/generate.test.ts` verifies that `defp` bindings never appear in the compiled module exports.
+
+## 2025-12-29
+
+- **Destructuring emission** — `let` bindings and function parameters now run through the shared binding-pattern parser before code generation. Vector patterns emit deterministic destructuring helpers (including nested patterns, `& rest`, and `:as` aliases) while map patterns expand explicit keys plus the `:keys`/`:strs`/`:syms` shorthands with inline default expressions. Generated modules now mirror the interpreter’s runtime binding semantics, and new tests in `packages/codegen/tests/generate.test.ts` exercise end-to-end destructuring.
+
+## 2025-12-28
+
+- **Code generation for try/catch/finally** — Added `emitTry` and `emitThrow` methods that lower try forms to JavaScript try/catch/finally blocks wrapped in IIFEs to preserve value semantics. The catch binding is resolved from the semantic graph and sanitized to a valid JavaScript identifier.
+- **Throw error coercion** — Emitted throw statements validate that the error value is an instance of `Error`, falling back to `new Error(String(...))` for non-error values. This matches the runtime coercion behavior.
+- **Try/catch/finally partitioning** — Added `partitionTryForm()` helper (matching interpreter and semantics logic) to consistently extract body, catch, and finally clause nodes from the try list structure across all compilation stages.
+
 ## 2025-12-26
 
 - Top-level macro skipping now keys off `(def name (macro ...))` instead of the removed `defmacro` head. The emitter inspects `def` forms for macro literals and omits them from generated JavaScript so compile-time declarations never leak into runtime output regardless of the surface syntax.

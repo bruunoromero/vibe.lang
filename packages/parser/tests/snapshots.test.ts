@@ -12,7 +12,7 @@ const snapshotCases = [
   },
   {
     name: "dispatch variants inside collection",
-    source: "'[ #(println %1) #{:alpha :beta} #(+ 1 @state) ]",
+    source: "'[ #(println %1) #{:alpha :beta} #(+ 1 state) ]",
   },
   {
     name: "macro declaration and usage",

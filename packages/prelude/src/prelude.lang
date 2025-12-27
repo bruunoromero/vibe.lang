@@ -5,49 +5,89 @@
 (external runtime "@vibe/runtime")
 
 ;; ============================================================
-;; Core Sequence Helpers
+;; Definition Helpers
 ;; ============================================================
 
-(def reduce (fn [f init coll]
-  (if (runtime/eq* (runtime/count coll) 0)
-    init
-    (reduce f (f init (runtime/first coll)) (runtime/rest coll)))))
+(def defmacro
+  (macro
+    ([name & clauses]
+      `(def ~name
+         (macro ~@clauses)))))
+
+(defmacro defmacrop
+  ([name & clauses]
+    `(defp ~name
+        (macro ~@clauses))))
+
+(defmacro defn
+  ([name & clauses]
+    `(def ~name
+        (fn ~@clauses))))
+
+(defmacro defnp
+  ([name & clauses]
+    `(defp ~name
+      (fn ~@clauses))))
 
 ;; ============================================================
-;; Arithmetic Operators (user-friendly names)
+;; Logic Macros (short-circuiting)
 ;; ============================================================
 
-(def + (fn [& xs]
-  (reduce runtime/add* 0 xs)))
+(defmacro and
+  ([] true)
+  ([x] x)
+  ([x & rest]
+    `(let [temp# ~x]
+        (if temp#
+          (and ~@rest)
+          temp#))))
 
-(def - (fn [& xs]
-  (let [cnt (runtime/count xs)]
-    (if (runtime/eq* cnt 0)
-      0
-      (if (runtime/eq* cnt 1)
-        (runtime/sub* 0 (runtime/first xs))
-        (reduce runtime/sub* (runtime/first xs) (runtime/rest xs)))))))
+(defmacro or
+  ([] nil)
+  ([x] x)
+  ([x & rest]
+    `(let [temp# ~x]
+        (if temp#
+          temp#
+          (or ~@rest)))))
 
-(def * (fn [& xs]
-  (reduce runtime/mul* 1 xs)))
+(defn empty? [coll]
+  (runtime/eq* (runtime/count coll) 0))
 
-(def / (fn [& xs]
-  (let [cnt (runtime/count xs)]
-    (if (runtime/eq* cnt 0)
-      0
-      (if (runtime/eq* cnt 1)
-        (runtime/div* 1 (runtime/first xs))
-        (reduce runtime/div* (runtime/first xs) (runtime/rest xs)))))))
+(defn cons 
+  ([head] [head])
+  ([head tail]
+   (runtime/cons head tail)))
 
-(def mod (fn [x y]
-  (runtime/mod* x y)))
+(defn first [coll]
+  (runtime/first coll))
+
+(defn rest [coll]
+  (runtime/rest coll))
+
+;; ============================================================
+;; Map / Namespace Helpers
+;; ============================================================
+
+(defn get 
+  ([target member] (runtime/get target member))
+  ([target member default] (or (runtime/get target member) default)))
+
+(defn apply [f args]
+  (runtime/apply f args))
 
 ;; ============================================================
 ;; Comparison Operators (user-friendly names)
 ;; ============================================================
 
-(def = (fn [x y]
-  (runtime/eq* x y)))
+(defn = 
+  ([x] true)
+  ([x y]
+    (runtime/eq* x y))
+  ([x y & rest]
+    (if (runtime/eq* x y)
+      (apply = (cons y rest))
+      false)))
 
 (def < (fn [x y]
   (runtime/lt* x y)))
@@ -62,94 +102,101 @@
   (runtime/gte* x y)))
 
 ;; ============================================================
-;; Logic Macros (short-circuiting)
+;; Core Sequence Helpers
 ;; ============================================================
 
-(def and
-  (macro
-    ([] true)
-    ([x] x)
-    ([x & rest]
-      `(let [temp# ~x]
-         (if temp#
-           (and ~@rest)
-           temp#)))))
+(defn reduce [f init coll]
+  (if (empty? coll)
+    init
+    (reduce f (f init (first coll)) (rest coll))))
 
-(def or
-  (macro
-    ([] nil)
-    ([x] x)
-    ([x & rest]
-      `(let [temp# ~x]
-         (if temp#
-           temp#
-           (or ~@rest))))))
+;; ============================================================
+;; Arithmetic Operators
+;; ============================================================
+
+(defn + [& xs]
+  (reduce runtime/add* 0 xs))
+
+(defn - 
+  ([] 0)
+  ([x] (runtime/sub* 0 x))
+  ([& xs]
+    (reduce runtime/sub* (first xs) (rest xs))))
+
+(defn * [& xs]
+  (reduce runtime/mul* 1 xs))
+
+(defn / 
+  ([] 0)
+  ([x] (runtime/div* 1 x))
+  ([& xs]
+    (reduce runtime/div* (first xs) (rest xs))))
+
+(defn mod [x y]
+  (runtime/mod* x y))
+
+(defn inc [x]
+  (+ x 1))
+
+(defn dec [x]
+  (- x 1))
 
 ;; ============================================================
 ;; Higher-Order Sequence Operations
 ;; ============================================================
 
-(def map (fn [f coll]
-  (if (runtime/eq* (runtime/count coll) 0)
+(defn map [f coll]
+  (if (empty? coll)
     []
-    (runtime/cons (f (runtime/first coll))
-          (map f (runtime/rest coll))))))
+    (cons (f (first coll))
+          (map f (rest coll)))))
 
-(def filter (fn [pred coll]
-  (if (runtime/eq* (runtime/count coll) 0)
+(defn filter [pred coll]
+  (if (empty? coll)
     []
-    (let [x (runtime/first coll)
-          xs (runtime/rest coll)]
+    (let [x (first coll)
+          xs (rest coll)]
       (if (pred x)
-        (runtime/cons x (filter pred xs))
-        (filter pred xs))))))
+        (cons x (filter pred xs))
+        (filter pred xs)))))
 
-(def concat (fn [& colls]
+(defn concat [& colls]
   (reduce (fn [acc coll]
-            (if (runtime/eq* (runtime/count coll) 0)
+            (if (empty? coll)
               acc
-              (concat acc (runtime/cons (runtime/first coll) (runtime/rest coll)))))
+              (concat acc (cons (first coll) (rest coll)))))
           []
-          colls)))
+          colls))
 
-(def take (fn [n coll]
-  (if (runtime/lte* n 0)
+(defn take [n coll]
+  (if (<= n 0)
     []
-    (if (runtime/eq* (runtime/count coll) 0)
+    (if (empty? coll)
       []
-      (runtime/cons (runtime/first coll) (take (runtime/add* n -1) (runtime/rest coll)))))))
+      (cons (first coll) (take (dec n) (rest coll))))))
 
-(def drop (fn [n coll]
-  (if (runtime/lte* n 0)
+(defn drop [n coll]
+  (if (<= n 0)
     coll
-    (if (runtime/eq* (runtime/count coll) 0)
+    (if (empty? coll)
       []
-      (drop (runtime/add* n -1) (runtime/rest coll))))))
+      (drop (dec n) (rest coll)))))
 
-(def reverse (fn [coll]
-  (reduce (fn [acc x] (runtime/cons x acc)) [] coll)))
+(defn reverse [coll]
+  (reduce (fn [acc x] (cons x acc)) [] coll))
 
 ;; ============================================================
 ;; Collection Constructors
 ;; ============================================================
 
-(def list (fn [& items]
-  items))
+(defn list [& items]
+  items)
 
-(def vector (fn [& items]
-  items))
-
+(defn vector [& items]
+  items)
 ;; ============================================================
 ;; I/O Functions
 ;; ============================================================
 
-(def println runtime/println)
-
-;; ============================================================
-;; Map / Namespace Helpers
-;; ============================================================
-
-(def get (fn [target member & defaults]
-  (if (runtime/eq* (runtime/count defaults) 0)
-    (runtime/get target member)
-    (runtime/get target member (runtime/first defaults)))))
+(defn println [& args]
+  (runtime/println args))

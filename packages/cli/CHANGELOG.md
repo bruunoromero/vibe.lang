@@ -1,5 +1,20 @@
 # @vibe/cli Changelog
 
+## 2025-12-31
+
+- Module export discovery now runs the semantic analyzer (with the module resolver/table) before scanning top-level forms, so helper macros such as `defmacro`, `defmacrop`, `defn`, and `defnp` expand into real `def`/`defp` bindings and get exported correctly.
+- Workspace seeding always reuses the CLI's project module resolver when indexing package sources, ensuring analyzer-driven export extraction can resolve imports (like the prelude) during macro expansion.
+- The REPL now analyzes the bundled prelude before evaluation and only skips `(def|defp name (macro ...))` forms, so helper-defined macros load correctly without depending on literal heads like `defmacro`/`defn`.
+
+## 2025-12-30
+
+- Module export discovery now ignores `defp` forms so private bindings never leak into the workspace export table that powers `(import ...)` and `require` macro seeding.
+- The REPL treats `(defp name value)` the same as `(def name value)` when printing results, so defining a private helper no longer yields nested `def` expressions or missing value captures.
+
+## 2025-12-27
+
+- Added a `--force` flag to `vibe build` that bypasses timestamp checks and rebuilds every targeted package even when outputs are newer than their sources, simplifying clean rebuilds after tooling upgrades.
+
 ## 2025-12-26
 
 - REPL macro detection now looks for `(def name (macro ...))` definitions instead of relying on the removed `defmacro` head, ensuring compile-time macros are skipped during prelude loading and interactive evaluation regardless of where they are defined.

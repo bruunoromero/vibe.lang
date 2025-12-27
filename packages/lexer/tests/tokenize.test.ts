@@ -30,7 +30,7 @@ describe("tokenize", () => {
   });
 
   test("supports keywords, booleans, strings, and reader macros", async () => {
-    const source = '\'[:ok true false nil "hi\\n" #(+ @foo) ~@bar]';
+    const source = '\'[:ok true false nil "hi\\n" #(+ foo) ~@bar]';
     const result = await collectTokens(source);
 
     expect(result.ok).toBeTrue();
@@ -46,7 +46,6 @@ describe("tokenize", () => {
       TokenType.Dispatch,
       TokenType.LeftParen,
       TokenType.Symbol,
-      TokenType.Deref,
       TokenType.Symbol,
       TokenType.RightParen,
       TokenType.UnquoteSplicing,
@@ -306,5 +305,17 @@ describe("tokenize", () => {
       (token) => token.kind === TokenType.Symbol
     );
     expect(symbols.map((token) => token.lexeme)).toEqual(["foo#", "foo#"]);
+  });
+
+  test("reports stray deref reader macros", async () => {
+    const result = await collectTokens("@foo");
+
+    expect(result.ok).toBeFalse();
+    expect(result.diagnostics.map((diag) => diag.message)).toContain(
+      "Unexpected character '@'"
+    );
+    expect(result.tokens.map((token) => token.kind)).toEqual([
+      TokenType.Symbol,
+    ]);
   });
 });

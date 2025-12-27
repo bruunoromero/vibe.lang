@@ -1,9 +1,30 @@
 # @vibe/semantics Changelog
 
-# @vibe/semantics Changelog
+## 2025-12-30
+
+- Added full analyzer support for the new `defp` special form. Private definitions now bind symbols, macros, and diagnostics exactly like `def` while skipping module-export registration so imports only see public APIs.
+- Analyzer fixtures now cover private exports to confirm local usages resolve correctly and the `graph.exports` payload remains unchanged.
+
+## 2025-12-29
+
+- **Destructuring patterns for bindings** — `let` bindings and `fn` parameters now flow through the shared `parseBindingPattern` helper so vector/map patterns (including nested forms, `& rest`, `:keys`/`:strs`/`:syms`, `:or`, and `:as`) introduce scoped symbols deterministically. The analyzer reports the new `SEM_PATTERN_*` diagnostics when a pattern is malformed and visits `:or` defaults eagerly so their expressions participate in dependency analysis.
+- **Alias + default traversal** — Map defaults (`:or`) and alias expressions are now revisited during analysis so macro-generated defaults and nested destructuring emit the same diagnostics as ordinary bindings.
+- Tests in `packages/semantics/tests/analyze.test.ts` cover both let-bound and function-parameter destructuring, ensuring every introduced symbol appears in the semantic graph.
+
+## 2025-12-28
+
+- **Feature: try/catch/finally semantic analysis** — Added `handleTry` and `handleThrow` to the analyzer so try forms are validated and catch bindings are defined within scoped environments. Diagnostics now catch clause ordering violations (`SEM_TRY_CLAUSE_ORDER`), duplicate catch/finally clauses, and malformed bindings.
+- **Error binding hygiene** — Catch bindings are automatically registered as `var` symbols in their child scope, enabling proper resolution of caught error identifiers downstream.
+- **Throw validation** — Throw expressions are validated for arity (`SEM_THROW_REQUIRES_VALUE`, `SEM_THROW_TOO_MANY_ARGS`) and visited to ensure arguments are well-formed.
+- Tests in `packages/semantics/tests/analyze.test.ts` cover try/catch scoping and throw argument checking.
+
+## 2025-12-27
+
+- Removed support for the `@` deref reader macro during semantic analysis. Macro expansion, hygiene tracking, and scope scrubbing no longer special-case deref nodes, and analyzers now rely on explicit `(deref ...)` function calls if future runtimes reintroduce dereferencing behavior.
 
 ## 2025-12-26
 
+- Macro expansion now clears parser-provided `scopeId` metadata from unquoted arguments (including spliced sequences) so inserted expressions adopt the caller's lexical scope. This fixes unresolved parameter diagnostics for macros like `defn` that expand multi-arity functions before other macros such as `or` rewrite their bodies.
 - Replaced the `defmacro` special form with `macro` literals that bind via ordinary forms like `def` and `let`. The analyzer now detects `(macro ...)` initializers, registers macro metadata (clauses, dependencies) for those bindings, and skips runtime analysis of macro literals while still allowing macros to be scoped lexically. Non-top-level macros remain private because only top-level `def` exports are recorded, and standalone `(macro ...)` expressions emit `SEM_MACRO_LITERAL_CONTEXT` so macros stay restricted to binding initializers.
 
 ## 2025-12-25

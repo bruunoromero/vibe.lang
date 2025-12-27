@@ -117,10 +117,6 @@ export class Lexer {
             this.addToken(TokenType.Unquote, start);
           }
           continue;
-        case "@":
-          await this.advance();
-          this.addToken(TokenType.Deref, start);
-          continue;
         case "#":
           await this.advance();
           this.addToken(TokenType.Dispatch, start);

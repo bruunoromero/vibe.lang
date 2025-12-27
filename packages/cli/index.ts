@@ -45,6 +45,10 @@ type CompileAllCliOptions = {
   outDir?: string;
 };
 
+type BuildCliOptions = CompileAllCliOptions & {
+  force?: boolean;
+};
+
 type CliOptionBag = TokenizeOptions & Record<string, unknown>;
 
 interface FrontendResult {
@@ -74,7 +78,9 @@ async function seedWorkspaceModuleExports(): Promise<void> {
   const workspacePackages = PACKAGE_REGISTRY.getWorkspacePackages();
   await Promise.all(
     workspacePackages.map(async (metadata) => {
-      await seedModuleExportsFromMetadata(metadata, MODULE_EXPORTS);
+      await seedModuleExportsFromMetadata(metadata, MODULE_EXPORTS, {
+        moduleResolver: defaultModuleResolver,
+      });
       seededPackageRoots.add(metadata.rootDir);
     })
   );
@@ -104,7 +110,9 @@ const ensureModuleExportsReady = async (modulePath?: string): Promise<void> => {
   if (!packageRoot || seededPackageRoots.has(packageRoot)) {
     return;
   }
-  await seedModuleExportsFromPackageJson(packageRoot, MODULE_EXPORTS);
+  await seedModuleExportsFromPackageJson(packageRoot, MODULE_EXPORTS, {
+    moduleResolver: defaultModuleResolver,
+  });
   seededPackageRoots.add(packageRoot);
 };
 
@@ -702,11 +710,12 @@ const resolveBuildTargetDir = (target: string | undefined): string => {
 
 const runBuild = async (
   target: string | undefined,
-  options: CompileAllCliOptions
+  options: BuildCliOptions
 ): Promise<number> => {
   try {
     const pretty = options.pretty ?? DEFAULT_PRETTY;
     const debugMacros = options.debugMacros ?? false;
+    const force = options.force ?? false;
     const targetDir = resolveBuildTargetDir(target);
     const graph = buildPackageGraph(targetDir, PACKAGE_REGISTRY);
     if (graph.topoOrder.length === 0) {
@@ -729,7 +738,7 @@ const runBuild = async (
         pretty,
         debugMacros,
         logTag: `[vibe][build:${node.name}]`,
-        skipIfUpToDate: true,
+        skipIfUpToDate: !force,
       });
       if (!result.ok) {
         hadFailure = true;
@@ -940,6 +949,7 @@ const bootstrapCli = (): void => {
       "--debug-macros",
       "Dump macro-expansion metadata to stderr alongside diagnostics"
     )
+    .option("--force", "Rebuild every package even when outputs are fresh")
     .example("build packages/example-app")
     .example("build @vibe/example-app")
     .action(
@@ -947,6 +957,7 @@ const bootstrapCli = (): void => {
         const exitCode = await runBuild(target, {
           pretty: getNumberOption(opts, "pretty"),
           debugMacros: getBooleanOption(opts, "debug-macros"),
+          force: getBooleanOption(opts, "force"),
         });
         process.exit(exitCode);
       }

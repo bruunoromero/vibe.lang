@@ -13,6 +13,10 @@ import {
   type StringNode,
   type SymbolNode,
   type VectorNode,
+  parseBindingPattern,
+  type BindingPattern,
+  type MapBindingPattern,
+  type VectorBindingPattern,
 } from "@vibe/syntax";
 import type {
   NodeId,
@@ -186,6 +190,7 @@ class ModuleEmitter {
   private readonly namespaceAliasMap = new Map<string, NamespaceImportSpec>();
   private readonly reservedNamespaceAliases = new Set<string>();
   private anonymousImportCounter = 0;
+  private bindingTempCounter = 0;
   private readonly moduleImportIndex = new Map<string, ModuleImportRecord>();
   private readonly semanticLookup: SemanticLookup;
 
@@ -426,8 +431,9 @@ class ModuleEmitter {
         // Macros are compile-time only and should not emit runtime code.
         continue;
       }
-      if (this.isTopLevelDef(expr)) {
-        this.emitTopLevelDef(expr);
+      const defInfo = this.getTopLevelDefMetadata(expr);
+      if (defInfo) {
+        this.emitTopLevelDef(defInfo.node, defInfo.visibility);
         continue;
       }
       this.emitTopLevelExpression(expr);
@@ -453,7 +459,10 @@ class ModuleEmitter {
     }
   }
 
-  private emitTopLevelDef(node: ListNode): void {
+  private emitTopLevelDef(
+    node: ListNode,
+    visibility: "public" | "private"
+  ): void {
     const nameNode = node.elements[1];
     const valueNode = node.elements[2];
     if (!nameNode || nameNode.kind !== NodeKind.Symbol) {
@@ -461,7 +470,8 @@ class ModuleEmitter {
     }
     const identifier = this.resolveBindingIdentifier(nameNode);
     const valueExpr = valueNode ? this.emitExpression(valueNode) : "null";
-    this.addLine(`export const ${identifier} = ${valueExpr};`, node.span);
+    const keyword = visibility === "public" ? "export const" : "const";
+    this.addLine(`${keyword} ${identifier} = ${valueExpr};`, node.span);
   }
 
   private emitNamespaceDefinition(spec: NamespaceImportSpec): void {
@@ -493,8 +503,13 @@ class ModuleEmitter {
       case NodeKind.Number:
       case NodeKind.String:
       case NodeKind.Character:
-      case NodeKind.Keyword:
         return JSON.stringify(node.value);
+      case NodeKind.Keyword: {
+        const label = node.value.startsWith(":")
+          ? node.value
+          : `:${node.value}`;
+        return JSON.stringify(label);
+      }
       case NodeKind.Boolean:
         return node.value ? "true" : "false";
       case NodeKind.Nil:
@@ -566,6 +581,10 @@ class ModuleEmitter {
           return this.emitFn(node);
         case "if":
           return this.emitIf(tail);
+        case "try":
+          return this.emitTry(node);
+        case "throw":
+          return this.emitThrow(node);
         default:
           break;
       }
@@ -628,17 +647,24 @@ class ModuleEmitter {
 
     const declarations: string[] = [];
     for (let index = 0; index < bindingsNode.elements.length; index += 2) {
-      const nameNode = bindingsNode.elements[index];
+      const targetNode = bindingsNode.elements[index];
       const initNode = bindingsNode.elements[index + 1];
-      if (!nameNode || nameNode.kind !== NodeKind.Symbol || !initNode) {
+      if (!targetNode || !initNode) {
         continue;
       }
-      if (this.isMacroBinding(nameNode)) {
+      const pattern = this.parsePatternOrThrow(targetNode);
+      if (pattern.kind === "symbol" && this.isMacroBinding(pattern.node)) {
         continue;
       }
-      const identifier = this.resolveBindingIdentifier(nameNode);
       const initExpr = this.emitExpression(initNode);
-      declarations.push(`const ${identifier} = ${initExpr};`);
+      if (pattern.kind === "symbol") {
+        const identifier = this.resolveBindingIdentifier(pattern.node);
+        declarations.push(`const ${identifier} = ${initExpr};`);
+        continue;
+      }
+      const temp = this.allocateBindingTemp();
+      declarations.push(`const ${temp} = ${initExpr};`);
+      this.emitPatternDestructuring(pattern, temp, declarations);
     }
 
     const body = node.elements.slice(2).filter(Boolean) as ExpressionNode[];
@@ -703,8 +729,8 @@ class ModuleEmitter {
     paramsNode: VectorNode,
     bodyNodes: readonly ExpressionNode[]
   ): string {
-    const { params, restParam } = this.parseFnParameters(paramsNode);
-    return this.buildArrowFunction(params, restParam, bodyNodes);
+    const plan = this.parseFnParameters(paramsNode);
+    return this.buildArrowFunction(plan, bodyNodes);
   }
 
   private emitMultiClauseFn(
@@ -718,21 +744,17 @@ class ModuleEmitter {
     } | null = null;
 
     for (const clause of clauses) {
-      const { params, restParam } = this.parseFnParameters(clause.paramsNode);
-      const clauseExpr = `(${this.buildArrowFunction(
-        params,
-        restParam,
-        clause.bodyNodes
-      )})`;
-      if (restParam) {
+      const plan = this.parseFnParameters(clause.paramsNode);
+      const clauseExpr = `(${this.buildArrowFunction(plan, clause.bodyNodes)})`;
+      if (plan.restParam) {
         variadicClause = {
-          arity: params.length,
+          arity: plan.placeholders.length,
           expression: clauseExpr,
         };
         continue;
       }
       dispatchLines.push(
-        `if (__arity === ${params.length}) {`,
+        `if (__arity === ${plan.placeholders.length}) {`,
         `  return ${clauseExpr}(...${argsIdent});`,
         `}`
       );
@@ -754,51 +776,77 @@ ${dispatchBlock}
 })`;
   }
 
-  private parseFnParameters(paramsNode: VectorNode): {
-    params: string[];
-    restParam?: string;
-  } {
-    const params: string[] = [];
+  private parseFnParameters(paramsNode: VectorNode): FnParameterPlan {
+    const placeholders: string[] = [];
+    const destructures: PatternDestructure[] = [];
     let restParam: string | undefined;
-    let sawAmpersand = false;
+    let sawRest = false;
 
     for (let i = 0; i < paramsNode.elements.length; i += 1) {
       const param = paramsNode.elements[i];
-      if (!param || param.kind !== NodeKind.Symbol) {
+      if (!param) {
         continue;
       }
 
-      if (param.value === "&") {
-        sawAmpersand = true;
-        const nextParam = paramsNode.elements[i + 1];
-        if (nextParam && nextParam.kind === NodeKind.Symbol) {
-          restParam = this.resolveBindingIdentifier(nextParam);
-          i += 1;
+      if (param.kind === NodeKind.Symbol && param.value === "&") {
+        if (sawRest) {
+          throw new Error("fn allows only a single & rest parameter");
         }
+        sawRest = true;
+        const nextParam = paramsNode.elements[i + 1];
+        if (!nextParam || nextParam.kind !== NodeKind.Symbol) {
+          throw new Error("& must be followed by a symbol name");
+        }
+        restParam = this.resolveBindingIdentifier(nextParam);
+        i += 1;
         continue;
       }
 
-      if (sawAmpersand) {
-        continue;
+      if (sawRest) {
+        throw new Error("Parameters cannot appear after & rest parameter");
       }
 
-      params.push(this.resolveBindingIdentifier(param));
+      const pattern = this.parsePatternOrThrow(param);
+      if (pattern.kind === "symbol") {
+        placeholders.push(this.resolveBindingIdentifier(pattern.node));
+      } else {
+        const temp = this.allocateBindingTemp("param");
+        placeholders.push(temp);
+        destructures.push({ pattern, source: temp });
+      }
     }
 
-    return { params, restParam };
+    return {
+      placeholders,
+      ...(restParam ? { restParam } : {}),
+      destructures,
+    } satisfies FnParameterPlan;
   }
 
   private buildArrowFunction(
-    params: readonly string[],
-    restParam: string | undefined,
+    plan: FnParameterPlan,
     bodyNodes: readonly ExpressionNode[]
   ): string {
-    const paramList = restParam
-      ? [...params, `...${restParam}`].join(", ")
-      : params.join(", ");
-    const bodyBlock = this.emitFunctionBody(bodyNodes);
-    return `(${paramList}) => {
-${bodyBlock}
+    const params = [...plan.placeholders];
+    if (plan.restParam) {
+      params.push(`...${plan.restParam}`);
+    }
+    const signature = params.length === 0 ? "()" : `(${params.join(", ")})`;
+    const destructStatements: string[] = [];
+    for (const entry of plan.destructures) {
+      this.emitPatternDestructuring(
+        entry.pattern,
+        entry.source,
+        destructStatements
+      );
+    }
+    const bodyStatements = [
+      ...destructStatements,
+      ...this.buildSequenceStatements(bodyNodes),
+    ];
+    const block = this.indentBlock(bodyStatements);
+    return `${signature} => {
+${block}
 }`;
   }
 
@@ -841,6 +889,96 @@ ${bodyBlock}
     return `(${cond} ? ${thenExpr} : ${elseExpr})`;
   }
 
+  private emitTry(node: ListNode): string {
+    const { bodyNodes, catchClause, finallyClause } =
+      this.partitionTryForm(node);
+    const tryBody = this.indentBlock(
+      this.buildSequenceStatements(bodyNodes),
+      4
+    );
+    let catchSection = "";
+    if (catchClause) {
+      const bindingNode = catchClause.elements[1];
+      if (!bindingNode || bindingNode.kind !== NodeKind.Symbol) {
+        throw new Error("catch clause requires a symbol binding");
+      }
+      const bindingIdentifier = this.resolveBindingIdentifier(bindingNode);
+      const catchBody = this.indentBlock(
+        this.buildSequenceStatements(
+          catchClause.elements
+            .slice(2)
+            .filter((element): element is ExpressionNode => Boolean(element))
+        ),
+        4
+      );
+      catchSection = ` catch (${bindingIdentifier}) {\n${catchBody}\n  }`;
+    }
+
+    let finallySection = "";
+    if (finallyClause) {
+      const finallyBody = this.indentBlock(
+        this.buildSequenceStatements(
+          finallyClause.elements
+            .slice(1)
+            .filter((element): element is ExpressionNode => Boolean(element))
+        ),
+        4
+      );
+      finallySection = ` finally {\n${finallyBody}\n  }`;
+    }
+
+    return `(() => {\n  try {\n${tryBody}\n  }${catchSection}${finallySection}\n})()`;
+  }
+
+  private emitThrow(node: ListNode): string {
+    const argNode = node.elements[1];
+    if (!argNode) {
+      throw new Error("throw requires a value expression");
+    }
+    const extras = node.elements
+      .slice(2)
+      .filter((element): element is ExpressionNode => Boolean(element));
+    if (extras.length > 0) {
+      throw new Error("throw accepts exactly one argument");
+    }
+    const valueExpr = this.emitExpression(argNode);
+    return `(() => {\n  const __error = ${valueExpr};\n  throw (__error instanceof Error ? __error : new Error(String(__error)));\n})()`;
+  }
+
+  private partitionTryForm(node: ListNode): {
+    readonly bodyNodes: readonly ExpressionNode[];
+    readonly catchClause?: ListNode;
+    readonly finallyClause?: ListNode;
+  } {
+    const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    const bodyNodes: ExpressionNode[] = [];
+    let catchClause: ListNode | undefined;
+    let finallyClause: ListNode | undefined;
+
+    for (const expr of tail) {
+      if (expr.kind === NodeKind.List) {
+        const head = expr.elements[0];
+        if (head && head.kind === NodeKind.Symbol) {
+          if (head.value === "catch" && !catchClause && !finallyClause) {
+            catchClause = expr;
+            continue;
+          }
+          if (head.value === "finally" && !finallyClause) {
+            finallyClause = expr;
+            continue;
+          }
+        }
+      }
+      bodyNodes.push(expr);
+    }
+
+    return {
+      bodyNodes,
+      ...(catchClause ? { catchClause } : {}),
+      ...(finallyClause ? { finallyClause } : {}),
+    };
+  }
+
   private resolveBindingIdentifier(node: SymbolNode): string {
     const symbolRecord = this.semanticLookup.getSymbolRecord(node);
     if (!symbolRecord) {
@@ -864,6 +1002,115 @@ ${bodyBlock}
     return `new Map([${pairs}])`;
   }
 
+  private allocateBindingTemp(prefix = "__binding"): string {
+    return `${prefix}_${this.bindingTempCounter++}`;
+  }
+
+  private parsePatternOrThrow(node: ExpressionNode): BindingPattern {
+    const result = parseBindingPattern(node);
+    if (!result.ok) {
+      const details = result.errors.map((error) => error.message).join("; ");
+      throw new Error(`Invalid binding pattern: ${details}`);
+    }
+    return result.pattern;
+  }
+
+  private emitPatternDestructuring(
+    pattern: BindingPattern,
+    sourceExpr: string,
+    statements: string[]
+  ): void {
+    switch (pattern.kind) {
+      case "symbol": {
+        const identifier = this.resolveBindingIdentifier(pattern.node);
+        statements.push(`const ${identifier} = ${sourceExpr};`);
+        return;
+      }
+      case "vector":
+        this.emitVectorPattern(pattern, sourceExpr, statements);
+        return;
+      case "map":
+        this.emitMapPattern(pattern, sourceExpr, statements);
+        return;
+      default:
+        throw new Error("Unsupported binding pattern kind");
+    }
+  }
+
+  private emitVectorPattern(
+    pattern: VectorBindingPattern,
+    sourceExpr: string,
+    statements: string[]
+  ): void {
+    const valueTemp = this.allocateBindingTemp("value");
+    statements.push(`const ${valueTemp} = ${sourceExpr};`);
+    const seqTemp = this.allocateBindingTemp("seq");
+    statements.push(
+      `const ${seqTemp} = Array.isArray(${valueTemp}) ? ${valueTemp} : [];`
+    );
+    pattern.elements.forEach((element, index) => {
+      const elementExpr = `${seqTemp}[${index}]`;
+      const safeExpr = `${elementExpr} === undefined ? null : ${elementExpr}`;
+      this.emitPatternDestructuring(element, safeExpr, statements);
+    });
+    if (pattern.rest) {
+      const restExpr = `${seqTemp}.slice(${pattern.elements.length})`;
+      this.emitPatternDestructuring(pattern.rest, restExpr, statements);
+    }
+    if (pattern.as) {
+      const alias = this.resolveBindingIdentifier(pattern.as);
+      statements.push(`const ${alias} = ${valueTemp};`);
+    }
+  }
+
+  private emitMapPattern(
+    pattern: MapBindingPattern,
+    sourceExpr: string,
+    statements: string[]
+  ): void {
+    const valueTemp = this.allocateBindingTemp("value");
+    statements.push(`const ${valueTemp} = ${sourceExpr};`);
+    const mapTemp = this.allocateBindingTemp("map");
+    statements.push(
+      `const ${mapTemp} = ${valueTemp} instanceof Map ? ${valueTemp} : new Map();`
+    );
+    if (pattern.as) {
+      const alias = this.resolveBindingIdentifier(pattern.as);
+      statements.push(`const ${alias} = ${valueTemp};`);
+    }
+    const defaults = new Map<string, ExpressionNode>();
+    for (const entry of pattern.defaults) {
+      defaults.set(entry.binding, entry.value);
+    }
+    for (const property of pattern.properties) {
+      const keyExpr = this.emitMapKey(property.key);
+      let fallbackExpr = "null";
+      if (property.pattern.kind === "symbol") {
+        const defaultExpr = defaults.get(property.pattern.node.value);
+        if (defaultExpr) {
+          fallbackExpr = `(${this.emitExpression(defaultExpr)})`;
+        }
+      }
+      const valueExpr = `${mapTemp}.has(${keyExpr}) ? ${mapTemp}.get(${keyExpr}) : ${fallbackExpr}`;
+      const temp = this.allocateBindingTemp("value");
+      statements.push(`const ${temp} = ${valueExpr};`);
+      this.emitPatternDestructuring(property.pattern, temp, statements);
+    }
+  }
+
+  private emitMapKey(descriptor: {
+    readonly kind: string;
+    readonly value: string;
+  }): string {
+    if (descriptor.kind === "keyword") {
+      const label = descriptor.value.startsWith(":")
+        ? descriptor.value
+        : `:${descriptor.value}`;
+      return JSON.stringify(label);
+    }
+    return JSON.stringify(descriptor.value);
+  }
+
   private buildSequenceStatements(
     expressions: readonly ExpressionNode[]
   ): string[] {
@@ -876,11 +1123,6 @@ ${bodyBlock}
     });
   }
 
-  private emitFunctionBody(expressions: readonly ExpressionNode[]): string {
-    const statements = this.buildSequenceStatements(expressions);
-    return this.indentBlock(statements);
-  }
-
   private indentBlock(lines: readonly string[], indent = 2): string {
     const prefix = " ".repeat(indent);
     return lines
@@ -888,25 +1130,31 @@ ${bodyBlock}
       .join("\n");
   }
 
-  private isTopLevelDef(node: ExpressionNode): node is ListNode {
-    if (node.kind !== NodeKind.List) {
+  private isMacroDefinition(node: ExpressionNode): node is ListNode {
+    const defInfo = this.getTopLevelDefMetadata(node);
+    if (!defInfo) {
       return false;
     }
-    const head = node.elements[0];
-    return Boolean(
-      head && head.kind === NodeKind.Symbol && head.value === "def"
-    );
+    return this.isMacroBinding(defInfo.node.elements[1]);
   }
 
-  private isMacroDefinition(node: ExpressionNode): node is ListNode {
+  private getTopLevelDefMetadata(
+    node: ExpressionNode
+  ): { node: ListNode; visibility: "public" | "private" } | null {
     if (node.kind !== NodeKind.List) {
-      return false;
+      return null;
     }
     const head = node.elements[0];
-    if (!head || head.kind !== NodeKind.Symbol || head.value !== "def") {
-      return false;
+    if (!head || head.kind !== NodeKind.Symbol) {
+      return null;
     }
-    return this.isMacroBinding(node.elements[1]);
+    if (head.value === "def") {
+      return { node, visibility: "public" };
+    }
+    if (head.value === "defp") {
+      return { node, visibility: "private" };
+    }
+    return null;
   }
 
   private isMacroBinding(
@@ -1018,6 +1266,17 @@ interface MappingSegment {
 interface FnClauseEmitDescriptor {
   readonly paramsNode: VectorNode;
   readonly bodyNodes: readonly ExpressionNode[];
+}
+
+interface FnParameterPlan {
+  readonly placeholders: readonly string[];
+  readonly restParam?: string;
+  readonly destructures: readonly PatternDestructure[];
+}
+
+interface PatternDestructure {
+  readonly pattern: BindingPattern;
+  readonly source: string;
 }
 
 class SourceMapBuilder {

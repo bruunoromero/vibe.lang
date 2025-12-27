@@ -93,9 +93,14 @@ const isMacroDefinitionNode = (
     return false;
   }
   const head = node.elements[0];
-  if (!head || head.kind !== "symbol" || head.value !== "def") {
+  if (!head || head.kind !== "symbol") {
     return false;
   }
+
+  if (head.value !== "def" && head.value !== "defp") {
+    return false;
+  }
+
   const valueNode = node.elements[2];
   return isMacroLiteralNode(valueNode as ExpressionNode);
 };
@@ -279,6 +284,10 @@ export const runRepl = async (
         const parseResult = await parseSource(source, preludePath);
 
         if (parseResult.ok) {
+          await analyzeProgram(parseResult.program, {
+            builtins: buildAnalyzerBuiltins(globalEnv),
+            moduleId: preludePath,
+          });
           // Evaluate all expressions in the prelude, skipping macro definitions
           for (const expr of parseResult.program.body) {
             if (isMacroDefinitionNode(expr)) {
@@ -401,7 +410,7 @@ export const runRepl = async (
           if (
             head &&
             head.kind === "symbol" &&
-            head.value === "def" &&
+            (head.value === "def" || head.value === "defp") &&
             second &&
             second.kind === "symbol"
           ) {

@@ -5,7 +5,7 @@ import type { Diagnostic, Token } from "@vibe/syntax";
 
 const sources = [
   "(def foo [:bar {:baz 1}])",
-  "'(println ~x ~@xs #{:a :b} #(+ 1 @foo))",
+  "'(println ~x ~@xs #{:a :b} #(+ 1 foo))",
   '#^{:doc "hi"} (defrecord User [id ^:required name])',
   "(let [x 1 y 2] (+ x y))",
   '(println "unterminated',

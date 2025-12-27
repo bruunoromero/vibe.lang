@@ -1,9 +1,19 @@
 # @vibe/syntax Changelog
 
+## 2025-12-28
+
+- Added `try`, `throw` to `BUILTIN_SYMBOLS` to designate them as reserved special forms for error handling. These symbols are now recognized by downstream analyzers and must not be redefined in user code.
+- Updated `docs/syntax-spec.md` to document the canonical forms: `(try body... (catch symbol handler...) (finally cleanup...))` and `(throw expr)`.
+
+## 2025-12-27
+
+- Removed the `TokenType.Deref` and `NodeKind.Deref` definitions now that the `@form` reader macro has been retired across the toolchain. The syntax package no longer exports deref as part of `ReaderMacroKind`, keeping downstream packages in sync with the reduced surface.
+
 ## 2025-12-26
 
 - Replaced the `defmacro` builtin head with the new `macro` literal. `BUILTIN_SYMBOLS` now includes `macro` (so analyzers/repls treat it as a reserved special form) and documentation highlights `(def name (macro ...))` as the canonical declaration style.
 - Parser snapshots were refreshed to showcase the new `def` + `macro` structure so downstream tooling can reference up-to-date AST shapes.
+- Added the `defp` special form to `BUILTIN_SYMBOLS` so analyzers, the REPL, and codegen treat private definitions as reserved heads alongside `def`.
 
 ## 2025-12-23
 

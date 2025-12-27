@@ -10,8 +10,15 @@ import type {
   NamespaceImportNode,
   ReaderMacroNode,
   SymbolNode,
+  BindingPattern,
+  PatternError,
+  PatternErrorKind,
 } from "@vibe/syntax";
-import { DiagnosticSeverity, NodeKind as NK } from "@vibe/syntax";
+import {
+  DiagnosticSeverity,
+  NodeKind as NK,
+  parseBindingPattern,
+} from "@vibe/syntax";
 import {
   symbol as runtimeSymbol,
   symbol_QMARK as runtimeSymbol_QMARK,
@@ -35,6 +42,7 @@ import {
   makeBoolean,
   makeNil,
   makeSymbol,
+  makeError,
   makeList,
   makeVector,
   makeSet,
@@ -45,6 +53,7 @@ import {
   isSequence,
   isSymbol,
   isString,
+  isErrorValue,
 } from "./values";
 
 const MAX_CALL_DEPTH = 1000;
@@ -77,6 +86,52 @@ const sanitizeExternalMemberName = (member: string): string => {
   return result.length === 0 ? "_member" : result;
 };
 
+class RuntimeThrow extends Error {
+  constructor(readonly error: Error, readonly span: SourceSpan) {
+    super(error.message);
+    this.name = "RuntimeThrow";
+  }
+}
+
+const runtimeThrowToResult = (signal: RuntimeThrow): EvalResult => ({
+  ok: false,
+  diagnostics: [
+    {
+      message: `Unhandled throw: ${signal.error.message}`,
+      span: signal.span,
+      severity: DiagnosticSeverity.Error,
+      code: "INTERP_THROW_UNHANDLED",
+    },
+  ],
+});
+
+const throwRuntimeError = (error: Error, span: SourceSpan): never => {
+  throw new RuntimeThrow(error, span);
+};
+
+type CachedPattern =
+  | { ok: true; pattern: BindingPattern }
+  | { ok: false; errors: readonly PatternError[] };
+
+const patternCache = new WeakMap<ExpressionNode, CachedPattern>();
+
+const INTERP_PATTERN_ERROR_CODES: Record<PatternErrorKind, string> = {
+  PatternUnsupportedNode: "INTERP_PATTERN_UNSUPPORTED",
+  PatternRestRequiresTarget: "INTERP_PATTERN_REST_TARGET",
+  PatternRestDuplicate: "INTERP_PATTERN_REST_DUPLICATE",
+  PatternAsRequiresSymbol: "INTERP_PATTERN_AS_SYMBOL",
+  PatternAsDuplicate: "INTERP_PATTERN_AS_DUPLICATE",
+  PatternMapKeyMissingValue: "INTERP_PATTERN_MAP_VALUE",
+  PatternMapKeyUnsupported: "INTERP_PATTERN_MAP_KEY",
+  PatternMapKeysRequiresVector: "INTERP_PATTERN_KEYS_VECTOR",
+  PatternMapStringsRequiresVector: "INTERP_PATTERN_STRS_VECTOR",
+  PatternMapSymbolsRequiresVector: "INTERP_PATTERN_SYMS_VECTOR",
+  PatternMapDefaultsRequireMap: "INTERP_PATTERN_OR_MAP",
+  PatternDuplicateBinding: "INTERP_PATTERN_DUPLICATE",
+};
+
+const DEFAULT_PATTERN_ERROR_CODE = "INTERP_PATTERN_ERROR";
+
 interface EvaluatorFnClause {
   readonly paramsNode: ExpressionNode | null;
   readonly bodyNodes: readonly ExpressionNode[];
@@ -97,7 +152,7 @@ export interface EvalContext {
 /**
  * Evaluate an expression node in the given environment (async version for module loading).
  */
-export const evaluate = async (
+const evaluateNode = async (
   node: ExpressionNode,
   env: Environment,
   context: EvalContext = { callDepth: 0 }
@@ -125,6 +180,10 @@ export const evaluate = async (
       return { ok: true, value: makeBoolean(node.value), diagnostics: [] };
     case NK.Nil:
       return { ok: true, value: makeNil(), diagnostics: [] };
+    case NK.Keyword: {
+      const label = node.value.startsWith(":") ? node.value : `:${node.value}`;
+      return { ok: true, value: makeSymbol(label), diagnostics: [] };
+    }
     case NK.Symbol:
       return evaluateSymbol(node.value, node.span, env);
     case NK.List:
@@ -186,6 +245,21 @@ export const evaluate = async (
           },
         ],
       };
+  }
+};
+
+export const evaluate = async (
+  node: ExpressionNode,
+  env: Environment,
+  context: EvalContext = { callDepth: 0 }
+): Promise<EvalResult> => {
+  try {
+    return await evaluateNode(node, env, context);
+  } catch (error) {
+    if (error instanceof RuntimeThrow) {
+      return runtimeThrowToResult(error);
+    }
+    throw error;
   }
 };
 
@@ -344,7 +418,7 @@ const evaluateList = async (
   }
 
   // Regular function call - evaluate head and args
-  const headResult = await evaluate(head!, env, context);
+  const headResult = await evaluateNode(head!, env, context);
   if (!headResult.ok) {
     return headResult;
   }
@@ -355,7 +429,7 @@ const evaluateList = async (
   const diagnostics: Diagnostic[] = [];
 
   for (const argNode of argNodes) {
-    const argResult = await evaluate(argNode, env, context);
+    const argResult = await evaluateNode(argNode, env, context);
     if (!argResult.ok) {
       diagnostics.push(...argResult.diagnostics);
       continue;
@@ -380,7 +454,7 @@ const evaluateVector = async (
 
   for (const elem of node.elements) {
     if (!elem) continue;
-    const elemResult = await evaluate(elem, env, context);
+    const elemResult = await evaluateNode(elem, env, context);
     if (!elemResult.ok) {
       diagnostics.push(...elemResult.diagnostics);
       continue;
@@ -405,7 +479,7 @@ const evaluateSet = async (
 
   for (const elem of node.elements) {
     if (!elem) continue;
-    const elemResult = await evaluate(elem, env, context);
+    const elemResult = await evaluateNode(elem, env, context);
     if (!elemResult.ok) {
       diagnostics.push(...elemResult.diagnostics);
       continue;
@@ -431,13 +505,13 @@ const evaluateMap = async (
   for (const entry of node.entries) {
     if (!entry.key || !entry.value) continue;
 
-    const keyResult = await evaluate(entry.key, env, context);
+    const keyResult = await evaluateNode(entry.key, env, context);
     if (!keyResult.ok) {
       diagnostics.push(...keyResult.diagnostics);
       continue;
     }
 
-    const valueResult = await evaluate(entry.value, env, context);
+    const valueResult = await evaluateNode(entry.value, env, context);
     if (!valueResult.ok) {
       diagnostics.push(...valueResult.diagnostics);
       continue;
@@ -474,6 +548,8 @@ const tryEvaluateSpecialForm = async (
   switch (head.value) {
     case "def":
       return evaluateDef(node, env, context);
+    case "defp":
+      return evaluateDef(node, env, context);
     case "let":
       return await evaluateLet(node, env, context);
     case "fn":
@@ -484,6 +560,10 @@ const tryEvaluateSpecialForm = async (
       return evaluateQuoteForm(node, env);
     case "do":
       return await evaluateDo(node, env, context);
+    case "try":
+      return await evaluateTry(node, env, context);
+    case "throw":
+      return await evaluateThrow(node, env, context);
     case "require":
       return await evaluateRequire(node, env, context);
     case "import":
@@ -533,7 +613,7 @@ const evaluateDef = async (
     };
   }
 
-  const valueResult = await evaluate(valueNode, env, context);
+  const valueResult = await evaluateNode(valueNode, env, context);
   if (!valueResult.ok) {
     return valueResult;
   }
@@ -579,7 +659,7 @@ const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
       );
     }
 
-    const params: string[] = [];
+    const params: BindingPattern[] = [];
     let restParam: string | undefined;
     let sawRestMarker = false;
 
@@ -589,15 +669,7 @@ const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
         continue;
       }
 
-      if (paramNode.kind !== NK.Symbol) {
-        return errorResult(
-          "fn parameter must be a symbol",
-          paramNode.span,
-          "INTERP_FN_PARAM_SYMBOL"
-        );
-      }
-
-      if (paramNode.value === "&") {
+      if (paramNode.kind === NK.Symbol && paramNode.value === "&") {
         if (sawRestMarker) {
           return errorResult(
             "fn allows only a single & rest parameter",
@@ -627,7 +699,14 @@ const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
         );
       }
 
-      params.push(paramNode.value);
+      const patternResult = resolvePattern(paramNode);
+      if (!patternResult.ok) {
+        return {
+          ok: false,
+          diagnostics: diagnosticsFromPatternErrors(patternResult.errors),
+        };
+      }
+      params.push(patternResult.pattern);
     }
 
     if (restParam) {
@@ -1112,7 +1191,7 @@ const evaluateUnquoteNode = async (
       ],
     };
   }
-  const result = await evaluate(node.target, env, context);
+  const result = await evaluateNode(node.target, env, context);
   if (!result.ok) {
     return result;
   }
@@ -1141,7 +1220,7 @@ const evaluateUnquoteSplicing = async (
       ],
     };
   }
-  const result = await evaluate(node.target, env, context);
+  const result = await evaluateNode(node.target, env, context);
   if (!result.ok) {
     return { ok: false, diagnostics: result.diagnostics };
   }
@@ -1188,38 +1267,48 @@ const evaluateLet = async (
   const diagnostics: Diagnostic[] = [];
 
   for (let i = 0; i < bindings.length; i += 2) {
-    const nameNode = bindings[i];
+    const targetNode = bindings[i];
     const valueNode = bindings[i + 1];
 
-    if (!nameNode) continue;
+    if (!targetNode) {
+      continue;
+    }
 
-    if (nameNode.kind !== NK.Symbol) {
-      diagnostics.push({
-        message: "Binding name must be a symbol",
-        span: nameNode.span,
-        severity: DiagnosticSeverity.Error,
-        code: "INTERP_LET_NAME_SYMBOL",
-      });
+    const patternResult = resolvePattern(targetNode);
+    if (!patternResult.ok) {
+      diagnostics.push(...diagnosticsFromPatternErrors(patternResult.errors));
       continue;
     }
 
     if (!valueNode) {
+      const message =
+        patternResult.pattern.kind === "symbol"
+          ? `Missing value for binding ${patternResult.pattern.node.value}`
+          : "Missing value for binding";
       diagnostics.push({
-        message: `Missing value for binding ${nameNode.value}`,
-        span: nameNode.span,
+        message,
+        span: targetNode.span,
         severity: DiagnosticSeverity.Error,
         code: "INTERP_LET_MISSING_VALUE",
       });
       continue;
     }
 
-    const valueResult = await evaluate(valueNode, letEnv, context);
+    const valueResult = await evaluateNode(valueNode, letEnv, context);
     if (!valueResult.ok) {
       diagnostics.push(...valueResult.diagnostics);
       continue;
     }
 
-    defineVariable(letEnv, nameNode.value, valueResult.value!);
+    const bindResult = await bindPatternValue(
+      patternResult.pattern,
+      valueResult.value ?? makeNil(),
+      letEnv,
+      context
+    );
+    if (!bindResult.ok) {
+      diagnostics.push(...bindResult.diagnostics);
+    }
   }
 
   if (diagnostics.length > 0) {
@@ -1230,7 +1319,7 @@ const evaluateLet = async (
   let lastResult: EvalResult = { ok: true, value: makeNil(), diagnostics: [] };
 
   for (const bodyNode of bodyNodes) {
-    lastResult = await evaluate(bodyNode, letEnv, context);
+    lastResult = await evaluateNode(bodyNode, letEnv, context);
     if (!lastResult.ok) {
       return lastResult;
     }
@@ -1262,19 +1351,19 @@ const evaluateIf = async (
     };
   }
 
-  const condResult = await evaluate(condNode, env, context);
+  const condResult = await evaluateNode(condNode, env, context);
   if (!condResult.ok) {
     return condResult;
   }
 
   if (isTruthy(condResult.value!)) {
     if (thenNode) {
-      return await evaluate(thenNode, env, context);
+      return await evaluateNode(thenNode, env, context);
     }
     return { ok: true, value: makeNil(), diagnostics: [] };
   } else {
     if (elseNode) {
-      return await evaluate(elseNode, env, context);
+      return await evaluateNode(elseNode, env, context);
     }
     return { ok: true, value: makeNil(), diagnostics: [] };
   }
@@ -1289,13 +1378,251 @@ const evaluateDo = async (
   let lastResult: EvalResult = { ok: true, value: makeNil(), diagnostics: [] };
 
   for (const bodyNode of bodyNodes) {
-    lastResult = await evaluate(bodyNode, env, context);
+    lastResult = await evaluateNode(bodyNode, env, context);
     if (!lastResult.ok) {
       return lastResult;
     }
   }
 
   return lastResult;
+};
+
+type SequenceOutcome =
+  | { kind: "value"; result: EvalResult }
+  | { kind: "thrown"; error: Error; span: SourceSpan };
+
+const evaluateSequenceNodes = async (
+  nodes: readonly ExpressionNode[],
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult> => {
+  let lastResult: EvalResult = { ok: true, value: makeNil(), diagnostics: [] };
+  for (const expr of nodes) {
+    lastResult = await evaluateNode(expr, env, context);
+    if (!lastResult.ok) {
+      return lastResult;
+    }
+  }
+  return lastResult;
+};
+
+const runSequenceSafely = async (
+  nodes: readonly ExpressionNode[],
+  env: Environment,
+  context: EvalContext,
+  fallbackSpan: SourceSpan
+): Promise<SequenceOutcome> => {
+  try {
+    const result = await evaluateSequenceNodes(nodes, env, context);
+    return { kind: "value", result };
+  } catch (error) {
+    if (error instanceof RuntimeThrow) {
+      return { kind: "thrown", error: error.error, span: error.span };
+    }
+    return {
+      kind: "thrown",
+      error: error instanceof Error ? error : new Error(String(error)),
+      span: fallbackSpan,
+    };
+  }
+};
+
+interface TryFormLayout {
+  readonly bodyNodes: readonly ExpressionNode[];
+  readonly catchClause?: ListNode;
+  readonly finallyClause?: ListNode;
+}
+
+const partitionTryForm = (node: ListNode): TryFormLayout => {
+  const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+  const bodyNodes: ExpressionNode[] = [];
+  let catchClause: ListNode | undefined;
+  let finallyClause: ListNode | undefined;
+
+  for (const expr of tail) {
+    if (expr.kind === NK.List) {
+      const head = expr.elements[0];
+      if (head && head.kind === NK.Symbol) {
+        if (head.value === "catch" && !catchClause && !finallyClause) {
+          catchClause = expr;
+          continue;
+        }
+        if (head.value === "finally" && !finallyClause) {
+          finallyClause = expr;
+          continue;
+        }
+      }
+    }
+    bodyNodes.push(expr);
+  }
+
+  return {
+    bodyNodes,
+    ...(catchClause ? { catchClause } : {}),
+    ...(finallyClause ? { finallyClause } : {}),
+  };
+};
+
+const evaluateTry = async (
+  node: ListNode,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult> => {
+  const layout = partitionTryForm(node);
+  let completion: EvalResult = { ok: true, value: makeNil(), diagnostics: [] };
+  let pendingThrow: { error: Error; span: SourceSpan } | null = null;
+
+  const bodyOutcome = await runSequenceSafely(
+    layout.bodyNodes,
+    env,
+    context,
+    node.span
+  );
+  if (bodyOutcome.kind === "value") {
+    if (!bodyOutcome.result.ok) {
+      return bodyOutcome.result;
+    }
+    completion = bodyOutcome.result;
+  } else {
+    pendingThrow = { error: bodyOutcome.error, span: bodyOutcome.span };
+  }
+
+  if (pendingThrow && layout.catchClause) {
+    const bindingNode = layout.catchClause.elements[1];
+    if (!bindingNode || bindingNode.kind !== NK.Symbol) {
+      return {
+        ok: false,
+        diagnostics: [
+          {
+            message: "catch clause requires a symbol binding",
+            span: layout.catchClause.span,
+            severity: DiagnosticSeverity.Error,
+            code: "INTERP_TRY_CATCH_BINDING",
+          },
+        ],
+      };
+    }
+    const catchEnv = extendEnvironment(env);
+    defineVariable(catchEnv, bindingNode.value, makeError(pendingThrow.error));
+    const catchBodyNodes = layout.catchClause.elements
+      .slice(2)
+      .filter((element): element is ExpressionNode => Boolean(element));
+    const catchOutcome = await runSequenceSafely(
+      catchBodyNodes,
+      catchEnv,
+      context,
+      layout.catchClause.span
+    );
+    if (catchOutcome.kind === "value") {
+      if (!catchOutcome.result.ok) {
+        return catchOutcome.result;
+      }
+      completion = catchOutcome.result;
+      pendingThrow = null;
+    } else {
+      pendingThrow = {
+        error: catchOutcome.error,
+        span: catchOutcome.span,
+      };
+    }
+  }
+
+  if (layout.finallyClause) {
+    const finallyBodyNodes = layout.finallyClause.elements
+      .slice(1)
+      .filter((element): element is ExpressionNode => Boolean(element));
+    const finallyOutcome = await runSequenceSafely(
+      finallyBodyNodes,
+      env,
+      context,
+      layout.finallyClause.span
+    );
+    if (finallyOutcome.kind === "value") {
+      if (!finallyOutcome.result.ok) {
+        return finallyOutcome.result;
+      }
+    } else {
+      pendingThrow = {
+        error: finallyOutcome.error,
+        span: finallyOutcome.span,
+      };
+    }
+  }
+
+  if (pendingThrow) {
+    throwRuntimeError(pendingThrow.error, pendingThrow.span);
+  }
+
+  return completion;
+};
+
+const coerceValueToError = (value: Value): Error => {
+  if (isErrorValue(value)) {
+    return value.error;
+  }
+  const jsValue = valueToJS(value);
+  if (jsValue instanceof Error) {
+    return jsValue;
+  }
+  if (typeof jsValue === "string") {
+    return new Error(jsValue);
+  }
+  try {
+    return new Error(
+      typeof jsValue === "object" ? JSON.stringify(jsValue) : String(jsValue)
+    );
+  } catch {
+    return new Error(String(jsValue));
+  }
+};
+
+const evaluateThrow = async (
+  node: ListNode,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult> => {
+  const argNode = node.elements[1];
+  if (!argNode) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "throw requires a value expression",
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_THROW_REQUIRES_VALUE",
+        },
+      ],
+    };
+  }
+
+  const extraArgs = node.elements
+    .slice(2)
+    .filter((element): element is ExpressionNode => Boolean(element));
+  if (extraArgs.length > 0) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "throw accepts exactly one argument",
+          span: extraArgs[0]!.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_THROW_TOO_MANY_ARGS",
+        },
+      ],
+    };
+  }
+
+  const valueResult = await evaluateNode(argNode, env, context);
+  if (!valueResult.ok) {
+    return valueResult;
+  }
+
+  const thrownValue = valueResult.value ?? makeNil();
+  const errorObject = coerceValueToError(thrownValue);
+  throwRuntimeError(errorObject, node.span);
+  // Unreachable, but satisfies the return type contract.
+  return { ok: true, value: makeNil(), diagnostics: [] };
 };
 
 const applyFunction = async (
@@ -1330,22 +1657,32 @@ const applyFunction = async (
     }
 
     const fnEnv = extendEnvironment(fn.closure);
-    clause.params.forEach((param, index) => {
-      defineVariable(fnEnv, param, args[index]!);
-    });
+    const invokeContext: EvalContext = { callDepth: context.callDepth + 1 };
+    for (let index = 0; index < clause.params.length; index += 1) {
+      const pattern = clause.params[index]!;
+      const argument = args[index] ?? makeNil();
+      const bindResult = await bindPatternValue(
+        pattern,
+        argument,
+        fnEnv,
+        invokeContext
+      );
+      if (!bindResult.ok) {
+        return { ok: false, diagnostics: bindResult.diagnostics };
+      }
+    }
     if (clause.rest) {
       const restArgs = args.slice(clause.params.length);
       defineVariable(fnEnv, clause.rest, makeList(restArgs));
     }
 
-    const newContext: EvalContext = { callDepth: context.callDepth + 1 };
     let lastResult: EvalResult = {
       ok: true,
       value: makeNil(),
       diagnostics: [],
     };
     for (const expr of clause.body) {
-      lastResult = await evaluate(expr, fnEnv, newContext);
+      lastResult = await evaluateNode(expr, fnEnv, invokeContext);
       if (!lastResult.ok) {
         return lastResult;
       }
@@ -1385,6 +1722,153 @@ const selectFunctionClause = (
     return variadicClause;
   }
   return null;
+};
+
+const resolvePattern = (node: ExpressionNode): CachedPattern => {
+  const cached = patternCache.get(node);
+  if (cached) {
+    return cached;
+  }
+  const result = parseBindingPattern(node);
+  const entry: CachedPattern = result.ok
+    ? { ok: true, pattern: result.pattern }
+    : { ok: false, errors: result.errors };
+  patternCache.set(node, entry);
+  return entry;
+};
+
+const diagnosticsFromPatternErrors = (
+  errors: readonly PatternError[]
+): Diagnostic[] =>
+  errors.map((error) => ({
+    message: error.message,
+    span: error.span,
+    severity: DiagnosticSeverity.Error,
+    code: INTERP_PATTERN_ERROR_CODES[error.kind] ?? DEFAULT_PATTERN_ERROR_CODE,
+  }));
+
+const okVoid = (): EvalResult<void> => ({ ok: true, diagnostics: [] });
+
+const bindPatternValue = async (
+  pattern: BindingPattern,
+  value: Value,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult<void>> => {
+  switch (pattern.kind) {
+    case "symbol":
+      defineVariable(env, pattern.node.value, value);
+      return okVoid();
+    case "vector":
+      return await bindVectorPattern(pattern, value, env, context);
+    case "map":
+      return await bindMapPattern(pattern, value, env, context);
+    default:
+      return okVoid();
+  }
+};
+
+const bindVectorPattern = async (
+  pattern: Extract<BindingPattern, { kind: "vector" }>,
+  value: Value,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult<void>> => {
+  const elements = sequenceElements(value);
+  for (let index = 0; index < pattern.elements.length; index += 1) {
+    const elementPattern = pattern.elements[index]!;
+    const elementValue = elements[index] ?? makeNil();
+    const result = await bindPatternValue(
+      elementPattern,
+      elementValue,
+      env,
+      context
+    );
+    if (!result.ok) {
+      return result;
+    }
+  }
+  if (pattern.rest) {
+    const restValues = elements.slice(pattern.elements.length);
+    const restResult = await bindPatternValue(
+      pattern.rest,
+      makeVector(restValues),
+      env,
+      context
+    );
+    if (!restResult.ok) {
+      return restResult;
+    }
+  }
+  if (pattern.as) {
+    defineVariable(env, pattern.as.value, value);
+  }
+  return okVoid();
+};
+
+const bindMapPattern = async (
+  pattern: Extract<BindingPattern, { kind: "map" }>,
+  value: Value,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult<void>> => {
+  const entries =
+    value.kind === "map" ? value.entries : new Map<string, Value>();
+  if (pattern.as) {
+    defineVariable(env, pattern.as.value, value);
+  }
+  const defaults = new Map<string, ExpressionNode>();
+  for (const entry of pattern.defaults) {
+    defaults.set(entry.binding, entry.value);
+  }
+  for (const property of pattern.properties) {
+    const key = mapKeyToString(property.key);
+    let resolved = entries.get(key);
+    if (resolved === undefined && property.pattern.kind === "symbol") {
+      const fallbackExpr = defaults.get(property.pattern.node.value);
+      if (fallbackExpr) {
+        const fallbackResult = await evaluateNode(fallbackExpr, env, context);
+        if (!fallbackResult.ok) {
+          return { ok: false, diagnostics: fallbackResult.diagnostics };
+        }
+        resolved = fallbackResult.value ?? makeNil();
+      }
+    }
+    const bindResult = await bindPatternValue(
+      property.pattern,
+      resolved ?? makeNil(),
+      env,
+      context
+    );
+    if (!bindResult.ok) {
+      return bindResult;
+    }
+  }
+  return okVoid();
+};
+
+const mapKeyToString = (key: {
+  readonly kind: string;
+  readonly value: string;
+}): string => {
+  if (key.kind === "keyword") {
+    return key.value.startsWith(":") ? key.value : `:${key.value}`;
+  }
+  if (key.kind === "string") {
+    return key.value;
+  }
+  return key.value;
+};
+
+const sequenceElements = (value: Value): Value[] => {
+  switch (value.kind) {
+    case "vector":
+    case "list":
+    case "set":
+      return [...value.elements];
+    default:
+      return [];
+  }
 };
 
 /**
@@ -1451,7 +1935,7 @@ const evaluateRequire = async (
 
     // Evaluate all expressions in the module
     for (const expr of parseResult.program.body) {
-      const result = await evaluate(expr, moduleEnv, context);
+      const result = await evaluateNode(expr, moduleEnv, context);
       if (!result.ok) {
         diagnostics.push(...result.diagnostics);
         continue;
@@ -1536,7 +2020,7 @@ const evaluateImport = async (
 
     // Evaluate all expressions in the module
     for (const expr of parseResult.program.body) {
-      const result = await evaluate(expr, moduleEnv, context);
+      const result = await evaluateNode(expr, moduleEnv, context);
       if (!result.ok) {
         diagnostics.push(...result.diagnostics);
         continue;
@@ -1714,6 +2198,8 @@ const valueToJS = (value: Value): any => {
       };
     case "external":
       return value.module;
+    case "error":
+      return value.error;
     default:
       return null;
   }
@@ -1743,6 +2229,9 @@ const jsToValue = (jsValue: any): Value => {
   }
   if (runtimeSymbol_QMARK(jsValue)) {
     return makeSymbol((jsValue as RuntimeSymbol).name);
+  }
+  if (jsValue instanceof Error) {
+    return makeError(jsValue);
   }
   if (typeof jsValue === "object") {
     const entries = new Map<string, Value>();

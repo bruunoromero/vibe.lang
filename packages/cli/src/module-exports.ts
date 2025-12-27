@@ -5,15 +5,18 @@ import {
   type ListNode,
   type NamespaceImportNode,
   type ProgramNode,
+  type ScopeId,
   type SymbolNode,
   type VectorNode,
 } from "@vibe/syntax";
-import type {
-  ModuleExportEntry,
-  ModuleExportedMacro,
-  ModuleExportedMacroClause,
-  ModuleExportsLookup,
-  ModuleMacroDependency,
+import {
+  analyzeProgram,
+  type ModuleResolver,
+  type ModuleExportEntry,
+  type ModuleExportedMacro,
+  type ModuleExportedMacroClause,
+  type ModuleExportsLookup,
+  type ModuleMacroDependency,
 } from "@vibe/semantics";
 import { Dirent, existsSync, readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
@@ -39,9 +42,36 @@ export class ModuleExportsTable implements ModuleExportsLookup {
   }
 }
 
-export const extractTopLevelExports = (
+const PUBLIC_DEF_FORMS = new Set(["def"]);
+const PRIVATE_DEF_FORMS = new Set(["defp"]);
+
+export interface ExportExtractionOptions {
+  readonly moduleId?: string;
+  readonly moduleResolver?: ModuleResolver;
+  readonly moduleExports?: ModuleExportsLookup;
+}
+
+interface ExportDiscoveryOptions extends ExportExtractionOptions {}
+
+interface SeedModuleExportsOptions {
+  readonly moduleResolver?: ModuleResolver;
+}
+
+export const extractTopLevelExports = async (
+  program: ProgramNode,
+  options: ExportExtractionOptions = {}
+): Promise<readonly ModuleExportEntry[]> => {
+  await analyzeProgram(program, {
+    moduleId: options.moduleId,
+    moduleResolver: options.moduleResolver,
+    moduleExports: options.moduleExports,
+  });
+  return collectExportsFromProgram(program);
+};
+
+const collectExportsFromProgram = (
   program: ProgramNode
-): readonly ModuleExportEntry[] => {
+): ModuleExportEntry[] => {
   const exports: ModuleExportEntry[] = [];
   const seen = new Set<string>();
   const namespaceAliases: ModuleMacroDependency[] = [];
@@ -57,11 +87,15 @@ export const extractTopLevelExports = (
     if (!head || head.kind !== NodeKind.Symbol) {
       continue;
     }
-    if (head.value === "external" || head.value === "require") {
-      recordNamespaceAlias(namespaceAliases, list, head.value);
+    const headValue = head.value;
+    if (headValue === "external" || headValue === "require") {
+      recordNamespaceAlias(namespaceAliases, list, headValue);
       continue;
     }
-    if (head.value !== "def") {
+    if (PRIVATE_DEF_FORMS.has(headValue)) {
+      continue;
+    }
+    if (!PUBLIC_DEF_FORMS.has(headValue)) {
       continue;
     }
     const binding = list.elements[1];
@@ -128,7 +162,7 @@ const createMacroExport = (
     return {
       params: parsedParams.params,
       ...(parsedParams.rest ? { rest: parsedParams.rest } : {}),
-      body: cloneExpression(bodyNode),
+      body: cloneExpressionWithoutScopes(bodyNode),
     } satisfies ModuleExportedMacroClause;
   });
 
@@ -285,8 +319,33 @@ const cloneExpression = <T extends ExpressionNode>(node: T): T => {
   return JSON.parse(JSON.stringify(node)) as T;
 };
 
+const cloneExpressionWithoutScopes = <T extends ExpressionNode>(node: T): T => {
+  const cloned = cloneExpression(node);
+  stripScopeMetadata(cloned);
+  return cloned;
+};
+
+const stripScopeMetadata = (value: unknown): void => {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const element of value) {
+      stripScopeMetadata(element);
+    }
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "scopeId")) {
+    delete (value as { scopeId?: ScopeId }).scopeId;
+  }
+  for (const child of Object.values(value as Record<string, unknown>)) {
+    stripScopeMetadata(child);
+  }
+};
+
 export const discoverModuleExports = async (
-  modulePath: string
+  modulePath: string,
+  options: ExportDiscoveryOptions = {}
 ): Promise<readonly ModuleExportEntry[] | undefined> => {
   if (!modulePath.endsWith(LANG_EXTENSION)) {
     return undefined;
@@ -294,7 +353,10 @@ export const discoverModuleExports = async (
   try {
     const source = await readFile(modulePath, "utf8");
     const result = await parseSource(source);
-    return extractTopLevelExports(result.program);
+    return extractTopLevelExports(result.program, {
+      moduleId: modulePath,
+      ...options,
+    });
   } catch {
     return undefined;
   }
@@ -302,7 +364,8 @@ export const discoverModuleExports = async (
 
 export const seedModuleExportsFromMetadata = async (
   metadata: PackageMetadata,
-  table: ModuleExportsTable
+  table: ModuleExportsTable,
+  options: SeedModuleExportsOptions = {}
 ): Promise<void> => {
   const resolved = resolveVibePackageConfig(metadata.rootDir, metadata.vibe);
   const moduleCandidates = new Set<string>();
@@ -319,7 +382,10 @@ export const seedModuleExportsFromMetadata = async (
     if (table.has(modulePath)) {
       continue;
     }
-    const exports = await discoverModuleExports(modulePath);
+    const exports = await discoverModuleExports(modulePath, {
+      moduleResolver: options.moduleResolver,
+      moduleExports: table,
+    });
     if (exports !== undefined) {
       table.register(modulePath, exports);
     }
@@ -328,13 +394,14 @@ export const seedModuleExportsFromMetadata = async (
 
 export const seedModuleExportsFromPackageJson = async (
   packageRoot: string,
-  table: ModuleExportsTable
+  table: ModuleExportsTable,
+  options: SeedModuleExportsOptions = {}
 ): Promise<void> => {
   const metadata = readPackageMetadata(packageRoot);
   if (!metadata) {
     return;
   }
-  await seedModuleExportsFromMetadata(metadata, table);
+  await seedModuleExportsFromMetadata(metadata, table, options);
 };
 
 const readPackageMetadata = (dir: string): PackageMetadata | null => {

@@ -107,7 +107,7 @@ describe("parseSource", () => {
   });
 
   test("handles reader macros, sets, and dispatch", async () => {
-    const source = "'(println ~x ~@xs #{:a :b} #(+ 1 @foo))";
+    const source = "'(println ~x ~@xs #{:a :b} #(+ 1 foo))";
     const result = await parseSource(source);
 
     expect(result.ok).toBeTrue();
@@ -147,7 +147,7 @@ describe("parseSource", () => {
       if (innerList.kind !== NodeKind.List) {
         throw new Error("Expected dispatch target list");
       }
-      expect(innerList.elements[2]?.kind).toBe(NodeKind.Deref);
+      expect(innerList.elements[2]?.kind).toBe(NodeKind.Symbol);
     }
   });
 
@@ -205,7 +205,6 @@ describe("parseSource", () => {
       { source: "`", kind: NodeKind.SyntaxQuote },
       { source: "~", kind: NodeKind.Unquote },
       { source: "~@", kind: NodeKind.UnquoteSplicing },
-      { source: "@", kind: NodeKind.Deref },
     ];
 
     for (const testCase of cases) {
@@ -219,8 +218,7 @@ describe("parseSource", () => {
         node?.kind === NodeKind.Quote ||
         node?.kind === NodeKind.SyntaxQuote ||
         node?.kind === NodeKind.Unquote ||
-        node?.kind === NodeKind.UnquoteSplicing ||
-        node?.kind === NodeKind.Deref
+        node?.kind === NodeKind.UnquoteSplicing
       ) {
         expect(node.target).toBeNull();
       }

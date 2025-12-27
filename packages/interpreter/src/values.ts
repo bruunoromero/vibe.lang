@@ -12,12 +12,15 @@ import type {
   SetNode,
   MapNode,
   MapEntryNode,
+  BindingPattern,
 } from "@vibe/syntax";
 import { NodeKind as NK } from "@vibe/syntax";
 import type { Environment } from "./environment";
 
 /**
  * Runtime values produced by the interpreter.
+    case "error":
+      return value.error;
  * These represent the results of evaluating AST nodes.
  */
 export type Value =
@@ -32,7 +35,8 @@ export type Value =
   | MapValue
   | FunctionValue
   | BuiltinValue
-  | ExternalNamespaceValue;
+  | ExternalNamespaceValue
+  | ErrorValue;
 
 export interface NumberValue {
   readonly kind: "number";
@@ -79,7 +83,7 @@ export interface MapValue {
 }
 
 export interface FunctionClauseValue {
-  readonly params: readonly string[];
+  readonly params: readonly BindingPattern[];
   readonly rest?: string;
   readonly body: readonly ExpressionNode[];
 }
@@ -111,6 +115,11 @@ export interface BuiltinValue {
 export interface ExternalNamespaceValue {
   readonly kind: "external";
   readonly module: any; // The raw JS module object
+}
+
+export interface ErrorValue {
+  readonly kind: "error";
+  readonly error: Error;
 }
 
 export type BuiltinFunction = (
@@ -160,6 +169,9 @@ export const isSequence = (
 ): value is ListValue | VectorValue | SetValue =>
   isList(value) || isVector(value) || isSet(value);
 
+export const isErrorValue = (value: Value): value is ErrorValue =>
+  value.kind === "error";
+
 // Truthiness: nil and false are falsy, everything else is truthy
 
 export const isTruthy = (value: Value): boolean =>
@@ -203,6 +215,8 @@ export const valuesEqual = (a: Value, b: Value): boolean => {
     case "builtin":
       // Functions are compared by reference (identity)
       return a === b;
+    case "error":
+      return a.error === (b as ErrorValue).error;
     default:
       return false;
   }
@@ -395,6 +409,11 @@ export const makeNil = (): NilValue => ({ kind: "nil" });
 export const makeSymbol = (value: string): SymbolValue => ({
   kind: "symbol",
   value,
+});
+
+export const makeError = (error: Error): ErrorValue => ({
+  kind: "error",
+  error,
 });
 
 export const makeList = (elements: readonly Value[]): ListValue => ({

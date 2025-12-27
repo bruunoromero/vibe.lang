@@ -6,7 +6,7 @@
   "scripts": {
     "clean": "rm -rf dist",
     "dev": "bun run ../cli/index.ts run --file src/main.lang",
-    "build": "mkdir -p dist && bun run ../cli/index.ts build",
+    "build": "bun run ../cli/index.ts build --force",
     "start": "node dist/main.js"
   },
   "dependencies": {

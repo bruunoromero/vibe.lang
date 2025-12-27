@@ -232,6 +232,17 @@ describe("Interpreter - Special Forms", () => {
     expect(result.value).toEqual({ kind: "number", value: 42 });
   });
 
+  test("defp creates a private binding", async () => {
+    const parseResult = await parseSource("(defp hidden 99) hidden");
+    const env = createRootEnvironment();
+    const def = parseResult.program.body[0];
+    const ref = parseResult.program.body[1];
+    await evaluate(def!, env);
+    const result = await evaluate(ref!, env);
+    expect(result.ok).toBeTrue();
+    expect(result.value).toEqual({ kind: "number", value: 99 });
+  });
+
   test("let creates local scope", async () => {
     const result = await evalSource(
       "(let [x 10 y 20] (runtime/add* x y))",
@@ -318,6 +329,46 @@ describe("Interpreter - Special Forms", () => {
     const greetResult = await evalMulti(`(import "${IMPORT_FIXTURE}") (greet)`);
     expect(greetResult.ok).toBeTrue();
     expect(greetResult.value).toEqual({ kind: "string", value: "hello" });
+  });
+
+  test("try returns body value when no error", async () => {
+    const result = await evalSource("(try 42)");
+    expect(result.ok).toBeTrue();
+    expect(result.value).toEqual({ kind: "number", value: 42 });
+  });
+
+  test("try catches explicit throw", async () => {
+    const result = await evalSource('(try (throw "boom") (catch err err))');
+    expect(result.ok).toBeTrue();
+    const value = result.value as any;
+    expect(value.kind).toBe("error");
+    expect(value.error).toBeInstanceOf(Error);
+    expect(value.error.message).toBe("boom");
+  });
+
+  test("try catches runtime errors", async () => {
+    const result = await evalSource(
+      "(try (runtime/div* 1 0) (catch err 99))",
+      true
+    );
+    expect(result.ok).toBeTrue();
+    expect(result.value).toEqual({ kind: "number", value: 99 });
+  });
+
+  test("throw without value reports diagnostics", async () => {
+    const missing = await evalSource("(throw)");
+    expect(missing.ok).toBeFalse();
+    expect(
+      missing.diagnostics.some((d) => d.code === "INTERP_THROW_REQUIRES_VALUE")
+    ).toBeTrue();
+  });
+
+  test("throw without catch surfaces unhandled diagnostic", async () => {
+    const result = await evalSource('(throw "catastrophe")');
+    expect(result.ok).toBeFalse();
+    expect(
+      result.diagnostics.some((d) => d.code === "INTERP_THROW_UNHANDLED")
+    ).toBeTrue();
   });
 });
 
@@ -560,10 +611,7 @@ describe("Interpreter - Utility", () => {
     const bindingSymbol = bindings.elements[0];
     expect(bindingSymbol?.kind).toBe("symbol");
     expect(usage?.kind).toBe("symbol");
-    if (
-      bindingSymbol?.kind === "symbol" &&
-      usage?.kind === "symbol"
-    ) {
+    if (bindingSymbol?.kind === "symbol" && usage?.kind === "symbol") {
       expect(bindingSymbol.value).toBe(usage.value);
       expect(bindingSymbol.value).toMatch(/^foo__\d+/);
     }
@@ -572,9 +620,7 @@ describe("Interpreter - Utility", () => {
   test("syntax quote forbids namespace-qualified auto gensyms", async () => {
     const result = await evalSource("`alias/foo#");
     expect(result.ok).toBeFalse();
-    expect(result.diagnostics[0]?.code).toBe(
-      "INTERP_SYNTAX_GENSYM_NAMESPACE"
-    );
+    expect(result.diagnostics[0]?.code).toBe("INTERP_SYNTAX_GENSYM_NAMESPACE");
   });
 });
 
@@ -591,6 +637,62 @@ describe("Interpreter - Module Imports", () => {
     const result = await evalMulti(source);
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "string", value: "hello" });
+  });
+
+  describe("Interpreter - Destructuring", () => {
+    test("let destructures vector and map bindings", async () => {
+      const result = await evalSource(
+        `
+        (let [[x y & rest :as full] [1 2 3 4]
+              {:keys [bonus] :or {bonus (runtime/add* x 3)} :as meta} {}]
+          [x y rest full bonus meta])
+      `,
+        true
+      );
+
+      expect(result.ok).toBeTrue();
+      const vector = result.value as any;
+      expect(vector?.kind).toBe("vector");
+      const [x, y, rest, full, bonus, meta] = vector?.elements ?? [];
+      expect(x).toMatchObject({ kind: "number", value: 1 });
+      expect(y).toMatchObject({ kind: "number", value: 2 });
+      expect(rest).toMatchObject({ kind: "vector" });
+      expect(rest?.elements?.map((element: any) => element.value)).toEqual([
+        3, 4,
+      ]);
+      expect(full).toMatchObject({ kind: "vector" });
+      expect(full?.elements?.map((element: any) => element.value)).toEqual([
+        1, 2, 3, 4,
+      ]);
+      expect(bonus).toMatchObject({ kind: "number", value: 4 });
+      expect(meta).toMatchObject({ kind: "map" });
+      expect(meta?.entries?.size).toBe(0);
+    });
+
+    test("fn destructures vector and map parameters", async () => {
+      const result = await evalMulti(
+        `
+        (def describe
+          (fn [[x y & tail] {:keys [bonus extra] :or {bonus 0 extra 5}}]
+            [x y tail bonus extra]))
+        (describe [10 20 30] {:bonus 7})
+      `,
+        true
+      );
+
+      expect(result.ok).toBeTrue();
+      const vector = result.value as any;
+      expect(vector?.kind).toBe("vector");
+      const [x, y, tail, bonus, extra] = vector?.elements ?? [];
+      expect(x).toMatchObject({ kind: "number", value: 10 });
+      expect(y).toMatchObject({ kind: "number", value: 20 });
+      expect(tail).toMatchObject({ kind: "vector" });
+      expect(tail?.elements?.map((element: any) => element.value)).toEqual([
+        30,
+      ]);
+      expect(bonus).toMatchObject({ kind: "number", value: 7 });
+      expect(extra).toMatchObject({ kind: "number", value: 5 });
+    });
   });
 
   test("import without alias syntax", async () => {

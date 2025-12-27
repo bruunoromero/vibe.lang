@@ -69,3 +69,4 @@ Start an interactive REPL that parses, analyzes, compiles, and executes Lang for
   - Mirrors the `sources` directory structure under `outDir`, swapping `.lang` → `.js`.
   - Leaves package-level `require` imports as bare specifiers so Node can honor each package's `exports` map while forcing relative imports to reference their `.js` siblings.
   - Resolves package imports by looking inside the `sources` tree and falls back to `vibe.entry` when the specifier is bare (e.g., `(require "@vibe/prelude")`).
+  - Pass `--force` to rebuild every package even when the outputs are newer than their `.lang` sources.

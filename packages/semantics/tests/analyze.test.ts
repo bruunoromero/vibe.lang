@@ -9,7 +9,7 @@ import {
   type SymbolId,
 } from "../src";
 import { parseSource } from "@vibe/parser";
-import { NodeKind, type ExpressionNode } from "@vibe/syntax";
+import { NodeKind, type ExpressionNode, type ProgramNode } from "@vibe/syntax";
 import { TEST_BUILTINS } from "./test-builtins";
 
 const ARITHMETIC_STUB = `
@@ -58,6 +58,70 @@ const expectBooleanNode = (node: ExpressionNode | null | undefined) => {
   return node;
 };
 
+const cloneExpression = <T>(node: T): T =>
+  JSON.parse(JSON.stringify(node)) as T;
+
+const renameSymbolInNode = (
+  node: ExpressionNode | null | undefined,
+  from: string,
+  to: string
+): ExpressionNode | null | undefined => {
+  if (!node) {
+    return node;
+  }
+  if (node.kind === NodeKind.Symbol) {
+    if (node.value !== from) {
+      return node;
+    }
+    return {
+      ...node,
+      value: to,
+      lexeme: to,
+    };
+  }
+  if (
+    node.kind === NodeKind.List ||
+    node.kind === NodeKind.Vector ||
+    node.kind === NodeKind.Set
+  ) {
+    const elements = node.elements.map(
+      (element) => renameSymbolInNode(element, from, to) ?? element
+    );
+    return {
+      ...node,
+      elements,
+    };
+  }
+  if (node.kind === NodeKind.Map) {
+    const entries = node.entries.map((entry) => ({
+      ...entry,
+      key: renameSymbolInNode(entry.key, from, to) ?? entry.key,
+      value: renameSymbolInNode(entry.value, from, to) ?? entry.value,
+    }));
+    return {
+      ...node,
+      entries,
+    };
+  }
+  if (
+    node.kind === NodeKind.Dispatch ||
+    node.kind === NodeKind.Quote ||
+    node.kind === NodeKind.SyntaxQuote ||
+    node.kind === NodeKind.Unquote ||
+    node.kind === NodeKind.UnquoteSplicing
+  ) {
+    const originalTarget =
+      (node as { target?: ExpressionNode | null }).target ?? null;
+    const updatedTarget = renameSymbolInNode(originalTarget, from, to);
+    const target = updatedTarget !== undefined ? updatedTarget : originalTarget;
+    return {
+      ...node,
+      target,
+    };
+  }
+  return node;
+};
+
 describe("analyzeProgram", () => {
   test("aligns semantic scopes with parser annotations", async () => {
     const parseResult = await parseSource("(let [x 1] (fn [y] y) x)");
@@ -99,6 +163,63 @@ describe("analyzeProgram", () => {
     expect(usageNode).toBeDefined();
   });
 
+  test("ignores stale parser scope metadata when reusing nodes under new parents", async () => {
+    const parseResult = await parseSource(`
+      (let [outer 1]
+        outer)
+
+      (let [shadow 2]
+        shadow)
+    `);
+    if (!parseResult.ok) {
+      throw new Error("Failed to parse stale scope fixture");
+    }
+    const program = parseResult.program;
+    const firstExpr = program.body[0];
+    const secondExpr = program.body[1];
+    if (!firstExpr || firstExpr.kind !== NodeKind.List) {
+      throw new Error("Expected first let expression");
+    }
+    if (!secondExpr || secondExpr.kind !== NodeKind.List) {
+      throw new Error("Expected second let expression");
+    }
+    const originalBody = firstExpr.elements[2];
+    if (!originalBody) {
+      throw new Error("Expected first let body expression");
+    }
+    const staleBody = cloneExpression(originalBody);
+    const renamedBody =
+      renameSymbolInNode(staleBody, "outer", "shadow") ?? staleBody;
+    const mutatedSecondElements = [...secondExpr.elements];
+    mutatedSecondElements[2] = renamedBody;
+    const mutatedSecondExpr = {
+      ...secondExpr,
+      elements: mutatedSecondElements,
+    };
+    const mutatedProgram: ProgramNode = {
+      ...program,
+      body: [firstExpr, mutatedSecondExpr],
+    };
+    const analysis = await analyzeProgram(mutatedProgram, {
+      builtins: TEST_BUILTINS,
+    });
+
+    debugDiagnostics("stale parser scope metadata", analysis);
+
+    expect(analysis.ok).toBeTrue();
+    expect(getDiagnosticCodes(analysis)).not.toContain("SEM_UNRESOLVED_SYMBOL");
+
+    const shadowSymbol = analysis.graph.symbols.find(
+      (symbol) => symbol.name === "shadow" && symbol.kind === "var"
+    );
+    const shadowUsage = analysis.graph.nodes.find(
+      (node) => node.symbol?.name === "shadow" && node.symbol.role === "usage"
+    );
+
+    expect(shadowSymbol).toBeDefined();
+    expect(shadowUsage?.symbol?.symbolId).toBe(shadowSymbol?.id);
+  });
+
   test("links definitions with usages", async () => {
     const analysis = await analyzeSource("(def foo 1) foo");
 
@@ -133,6 +254,21 @@ describe("analyzeProgram", () => {
     );
   });
 
+  test("defp binds locally but remains private", async () => {
+    const analysis = await analyzeSource(
+      "(defp secret 41) secret (def public 42)"
+    );
+
+    expect(analysis.ok).toBeTrue();
+    expect(analysis.graph.exports.map((entry) => entry.name)).toEqual([
+      "public",
+    ]);
+    const secretSymbol = analysis.graph.symbols.find(
+      (symbol) => symbol.name === "secret"
+    );
+    expect(secretSymbol).toBeDefined();
+  });
+
   test("creates scoped bindings for let and fn", async () => {
     const analysis = await analyzeSource(
       withArithmeticPrelude("(let [x 1] (fn [y] (+ x y)))")
@@ -152,6 +288,32 @@ describe("analyzeProgram", () => {
     expect(letBindingNode).toBeDefined();
 
     expect(parameterNode?.scopeId).not.toBe(letBindingNode?.scopeId);
+  });
+
+  test("binds symbols from destructured let patterns", async () => {
+    const analysis = await analyzeSource(
+      "(let [[x y & rest :as full] [1 2 3] {:keys [foo bar] :or {bar 10}} {:foo x}] [x y rest full foo bar])"
+    );
+
+    expect(analysis.ok).toBeTrue();
+    const definitions = analysis.graph.nodes
+      .filter((node) => node.symbol?.role === "definition")
+      .map((node) => node.symbol?.name);
+    expect(definitions).toEqual(
+      expect.arrayContaining(["x", "y", "rest", "full", "foo", "bar"])
+    );
+  });
+
+  test("binds symbols from destructured fn parameters", async () => {
+    const analysis = await analyzeSource(
+      withArithmeticPrelude("(fn [[x y] {:keys [z] :or {z 0}}] (+ x y z))")
+    );
+
+    expect(analysis.ok).toBeTrue();
+    const parameters = analysis.graph.nodes
+      .filter((node) => node.symbol?.role === "parameter")
+      .map((node) => node.symbol?.name);
+    expect(parameters).toEqual(expect.arrayContaining(["x", "y", "z"]));
   });
 
   test("analyzes multi-arity fn clauses", async () => {
@@ -395,6 +557,45 @@ describe("analyzeProgram", () => {
     expect(definitionNode?.symbol?.role).toBe("definition");
   });
 
+  test("analyzes try/catch binding scopes", async () => {
+    const analysis = await analyzeSource(`
+      (def noop (fn [] 0))
+      (try
+        (noop)
+        (catch err err)
+        (finally (noop)))
+    `);
+
+    expect(analysis.ok).toBeTrue();
+    const errSymbol = analysis.graph.symbols.find(
+      (symbol) => symbol.name === "err"
+    );
+    expect(errSymbol?.kind).toBe("var");
+
+    const errUsage = analysis.graph.nodes.find(
+      (node) => node.symbol?.name === "err" && node.symbol.role === "usage"
+    );
+    expect(errUsage?.symbol?.symbolId).toBe(errSymbol?.id);
+  });
+
+  test("reports non-symbol catch bindings", async () => {
+    const analysis = await analyzeSource(`
+      (try
+        1
+        (catch [oops] oops))
+    `);
+
+    expectDiagnostic(analysis, "SEM_TRY_CATCH_REQUIRES_SYMBOL");
+  });
+
+  test("validates throw arity", async () => {
+    const missingArg = await analyzeSource("(throw)");
+    expectDiagnostic(missingArg, "SEM_THROW_REQUIRES_VALUE");
+
+    const extraArgs = await analyzeSource("(throw 1 2)");
+    expectDiagnostic(extraArgs, "SEM_THROW_TOO_MANY_ARGS");
+  });
+
   test("instantiates auto gensym placeholders inside syntax quotes", async () => {
     const analysis = await analyzeSource(`
       (def capture
@@ -510,7 +711,7 @@ describe("analyzeProgram", () => {
     test("requires binding targets inside let to be symbols", async () => {
       const analysis = await analyzeSource("(let [42 1] 42)");
 
-      expectDiagnostic(analysis, "SEM_BINDING_REQUIRES_SYMBOL");
+      expectDiagnostic(analysis, "SEM_PATTERN_UNSUPPORTED");
     });
 
     test("requires fn parameters to be declared via vectors", async () => {
@@ -522,7 +723,7 @@ describe("analyzeProgram", () => {
     test("requires fn parameters to be symbols", async () => {
       const analysis = await analyzeSource("(fn [42] 42)");
 
-      expectDiagnostic(analysis, "SEM_BINDING_REQUIRES_SYMBOL");
+      expectDiagnostic(analysis, "SEM_PATTERN_UNSUPPORTED");
     });
 
     test("allows duplicate symbols in the same scope by shadowing", async () => {

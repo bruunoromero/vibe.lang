@@ -14,7 +14,7 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
    - Symbol bindings (variables, parameters, macros, built-ins) with stable IDs that reference their defining scope and node.
    - Node metadata records (one per AST node) that describe which scope a node belongs to plus optional symbol resolution info (definition vs. usage, resolved symbol ID, hygiene tag).
 2. Maintain AST immutability by keeping metadata out-of-band. `@vibe/semantics` assigns opaque `nodeId` values while traversing, and maps additional information via plain records in the returned graph.
-3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `macro` (as a literal restricted to binding positions), `let`, `fn`, `if`, `quote`, `do`, plus the import heads (`require`, `external`). Additional forms can be layered on via feature flags without changing existing consumers.
+3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `defp` (a private-only variant of `def` that skips module exports), `macro` (as a literal restricted to binding positions), `let`, `fn`, `if`, `quote`, `do`, plus the import heads (`require`, `external`). Additional forms can be layered on via feature flags without changing existing consumers.
 4. Export a default list of builtin symbols that matches those special forms so unresolved symbol diagnostics stay meaningful even before user code (or the prelude) defines helpers such as arithmetic or collection operations.
 5. Extend the CLI with a new `vibe analyze` command that parses source, invokes the semantic analyzer, prints the AST alongside semantic metadata, and surfaces combined diagnostics.
 
@@ -43,6 +43,13 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
 - Macro literals now mirror the multi-clause surface of `fn`. Authors can provide one or more clauses inside `(macro ...)`, each with its own parameter vector and single body expression, and the analyzer dispatches to the first clause whose arity matches the call, falling back to the sole variadic clause when present.
 - Clause validation parallels lambdas: duplicate fixed-arity clauses emit `SEM_MACRO_DUPLICATE_ARITY`, multiple variadic clauses trigger `SEM_MACRO_MULTIPLE_REST_CLAUSES`, and a variadic clause that does not appear last raises `SEM_MACRO_REST_POSITION`.
 - Module export metadata now records every macro clause (params, optional rest, body) so imported macros retain the full dispatch table during analysis.
+
+### Update – Binding Patterns (2025-12-29)
+
+- Analyzer now delegates all binding targets (let bindings and function parameters) to `parseBindingPattern` from `@vibe/syntax`, ensuring a single source of truth for destructuring semantics.
+- Vector patterns support nested bindings, optional `& rest` collectors, and `:as` aliases. The analyzer declares every introduced symbol inside the surrounding scope and threads rest/alias metadata through the semantic graph.
+- Map patterns understand explicit key bindings plus the `:keys`/`:strs`/`:syms` shorthands. `:or` defaults are traversed eagerly so their expressions participate in dependency analysis and diagnostics even when the default is not taken at runtime.
+- Pattern diagnostics from the syntax package map directly to semantic `SEM_PATTERN_*` codes, keeping error spans deterministic whether they surface during analysis or evaluation.
 
 ## Semantic Graph Contract
 

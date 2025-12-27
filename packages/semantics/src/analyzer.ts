@@ -20,6 +20,10 @@ import {
   type SymbolNode,
   type VectorNode,
   BUILTIN_SYMBOLS,
+  parseBindingPattern,
+  type BindingPattern,
+  type PatternError,
+  type PatternErrorKind,
 } from "@vibe/syntax";
 import {
   evaluate,
@@ -164,6 +168,23 @@ interface FnClauseDescriptor {
   readonly span: SourceSpan;
 }
 
+interface TryCatchClauseDescriptor {
+  readonly clause: ListNode;
+  readonly binding: ExpressionNode | null;
+  readonly bodyNodes: readonly ExpressionNode[];
+}
+
+interface TryFinallyClauseDescriptor {
+  readonly clause: ListNode;
+  readonly bodyNodes: readonly ExpressionNode[];
+}
+
+interface TryStructure {
+  readonly bodyNodes: readonly ExpressionNode[];
+  readonly catchClause?: TryCatchClauseDescriptor;
+  readonly finallyClause?: TryFinallyClauseDescriptor;
+}
+
 type MacroBody =
   | {
       readonly kind: "template";
@@ -212,6 +233,23 @@ interface MacroExpansionContext {
   readonly originModuleId?: string;
   autoGensyms?: Map<string, string>;
 }
+
+const PATTERN_ERROR_CODE_MAP: Record<PatternErrorKind, string> = {
+  PatternUnsupportedNode: "SEM_PATTERN_UNSUPPORTED",
+  PatternRestRequiresTarget: "SEM_PATTERN_REST_TARGET",
+  PatternRestDuplicate: "SEM_PATTERN_REST_DUPLICATE",
+  PatternAsRequiresSymbol: "SEM_PATTERN_AS_SYMBOL",
+  PatternAsDuplicate: "SEM_PATTERN_AS_DUPLICATE",
+  PatternMapKeyMissingValue: "SEM_PATTERN_MAP_VALUE",
+  PatternMapKeyUnsupported: "SEM_PATTERN_MAP_KEY",
+  PatternMapKeysRequiresVector: "SEM_PATTERN_KEYS_VECTOR",
+  PatternMapStringsRequiresVector: "SEM_PATTERN_STRS_VECTOR",
+  PatternMapSymbolsRequiresVector: "SEM_PATTERN_SYMS_VECTOR",
+  PatternMapDefaultsRequireMap: "SEM_PATTERN_OR_MAP",
+  PatternDuplicateBinding: "SEM_PATTERN_DUPLICATE",
+};
+
+const DEFAULT_PATTERN_ERROR_CODE = "SEM_PATTERN_ERROR";
 
 export const analyzeProgram = async (
   program: ProgramNode,
@@ -336,7 +374,6 @@ export class SemanticAnalyzer {
         this.recordNode(node, nodeScopeId);
         await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
         break;
-      case NodeKind.Deref:
       case NodeKind.Dispatch:
         this.recordNode(node, nodeScopeId);
         await this.visitReaderMacro(
@@ -654,7 +691,11 @@ export class SemanticAnalyzer {
     switch (head.value) {
       case "def":
         this.recordSymbolUsage(head, scopeId, "usage");
-        await this.handleDef(node, scopeId);
+        await this.handleDef(node, scopeId, "public");
+        return true;
+      case "defp":
+        this.recordSymbolUsage(head, scopeId, "usage");
+        await this.handleDef(node, scopeId, "private");
         return true;
       case "let":
         this.recordSymbolUsage(head, scopeId, "usage");
@@ -663,6 +704,14 @@ export class SemanticAnalyzer {
       case "fn":
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleFn(node, scopeId);
+        return true;
+      case "try":
+        this.recordSymbolUsage(head, scopeId, "usage");
+        await this.handleTry(node, scopeId);
+        return true;
+      case "throw":
+        this.recordSymbolUsage(head, scopeId, "usage");
+        await this.handleThrow(node, scopeId);
         return true;
       case "macro":
         this.recordSymbolUsage(head, scopeId, "usage");
@@ -685,7 +734,11 @@ export class SemanticAnalyzer {
     }
   }
 
-  private async handleDef(node: ListNode, scopeId: ScopeId): Promise<void> {
+  private async handleDef(
+    node: ListNode,
+    scopeId: ScopeId,
+    visibility: "public" | "private" = "public"
+  ): Promise<void> {
     const bindingNode = node.elements[1];
     const valueNode = node.elements[2];
     const macroLiteralNode =
@@ -712,7 +765,11 @@ export class SemanticAnalyzer {
       if (record) {
         if (macroLiteral) {
           this.registerMacroLiteral(record, macroLiteral);
-        } else if (this.isTopLevelScope(scopeId) && !isMacroBinding) {
+        } else if (
+          this.isTopLevelScope(scopeId) &&
+          !isMacroBinding &&
+          visibility === "public"
+        ) {
           this.recordModuleExport(record, node.span);
         }
       }
@@ -950,12 +1007,12 @@ export class SemanticAnalyzer {
           this.registerMacroLiteral(record, macroLiteral);
         }
       } else {
-        await this.visit(target, childScopeId);
-        this.report(
-          "Binding targets inside let must be symbols",
-          target.span,
-          "SEM_BINDING_REQUIRES_SYMBOL"
-        );
+        const pattern = this.parseBindingPatternOrReport(target);
+        if (!pattern) {
+          continue;
+        }
+        await this.visitPatternDefaults(pattern, childScopeId);
+        this.declarePatternBindings(pattern, childScopeId, "var", "definition");
       }
     }
 
@@ -1048,6 +1105,179 @@ export class SemanticAnalyzer {
         await this.visit(bodyNode, clauseScopeId);
       }
     }
+  }
+
+  private async handleTry(node: ListNode, scopeId: ScopeId): Promise<void> {
+    const structure = this.partitionTryStructure(node);
+    if (
+      structure.bodyNodes.length === 0 &&
+      !structure.catchClause &&
+      !structure.finallyClause
+    ) {
+      this.report(
+        "try requires at least one body expression, catch clause, or finally clause",
+        node.span,
+        "SEM_TRY_EXPECTS_BODY"
+      );
+    }
+
+    for (const bodyNode of structure.bodyNodes) {
+      await this.visit(bodyNode, scopeId);
+    }
+
+    if (structure.catchClause) {
+      const { clause, binding, bodyNodes } = structure.catchClause;
+      const catchScopeId = this.resolveChildScopeId(scopeId, [
+        ...(binding ? [binding] : []),
+        ...bodyNodes,
+      ]);
+      if (!binding || binding.kind !== NodeKind.Symbol) {
+        if (binding) {
+          await this.visit(binding, scopeId);
+        }
+        this.report(
+          "catch requires a symbol binding",
+          clause.span,
+          "SEM_TRY_CATCH_REQUIRES_SYMBOL"
+        );
+      } else {
+        this.defineSymbol(binding, catchScopeId, "var", "definition");
+      }
+
+      if (bodyNodes.length === 0) {
+        this.report(
+          "catch requires at least one body expression",
+          clause.span,
+          "SEM_TRY_CATCH_REQUIRES_BODY"
+        );
+      }
+
+      for (const expr of bodyNodes) {
+        await this.visit(expr, catchScopeId);
+      }
+    }
+
+    if (structure.finallyClause) {
+      const { clause, bodyNodes } = structure.finallyClause;
+      if (bodyNodes.length === 0) {
+        this.report(
+          "finally requires at least one body expression",
+          clause.span,
+          "SEM_TRY_FINALLY_REQUIRES_BODY"
+        );
+      }
+      for (const expr of bodyNodes) {
+        await this.visit(expr, scopeId);
+      }
+    }
+  }
+
+  private async handleThrow(node: ListNode, scopeId: ScopeId): Promise<void> {
+    const argNode = node.elements[1];
+    if (!argNode) {
+      this.report(
+        "throw requires a value expression",
+        node.span,
+        "SEM_THROW_REQUIRES_VALUE"
+      );
+    } else {
+      await this.visit(argNode, scopeId);
+    }
+
+    for (let index = 2; index < node.elements.length; index += 1) {
+      const extra = node.elements[index];
+      if (!extra) {
+        continue;
+      }
+      this.report(
+        "throw accepts exactly one argument",
+        extra.span,
+        "SEM_THROW_TOO_MANY_ARGS"
+      );
+      await this.visit(extra, scopeId);
+    }
+  }
+
+  private partitionTryStructure(node: ListNode): TryStructure {
+    const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    const bodyNodes: ExpressionNode[] = [];
+    let catchClause: TryCatchClauseDescriptor | undefined;
+    let finallyClause: TryFinallyClauseDescriptor | undefined;
+    let encounteredFinally = false;
+
+    for (const expr of tail) {
+      if (expr.kind === NodeKind.List) {
+        const head = expr.elements[0];
+        if (head && head.kind === NodeKind.Symbol) {
+          if (head.value === "catch") {
+            let skipClause = false;
+            if (encounteredFinally) {
+              this.report(
+                "catch clauses must appear before finally clauses",
+                expr.span,
+                "SEM_TRY_CLAUSE_ORDER"
+              );
+              skipClause = true;
+            }
+            if (catchClause) {
+              this.report(
+                "try supports only one catch clause",
+                expr.span,
+                "SEM_TRY_DUPLICATE_CATCH"
+              );
+              skipClause = true;
+            }
+            if (skipClause) {
+              continue;
+            }
+            catchClause = {
+              clause: expr,
+              binding: expr.elements[1] ?? null,
+              bodyNodes: expr.elements
+                .slice(2)
+                .filter((element): element is ExpressionNode =>
+                  Boolean(element)
+                ),
+            };
+            continue;
+          } else if (head.value === "finally") {
+            if (finallyClause) {
+              this.report(
+                "try supports only one finally clause",
+                expr.span,
+                "SEM_TRY_DUPLICATE_FINALLY"
+              );
+              continue;
+            }
+            finallyClause = {
+              clause: expr,
+              bodyNodes: expr.elements
+                .slice(1)
+                .filter((element): element is ExpressionNode =>
+                  Boolean(element)
+                ),
+            };
+            encounteredFinally = true;
+            continue;
+          }
+        }
+      }
+
+      if (catchClause || finallyClause) {
+        this.report(
+          "try body expressions must appear before catch/finally clauses",
+          expr.span,
+          "SEM_TRY_BODY_ORDER"
+        );
+      }
+      bodyNodes.push(expr);
+    }
+
+    return {
+      bodyNodes,
+      ...(catchClause ? { catchClause } : {}),
+      ...(finallyClause ? { finallyClause } : {}),
+    };
   }
 
   private collectFnParamHints(
@@ -1209,17 +1439,18 @@ export class SemanticAnalyzer {
         continue;
       }
 
-      if (param.kind === NodeKind.Symbol) {
-        this.defineSymbol(param, clauseScopeId, "parameter", "parameter");
-        arity += 1;
-      } else {
-        await this.visit(param, clauseScopeId);
-        this.report(
-          "Parameters inside fn must be symbols",
-          param.span,
-          "SEM_BINDING_REQUIRES_SYMBOL"
-        );
+      const pattern = this.parseBindingPatternOrReport(param);
+      if (!pattern) {
+        continue;
       }
+      await this.visitPatternDefaults(pattern, clauseScopeId);
+      this.declarePatternBindings(
+        pattern,
+        clauseScopeId,
+        "parameter",
+        "parameter"
+      );
+      arity += 1;
     }
 
     return { arity, isVariadic };
@@ -1734,7 +1965,6 @@ export class SemanticAnalyzer {
       case NodeKind.Map:
         return await this.instantiateMap(node, context);
       case NodeKind.Quote:
-      case NodeKind.Deref:
         return await this.instantiateReader(node as ReaderMacroNode, context);
       case NodeKind.Dispatch:
         return await this.instantiateDispatch(node as DispatchNode, context);
@@ -1949,9 +2179,7 @@ export class SemanticAnalyzer {
     ) {
       return value.elements
         .filter((element): element is ExpressionNode => Boolean(element))
-        .map((element) =>
-          this.cloneExpression(element, { preserveScopeMetadata: true })
-        );
+        .map((element) => this.cloneExpression(element));
     }
     this.report(
       "Unquote splicing requires a sequence expression",
@@ -1976,7 +2204,7 @@ export class SemanticAnalyzer {
         );
         return null;
       }
-      return this.cloneExpression(value, { preserveScopeMetadata: true });
+      return this.cloneExpression(value);
     }
 
     return await this.evaluateCompileTimeExpression(target, context);
@@ -2126,6 +2354,82 @@ export class SemanticAnalyzer {
     return null;
   }
 
+  private parseBindingPatternOrReport(
+    node: ExpressionNode
+  ): BindingPattern | null {
+    const result = parseBindingPattern(node);
+    if (!result.ok) {
+      this.reportPatternErrors(result.errors);
+      return null;
+    }
+    return result.pattern;
+  }
+
+  private reportPatternErrors(errors: readonly PatternError[]): void {
+    for (const error of errors) {
+      const code =
+        PATTERN_ERROR_CODE_MAP[error.kind] ?? DEFAULT_PATTERN_ERROR_CODE;
+      this.report(error.message, error.span, code);
+    }
+  }
+
+  private declarePatternBindings(
+    pattern: BindingPattern,
+    scopeId: ScopeId,
+    kind: SymbolKind,
+    role: NodeSymbolRole
+  ): void {
+    switch (pattern.kind) {
+      case "symbol":
+        this.defineSymbol(pattern.node, scopeId, kind, role);
+        return;
+      case "vector":
+        for (const element of pattern.elements) {
+          this.declarePatternBindings(element, scopeId, kind, role);
+        }
+        if (pattern.rest) {
+          this.declarePatternBindings(pattern.rest, scopeId, kind, role);
+        }
+        if (pattern.as) {
+          this.defineSymbol(pattern.as, scopeId, kind, role);
+        }
+        return;
+      case "map":
+        for (const property of pattern.properties) {
+          this.declarePatternBindings(property.pattern, scopeId, kind, role);
+        }
+        if (pattern.as) {
+          this.defineSymbol(pattern.as, scopeId, kind, role);
+        }
+        return;
+      default:
+        return;
+    }
+  }
+
+  private async visitPatternDefaults(
+    pattern: BindingPattern,
+    scopeId: ScopeId
+  ): Promise<void> {
+    if (pattern.kind === "map") {
+      for (const entry of pattern.defaults) {
+        await this.visit(entry.value, scopeId);
+      }
+      for (const property of pattern.properties) {
+        await this.visitPatternDefaults(property.pattern, scopeId);
+      }
+      return;
+    }
+    if (pattern.kind === "vector") {
+      for (const element of pattern.elements) {
+        await this.visitPatternDefaults(element, scopeId);
+      }
+      if (pattern.rest) {
+        await this.visitPatternDefaults(pattern.rest, scopeId);
+      }
+    }
+  }
+
   private cloneExpression<T extends ExpressionNode>(
     node: T,
     options?: { preserveScopeMetadata?: boolean }
@@ -2158,6 +2462,16 @@ export class SemanticAnalyzer {
     delete (node as { scopeId?: ScopeId }).scopeId;
   }
 
+  private assignScopeMetadata(
+    node: ExpressionNode | MapEntryNode | ProgramNode | null | undefined,
+    scopeId: ScopeId
+  ): void {
+    if (!node) {
+      return;
+    }
+    (node as { scopeId?: ScopeId }).scopeId = scopeId;
+  }
+
   private stripScopeMetadata(
     node: ExpressionNode | MapEntryNode | ProgramNode | null | undefined
   ): void {
@@ -2186,7 +2500,6 @@ export class SemanticAnalyzer {
       case NodeKind.SyntaxQuote:
       case NodeKind.Unquote:
       case NodeKind.UnquoteSplicing:
-      case NodeKind.Deref:
         this.stripScopeMetadata((node as ReaderMacroNode).target);
         break;
       case NodeKind.Dispatch:
@@ -2249,6 +2562,10 @@ export class SemanticAnalyzer {
   ): ScopeId {
     const scopeId = this.resolveScopeIdFromNode(node);
     if (!scopeId || scopeId === fallback) {
+      return fallback;
+    }
+    const existing = this.scopes.get(scopeId);
+    if (existing && existing.record.parentId !== fallback) {
       return fallback;
     }
     return this.ensureScope(scopeId, fallback).record.id;
@@ -2444,7 +2761,7 @@ export class SemanticAnalyzer {
   }
 
   private recordNode(
-    node: { kind: NodeKind; span: SourceSpan },
+    node: ExpressionNode | MapEntryNode | ProgramNode,
     scopeId: ScopeId,
     symbol?: NodeSymbolInfo
   ): NodeId {
@@ -2452,6 +2769,7 @@ export class SemanticAnalyzer {
     if (!scope) {
       throw new Error(`Missing scope ${scopeId}`);
     }
+    this.assignScopeMetadata(node, scopeId);
     const nodeId = this.allocateNodeId();
     this.nodes.push({
       nodeId,

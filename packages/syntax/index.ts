@@ -9,7 +9,6 @@ export enum TokenType {
   SyntaxQuote = "syntax_quote",
   Unquote = "unquote",
   UnquoteSplicing = "unquote_splicing",
-  Deref = "deref",
   Dispatch = "dispatch",
   Number = "number",
   String = "string",
@@ -95,7 +94,6 @@ export enum NodeKind {
   SyntaxQuote = "syntax_quote",
   Unquote = "unquote",
   UnquoteSplicing = "unquote_splicing",
-  Deref = "deref",
   Dispatch = "dispatch",
   Symbol = "symbol",
   Keyword = "keyword",
@@ -110,12 +108,15 @@ export enum NodeKind {
 export const BUILTIN_SYMBOLS = [
   // Special forms (required even without user-provided definitions)
   "def",
+  "defp",
   "macro",
   "let",
   "fn",
   "if",
   "quote",
   "do",
+  "try",
+  "throw",
   "require",
   "external",
   "import",
@@ -155,8 +156,7 @@ export type ReaderMacroKind =
   | NodeKind.Quote
   | NodeKind.SyntaxQuote
   | NodeKind.Unquote
-  | NodeKind.UnquoteSplicing
-  | NodeKind.Deref;
+  | NodeKind.UnquoteSplicing;
 
 export interface ReaderMacroNode<K extends ReaderMacroKind = ReaderMacroKind>
   extends AstNode<K> {
@@ -217,3 +217,5 @@ export type ExpressionNode =
   | DispatchNode
   | NamespaceImportNode
   | AtomNode;
+
+export * from "./destructuring";

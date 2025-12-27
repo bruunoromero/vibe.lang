@@ -33,7 +33,6 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 | `` ` `` | `` `form`` | Syntax-quote reader macro |
 | `~` | `~form` | Unquote |
 | `~@` | `~@form` | Unquote splicing |
-| `@` | `@form` | Deref |
 | `#` | `#dispatch` | Dispatch macro prefix (currently `#{` for sets) |
 | Numbers | `42` `-3.14` `6.022e23` | Optional sign, decimal part, exponent |
 | Strings | `"hello"` | Double-quoted with escapes |
@@ -75,7 +74,6 @@ All delimiters must balance. Unmatched closers report `PARSE_UNEXPECTED_CLOSING`
 | `` `form``   | `SyntaxQuote` node     | Like quote but supports hygiene-aware unquoting.                                                                                                      |
 | `~form`      | `Unquote` node         | Allowed inside syntax-quoted forms only.                                                                                                              |
 | `~@form`     | `UnquoteSplicing` node | Inserts a sequence into the surrounding form.                                                                                                         |
-| `@form`      | `Deref` node           | Signals runtime dereferencing (`(deref form)`).                                                                                                       |
 | `#form`      | `Dispatch` node        | Generic dispatch marker; currently only `#{...}` is recognized as a set literal. Additional dispatch targets must be documented here when introduced. |
 
 If a reader or dispatch macro lacks a following form, the parser emits `PARSE_MACRO_MISSING_TARGET` or `PARSE_DISPATCH_MISSING_TARGET` but still constructs a node with `target = null`.
@@ -85,6 +83,7 @@ If a reader or dispatch macro lacks a following form, the parser emits `PARSE_MA
 These symbols are intercepted by downstream stages for non-generic evaluation:
 
 - `def` — Top-level definition only. Emits exported bindings in codegen. When the value is a macro literal (see below), the analyzer registers the binding as a macro so downstream compilation stages can expand it while still exporting the symbol through the module metadata.
+- `defp` — Mirrors `def` semantics but marks the binding as private to the current module. Private bindings participate in analysis, macro registration, and runtime evaluation, yet they are omitted from module-export metadata so `(import ...)` and `require` callers cannot reference them. `defp` is typically surfaced through higher-level macros such as `prelude/defnp` or `prelude/defmacrop`.
 - `macro` — Macro literal that mirrors `fn` clause syntax. Must appear as the initializer of a binding form such as `def` or `let` (standalone `(macro ...)` expressions are rejected). Single-clause macros look like `(def name (macro [params*] body))`. Multi-clause macros reuse `fn` semantics: `(def name (macro ([params*] body) ([params2*] body2) ...))`. Clauses are matched by arity from top to bottom; only one variadic clause (one that uses `& rest`) is allowed and it must appear last. Each clause body is a single expression that the analyzer evaluates at analysis time, and it must return a form. Returning a syntax-quoted template (e.g., `` `(template ...) ``) still enables `~`/`~@` splicing, but macros can also build data manually and return it directly. Macros bound via `def` are exported; macros introduced inside other bindings remain scoped to that binding.
 - `let` — Introduces a lexical scope: `(let [name expr ...] body...)`.
 - `fn` — Lambda literal. The single-clause form `(fn [params...] body...)` remains valid, and multi-clause forms follow Clojure's syntax: `(fn ([params...] body...) ([params2...] body2...) ...)`. Clauses are evaluated in order; the first clause whose fixed arity matches the call is selected, falling back to a single variadic clause (one that uses `& rest`) when present. Only one variadic clause is allowed per function and it must appear last. Each clause requires at least one body expression.
@@ -101,8 +100,41 @@ These symbols are intercepted by downstream stages for non-generic evaluation:
 - `require` — Module import (see below). Restricted to the top level.
 - `external` — JavaScript module import (see below). Restricted to the top level.
 - `import` — Module import that flattens the target module's exports into the current scope (see below). Restricted to the top level.
+- `try` — Error handling form: `(try body... (catch binding handler...) (finally cleanup...))`. Evaluates body expressions; if any throw an error, the catch clause (if present) receives the error value bound to a symbol, executes its handler, and may suppress or re-throw. A finally clause (if present) always executes, even after a throw, and its value is discarded. At least one of body, catch, or finally must be provided.
+- `throw` — Raises an error: `(throw expr)`. Evaluates expr to produce a value, wraps non-Error values in a JS Error, and propagates upward to be caught by an enclosing try form or surfaced as an unhandled error.
 
-Arithmetic helpers (`+`, `-`, `*`, `/`, comparisons, sequence utilities, etc.) are implemented in `@vibe/prelude`. User code should `(require prelude "@vibe/prelude")` (or whichever module provides the desired helpers) rather than relying on implicit global definitions.
+Arithmetic helpers (`+`, `-`, `*`, `/`, comparisons, sequence utilities, etc.) are implemented in `@vibe/prelude`. User code should `(require prelude "@vibe/prelude")` (or whichever module provides the desired helpers) rather than relying on implicit global definitions. The prelude also exports ergonomic definition macros—`defmacro`, `defmacrop`, `defn`, `defnp`—that wrap the raw `macro` and `fn` literals plus `def`/`defp` so modules can declare public/private macros and functions succinctly.
+
+## Binding Patterns
+
+`let` binding vectors and `fn` parameter vectors accept destructuring patterns in addition to bare symbols. Every binding position evaluates its corresponding expression first, then matches the produced value against one of the following pattern shapes:
+
+- **Symbol pattern** — Binds the evaluated value directly to the symbol name.
+- **Vector pattern** — `[binding* & rest :as alias]`
+  - `binding` entries may be symbols or nested patterns. Missing positions bind to `nil`.
+  - `& rest` (optional) captures the remaining elements as a vector bound to another pattern (usually a symbol).
+  - `:as alias` (optional) binds the entire matched value—before any destructuring—to a symbol for later reuse.
+- **Map pattern** — `{:keys [a b] :strs [c] :syms [d] key binding ... :or {a 1} :as alias}`
+  - Explicit `key binding` pairs accept a literal key (keyword, string, or symbol) on the left and any binding pattern on the right.
+  - `:keys`, `:strs`, and `:syms` expand shorthand vectors into multiple symbol bindings that read from keyword (`:foo`), string (`"foo"`), or symbol (`'foo`) map keys respectively.
+  - `:or {binding-name default-expr ...}` supplies defaults for symbol bindings introduced by the pattern. Defaults evaluate lazily in the surrounding scope and only run when the corresponding map entry is missing.
+  - `:as alias` captures the entire map argument prior to destructuring, mirroring vector `:as` semantics.
+
+Vector and map patterns can nest arbitrarily, enabling structures such as `[{:keys [x]} [y & rest]]`. All alias symbols introduced by the pattern share the same scope as the binding form. Attempts to reuse a name inside the same pattern surface deterministic diagnostics (`PATTERN_DUPLICATE_BINDING`, etc.).
+
+Example:
+
+```
+(let [[x y & tail :as original] [1 2 3]
+      {:keys [sum] :or {sum (+ x y)} :as opts} {}]
+  {:first x
+   :rest tail
+   :original original
+   :sum sum
+   :opts opts})
+```
+
+Function parameters follow the exact same rules, so `(fn [[a b] {:keys [c]}] ...)` binds `a`, `b`, and `c` before the body executes.
 
 ## Module Imports & Namespaces
 
@@ -138,12 +170,11 @@ list           ::= '(' form* ')'
 vector         ::= '[' form* ']'
 map            ::= '{' (form form)* '}'
 set            ::= '#{' form* '}'
-reader_macro   ::= quote | syntax_quote | unquote | unquote_splicing | deref
+reader_macro   ::= quote | syntax_quote | unquote | unquote_splicing
 quote          ::= "'" form
 syntax_quote   ::= "`" form
 unquote        ::= "~" form
 unquote_splicing ::= "~@" form
-deref          ::= "@" form
 dispatch       ::= '#' form
 atom           ::= number | string | character | keyword | symbol | boolean | nil
 ```

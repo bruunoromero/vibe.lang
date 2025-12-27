@@ -1,5 +1,14 @@
 # @vibe/parser Changelog
 
+## 2025-12-28
+
+- **Feature: try/catch/finally scoping** — The parser's `ScopeAnnotator` now recognizes try forms and allocates a dedicated child scope for catch clauses so caught error bindings are hygienically isolated from the try body. Finally clauses execute in the parent scope.
+- Parser tests in `packages/parser/tests/parse.test.ts` validate nested control structures.
+
+## 2025-12-27
+
+- Removed the deref (`@form`) reader macro. The parser no longer emits `NodeKind.Deref` nodes, treats stray `@` characters as lexical errors, and the scope annotator no longer reserves metadata for deref forms. Snapshot and unit tests now cover the remaining reader macros to ensure diagnostics stay consistent.
+
 ## 2025-12-25
 
 - Syntax-quoted forms now preserve trailing `#` symbols as standalone `SymbolNode`s so auto-gensym placeholders survive parsing. Added regression coverage for `` `(let [foo# 1] foo#) `` to ensure scope metadata keeps these placeholders inside the template until macro expansion replaces them.

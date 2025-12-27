@@ -1,5 +1,9 @@
 # @vibe/runtime Changelog
 
+## 2025-12-28
+
+- No runtime changes for try/catch/finally support — error handling is implemented entirely in the interpreter and code generator. Error objects are passed directly through the value system without requiring new runtime helpers.
+
 ## Unreleased
 
 - Added shared numeric guards for `add*`, `sub*`, `mul*`, `div*`, and `mod*` so prelude reducers get consistent error messages while they replace the codegen fast-path semantics.

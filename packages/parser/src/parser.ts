@@ -130,8 +130,6 @@ export class Parser {
         return this.parseReaderMacro(NodeKind.Unquote, token);
       case TokenType.UnquoteSplicing:
         return this.parseReaderMacro(NodeKind.UnquoteSplicing, token);
-      case TokenType.Deref:
-        return this.parseReaderMacro(NodeKind.Deref, token);
       case TokenType.Dispatch:
         return this.parseDispatch(token);
       case TokenType.Number:
@@ -475,8 +473,6 @@ export class Parser {
         return "~";
       case TokenType.UnquoteSplicing:
         return "~@";
-      case TokenType.Deref:
-        return "@";
       case TokenType.Dispatch:
         return "#";
       default:
@@ -589,7 +585,6 @@ class ScopeAnnotator {
       case NodeKind.SyntaxQuote:
       case NodeKind.Unquote:
       case NodeKind.UnquoteSplicing:
-      case NodeKind.Deref:
         this.annotateReaderMacro(node as ReaderMacroNode, scopeId);
         break;
       case NodeKind.Dispatch:
@@ -612,6 +607,9 @@ class ScopeAnnotator {
           return;
         case "fn":
           this.annotateFn(node, scopeId);
+          return;
+        case "try":
+          this.annotateTry(node, scopeId);
           return;
         default:
           break;
@@ -696,6 +694,67 @@ class ScopeAnnotator {
         this.annotateExpression(element, fnScopeId);
       }
     }
+  }
+
+  private annotateTry(node: ListNode, parentScopeId: ScopeId): void {
+    const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    const catchClause = this.findTryClause(tail, "catch");
+    const finallyClause = this.findTryClause(tail, "finally");
+
+    for (const expr of tail) {
+      if (
+        (catchClause && expr === catchClause) ||
+        (finallyClause && expr === finallyClause)
+      ) {
+        continue;
+      }
+      this.annotateExpression(expr, parentScopeId);
+    }
+
+    if (catchClause) {
+      this.assignScope(catchClause, parentScopeId);
+      const catchScopeId = this.allocateScopeId();
+      const binding = catchClause.elements[1];
+      if (binding) {
+        this.annotateExpression(binding, catchScopeId);
+      }
+      for (let index = 2; index < catchClause.elements.length; index += 1) {
+        const clauseExpr = catchClause.elements[index];
+        if (clauseExpr) {
+          this.annotateExpression(clauseExpr, catchScopeId);
+        }
+      }
+    }
+
+    if (finallyClause) {
+      this.assignScope(finallyClause, parentScopeId);
+      for (let index = 1; index < finallyClause.elements.length; index += 1) {
+        const clauseExpr = finallyClause.elements[index];
+        if (clauseExpr) {
+          this.annotateExpression(clauseExpr, parentScopeId);
+        }
+      }
+    }
+  }
+
+  private findTryClause(
+    nodes: readonly ExpressionNode[],
+    kind: "catch" | "finally"
+  ): ListNode | null {
+    for (const node of nodes) {
+      if (node.kind !== NodeKind.List) {
+        continue;
+      }
+      const clauseHead = node.elements[0];
+      if (
+        clauseHead &&
+        clauseHead.kind === NodeKind.Symbol &&
+        clauseHead.value === kind
+      ) {
+        return node;
+      }
+    }
+    return null;
   }
 
   private extractFnClauses(node: ListNode): readonly ListNode[] {

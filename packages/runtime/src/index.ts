@@ -281,11 +281,7 @@ export const str = (...args: unknown[]): string => {
 };
 
 // Map operations
-export const get = (
-  target: unknown,
-  key: unknown,
-  defaultValue?: unknown
-): unknown => {
+export const get = (target: unknown, key: unknown): unknown => {
   if (target instanceof Map) {
     const direct = target.get(key);
     if (direct !== undefined) {
@@ -295,11 +291,11 @@ export const get = (
     if (fallback !== undefined) {
       return fallback;
     }
-    return defaultValue ?? null;
+    return null;
   }
   if (typeof target === "object" && target !== null && !Array.isArray(target)) {
     const value = (target as Record<string, unknown>)[coerceKey(key)];
-    return value !== undefined ? value : defaultValue ?? null;
+    return value !== undefined ? value : null;
   }
   throw new Error("get requires a map or namespace object as first argument");
 };
@@ -351,6 +347,16 @@ export const vals = (map: unknown): unknown[] => {
   return Object.values(map);
 };
 
+export const apply = (f: unknown, args: unknown[]): unknown => {
+  if (typeof f !== "function") {
+    throw new Error("apply requires a function as first argument");
+  }
+  if (!Array.isArray(args)) {
+    throw new Error("apply requires a list of arguments as second argument");
+  }
+  return f(...args);
+};
+
 export default {
   symbol,
   symbol_QMARK,
@@ -385,4 +391,5 @@ export default {
   dissoc,
   keys,
   vals,
+  apply,
 };
