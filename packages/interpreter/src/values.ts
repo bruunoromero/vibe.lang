@@ -3,6 +3,7 @@ import type {
   NodeKind,
   SourceSpan,
   SymbolNode,
+  KeywordNode,
   NumberNode,
   StringNode,
   BooleanNode,
@@ -263,11 +264,21 @@ export const valueToNode = (value: Value, span: SourceSpan): ExpressionNode => {
       return node;
     }
     case "symbol": {
+      const lexeme = value.value;
+      if (lexeme.startsWith(":")) {
+        const keywordNode: KeywordNode = {
+          kind: NK.Keyword,
+          span,
+          lexeme,
+          value: lexeme,
+        };
+        return keywordNode;
+      }
       const node: SymbolNode = {
         kind: NK.Symbol,
         span,
-        lexeme: value.value,
-        value: value.value,
+        lexeme,
+        value: lexeme,
       };
       return node;
     }
@@ -343,6 +354,10 @@ export const nodeToValue = (node: ExpressionNode): Value => {
       return { kind: "boolean", value: node.value };
     case NK.Nil:
       return { kind: "nil" };
+    case NK.Keyword: {
+      const value = node.value.startsWith(":") ? node.value : `:${node.value}`;
+      return { kind: "symbol", value };
+    }
     case NK.Symbol:
       return { kind: "symbol", value: node.value };
     case NK.List:

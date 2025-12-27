@@ -106,6 +106,25 @@ describe("advanced macros", () => {
     expect(result.ok).toBeTrue();
   });
 
+  test("macros can call earlier helpers during expansion", async () => {
+    const result = await analyzeSource(`
+      (external runtime "@vibe/runtime")
+      (def even?
+        (fn [n]
+          (runtime/eq* 0 (runtime/mod* n 2))))
+      (def classify
+        (macro [value]
+          (if (even? value)
+            \`["even" ~value]
+            \`["odd" ~value])))
+      (classify 2)
+      (classify 3)
+    `);
+
+    expect(result.ok).toBeTrue();
+    expect(result.diagnostics).toHaveLength(0);
+  });
+
   test("detects when & is not followed by symbol", async () => {
     const result = await analyzeSource(`
       (def bad (macro [&] \`nil))

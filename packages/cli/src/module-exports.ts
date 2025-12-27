@@ -1,4 +1,5 @@
 import { parseSource } from "@vibe/parser";
+import type { Value } from "@vibe/interpreter";
 import {
   NodeKind,
   type ExpressionNode,
@@ -61,16 +62,17 @@ export const extractTopLevelExports = async (
   program: ProgramNode,
   options: ExportExtractionOptions = {}
 ): Promise<readonly ModuleExportEntry[]> => {
-  await analyzeProgram(program, {
+  const analysis = await analyzeProgram(program, {
     moduleId: options.moduleId,
     moduleResolver: options.moduleResolver,
     moduleExports: options.moduleExports,
   });
-  return collectExportsFromProgram(program);
+  return collectExportsFromProgram(program, analysis.macroRuntime);
 };
 
 const collectExportsFromProgram = (
-  program: ProgramNode
+  program: ProgramNode,
+  macroRuntime?: ReadonlyMap<string, Value>
 ): ModuleExportEntry[] => {
   const exports: ModuleExportEntry[] = [];
   const seen = new Set<string>();
@@ -114,9 +116,11 @@ const collectExportsFromProgram = (
       exports.push(macro ?? { name: binding.value, kind: "macro" });
       continue;
     }
+    const runtimeValue = macroRuntime?.get(binding.value);
     exports.push({
       name: binding.value,
       kind: "var",
+      ...(runtimeValue ? { macroRuntimeValue: runtimeValue } : {}),
     });
   }
   return exports;

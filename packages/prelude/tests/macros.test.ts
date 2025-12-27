@@ -36,7 +36,7 @@ describe("prelude definition helpers", () => {
       .filter((name): name is string => Boolean(name));
 
     expect(exportedNames).toEqual(
-      expect.arrayContaining(["defmacro", "defmacrop", "defn", "defnp"])
+      expect.arrayContaining(["defmacro", "defmacrop", "defn", "defnp", "cond"])
     );
   });
 });

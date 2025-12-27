@@ -51,8 +51,14 @@
           temp#
           (or ~@rest)))))
 
+(defn count [coll]
+  (runtime/count coll))
+
+(defn even? [n]
+  (runtime/mod* n 2))
+
 (defn empty? [coll]
-  (runtime/eq* (runtime/count coll) 0))
+  (runtime/eq* (count coll) 0))
 
 (defn cons 
   ([head] [head])
@@ -64,6 +70,16 @@
 
 (defn rest [coll]
   (runtime/rest coll))
+
+(defmacro cond 
+  ([]
+    nil)
+  ([test expr & rest]
+    (if (even? (count rest))
+      `(if ~test
+         ~expr
+         (cond ~@rest))
+      (throw "cond requires an even number of clauses"))))
 
 ;; ============================================================
 ;; Map / Namespace Helpers
@@ -169,18 +185,16 @@
           colls))
 
 (defn take [n coll]
-  (if (<= n 0)
-    []
-    (if (empty? coll)
-      []
-      (cons (first coll) (take (dec n) (rest coll))))))
+  (cond 
+    (<= n 0) []
+    (empty? coll) []
+    :else (cons (first coll) (take (dec n) (rest coll)))))
 
 (defn drop [n coll]
-  (if (<= n 0)
-    coll
-    (if (empty? coll)
-      []
-      (drop (dec n) (rest coll)))))
+  (cond
+    (<= n 0) coll
+    (empty? coll) []
+    :else (drop (dec n) (rest coll))))
 
 (defn reverse [coll]
   (reduce (fn [acc x] (cons x acc)) [] coll))

@@ -570,11 +570,18 @@ const tryEvaluateSpecialForm = async (
       return await evaluateImport(node, env, context);
     case "external":
       return evaluateExternal(node, env, context);
+    case "macro":
+      return evaluateMacroLiteral(node);
     case "gensym":
       return evaluateGensym(node, env, context);
     default:
       return null;
   }
+};
+
+const evaluateMacroLiteral = (_node: ListNode): EvalResult => {
+  // Macro literals are compile-time only; at runtime we treat them as no-ops.
+  return { ok: true, value: makeNil(), diagnostics: [] };
 };
 
 const evaluateDef = async (

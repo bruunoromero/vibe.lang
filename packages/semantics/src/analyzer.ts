@@ -28,6 +28,7 @@ import {
 import {
   evaluate,
   createRootEnvironment,
+  extendEnvironment,
   defineVariable,
   valueToNode,
   nodeToValue,
@@ -49,12 +50,14 @@ export interface AnalyzeOptions {
   readonly moduleId?: string;
   readonly moduleResolver?: ModuleResolver;
   readonly moduleExports?: ModuleExportsLookup;
+  readonly disableMacroRuntime?: boolean;
 }
 
 export interface AnalyzeResult {
   readonly ok: boolean;
   readonly diagnostics: Diagnostic[];
   readonly graph: SemanticGraph;
+  readonly macroRuntime?: ReadonlyMap<string, Value>;
 }
 
 export interface SemanticGraph {
@@ -102,6 +105,7 @@ export interface ModuleExportEntry {
   readonly name: string;
   readonly kind: ModuleExportKind;
   readonly macro?: ModuleExportedMacro;
+  readonly macroRuntimeValue?: Value;
 }
 
 export interface ModuleExportRecord {
@@ -281,10 +285,13 @@ export class SemanticAnalyzer {
   private readonly macros = new Map<SymbolId, MacroDefinition>();
   private readonly macroExpansionStack: SymbolId[] = [];
   private readonly macroDependencyCache = new Map<string, Value>();
+  private readonly macroRuntimeEnv: Environment = createRootEnvironment();
+  private readonly macroRuntimeBindings = new Map<string, Value>();
   private readonly builtins: readonly string[];
   private readonly moduleId?: string;
   private readonly moduleResolver?: ModuleResolver;
   private readonly moduleExportsLookup?: ModuleExportsLookup;
+  private readonly disableMacroRuntime: boolean;
   private readonly aliasAllocator = new AliasAllocator();
   private nextScopeId = 0;
   private nextSymbolId = 0;
@@ -298,6 +305,7 @@ export class SemanticAnalyzer {
     this.moduleId = options.moduleId;
     this.moduleResolver = options.moduleResolver;
     this.moduleExportsLookup = options.moduleExports;
+    this.disableMacroRuntime = options.disableMacroRuntime ?? false;
   }
 
   async analyze(program: ProgramNode): Promise<void> {
@@ -333,6 +341,10 @@ export class SemanticAnalyzer {
         imports: [...this.moduleImports],
         exports: [...this.moduleExportsTable],
       },
+      macroRuntime:
+        this.macroRuntimeBindings.size > 0
+          ? new Map(this.macroRuntimeBindings)
+          : undefined,
     };
   }
 
@@ -777,6 +789,13 @@ export class SemanticAnalyzer {
 
     if (!isMacroBinding && valueNode) {
       await this.visit(valueNode, scopeId);
+      if (bindingNode && bindingNode.kind === NodeKind.Symbol) {
+        await this.exposeDefinitionToMacroRuntime(
+          bindingNode.value,
+          valueNode,
+          scopeId
+        );
+      }
     }
 
     for (let index = 3; index < node.elements.length; index += 1) {
@@ -1800,6 +1819,9 @@ export class SemanticAnalyzer {
             this.registerImportedMacro(record, entry.macro, moduleId);
             continue;
           }
+          if (entry.macroRuntimeValue) {
+            this.bindMacroRuntimeValue(exportedName, entry.macroRuntimeValue);
+          }
           bindings.push({
             exportedName,
             identifier: record.alias,
@@ -2214,37 +2236,54 @@ export class SemanticAnalyzer {
     node: ExpressionNode,
     context: MacroExpansionContext
   ): Promise<ExpressionNode | null> {
-    // Create an interpreter environment with macro parameter bindings
-    const env = createRootEnvironment();
+    const value = await this.evaluateCompileTimeValue(node, context);
+    if (!value) {
+      return null;
+    }
+
+    try {
+      return valueToNode(value, context.callSpan);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown conversion error";
+      this.report(
+        `Cannot convert compile-time result to AST: ${message}`,
+        context.callSpan,
+        "SEM_MACRO_EVAL_ERROR"
+      );
+      return null;
+    }
+  }
+
+  private async evaluateCompileTimeValue(
+    node: ExpressionNode,
+    context: MacroExpansionContext
+  ): Promise<Value | null> {
+    const env = extendEnvironment(this.macroRuntimeEnv);
     await this.seedMacroDependencies(
       env,
       context.dependencies,
       context.callSpan,
       context.originModuleId
     );
+
     for (const [name, value] of context.env.entries()) {
       try {
         const interpValue = nodeToValue(value);
         defineVariable(env, name, interpValue);
-      } catch (error) {
-        // If conversion fails, skip this binding
+      } catch {
         continue;
       }
     }
 
-    // Evaluate the expression using the full interpreter
-    // Share the analyzer's gensym counter with the interpreter context
     const evalContext = {
       callDepth: 0,
       gensymCounter: { value: this.nextGensymId },
     };
     const result = await evaluate(node, env, evalContext);
-
-    // Update the analyzer's counter after evaluation
     this.nextGensymId = evalContext.gensymCounter.value;
 
     if (!result.ok) {
-      // Report interpreter errors
       for (const diagnostic of result.diagnostics) {
         this.report(
           diagnostic.message,
@@ -2255,22 +2294,39 @@ export class SemanticAnalyzer {
       return null;
     }
 
-    if (!result.value) {
-      return null;
+    return result.value ?? null;
+  }
+
+  private bindMacroRuntimeValue(name: string, value: Value): void {
+    defineVariable(this.macroRuntimeEnv, name, value);
+    this.macroRuntimeBindings.set(name, value);
+  }
+
+  private shouldExposeDefinitionToMacroRuntime(scopeId: ScopeId): boolean {
+    return this.isTopLevelScope(scopeId);
+  }
+
+  private async exposeDefinitionToMacroRuntime(
+    name: string,
+    valueNode: ExpressionNode,
+    scopeId: ScopeId
+  ): Promise<void> {
+    if (
+      this.disableMacroRuntime ||
+      !this.shouldExposeDefinitionToMacroRuntime(scopeId)
+    ) {
+      return;
     }
 
-    // Convert the result value back to an AST node
-    try {
-      return valueToNode(result.value, context.callSpan);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unknown conversion error";
-      this.report(
-        `Cannot convert compile-time result to AST: ${message}`,
-        context.callSpan,
-        "SEM_MACRO_EVAL_ERROR"
-      );
-      return null;
+    const value = await this.evaluateCompileTimeValue(valueNode, {
+      env: new Map(),
+      callSpan: valueNode.span,
+      dependencies: this.collectInScopeDependencies(scopeId),
+      originModuleId: this.moduleId,
+    });
+
+    if (value) {
+      this.bindMacroRuntimeValue(name, value);
     }
   }
 

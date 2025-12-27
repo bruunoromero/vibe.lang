@@ -343,9 +343,13 @@ describe("generateModule", () => {
       (compute 41)
     `.trim();
 
-    const result = await generateFromSource(fixture, {
+    const { program, graph } = await compile(fixture, {
+      disableMacroRuntime: true,
+    });
+    const result = generateModule(program, graph, {
       sourceName: "imports.lang",
       targetFileName: "imports.js",
+      sourceContent: fixture,
     });
 
     expect(result.moduleText).toContain('import * as math from "./math.js";');
@@ -382,9 +386,13 @@ describe("generateModule", () => {
       answer
     `.trim();
 
-    const generated = await generateFromSource(fixture, {
+    const { program, graph } = await compile(fixture, {
+      disableMacroRuntime: true,
+    });
+    const generated = generateModule(program, graph, {
       sourceName: "package-import.lang",
       targetFileName: "package-import.js",
+      sourceContent: fixture,
     });
 
     expect(generated.moduleText).toContain(
@@ -411,6 +419,7 @@ describe("generateModule", () => {
       moduleId: "/workspace/main.lang",
       moduleResolver: resolver,
       moduleExports,
+      disableMacroRuntime: true,
     });
     const generated = generateModule(program, graph, {
       sourceName: "flatten.lang",

@@ -18,3 +18,8 @@
 (println "Joined path:" (path/join "/tmp" "example"))
 (greet "Node")
 (println (= 1 1 1 1 1))
+
+(cond
+  (= favorite-number 42) (println "The answer to life, the universe, and everything.")
+  (= favorite-number 7) (println "A lucky number.")
+  :else (println "Just a number."))

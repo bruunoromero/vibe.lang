@@ -20,6 +20,7 @@
 
 ## 2025-12-27
 
+- Macro expansion now shares a persistent interpreter environment with previously evaluated `def` forms, so compile-time code can call helper functions defined earlier in the same module. Top-level definitions are executed once during analysis, cached for later macro runs, and exposed to tests covering imported runtime aliases.
 - Removed support for the `@` deref reader macro during semantic analysis. Macro expansion, hygiene tracking, and scope scrubbing no longer special-case deref nodes, and analyzers now rely on explicit `(deref ...)` function calls if future runtimes reintroduce dereferencing behavior.
 
 ## 2025-12-26
