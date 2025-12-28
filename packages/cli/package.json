@@ -5,7 +5,8 @@
   "module": "index.ts",
   "scripts": {
     "build": "bun build index.ts --outdir dist --target bun",
-    "test": "bun test"
+    "test": "bun test",
+    "repl": "bun index.ts repl"
   },
   "dependencies": {
     "@vibe/syntax": "workspace:*",

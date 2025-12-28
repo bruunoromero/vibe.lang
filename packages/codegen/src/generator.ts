@@ -214,7 +214,15 @@ class ModuleEmitter {
       (node) => node.kind === NodeKind.Keyword
     );
     if (hasKeywordNodes) {
-      this.requireRuntimeHelper("keyword");
+      this.requireRuntimeHelper("keyword*");
+    }
+    const hasQuoteNodes = graph.nodes.some(
+      (node) =>
+        node.kind === NodeKind.Quote || node.kind === NodeKind.SyntaxQuote
+    );
+    if (hasQuoteNodes) {
+      this.requireRuntimeHelper("symbol*");
+      this.requireRuntimeHelper("list*");
     }
   }
 
@@ -409,12 +417,13 @@ class ModuleEmitter {
   }
 
   private requireRuntimeHelper(exportName: string): string {
-    const existing = this.runtimeHelpers.get(exportName);
+    const sanitized = sanitizeExternalIdentifier(exportName);
+    const existing = this.runtimeHelpers.get(sanitized);
     if (existing) {
       return existing;
     }
-    const alias = `__runtime_${sanitizeExternalIdentifier(exportName)}`;
-    this.runtimeHelpers.set(exportName, alias);
+    const alias = `__runtime_${sanitized}`;
+    this.runtimeHelpers.set(sanitized, alias);
     return alias;
   }
 
@@ -530,6 +539,18 @@ class ModuleEmitter {
 
   private emitExpression(node: ExpressionNode): string {
     switch (node.kind) {
+      case NodeKind.Quote: {
+        // quoted forms produce literal data structures: symbols become runtime
+        // symbols, lists/vectors become JS arrays, maps -> Map, sets -> Set
+        const target = (node as any).target as ExpressionNode | null;
+        if (!target) return "null";
+        return this.emitQuotedExpression(target);
+      }
+      case NodeKind.SyntaxQuote: {
+        const target = (node as any).target as ExpressionNode | null;
+        if (!target) return "null";
+        return this.emitQuotedExpression(target);
+      }
       case NodeKind.Number:
       case NodeKind.String:
       case NodeKind.Character:
@@ -562,8 +583,67 @@ class ModuleEmitter {
     }
   }
 
+  private emitQuotedExpression(node: ExpressionNode): string {
+    switch (node.kind) {
+      case NodeKind.Symbol: {
+        const helper = this.requireRuntimeHelper("symbol*");
+        const name = (node as any).lexeme ?? (node as any).value;
+        return `${helper}(${JSON.stringify(name)})`;
+      }
+      case NodeKind.Keyword:
+        return this.emitKeywordLiteral((node as any).value);
+      case NodeKind.Number:
+      case NodeKind.String:
+      case NodeKind.Character:
+        return JSON.stringify((node as any).value);
+      case NodeKind.Boolean:
+        return (node as any).value ? "true" : "false";
+      case NodeKind.Nil:
+        return "null";
+      case NodeKind.List: {
+        const seq = (node as any).elements
+          .map((el: ExpressionNode | null | undefined) =>
+            el ? this.emitQuotedExpression(el) : "null"
+          )
+          .join(", ");
+        const helper = this.requireRuntimeHelper("list*");
+        return `${helper}([${seq}])`;
+      }
+      case NodeKind.Vector: {
+        const seq = (node as any).elements
+          .map((el: ExpressionNode | null | undefined) =>
+            el ? this.emitQuotedExpression(el) : "null"
+          )
+          .join(", ");
+        return `[${seq}]`;
+      }
+      case NodeKind.Set: {
+        const elems = (node as any).elements
+          .map((el: ExpressionNode | null | undefined) =>
+            el ? this.emitQuotedExpression(el) : "null"
+          )
+          .join(", ");
+        return `new Set([${elems}])`;
+      }
+      case NodeKind.Map: {
+        const pairs = (node as any).entries
+          .map((entry: any) => {
+            if (!entry.key || !entry.value) return null;
+            const k = this.emitQuotedExpression(entry.key);
+            const v = this.emitQuotedExpression(entry.value);
+            return `[${k}, ${v}]`;
+          })
+          .filter(Boolean)
+          .join(", ");
+        return `new Map([${pairs}])`;
+      }
+      default:
+        throw new Error(`Unsupported quoted node kind: ${node.kind}`);
+    }
+  }
+
   private emitKeywordLiteral(raw: string): string {
-    const helper = this.requireRuntimeHelper("keyword");
+    const helper = this.requireRuntimeHelper("keyword*");
     const label = raw.startsWith(":") ? raw.slice(1) : raw;
     return `${helper}(${JSON.stringify(label)})`;
   }

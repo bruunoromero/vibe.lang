@@ -1981,7 +1981,9 @@ export class SemanticAnalyzer {
     if (!context) {
       this.syntaxQuoteDepth += 1;
       try {
-        await this.visit(node.target, scopeId);
+        // Walk the quoted structure without expanding macros or recording
+        // symbol usages so syntax-quoted forms remain literal data at runtime.
+        await this.visitQuoted(node.target, scopeId);
       } finally {
         this.syntaxQuoteDepth -= 1;
       }
@@ -1998,8 +2000,71 @@ export class SemanticAnalyzer {
     node: ReaderMacroNode | DispatchNode,
     scopeId: ScopeId
   ): Promise<void> {
-    if (node.target) {
-      await this.visit(node.target, scopeId);
+    if (!node.target) return;
+    // Quoted forms should not trigger macro expansion or normal symbol
+    // resolution; walk the quoted structure without expanding macros or
+    // recording symbol usages so quoted literals remain literal.
+    if (node.kind === NodeKind.Quote) {
+      await this.visitQuoted(node.target, scopeId);
+      return;
+    }
+
+    await this.visit(node.target, scopeId);
+  }
+
+  private async visitQuoted(node: ExpressionNode, scopeId: ScopeId) {
+    const nodeScopeId = this.getScopeForNode(node, scopeId);
+    switch (node.kind) {
+      case NodeKind.List:
+      case NodeKind.Vector:
+      case NodeKind.Set: {
+        this.recordNode(node, nodeScopeId);
+        for (const el of (node as any).elements) {
+          if (el) await this.visitQuoted(el, nodeScopeId);
+        }
+        break;
+      }
+      case NodeKind.Map: {
+        this.recordNode(node, nodeScopeId);
+        for (const entry of (node as MapNode).entries) {
+          if (entry.key) await this.visitQuoted(entry.key, nodeScopeId);
+          if (entry.value) await this.visitQuoted(entry.value, nodeScopeId);
+        }
+        break;
+      }
+      case NodeKind.Symbol:
+      case NodeKind.Keyword:
+      case NodeKind.Number:
+      case NodeKind.String:
+      case NodeKind.Character:
+      case NodeKind.Boolean:
+      case NodeKind.Nil: {
+        // Record the node but do not resolve usages or alter bindings.
+        this.recordNode(node, nodeScopeId);
+        break;
+      }
+      case NodeKind.Quote:
+      case NodeKind.SyntaxQuote:
+      case NodeKind.Unquote:
+      case NodeKind.UnquoteSplicing:
+      case NodeKind.Dispatch:
+      case NodeKind.NamespaceImport: {
+        // For nested reader-macros inside a quoted form, walk their target(s)
+        // conservatively without triggering expansion.
+        this.recordNode(node, nodeScopeId);
+        if ((node as any).target) {
+          await this.visitQuoted((node as any).target, nodeScopeId);
+        }
+        if (node.kind === NodeKind.NamespaceImport) {
+          for (const el of (node as NamespaceImportNode).elements) {
+            if (el) await this.visitQuoted(el, nodeScopeId);
+          }
+        }
+        break;
+      }
+      default:
+        this.recordNode(node, nodeScopeId);
+        break;
     }
   }
 

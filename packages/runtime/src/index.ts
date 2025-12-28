@@ -8,6 +8,10 @@ export interface RuntimeKeyword {
   readonly name: string;
 }
 
+export interface RuntimeList extends Array<unknown> {
+  readonly __vibeType: "list";
+}
+
 const isRuntimeSymbol = (value: unknown): value is RuntimeSymbol => {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -25,6 +29,15 @@ const isRuntimeKeyword = (value: unknown): value is RuntimeKeyword => {
   const candidate = value as Partial<RuntimeKeyword>;
   return (
     candidate.__vibeType === "keyword" && typeof candidate.name === "string"
+  );
+};
+
+const isRuntimeList = (value: unknown): value is RuntimeList => {
+  return (
+    Array.isArray(value) &&
+    typeof value === "object" &&
+    value !== null &&
+    (value as any).__vibeType === "list"
   );
 };
 
@@ -79,6 +92,23 @@ export const keyword_STAR = (label: unknown): RuntimeKeyword => {
   return createRuntimeKeyword(label);
 };
 
+export const list_STAR = (items: unknown[]): RuntimeList => {
+  const arr = Array.isArray(items) ? [...items] : [];
+  // Attach the vibe marker
+  const list = arr as unknown as RuntimeList;
+  Object.defineProperty(list, "__vibeType", {
+    value: "list",
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return list;
+};
+
+export const list_QMARK = (v: unknown): v is RuntimeList => {
+  return isRuntimeList(v);
+};
+
 export const keyword_QMARK = (value: unknown): value is RuntimeKeyword =>
   isRuntimeKeyword(value);
 
@@ -96,7 +126,8 @@ export const type = (v: unknown): RuntimeKeyword => {
   if (v === null) return createRuntimeKeyword("nil");
   if (isRuntimeSymbol(v)) return createRuntimeKeyword("symbol");
   if (isRuntimeKeyword(v)) return createRuntimeKeyword("keyword");
-  if (Array.isArray(v)) return createRuntimeKeyword("list");
+  if (isRuntimeList(v)) return createRuntimeKeyword("list");
+  if (Array.isArray(v)) return createRuntimeKeyword("vector");
   if (v instanceof Set) return createRuntimeKeyword("set");
   if (v instanceof Map) return createRuntimeKeyword("map");
   if (typeof v === "boolean") return createRuntimeKeyword("boolean");
@@ -301,6 +332,8 @@ export default {
   type,
   seq_QMARK,
   count,
+  list_STAR,
+  list_QMARK,
   add_STAR,
   sub_STAR,
   mul_STAR,
