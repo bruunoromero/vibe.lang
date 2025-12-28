@@ -23,3 +23,5 @@
   (= favorite-number 42) (println "The answer to life, the universe, and everything.")
   (= favorite-number 7) (println "A lucky number.")
   :else (println "Just a number."))
+
+(println (cons 1 [1 2 3]))

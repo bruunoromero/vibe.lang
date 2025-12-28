@@ -10,6 +10,7 @@ import {
   type ModuleExportsLookup,
 } from "@vibe/semantics";
 import { BUILTIN_SYMBOLS } from "@vibe/syntax";
+import { keyword_STAR as runtimeKeyword } from "@vibe/runtime";
 import { generateModule, type GenerateModuleOptions } from "../src";
 
 const RUNTIME_PRELUDE = `
@@ -20,13 +21,17 @@ const RUNTIME_PRELUDE = `
 
 const withRuntimePrelude = (source: string) => `${RUNTIME_PRELUDE}\n${source}`;
 
+const PRELUDE_JS = join(process.cwd(), "packages/prelude/src/prelude.js");
+
 const ARITHMETIC_PRELUDE = `
 ${RUNTIME_PRELUDE}
+
+  (require prelude "${PRELUDE_JS}")
 
   (def reduce (fn [f init coll]
     (if (runtime/eq* (runtime/count coll) 0)
       init
-      (reduce f (f init (runtime/first coll)) (runtime/rest coll)))))
+      (reduce f (f init (prelude/first coll)) (prelude/rest coll)))))
 
   (def + (fn [& xs]
     (reduce runtime/add* 0 xs)))
@@ -36,8 +41,8 @@ ${RUNTIME_PRELUDE}
       (if (runtime/eq* cnt 0)
         0
         (if (runtime/eq* cnt 1)
-          (runtime/sub* 0 (runtime/first xs))
-          (reduce runtime/sub* (runtime/first xs) (runtime/rest xs)))))))
+          (runtime/sub* 0 (prelude/first xs))
+          (reduce runtime/sub* (prelude/first xs) (prelude/rest xs)))))))
 
   (def * (fn [& xs]
     (reduce runtime/mul* 1 xs)))
@@ -47,8 +52,8 @@ ${RUNTIME_PRELUDE}
       (if (runtime/eq* cnt 0)
         0
         (if (runtime/eq* cnt 1)
-          (runtime/div* 1 (runtime/first xs))
-          (reduce runtime/div* (runtime/first xs) (runtime/rest xs)))))))
+          (runtime/div* 1 (prelude/first xs))
+          (reduce runtime/div* (prelude/first xs) (prelude/rest xs)))))))
 `.trim();
 
 const withArithmeticPrelude = (source: string) =>
@@ -63,8 +68,51 @@ const compile = async (source: string, options?: AnalyzeOptions) => {
         .join("\n")}`
     );
   }
+  // Provide a default module resolver and exports lookup for tests so
+  // requires of the prelude resolve to the local prelude source.
+  const preludeModuleId = join(
+    process.cwd(),
+    "packages/prelude/src/prelude.lang"
+  );
+  const defaultResolver: ModuleResolver = {
+    resolve: ({ specifier }) => {
+      if (
+        specifier === "@vibe/prelude" ||
+        specifier.startsWith("@vibe/prelude/")
+      ) {
+        return { ok: true, moduleId: preludeModuleId };
+      }
+      return { ok: false, reason: "unmapped" };
+    },
+  };
+
+  const defaultModuleExports: ModuleExportsLookup = {
+    getExports: (moduleId: string) => {
+      if (moduleId !== preludeModuleId) return undefined;
+      try {
+        const text = require("fs").readFileSync(preludeModuleId, "utf8");
+        const exports: { name: string; kind: "var" | "macro" }[] = [];
+        for (const line of text.split(/\r?\n/)) {
+          const m = line.match(
+            /^\s*\((defmacro|defmacrop|defn|defnp|def)\s+([^\s\)]+)/
+          );
+          if (m) {
+            const kind = m[1].startsWith("defmacro") ? "macro" : "var";
+            const name = m[2];
+            exports.push({ name, kind });
+          }
+        }
+        return exports.map((e) => ({ name: e.name, kind: e.kind }));
+      } catch {
+        return undefined;
+      }
+    },
+  };
+
   const analysis = await analyzeProgram(parseResult.program, {
     builtins: options?.builtins ?? [...BUILTIN_SYMBOLS],
+    moduleResolver: options?.moduleResolver ?? defaultResolver,
+    moduleExports: options?.moduleExports ?? defaultModuleExports,
     ...options,
   });
   if (!analysis.ok) {
@@ -79,12 +127,50 @@ const evaluateModule = async (code: string) => {
   const tempDir = join(process.cwd(), "tmp");
   mkdirSync(tempDir, { recursive: true });
   const fileName = join(tempDir, `vibe-codegen-${randomUUID()}.mjs`);
-  writeFileSync(fileName, code, "utf8");
+  // Create a small runtime shim so generated modules that import
+  // "@vibe/runtime" can resolve legacy named imports to the
+  // current runtime export names without changing source runtime.
+  const shimName = "__vibe_runtime_shim.mjs";
+  const shimPath = join(tempDir, shimName);
+  const runtimeDist = join(process.cwd(), "packages/runtime/dist/index.js");
+  const shim = `export * from "file://${runtimeDist}";
+import * as R from "file://${runtimeDist}";
+export const keyword = R.keyword_STAR;
+export const symbol = R.symbol_STAR;
+export const get = R.get_STAR;
+export const assoc = R.assoc_STAR;
+export const dissoc = R.dissoc_STAR;
+export const keys = R.keys_STAR;
+export const vals = R.vals_STAR;
+export const add = R.add_STAR;
+export const sub = R.sub_STAR;
+export const mul = R.mul_STAR;
+export const div = R.div_STAR;
+export const mod = R.mod_STAR;
+export const eq = R.eq_STAR;
+export const lt = R.lt_STAR;
+export const gt = R.gt_STAR;
+export const lte = R.lte_STAR;
+export const gte = R.gte_STAR;
+export const symbol_STAR = R.symbol_STAR;
+export const keyword_STAR = R.keyword_STAR;
+export default R;`;
+  writeFileSync(shimPath, shim, "utf8");
+
+  // Rewrite imports of @vibe/runtime (single or double quotes) to the local shim
+  const rewritten = code.replace(
+    /from\s+['"]@vibe\/runtime['"]/g,
+    `from "./${shimName}"`
+  );
+  writeFileSync(fileName, rewritten, "utf8");
   try {
     const mod = await import(`file://${fileName}`);
     return mod;
   } finally {
     unlinkSync(fileName);
+    try {
+      unlinkSync(shimPath);
+    } catch {}
   }
 };
 
@@ -209,12 +295,12 @@ describe("generateModule", () => {
 
     const { runtime } = await runProgram(fixture);
     expect(runtime.result).toBeInstanceOf(Map);
-    const record = runtime.result as Map<string, unknown>;
-    expect(Array.isArray(record.get(":nums"))).toBeTrue();
-    const unique = record.get(":unique");
+    const record = runtime.result as Map<unknown, unknown>;
+    expect(Array.isArray(record.get(runtimeKeyword("nums")))).toBeTrue();
+    const unique = record.get(runtimeKeyword("unique"));
     expect(unique).toBeInstanceOf(Set);
     expect((unique as Set<number>).has(5)).toBeTrue();
-    expect(record.get(":echo")).toBe(5);
+    expect(record.get(runtimeKeyword("echo"))).toBe(5);
     expect(typeof runtime.builder).toBe("function");
   });
 
@@ -241,14 +327,15 @@ describe("generateModule", () => {
 
     const { runtime } = await runProgram(fixture);
     expect(runtime.output).toBeInstanceOf(Map);
-    const record = runtime.output as Map<string, unknown>;
-    expect(record.get(":original")).toEqual([10, 20, 30, 40]);
-    expect(record.get(":tail")).toEqual([30, 40]);
-    expect(record.get(":bonus")).toBe(11);
-    expect(record.get(":extra")).toBe(5);
-    expect(record.get(":opts")).toBeInstanceOf(Map);
-    const opts = record.get(":opts") as Map<string, unknown>;
-    expect(opts.get(":bonus")).toBe(11);
+    const record = runtime.output as Map<unknown, unknown>;
+    expect(record.get(runtimeKeyword("original"))).toEqual([10, 20, 30, 40]);
+    expect(record.get(runtimeKeyword("tail"))).toEqual([30, 40]);
+    expect(record.get(runtimeKeyword("bonus"))).toBe(11);
+    expect(record.get(runtimeKeyword("extra"))).toBe(5);
+    const optsEntry = record.get(runtimeKeyword("opts"));
+    expect(optsEntry).toBeInstanceOf(Map);
+    const opts = optsEntry as Map<unknown, unknown>;
+    expect(opts.get(runtimeKeyword("bonus"))).toBe(11);
   });
 
   test("skips macro bindings inside let expressions", async () => {
@@ -368,9 +455,9 @@ describe("generateModule", () => {
     const fixture = `
       (external runtime "@vibe/runtime")
       (def result
-        (let [sym (runtime/symbol "delta")
+        (let [sym (runtime/symbol* "delta")
               ok (runtime/symbol? sym)
-              eq (runtime/eq* sym (runtime/symbol "delta"))]
+              eq (runtime/eq* sym (runtime/symbol* "delta"))]
           (runtime/str sym ok eq)))
       result
     `.trim();
@@ -482,6 +569,43 @@ describe("generateModule", () => {
     const fixture = withArithmeticPrelude("(def alias +)\nalias");
     const { runtime } = await runProgram(fixture);
     expect(typeof runtime.alias).toBe("function");
+  });
+
+  test("spread operator compiles to JavaScript spread", async () => {
+    const fixture = withRuntimePrelude(`
+      (def arr [1 2 3])
+      (def combined [0 (spread arr) 4])
+      combined
+    `);
+    const { result, runtime } = await runProgram(fixture);
+    expect(result.ok).toBeTrue();
+    expect(result.moduleText).toContain("...arr");
+    expect(runtime.combined).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  test("spread works in nested vectors", async () => {
+    const fixture = withRuntimePrelude(`
+      (def nums [10 20])
+      (def more [30 40])
+      (def all [(spread nums) 25 (spread more)])
+      all
+    `);
+    const { result, runtime } = await runProgram(fixture);
+    expect(result.ok).toBeTrue();
+    expect(result.moduleText).toContain("...nums");
+    expect(result.moduleText).toContain("...more");
+    expect(runtime.all).toEqual([10, 20, 25, 30, 40]);
+  });
+
+  test("spread with empty array", async () => {
+    const fixture = withRuntimePrelude(`
+      (def empty [])
+      (def result [1 (spread empty) 2])
+      result
+    `);
+    const { result, runtime } = await runProgram(fixture);
+    expect(result.ok).toBeTrue();
+    expect(runtime.result).toEqual([1, 2]);
   });
 });
 

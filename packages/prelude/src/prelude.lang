@@ -29,6 +29,17 @@
     `(defp ~name
       (fn ~@clauses))))
 
+
+;; ============================================================
+;; Collection Constructors
+;; ============================================================
+
+(defn list [& items]
+  items)
+
+(defn vector [& items]
+  items)
+
 ;; ============================================================
 ;; Logic Macros (short-circuiting)
 ;; ============================================================
@@ -60,16 +71,16 @@
 (defn empty? [coll]
   (runtime/eq* (count coll) 0))
 
-(defn cons 
-  ([head] [head])
-  ([head tail]
-   (runtime/cons head tail)))
-
 (defn first [coll]
-  (runtime/first coll))
+  (let [[x] coll]
+    x))
 
 (defn rest [coll]
-  (runtime/rest coll))
+  (let [[_ & xs] coll]
+    xs))
+
+(defn cons [x xs]
+  (list x (spread xs)))
 
 (defmacro cond 
   ([]
@@ -86,8 +97,8 @@
 ;; ============================================================
 
 (defn get 
-  ([target member] (runtime/get target member))
-  ([target member default] (or (runtime/get target member) default)))
+  ([target member] (runtime/get* target member))
+  ([target member default] (or (runtime/get* target member) default)))
 
 (defn apply [f args]
   (runtime/apply f args))
@@ -199,15 +210,6 @@
 (defn reverse [coll]
   (reduce (fn [acc x] (cons x acc)) [] coll))
 
-;; ============================================================
-;; Collection Constructors
-;; ============================================================
-
-(defn list [& items]
-  items)
-
-(defn vector [& items]
-  items)
 ;; ============================================================
 ;; I/O Functions
 ;; ============================================================

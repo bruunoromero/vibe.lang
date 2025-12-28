@@ -30,6 +30,7 @@ export type Value =
   | BooleanValue
   | NilValue
   | SymbolValue
+  | KeywordValue
   | ListValue
   | VectorValue
   | SetValue
@@ -60,6 +61,11 @@ export interface NilValue {
 
 export interface SymbolValue {
   readonly kind: "symbol";
+  readonly value: string;
+}
+
+export interface KeywordValue {
+  readonly kind: "keyword";
   readonly value: string;
 }
 
@@ -144,6 +150,9 @@ export const isNil = (value: Value): value is NilValue => value.kind === "nil";
 export const isSymbol = (value: Value): value is SymbolValue =>
   value.kind === "symbol";
 
+export const isKeyword = (value: Value): value is KeywordValue =>
+  value.kind === "keyword";
+
 export const isList = (value: Value): value is ListValue =>
   value.kind === "list";
 
@@ -194,6 +203,8 @@ export const valuesEqual = (a: Value, b: Value): boolean => {
       return true;
     case "symbol":
       return a.value === (b as SymbolValue).value;
+    case "keyword":
+      return a.value === (b as KeywordValue).value;
     case "list":
     case "vector":
     case "set": {
@@ -265,15 +276,6 @@ export const valueToNode = (value: Value, span: SourceSpan): ExpressionNode => {
     }
     case "symbol": {
       const lexeme = value.value;
-      if (lexeme.startsWith(":")) {
-        const keywordNode: KeywordNode = {
-          kind: NK.Keyword,
-          span,
-          lexeme,
-          value: lexeme,
-        };
-        return keywordNode;
-      }
       const node: SymbolNode = {
         kind: NK.Symbol,
         span,
@@ -281,6 +283,16 @@ export const valueToNode = (value: Value, span: SourceSpan): ExpressionNode => {
         value: lexeme,
       };
       return node;
+    }
+    case "keyword": {
+      const lexeme = value.value;
+      const keywordNode: KeywordNode = {
+        kind: NK.Keyword,
+        span,
+        lexeme,
+        value: lexeme,
+      };
+      return keywordNode;
     }
     case "list": {
       const node: ListNode = {
@@ -309,12 +321,21 @@ export const valueToNode = (value: Value, span: SourceSpan): ExpressionNode => {
     case "map": {
       const entries: MapEntryNode[] = [];
       for (const [keyStr, val] of value.entries) {
-        const key: SymbolNode = {
-          kind: NK.Symbol,
-          span,
-          lexeme: keyStr,
-          value: keyStr,
-        };
+        const keyIsKeyword =
+          typeof keyStr === "string" && keyStr.startsWith(":");
+        const key: SymbolNode | KeywordNode = keyIsKeyword
+          ? ({
+              kind: NK.Keyword,
+              span,
+              lexeme: keyStr,
+              value: keyStr,
+            } as KeywordNode)
+          : ({
+              kind: NK.Symbol,
+              span,
+              lexeme: keyStr,
+              value: keyStr,
+            } as SymbolNode);
         entries.push({
           kind: NK.MapEntry,
           span,
@@ -356,7 +377,7 @@ export const nodeToValue = (node: ExpressionNode): Value => {
       return { kind: "nil" };
     case NK.Keyword: {
       const value = node.value.startsWith(":") ? node.value : `:${node.value}`;
-      return { kind: "symbol", value };
+      return { kind: "keyword", value };
     }
     case NK.Symbol:
       return { kind: "symbol", value: node.value };
@@ -386,10 +407,11 @@ export const nodeToValue = (node: ExpressionNode): Value => {
       for (const entry of node.entries) {
         if (entry.key && entry.value) {
           const key = nodeToValue(entry.key);
-          if (!isSymbol(key) && !isString(key)) {
-            throw new Error("Map keys must be symbols or strings");
+          if (!isSymbol(key) && !isString(key) && !isKeyword(key)) {
+            throw new Error("Map keys must be symbols, strings, or keywords");
           }
-          const keyStr = isSymbol(key) ? key.value : key.value;
+          const keyStr =
+            isSymbol(key) || isKeyword(key) ? key.value : key.value;
           entries.set(keyStr, nodeToValue(entry.value));
         }
       }
@@ -423,6 +445,11 @@ export const makeNil = (): NilValue => ({ kind: "nil" });
 
 export const makeSymbol = (value: string): SymbolValue => ({
   kind: "symbol",
+  value,
+});
+
+export const makeKeyword = (value: string): KeywordValue => ({
+  kind: "keyword",
   value,
 });
 

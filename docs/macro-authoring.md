@@ -113,20 +113,22 @@ Use this power sparingly: running large computations during analysis slows the b
 
 Because the macro body itself runs through the interpreter, you can return any data structure that mirrors the surface syntax. For example, `(list 'let bindings body)` or `(vector 'foo)` are both valid macro results even though they never use `` `(...) ``. The analyzer will convert the returned value back into an AST node via `valueToNode`, so choose whichever style (raw data or syntax quote) keeps the macro simplest. Syntax quotes remain ideal when you want `~`/`~@` splicing, while raw data works well for generated forms that are easier to assemble with regular list helpers.
 
-## Symbols vs. Strings at Runtime
+## Symbols and Keywords at Runtime
 
-When code reaches the runtime, symbols are represented as tagged JavaScript objects with `__vibeType: "symbol"`. Use the helpers in `@vibe/runtime` to work with them:
+When code reaches the runtime, symbols and keywords are represented as tagged JavaScript objects (`__vibeType: "symbol"` or `"keyword"`). Use the helpers in `@vibe/runtime` to work with them:
 
 ```
 (external runtime "@vibe/runtime")
 
 (def quoted (quote foo))
 (def runtime-sym (runtime/symbol "foo"))
+(def runtime-kw (runtime/keyword "foo"))
 (runtime/symbol? runtime-sym)  ;=> true
+(runtime/keyword? runtime-kw)   ;=> true
 (runtime/eq* runtime-sym quoted) ;=> true
 ```
 
-Because `runtime/symbol` lives in the runtime package, you can build or compare symbols inside macros without adding a new builtin special form. Map helpers such as `runtime/assoc` and `runtime/get` also understand tagged symbols, so you can safely use them as keys without stringifying manually.
+Because these helpers live in the runtime package, you can build or compare identifiers inside macros without adding new builtin special forms. Map helpers such as `runtime/assoc` and `runtime/get` also understand tagged symbols/keywords, so you can safely use them as keys without stringifying manually.
 
 Example using core primitives:
 

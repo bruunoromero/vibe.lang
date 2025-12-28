@@ -14,7 +14,6 @@ import {
   analyzeProgram,
   type ModuleResolver,
   type ModuleExportEntry,
-  type ModuleExportedMacro,
   type ModuleExportedMacroClause,
   type ModuleExportsLookup,
   type ModuleMacroDependency,

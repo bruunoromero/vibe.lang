@@ -120,6 +120,9 @@ const valueToJS = (value: Value): unknown => {
       return null;
     case "symbol":
       return `<symbol ${value.value}>`;
+    case "keyword":
+      // Display keywords as a friendly tag in the REPL output
+      return `<keyword ${value.value}>`;
     case "list":
     case "vector":
       return value.elements.map(valueToJS);
@@ -204,7 +207,7 @@ export const runRepl = async (
       const fs = require("fs");
       const { parseSource } = require("@vibe/parser");
       // Import runtime from relative path
-      const runtime = await import("../../runtime/src/index");
+      const runtime = await import("@vibe/runtime");
 
       // Create a runtime namespace with all runtime primitives
       // so that (external runtime "@vibe/runtime") in prelude can resolve
@@ -225,6 +228,26 @@ export const runRepl = async (
                       return v.value;
                     case "nil":
                       return null;
+                    case "symbol":
+                      try {
+                        const name = v.value as string;
+                        if (typeof (runtime as any).symbol === "function") {
+                          return (runtime as any).symbol(name);
+                        }
+                        return name;
+                      } catch {
+                        return v.value;
+                      }
+                    case "keyword":
+                      try {
+                        const name = v.value as string;
+                        if (typeof (runtime as any).keyword === "function") {
+                          return (runtime as any).keyword(name);
+                        }
+                        return name;
+                      } catch {
+                        return v.value;
+                      }
                     case "list":
                     case "vector":
                       return v.elements.map(valueToJS);
@@ -241,6 +264,31 @@ export const runRepl = async (
                 const jsToValue = (jsVal: any): Value => {
                   if (jsVal === null || jsVal === undefined)
                     return { kind: "nil" };
+                  // If runtime exported tagged symbols/keywords, convert them back
+                  try {
+                    if (
+                      jsVal &&
+                      typeof jsVal === "object" &&
+                      typeof (runtime as any).keyword_QMARK === "function" &&
+                      (runtime as any).keyword_QMARK(jsVal)
+                    ) {
+                      return {
+                        kind: "keyword",
+                        // use the raw runtime name (no leading ':')
+                        value: (jsVal as any).name,
+                      };
+                    }
+                    if (
+                      jsVal &&
+                      typeof jsVal === "object" &&
+                      typeof (runtime as any).symbol_QMARK === "function" &&
+                      (runtime as any).symbol_QMARK(jsVal)
+                    ) {
+                      return { kind: "symbol", value: (jsVal as any).name };
+                    }
+                  } catch {
+                    // fallthrough to primitive handling
+                  }
                   if (typeof jsVal === "number")
                     return { kind: "number", value: jsVal };
                   if (typeof jsVal === "string")

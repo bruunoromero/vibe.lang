@@ -121,6 +121,7 @@ export const BUILTIN_SYMBOLS = [
   "external",
   "import",
   "gensym",
+  "spread",
 ] as const;
 
 export interface AstNode<K extends NodeKind = NodeKind> {

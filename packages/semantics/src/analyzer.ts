@@ -725,6 +725,10 @@ export class SemanticAnalyzer {
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleThrow(node, scopeId);
         return true;
+      case "spread":
+        this.recordSymbolUsage(head, scopeId, "usage");
+        await this.handleSpread(node, scopeId);
+        return true;
       case "macro":
         this.recordSymbolUsage(head, scopeId, "usage");
         this.report(
@@ -1212,6 +1216,32 @@ export class SemanticAnalyzer {
         "throw accepts exactly one argument",
         extra.span,
         "SEM_THROW_TOO_MANY_ARGS"
+      );
+      await this.visit(extra, scopeId);
+    }
+  }
+
+  private async handleSpread(node: ListNode, scopeId: ScopeId): Promise<void> {
+    const argNode = node.elements[1];
+    if (!argNode) {
+      this.report(
+        "spread requires a value expression",
+        node.span,
+        "SEM_SPREAD_REQUIRES_VALUE"
+      );
+    } else {
+      await this.visit(argNode, scopeId);
+    }
+
+    for (let index = 2; index < node.elements.length; index += 1) {
+      const extra = node.elements[index];
+      if (!extra) {
+        continue;
+      }
+      this.report(
+        "spread accepts exactly one argument",
+        extra.span,
+        "SEM_SPREAD_TOO_MANY_ARGS"
       );
       await this.visit(extra, scopeId);
     }

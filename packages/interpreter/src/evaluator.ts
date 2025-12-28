@@ -20,10 +20,12 @@ import {
   parseBindingPattern,
 } from "@vibe/syntax";
 import {
-  symbol as runtimeSymbol,
+  symbol_STAR as runtimeSymbol,
   symbol_QMARK as runtimeSymbol_QMARK,
+  keyword_STAR as runtimeKeyword,
+  keyword_QMARK as runtimeKeyword_QMARK,
 } from "@vibe/runtime";
-import type { RuntimeSymbol } from "@vibe/runtime";
+import type { RuntimeSymbol, RuntimeKeyword } from "@vibe/runtime";
 import type { Environment } from "./environment";
 import {
   createEnvironment,
@@ -37,11 +39,13 @@ import {
   isFunction,
   isBuiltin,
   isTruthy,
+  isKeyword,
   makeNumber,
   makeString,
   makeBoolean,
   makeNil,
   makeSymbol,
+  makeKeyword,
   makeError,
   makeList,
   makeVector,
@@ -182,7 +186,7 @@ const evaluateNode = async (
       return { ok: true, value: makeNil(), diagnostics: [] };
     case NK.Keyword: {
       const label = node.value.startsWith(":") ? node.value : `:${node.value}`;
-      return { ok: true, value: makeSymbol(label), diagnostics: [] };
+      return { ok: true, value: makeKeyword(label), diagnostics: [] };
     }
     case NK.Symbol:
       return evaluateSymbol(node.value, node.span, env);
@@ -429,6 +433,44 @@ const evaluateList = async (
   const diagnostics: Diagnostic[] = [];
 
   for (const argNode of argNodes) {
+    if (!argNode) continue;
+    // Support runtime splicing via (spread <expr>) in argument positions
+    if (argNode.kind === NK.List) {
+      const head = argNode.elements[0];
+      if (head && head.kind === NK.Symbol && head.value === "spread") {
+        const inner = argNode.elements[1];
+        if (!inner) {
+          diagnostics.push({
+            message: "spread requires a value expression",
+            span: argNode.span,
+            severity: DiagnosticSeverity.Error,
+            code: "INTERP_SPREAD_REQUIRES_VALUE",
+          });
+          continue;
+        }
+        const spreadResult = await evaluateNode(inner, env, context);
+        if (!spreadResult.ok) {
+          diagnostics.push(...spreadResult.diagnostics);
+          continue;
+        }
+        const spreadVal = spreadResult.value!;
+        if (spreadVal.kind === "vector" || spreadVal.kind === "list") {
+          for (const item of spreadVal.elements) {
+            args.push(item);
+          }
+          continue;
+        }
+        // Non-sequence values cannot be spliced
+        diagnostics.push({
+          message: "spread expects a sequence (vector or list) to splice",
+          span: argNode.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SPREAD_NOT_SEQUENCE",
+        });
+        continue;
+      }
+    }
+
     const argResult = await evaluateNode(argNode, env, context);
     if (!argResult.ok) {
       diagnostics.push(...argResult.diagnostics);
@@ -454,6 +496,42 @@ const evaluateVector = async (
 
   for (const elem of node.elements) {
     if (!elem) continue;
+    // Support runtime splicing via (spread <expr>) as vector elements
+    if (elem.kind === NK.List) {
+      const head = elem.elements[0];
+      if (head && head.kind === NK.Symbol && head.value === "spread") {
+        const inner = elem.elements[1];
+        if (!inner) {
+          diagnostics.push({
+            message: "spread requires a value expression",
+            span: elem.span,
+            severity: DiagnosticSeverity.Error,
+            code: "INTERP_SPREAD_REQUIRES_VALUE",
+          });
+          continue;
+        }
+        const spreadResult = await evaluateNode(inner, env, context);
+        if (!spreadResult.ok) {
+          diagnostics.push(...spreadResult.diagnostics);
+          continue;
+        }
+        const spreadVal = spreadResult.value!;
+        if (spreadVal.kind === "vector" || spreadVal.kind === "list") {
+          for (const item of spreadVal.elements) {
+            elements.push(item);
+          }
+          continue;
+        }
+        diagnostics.push({
+          message: "spread expects a sequence (vector or list) to splice",
+          span: elem.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SPREAD_NOT_SEQUENCE",
+        });
+        continue;
+      }
+    }
+
     const elemResult = await evaluateNode(elem, env, context);
     if (!elemResult.ok) {
       diagnostics.push(...elemResult.diagnostics);
@@ -518,9 +596,9 @@ const evaluateMap = async (
     }
 
     const key = keyResult.value!;
-    if (!isSymbol(key) && !isString(key)) {
+    if (!isSymbol(key) && !isString(key) && !isKeyword(key)) {
       diagnostics.push({
-        message: "Map keys must be symbols or strings",
+        message: "Map keys must be symbols, strings, or keywords",
         span: entry.key.span,
         severity: DiagnosticSeverity.Error,
         code: "INTERP_MAP_KEY_TYPE",
@@ -528,7 +606,7 @@ const evaluateMap = async (
       continue;
     }
 
-    const keyStr = isSymbol(key) ? key.value : key.value;
+    const keyStr = isSymbol(key) || isKeyword(key) ? key.value : key.value;
     entries.set(keyStr, valueResult.value!);
   }
 
@@ -574,6 +652,8 @@ const tryEvaluateSpecialForm = async (
       return evaluateMacroLiteral(node);
     case "gensym":
       return evaluateGensym(node, env, context);
+    case "spread":
+      return evaluateSpread(node);
     default:
       return null;
   }
@@ -581,6 +661,14 @@ const tryEvaluateSpecialForm = async (
 
 const evaluateMacroLiteral = (_node: ListNode): EvalResult => {
   // Macro literals are compile-time only; at runtime we treat them as no-ops.
+  return { ok: true, value: makeNil(), diagnostics: [] };
+};
+
+const evaluateSpread = (node: ListNode): EvalResult => {
+  // Spread is a codegen-only construct. At compile-time, we treat it as nil
+  // since it cannot be meaningfully evaluated. This allows definitions containing
+  // spread to pass semantic analysis, though they won't be fully evaluable at
+  // compile-time.
   return { ok: true, value: makeNil(), diagnostics: [] };
 };
 
@@ -870,12 +958,12 @@ const evaluateQuote = (node: ExpressionNode, env: Environment): EvalResult => {
         if (!keyResult.ok) return keyResult;
         const key = keyResult.value!;
 
-        if (!isSymbol(key) && !isString(key)) {
+        if (!isSymbol(key) && !isString(key) && !isKeyword(key)) {
           return {
             ok: false,
             diagnostics: [
               {
-                message: "Map keys must be symbols or strings",
+                message: "Map keys must be symbols, strings, or keywords",
                 span: entry.key.span,
                 severity: DiagnosticSeverity.Error,
                 code: "INTERP_MAP_KEY_TYPE",
@@ -1152,12 +1240,15 @@ const instantiateSyntaxMap = async (
       return keyResult;
     }
     const keyValue = keyResult.value;
-    if (!keyValue || (!isSymbol(keyValue) && !isString(keyValue))) {
+    if (
+      !keyValue ||
+      (!isSymbol(keyValue) && !isString(keyValue) && !isKeyword(keyValue))
+    ) {
       return {
         ok: false,
         diagnostics: [
           {
-            message: "Map keys must be symbols or strings",
+            message: "Map keys must be symbols, strings, or keywords",
             span: entry.key.span,
             severity: DiagnosticSeverity.Error,
             code: "INTERP_SYNTAX_MAP_KEY_TYPE",
@@ -2175,7 +2266,9 @@ const valueToJS = (value: Value): any => {
     case "nil":
       return null;
     case "symbol":
-      return runtimeSymbol(value.value);
+      return value.value.startsWith(":")
+        ? runtimeKeyword(value.value.slice(1))
+        : runtimeSymbol(value.value);
     case "list":
     case "vector":
       return value.elements.map(valueToJS);
@@ -2233,6 +2326,11 @@ const jsToValue = (jsValue: any): Value => {
   }
   if (jsValue instanceof Set) {
     return makeSet(Array.from(jsValue).map(jsToValue));
+  }
+  if (runtimeKeyword_QMARK(jsValue)) {
+    // runtime keyword names are stored without a leading colon; use the raw
+    // name as the vibe `keyword` value (no leading ':').
+    return makeKeyword((jsValue as RuntimeKeyword).name);
   }
   if (runtimeSymbol_QMARK(jsValue)) {
     return makeSymbol((jsValue as RuntimeSymbol).name);

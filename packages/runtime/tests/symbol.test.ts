@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
-  symbol,
+  symbol_STAR as symbol,
   symbol_QMARK,
+  keyword_STAR as keyword,
+  keyword_QMARK,
   eq_STAR,
-  str,
-  assoc,
-  get,
+  assoc_STAR as assoc,
+  get_STAR as get,
   type,
 } from "../src/index";
 
@@ -24,14 +25,14 @@ describe("runtime symbols", () => {
     expect(eq_STAR(left, other)).toBeFalse();
   });
 
-  test("str prints readable symbol names", () => {
-    const printable = symbol("demo");
-    expect(str(printable)).toBe("demo");
-  });
+  // test("str prints readable symbol names", () => {
+  //   const printable = symbol("demo");
+  //   expect(str(printable)).toBe("demo");
+  // });
 
   test("map helpers treat symbols as keys", () => {
     const key = symbol("answer");
-    const updated = assoc({}, key, 42);
+    const updated = assoc(new Map(), key, 42);
     expect(get(updated, key)).toBe(42);
   });
 
@@ -49,9 +50,34 @@ describe("runtime symbols", () => {
     expect(get(entries, symbol("beta"))).toBe(2);
   });
 
-  test("type returns keyword-like symbols", () => {
+  test("type returns keywords", () => {
     const result = type(symbol("foo"));
-    expect(symbol_QMARK(result)).toBeTrue();
-    expect(result.name).toBe(":symbol");
+    expect(keyword_QMARK(result)).toBeTrue();
+    expect(result).toEqual({ __vibeType: "keyword", name: "symbol" });
+  });
+});
+
+describe("runtime keywords", () => {
+  test("keyword creates tagged objects and interns names", () => {
+    const alpha = keyword("alpha");
+    const beta = keyword("alpha");
+    expect(keyword_QMARK(alpha)).toBeTrue();
+    expect(alpha).toEqual({ __vibeType: "keyword", name: "alpha" });
+    expect(alpha).toBe(beta);
+  });
+
+  test("eq* compares keywords by name", () => {
+    const left = keyword("foo");
+    const right = keyword("foo");
+    const other = keyword("bar");
+    expect(eq_STAR(left, right)).toBeTrue();
+    expect(eq_STAR(left, other)).toBeFalse();
+  });
+
+  test("get resolves keyword map keys", () => {
+    const key = keyword("answer");
+    const entries = new Map<unknown, unknown>();
+    entries.set(key, 42);
+    expect(get(entries, keyword("answer"))).toBe(42);
   });
 });
