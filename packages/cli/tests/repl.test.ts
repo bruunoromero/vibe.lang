@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { runRepl } from "../src/repl";
 
 const makeReader = (lines: Array<string | null>) => {

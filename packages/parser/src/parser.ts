@@ -5,7 +5,6 @@ import {
   TokenType,
   createSpan,
   type Diagnostic,
-  type DispatchNode,
   type ExpressionNode,
   type ListNode,
   type MapEntryNode,
@@ -129,8 +128,7 @@ export class Parser {
         return this.parseReaderMacro(NodeKind.Unquote, token);
       case TokenType.UnquoteSplicing:
         return this.parseReaderMacro(NodeKind.UnquoteSplicing, token);
-      case TokenType.Dispatch:
-        return this.parseDispatch(token);
+
       case TokenType.Number:
         return this.createAtomNode(
           NodeKind.Number,
@@ -297,45 +295,6 @@ export class Parser {
     } satisfies ReaderMacroNode<K>;
   }
 
-  private async parseDispatch(token: Token): Promise<ExpressionNode> {
-    if (await this.check(TokenType.LeftBrace)) {
-      const open = await this.advance();
-      if (open) {
-        const seq = await this.parseSequenceNode({
-          kind: NodeKind.List,
-          open,
-          closing: TokenType.RightBrace,
-          structure: "list",
-          unterminatedCode: "PARSE_LIST_UNTERMINATED",
-          spanStart: token,
-        });
-        return {
-          kind: NodeKind.Dispatch,
-          target: seq as ExpressionNode,
-          span: this.spanFromRefs(token, seq as SpanCarrier),
-        } satisfies ExpressionNode;
-      }
-    }
-    let target: ExpressionNode | null = null;
-    if (!(await this.isExpressionTerminator())) {
-      target = await this.parseExpression();
-    }
-    if (!target) {
-      this.report(
-        "Dispatch macro requires a following form",
-        token.span.start,
-        token.span.end,
-        "PARSE_DISPATCH_MISSING_TARGET"
-      );
-    }
-    const endRef: SpanCarrier = (target ?? token) as SpanCarrier;
-    return {
-      kind: NodeKind.Dispatch,
-      target: target ?? null,
-      span: this.spanFromRefs(token, endRef),
-    } satisfies ExpressionNode;
-  }
-
   private createMapEntry(
     key: ExpressionNode | null,
     value: ExpressionNode | null,
@@ -473,8 +432,7 @@ export class Parser {
         return "~";
       case TokenType.UnquoteSplicing:
         return "~@";
-      case TokenType.Dispatch:
-        return "#";
+
       default:
         return kind;
     }
@@ -586,9 +544,7 @@ class ScopeAnnotator {
       case NodeKind.UnquoteSplicing:
         this.annotateReaderMacro(node as ReaderMacroNode, scopeId);
         break;
-      case NodeKind.Dispatch:
-        this.annotateDispatch(node as DispatchNode, scopeId);
-        break;
+
       default:
         break;
     }
@@ -818,12 +774,6 @@ class ScopeAnnotator {
   }
 
   private annotateReaderMacro(node: ReaderMacroNode, scopeId: ScopeId): void {
-    if (node.target) {
-      this.annotateExpression(node.target, scopeId);
-    }
-  }
-
-  private annotateDispatch(node: DispatchNode, scopeId: ScopeId): void {
     if (node.target) {
       this.annotateExpression(node.target, scopeId);
     }

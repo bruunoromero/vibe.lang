@@ -12,7 +12,7 @@
     "src"
   ],
   "dependencies": {
-    "@vibe/cli": "workspace:*",
+    "@vibe/module-resolver": "workspace:*",
     "@vibe/semantics": "workspace:*"
   }
 }

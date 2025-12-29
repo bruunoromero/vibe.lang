@@ -106,8 +106,8 @@ describe("parseSource", () => {
     expect(nil.value).toBeNull();
   });
 
-  test("handles reader macros, sets, and dispatch", async () => {
-    const source = "'(println ~x ~@xs #{:a :b} #(+ 1 foo))";
+  test("handles reader macros", async () => {
+    const source = "'(println ~x ~@xs :a :b)";
     const result = await parseSource(source);
 
     expect(result.ok).toBeTrue();
@@ -126,34 +126,9 @@ describe("parseSource", () => {
     expect(quotedList.elements.length).toBeGreaterThan(3);
     const unquoteNode = quotedList.elements[1];
     const splicingNode = quotedList.elements[2];
-    const firstDispatch = quotedList.elements[3];
-    const secondDispatch = quotedList.elements[4];
 
     expect(unquoteNode?.kind).toBe(NodeKind.Unquote);
     expect(splicingNode?.kind).toBe(NodeKind.UnquoteSplicing);
-    expect(firstDispatch?.kind).toBe(NodeKind.Dispatch);
-    expect(secondDispatch?.kind).toBe(NodeKind.Dispatch);
-
-    if (firstDispatch?.kind === NodeKind.Dispatch && firstDispatch.target) {
-      const innerList = firstDispatch.target;
-      expect(innerList.kind).toBe(NodeKind.List);
-      if (innerList.kind !== NodeKind.List) {
-        throw new Error("Expected dispatch target list");
-      }
-      expect(innerList.elements.map((n) => n?.kind)).toEqual([
-        NodeKind.Keyword,
-        NodeKind.Keyword,
-      ]);
-    }
-
-    if (secondDispatch?.kind === NodeKind.Dispatch && secondDispatch.target) {
-      const innerList = secondDispatch.target;
-      expect(innerList.kind).toBe(NodeKind.List);
-      if (innerList.kind !== NodeKind.List) {
-        throw new Error("Expected dispatch target list");
-      }
-      expect(innerList.elements[2]?.kind).toBe(NodeKind.Symbol);
-    }
   });
 
   test("reports uneven map entries", async () => {
@@ -188,8 +163,6 @@ describe("parseSource", () => {
     const list = await parseSource("(foo");
     const vector = await parseSource("[1 2");
     const map = await parseSource("{:a 1");
-    const set = await parseSource("#{:a");
-
     expect(list.diagnostics.map((d) => d.code)).toContain(
       "PARSE_LIST_UNTERMINATED"
     );
@@ -199,9 +172,7 @@ describe("parseSource", () => {
     expect(map.diagnostics.map((d) => d.code)).toContain(
       "PARSE_MAP_UNTERMINATED"
     );
-    expect(set.diagnostics.map((d) => d.code)).toContain(
-      "PARSE_LIST_UNTERMINATED"
-    );
+    // set literals (reader dispatch) removed; no test here
   });
 
   test("reader macros require targets", async () => {
@@ -253,61 +224,7 @@ describe("parseSource", () => {
     expect(orphanQuote.target).toBeNull();
   });
 
-  test("dispatch macros require targets", async () => {
-    const result = await parseSource("#");
-
-    expect(result.diagnostics.map((d) => d.code)).toContain(
-      "PARSE_DISPATCH_MISSING_TARGET"
-    );
-
-    const dispatchNode = result.program.body[0];
-    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
-    if (dispatchNode?.kind === NodeKind.Dispatch) {
-      expect(dispatchNode.target).toBeNull();
-    }
-  });
-
-  test("dispatch macros missing targets inside sequences keep delimiters", async () => {
-    const result = await parseSource("(#)");
-
-    expect(result.ok).toBeFalse();
-    expect(result.diagnostics.map((d) => d.code)).toEqual([
-      "PARSE_DISPATCH_MISSING_TARGET",
-    ]);
-
-    const listNode = result.program.body[0];
-    expect(listNode?.kind).toBe(NodeKind.List);
-    if (listNode?.kind !== NodeKind.List) {
-      throw new Error("Expected list node");
-    }
-    expect(listNode.elements).toHaveLength(1);
-
-    const dispatchNode = listNode.elements[0];
-    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
-    if (dispatchNode?.kind !== NodeKind.Dispatch) {
-      throw new Error("Expected dispatch node");
-    }
-    expect(dispatchNode.target).toBeNull();
-  });
-
-  test("set literal spans include the dispatch prefix", async () => {
-    const result = await parseSource("#{:a :b}");
-
-    const dispatchNode = result.program.body[0];
-    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
-    if (dispatchNode?.kind !== NodeKind.Dispatch) {
-      throw new Error("Expected dispatch node");
-    }
-    if (!dispatchNode.target) {
-      throw new Error("Expected dispatch target");
-    }
-
-    expect(dispatchNode.span.start.offset).toBe(0);
-    expect(dispatchNode.span.start.column).toBe(0);
-    expect(dispatchNode.span.end.offset).toBeGreaterThan(
-      dispatchNode.span.start.offset
-    );
-  });
+  // Dispatch reader syntax removed; related tests removed.
 
   test("bubble up lexer diagnostics", async () => {
     const result = await parseSource('(println "oops');

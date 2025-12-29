@@ -16,15 +16,14 @@ import {
   createProjectModuleResolver,
   findWorkspaceRoot,
   PackageRegistry,
-} from "./src/module-resolver";
-import { buildPackageGraph } from "./src/package-graph";
-import { resolveVibePackageConfig } from "./src/workspace-config";
-import {
+  buildPackageGraph,
+  resolveVibePackageConfig,
   ModuleExportsTable,
   seedModuleExportsFromMetadata,
   seedModuleExportsFromPackageJson,
-} from "./src/module-exports";
-import { LANG_EXTENSION } from "./src/specifiers";
+  LANG_EXTENSION,
+} from "@vibe/module-resolver";
+// Re-export selected internals as a stable public API surface for other workspace packages
 
 type TokenizeOptions = {
   file?: string;

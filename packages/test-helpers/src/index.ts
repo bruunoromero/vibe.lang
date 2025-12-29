@@ -1,32 +1,15 @@
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { ModuleResolver, ModuleExportsLookup } from "@vibe/semantics";
 import {
   createProjectModuleResolver,
   findWorkspaceRoot,
   PackageRegistry,
-} from "../../cli/src/module-resolver.ts";
-import {
   ModuleExportsTable,
   seedModuleExportsFromMetadata,
-} from "../../cli/src/module-exports.ts";
+} from "@vibe/module-resolver";
 
 const PRELUDE_REL = path.join("packages", "prelude", "src", "prelude.lang");
 const RUNTIME_SRC_REL = path.join("packages", "runtime", "src", "index.ts");
-
-const extractPreludeExports = (
-  text: string
-): { name: string; kind: "var" | "macro" }[] => {
-  const exports: { name: string; kind: "var" | "macro" }[] = [];
-  const re = /\(\s*(defmacro|defmacrop|defn|defnp|def)\s+([^\s\)]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    const kind = m[1].startsWith("defmacro") ? "macro" : "var";
-    const name = m[2];
-    exports.push({ name, kind });
-  }
-  return exports;
-};
 
 export const createDefaultTestResolvers = async (): Promise<{
   moduleResolver: ModuleResolver;

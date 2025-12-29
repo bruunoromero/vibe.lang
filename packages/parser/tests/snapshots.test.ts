@@ -7,12 +7,8 @@ const snapshotCases = [
     source: "''(foo `(bar ~baz ~@(+ 1 2)))",
   },
   {
-    name: "metadata style dispatch",
-    source: '#^{:doc "hi" :author "me"} (def foo {:a 1 :b 2})',
-  },
-  {
-    name: "dispatch variants inside collection",
-    source: "'[ #(println %1) #(+ 1 state) ]",
+    name: "metadata with map and def",
+    source: '(defn info [] {:doc "hi" :author "me"})',
   },
   {
     name: "macro declaration and usage",

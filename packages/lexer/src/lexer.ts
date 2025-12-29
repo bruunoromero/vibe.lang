@@ -117,10 +117,7 @@ export class Lexer {
             this.addToken(TokenType.Unquote, start);
           }
           continue;
-        case "#":
-          await this.advance();
-          this.addToken(TokenType.Dispatch, start);
-          continue;
+        // '#' reader-dispatch removed; preserve '#!' shebang handling elsewhere
         case '"':
           await this.readString(start);
           continue;

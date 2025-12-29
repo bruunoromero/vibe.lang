@@ -4,7 +4,6 @@ import {
   DiagnosticSeverity,
   NodeKind,
   type Diagnostic,
-  type DispatchNode,
   type ExpressionNode,
   type ListNode,
   type MapEntryNode,
@@ -384,13 +383,7 @@ export class SemanticAnalyzer {
         this.recordNode(node, nodeScopeId);
         await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
         break;
-      case NodeKind.Dispatch:
-        this.recordNode(node, nodeScopeId);
-        await this.visitReaderMacro(
-          node as ReaderMacroNode | DispatchNode,
-          nodeScopeId
-        );
-        break;
+
       case NodeKind.Symbol:
         if (
           this.syntaxQuoteDepth === 0 &&
@@ -1995,7 +1988,7 @@ export class SemanticAnalyzer {
   }
 
   private async visitReaderMacro(
-    node: ReaderMacroNode | DispatchNode,
+    node: ReaderMacroNode,
     scopeId: ScopeId
   ): Promise<void> {
     if (!node.target) return;
@@ -2044,7 +2037,6 @@ export class SemanticAnalyzer {
       case NodeKind.SyntaxQuote:
       case NodeKind.Unquote:
       case NodeKind.UnquoteSplicing:
-      case NodeKind.Dispatch:
       case NodeKind.NamespaceImport: {
         // For nested reader-macros inside a quoted form, walk their target(s)
         // conservatively without triggering expansion.
@@ -2079,8 +2071,7 @@ export class SemanticAnalyzer {
         return await this.instantiateMap(node, context);
       case NodeKind.Quote:
         return await this.instantiateReader(node as ReaderMacroNode, context);
-      case NodeKind.Dispatch:
-        return await this.instantiateDispatch(node as DispatchNode, context);
+
       case NodeKind.SyntaxQuote:
         if (!node.target) {
           return null;
@@ -2180,20 +2171,6 @@ export class SemanticAnalyzer {
     node: ReaderMacroNode,
     context: MacroExpansionContext
   ): Promise<ReaderMacroNode> {
-    const instantiated = {
-      ...node,
-      target: node.target
-        ? await this.instantiateTemplate(node.target, context)
-        : null,
-    };
-    this.clearScopeMetadata(instantiated);
-    return instantiated;
-  }
-
-  private async instantiateDispatch(
-    node: DispatchNode,
-    context: MacroExpansionContext
-  ): Promise<DispatchNode> {
     const instantiated = {
       ...node,
       target: node.target
@@ -2644,9 +2621,7 @@ export class SemanticAnalyzer {
       case NodeKind.UnquoteSplicing:
         this.stripScopeMetadata((node as ReaderMacroNode).target);
         break;
-      case NodeKind.Dispatch:
-        this.stripScopeMetadata((node as DispatchNode).target);
-        break;
+
       default:
         break;
     }

@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { buildPackageGraph } from "../src/package-graph";
 import {
   findWorkspaceRoot,
   PackageRegistry,
-} from "../src/module-resolver";
+  buildPackageGraph,
+} from "@vibe/module-resolver";
 
 const WORKSPACE_ROOT = findWorkspaceRoot(process.cwd());
 
@@ -33,4 +33,3 @@ describe("package graph", () => {
     expect(graph.buildTargets.length).toBe(0);
   });
 });
-

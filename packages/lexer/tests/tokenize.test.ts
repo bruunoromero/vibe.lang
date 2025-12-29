@@ -30,7 +30,7 @@ describe("tokenize", () => {
   });
 
   test("supports keywords, booleans, strings, and reader macros", async () => {
-    const source = '\'[:ok true false nil "hi\\n" #(+ foo) ~@bar]';
+    const source = '\'[:ok true false nil "hi\\n" (+ foo) ~@bar]';
     const result = await collectTokens(source);
 
     expect(result.ok).toBeTrue();
@@ -43,7 +43,6 @@ describe("tokenize", () => {
       TokenType.Boolean,
       TokenType.Nil,
       TokenType.String,
-      TokenType.Dispatch,
       TokenType.LeftParen,
       TokenType.Symbol,
       TokenType.Symbol,
@@ -286,14 +285,13 @@ describe("tokenize", () => {
   });
 
   test("treats trailing # as gensym placeholder suffix", async () => {
-    const result = await collectTokens("(foo# #{1 2} foo#)");
+    const result = await collectTokens("(foo# {1 2} foo#)");
 
     expect(result.ok).toBeTrue();
     expect(result.diagnostics).toHaveLength(0);
     expect(result.tokens.map((token) => token.kind)).toEqual([
       TokenType.LeftParen,
       TokenType.Symbol,
-      TokenType.Dispatch,
       TokenType.LeftBrace,
       TokenType.Number,
       TokenType.Number,

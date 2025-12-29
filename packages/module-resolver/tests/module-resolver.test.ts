@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import path from "node:path";
-import { findWorkspaceRoot, PackageRegistry } from "../src/module-resolver";
+import { findWorkspaceRoot, PackageRegistry } from "@vibe/module-resolver";
 import { createDefaultTestResolvers } from "@vibe/test-helpers";
 
 const WORKSPACE_ROOT = findWorkspaceRoot(process.cwd());

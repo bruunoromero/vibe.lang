@@ -1,11 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { PackageRegistry } from "./module-resolver";
-import {
-  parseVibeConfig,
-  type VibePackageConfig,
-} from "./workspace-config";
+import type { PackageRegistry } from "@vibe/module-resolver";
+import { parseVibeConfig, type VibePackageConfig } from "@vibe/module-resolver";
 
 const resolveFromModule = createRequire(import.meta.url);
 
@@ -209,4 +206,3 @@ const buildTopologicalOrder = (
 
   return order;
 };
-

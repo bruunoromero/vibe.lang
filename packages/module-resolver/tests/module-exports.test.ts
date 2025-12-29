@@ -6,8 +6,8 @@ import {
   ModuleExportsTable,
   extractTopLevelExports,
   seedModuleExportsFromMetadata,
-} from "../src/module-exports";
-import type { PackageMetadata } from "../src/module-resolver";
+} from "@vibe/module-resolver";
+import type { PackageMetadata } from "@vibe/module-resolver";
 
 describe("module exports helpers", () => {
   const fixturesRoot = path.join(import.meta.dir, "fixtures");

@@ -9,7 +9,6 @@ export enum TokenType {
   SyntaxQuote = "syntax_quote",
   Unquote = "unquote",
   UnquoteSplicing = "unquote_splicing",
-  Dispatch = "dispatch",
   Number = "number",
   String = "string",
   Character = "character",
@@ -93,7 +92,6 @@ export enum NodeKind {
   SyntaxQuote = "syntax_quote",
   Unquote = "unquote",
   UnquoteSplicing = "unquote_splicing",
-  Dispatch = "dispatch",
   Symbol = "symbol",
   Keyword = "keyword",
   Number = "number",
@@ -183,9 +181,7 @@ export type CharacterNode = AtomNodeBase<NodeKind.Character, string>;
 export type BooleanNode = AtomNodeBase<NodeKind.Boolean, boolean>;
 export type NilNode = AtomNodeBase<NodeKind.Nil, null>;
 
-export interface DispatchNode extends AstNode<NodeKind.Dispatch> {
-  readonly target: ExpressionNode | null;
-}
+// Dispatch reader-node removed: no longer supported.
 
 export type NamespaceImportKind = "require" | "external" | "import";
 
@@ -211,7 +207,6 @@ export type ExpressionNode =
   | VectorNode
   | MapNode
   | ReaderMacroNode
-  | DispatchNode
   | NamespaceImportNode
   | AtomNode;
 

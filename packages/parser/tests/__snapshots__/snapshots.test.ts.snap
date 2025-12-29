@@ -1331,3 +1331,217 @@ exports[`parser snapshots macro declaration and usage 1`] = `
   },
 }
 `;
+
+exports[`parser snapshots metadata with map and def 1`] = `
+{
+  "body": [
+    {
+      "elements": [
+        {
+          "kind": "symbol",
+          "lexeme": "defn",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 5,
+              "line": 0,
+              "offset": 5,
+            },
+            "start": {
+              "column": 1,
+              "line": 0,
+              "offset": 1,
+            },
+          },
+          "value": "defn",
+        },
+        {
+          "kind": "symbol",
+          "lexeme": "info",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 10,
+              "line": 0,
+              "offset": 10,
+            },
+            "start": {
+              "column": 6,
+              "line": 0,
+              "offset": 6,
+            },
+          },
+          "value": "info",
+        },
+        {
+          "elements": [],
+          "kind": "vector",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 13,
+              "line": 0,
+              "offset": 13,
+            },
+            "start": {
+              "column": 11,
+              "line": 0,
+              "offset": 11,
+            },
+          },
+        },
+        {
+          "entries": [
+            {
+              "key": {
+                "kind": "keyword",
+                "lexeme": ":doc",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 19,
+                    "line": 0,
+                    "offset": 19,
+                  },
+                  "start": {
+                    "column": 15,
+                    "line": 0,
+                    "offset": 15,
+                  },
+                },
+                "value": "doc",
+              },
+              "kind": "map_entry",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 24,
+                  "line": 0,
+                  "offset": 24,
+                },
+                "start": {
+                  "column": 15,
+                  "line": 0,
+                  "offset": 15,
+                },
+              },
+              "value": {
+                "kind": "string",
+                "lexeme": ""hi"",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 24,
+                    "line": 0,
+                    "offset": 24,
+                  },
+                  "start": {
+                    "column": 20,
+                    "line": 0,
+                    "offset": 20,
+                  },
+                },
+                "value": "hi",
+              },
+            },
+            {
+              "key": {
+                "kind": "keyword",
+                "lexeme": ":author",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 32,
+                    "line": 0,
+                    "offset": 32,
+                  },
+                  "start": {
+                    "column": 25,
+                    "line": 0,
+                    "offset": 25,
+                  },
+                },
+                "value": "author",
+              },
+              "kind": "map_entry",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 37,
+                  "line": 0,
+                  "offset": 37,
+                },
+                "start": {
+                  "column": 25,
+                  "line": 0,
+                  "offset": 25,
+                },
+              },
+              "value": {
+                "kind": "string",
+                "lexeme": ""me"",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 37,
+                    "line": 0,
+                    "offset": 37,
+                  },
+                  "start": {
+                    "column": 33,
+                    "line": 0,
+                    "offset": 33,
+                  },
+                },
+                "value": "me",
+              },
+            },
+          ],
+          "kind": "map",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 38,
+              "line": 0,
+              "offset": 38,
+            },
+            "start": {
+              "column": 14,
+              "line": 0,
+              "offset": 14,
+            },
+          },
+        },
+      ],
+      "kind": "list",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 39,
+          "line": 0,
+          "offset": 39,
+        },
+        "start": {
+          "column": 0,
+          "line": 0,
+          "offset": 0,
+        },
+      },
+    },
+  ],
+  "kind": "program",
+  "scopeId": "scope_0",
+  "span": {
+    "end": {
+      "column": 39,
+      "line": 0,
+      "offset": 39,
+    },
+    "start": {
+      "column": 0,
+      "line": 0,
+      "offset": 0,
+    },
+  },
+}
+`;

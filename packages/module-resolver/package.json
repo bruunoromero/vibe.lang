@@ -1,0 +1,21 @@
+{
+  "name": "@vibe/module-resolver",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "dependencies": {
+    "@vibe/semantics": "workspace:*",
+    "@vibe/parser": "workspace:*",
+    "@vibe/syntax": "workspace:*",
+    "@vibe/interpreter": "workspace:*",
+    "@vibe/test-helpers": "workspace:*"
+  }
+}
