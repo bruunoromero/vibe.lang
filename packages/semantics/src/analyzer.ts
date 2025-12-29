@@ -6,8 +6,7 @@ import {
   type Diagnostic,
   type ExpressionNode,
   type ListNode,
-  type MapEntryNode,
-  type MapNode,
+  
   type NamespaceImportKind,
   type NamespaceImportNode,
   type ProgramNode,
@@ -366,10 +365,7 @@ export class SemanticAnalyzer {
         this.recordNode(node, nodeScopeId);
         await this.visitSequence(node as VectorNode, nodeScopeId);
         break;
-      case NodeKind.Map:
-        this.recordNode(node, nodeScopeId);
-        await this.visitMap(node, nodeScopeId);
-        break;
+      
       case NodeKind.Quote:
         this.recordNode(node, nodeScopeId);
         await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
@@ -1944,18 +1940,6 @@ export class SemanticAnalyzer {
     }
   }
 
-  private async visitMap(node: MapNode, scopeId: ScopeId): Promise<void> {
-    for (const entry of node.entries) {
-      this.recordNode(entry, scopeId);
-      if (entry.key) {
-        await this.visit(entry.key, scopeId);
-      }
-      if (entry.value) {
-        await this.visit(entry.value, scopeId);
-      }
-    }
-  }
-
   private async visitSyntaxQuote(
     node: ReaderMacroNode,
     scopeId: ScopeId,
@@ -2014,14 +1998,7 @@ export class SemanticAnalyzer {
         }
         break;
       }
-      case NodeKind.Map: {
-        this.recordNode(node, nodeScopeId);
-        for (const entry of (node as MapNode).entries) {
-          if (entry.key) await this.visitQuoted(entry.key, nodeScopeId);
-          if (entry.value) await this.visitQuoted(entry.value, nodeScopeId);
-        }
-        break;
-      }
+      
       case NodeKind.Symbol:
       case NodeKind.Keyword:
       case NodeKind.Number:
@@ -2067,8 +2044,7 @@ export class SemanticAnalyzer {
       case NodeKind.Vector:
         return (await this.instantiateSequence(node, context)) as VectorNode;
 
-      case NodeKind.Map:
-        return await this.instantiateMap(node, context);
+      
       case NodeKind.Quote:
         return await this.instantiateReader(node as ReaderMacroNode, context);
 
@@ -2141,31 +2117,7 @@ export class SemanticAnalyzer {
     return instantiated;
   }
 
-  private async instantiateMap(
-    node: MapNode,
-    context: MacroExpansionContext
-  ): Promise<MapNode> {
-    const entries: MapEntryNode[] = [];
-    for (const entry of node.entries) {
-      const entryCopy: MapEntryNode = {
-        ...entry,
-        key: entry.key
-          ? await this.instantiateTemplate(entry.key, context)
-          : null,
-        value: entry.value
-          ? await this.instantiateTemplate(entry.value, context)
-          : null,
-      };
-      this.clearScopeMetadata(entryCopy);
-      entries.push(entryCopy);
-    }
-    const instantiated: MapNode = {
-      ...node,
-      entries,
-    };
-    this.clearScopeMetadata(instantiated);
-    return instantiated;
-  }
+  /* Map instantiation removed */
 
   private async instantiateReader(
     node: ReaderMacroNode,
@@ -2574,7 +2526,7 @@ export class SemanticAnalyzer {
   }
 
   private clearScopeMetadata(
-    node: ExpressionNode | MapEntryNode | ProgramNode | null | undefined
+    node: ExpressionNode | ProgramNode | null | undefined
   ): void {
     if (!node) {
       return;
@@ -2583,7 +2535,7 @@ export class SemanticAnalyzer {
   }
 
   private assignScopeMetadata(
-    node: ExpressionNode | MapEntryNode | ProgramNode | null | undefined,
+    node: ExpressionNode | ProgramNode | null | undefined,
     scopeId: ScopeId
   ): void {
     if (!node) {
@@ -2593,7 +2545,7 @@ export class SemanticAnalyzer {
   }
 
   private stripScopeMetadata(
-    node: ExpressionNode | MapEntryNode | ProgramNode | null | undefined
+    node: ExpressionNode | ProgramNode | null | undefined
   ): void {
     if (!node) {
       return;
@@ -2606,15 +2558,7 @@ export class SemanticAnalyzer {
           this.stripScopeMetadata(element);
         }
         break;
-      case NodeKind.Map:
-        for (const entry of node.entries) {
-          this.stripScopeMetadata(entry);
-        }
-        break;
-      case NodeKind.MapEntry:
-        this.stripScopeMetadata(node.key);
-        this.stripScopeMetadata(node.value);
-        break;
+      
       case NodeKind.Quote:
       case NodeKind.SyntaxQuote:
       case NodeKind.Unquote:
@@ -2878,7 +2822,7 @@ export class SemanticAnalyzer {
   }
 
   private recordNode(
-    node: ExpressionNode | MapEntryNode | ProgramNode,
+    node: ExpressionNode | ProgramNode,
     scopeId: ScopeId,
     symbol?: NodeSymbolInfo
   ): NodeId {

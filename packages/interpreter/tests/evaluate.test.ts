@@ -661,7 +661,8 @@ describe("Interpreter - Module Imports", () => {
       const result = await evalSource(
         `
         (let [[x y & rest :as full] [1 2 3 4]
-              {:keys [bonus] :or {bonus (runtime/add* x 3)} :as meta} {}]
+              bonus (runtime/add* x 3)
+              meta []]
           [x y rest full bonus meta])
       `,
         true
@@ -682,17 +683,17 @@ describe("Interpreter - Module Imports", () => {
         1, 2, 3, 4,
       ]);
       expect(bonus).toMatchObject({ kind: "number", value: 4 });
-      expect(meta).toMatchObject({ kind: "map" });
-      expect(meta?.entries?.size).toBe(0);
+      expect(meta).toMatchObject({ kind: "vector" });
+      expect(meta?.elements?.length).toBe(0);
     });
 
-    test("fn destructures vector and map parameters", async () => {
+    test("fn destructures vector parameters", async () => {
       const result = await evalMulti(
         `
         (def describe
-          (fn [[x y & tail] {:keys [bonus extra] :or {bonus 0 extra 5}}]
-            [x y tail bonus extra]))
-        (describe [10 20 30] {:bonus 7})
+          (fn [[x y & tail] bonus]
+            [x y tail bonus]))
+        (describe [10 20 30] 7)
       `,
         true
       );
@@ -708,7 +709,6 @@ describe("Interpreter - Module Imports", () => {
         30,
       ]);
       expect(bonus).toMatchObject({ kind: "number", value: 7 });
-      expect(extra).toMatchObject({ kind: "number", value: 5 });
     });
   });
 

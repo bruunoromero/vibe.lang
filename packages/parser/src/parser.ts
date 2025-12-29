@@ -7,8 +7,6 @@ import {
   type Diagnostic,
   type ExpressionNode,
   type ListNode,
-  type MapEntryNode,
-  type MapNode,
   type NamespaceImportNode,
   type ProgramNode,
   type ReaderMacroKind,
@@ -118,8 +116,7 @@ export class Parser {
           structure: "vector literal",
           unterminatedCode: "PARSE_VECTOR_UNTERMINATED",
         });
-      case TokenType.LeftBrace:
-        return this.parseMap(token);
+      
       case TokenType.Quote:
         return this.parseReaderMacro(NodeKind.Quote, token);
       case TokenType.SyntaxQuote:
@@ -169,7 +166,6 @@ export class Parser {
         return this.createAtomNode(NodeKind.Nil, token, null);
       case TokenType.RightParen:
       case TokenType.RightBracket:
-      case TokenType.RightBrace:
         this.reportUnexpectedClosing(token);
         return null;
       default:
@@ -240,36 +236,7 @@ export class Parser {
     return node;
   }
 
-  private async parseMap(open: Token): Promise<MapNode> {
-    const entries: MapEntryNode[] = [];
-    while (
-      !(await this.check(TokenType.RightBrace)) &&
-      !(await this.isAtEnd())
-    ) {
-      const key = await this.parseExpression();
-      if (await this.check(TokenType.RightBrace)) {
-        this.reportMapArity((key ?? open) as SpanCarrier);
-        entries.push(this.createMapEntry(key, null, open));
-        break;
-      }
-      const value = await this.parseExpression();
-      entries.push(this.createMapEntry(key, value, open));
-    }
-    const close = await this.consumeClosing(
-      TokenType.RightBrace,
-      open,
-      "map literal",
-      "PARSE_MAP_UNTERMINATED"
-    );
-    const lastEntry = entries.length > 0 ? entries[entries.length - 1]! : null;
-    const endRef: SpanCarrier =
-      (close as SpanCarrier | null) ?? lastEntry ?? open;
-    return {
-      kind: NodeKind.Map,
-      entries,
-      span: this.spanFromRefs(open, endRef),
-    } satisfies MapNode;
-  }
+  
 
   private async parseReaderMacro<K extends ReaderMacroKind>(
     kind: K,
@@ -295,20 +262,7 @@ export class Parser {
     } satisfies ReaderMacroNode<K>;
   }
 
-  private createMapEntry(
-    key: ExpressionNode | null,
-    value: ExpressionNode | null,
-    fallback: Token
-  ): MapEntryNode {
-    const startRef: SpanCarrier = (key ?? value ?? fallback) as SpanCarrier;
-    const endRef: SpanCarrier = (value ?? key ?? fallback) as SpanCarrier;
-    return {
-      kind: NodeKind.MapEntry,
-      key: key ?? null,
-      value: value ?? null,
-      span: this.spanFromRefs(startRef, endRef),
-    } satisfies MapEntryNode;
-  }
+  
 
   private createAtomNode<T>(
     kind: NodeKind,
@@ -343,10 +297,10 @@ export class Parser {
 
   private reportMapArity(anchor: SpanCarrier): void {
     this.diagnostics.push({
-      message: "Map literal requires an even number of forms",
+      message: "Map literal support removed",
       span: this.spanFromRefs(anchor, anchor),
       severity: DiagnosticSeverity.Error,
-      code: "PARSE_MAP_ODD_ENTRIES",
+      code: "PARSE_MAP_UNSUPPORTED",
     });
   }
 
@@ -420,10 +374,6 @@ export class Parser {
         return "[";
       case TokenType.RightBracket:
         return "]";
-      case TokenType.LeftBrace:
-        return "{";
-      case TokenType.RightBrace:
-        return "}";
       case TokenType.Quote:
         return "'";
       case TokenType.SyntaxQuote:
@@ -504,7 +454,7 @@ export class Parser {
     return (
       token.kind === TokenType.RightParen ||
       token.kind === TokenType.RightBracket ||
-      token.kind === TokenType.RightBrace
+      false
     );
   }
 }
@@ -534,9 +484,6 @@ class ScopeAnnotator {
         break;
       case NodeKind.Vector:
         this.annotateSequence(node as VectorNode, scopeId);
-        break;
-      case NodeKind.Map:
-        this.annotateMap(node, scopeId);
         break;
       case NodeKind.Quote:
       case NodeKind.SyntaxQuote:
@@ -761,17 +708,7 @@ class ScopeAnnotator {
     }
   }
 
-  private annotateMap(node: MapNode, scopeId: ScopeId): void {
-    for (const entry of node.entries) {
-      this.assignScope(entry, scopeId);
-      if (entry.key) {
-        this.annotateExpression(entry.key, scopeId);
-      }
-      if (entry.value) {
-        this.annotateExpression(entry.value, scopeId);
-      }
-    }
-  }
+  /* Map annotation removed */
 
   private annotateReaderMacro(node: ReaderMacroNode, scopeId: ScopeId): void {
     if (node.target) {
@@ -779,10 +716,7 @@ class ScopeAnnotator {
     }
   }
 
-  private assignScope(
-    node: ProgramNode | ExpressionNode | MapEntryNode,
-    scopeId: ScopeId
-  ): void {
+  private assignScope(node: ProgramNode | ExpressionNode, scopeId: ScopeId): void {
     (node as { scopeId?: ScopeId }).scopeId = scopeId;
   }
 

@@ -7,8 +7,8 @@ import {
   createRootEnvironment,
   lookupVariable,
   defineVariable,
-  makeMap,
   makeBuiltin,
+  makeExternalNamespace,
   type Value,
   type Environment,
 } from "@vibe/interpreter";
@@ -27,7 +27,6 @@ const ARITHMETIC_OPERATORS = new Set(["+", "-", "*", "/"]);
 const UNTERMINATED_CODES = new Set([
   "PARSE_LIST_UNTERMINATED",
   "PARSE_VECTOR_UNTERMINATED",
-  "PARSE_MAP_UNTERMINATED",
   "PARSE_MACRO_MISSING_TARGET",
 ]);
 
@@ -208,103 +207,92 @@ export const runRepl = async (
 
       // Create a runtime namespace with all runtime primitives
       // so that (external runtime "@vibe/runtime") in prelude can resolve
-      const runtimeNamespace = new Map<string, Value>();
+      const runtimeNamespace: Record<string, Value> = {};
       for (const [key, value] of Object.entries(runtime)) {
         if (typeof value === "function") {
-          runtimeNamespace.set(
-            key,
-            makeBuiltin(
-              `runtime/${key}`,
-              (args: readonly Value[], span: any) => {
-                // Convert vibe values to JS, call runtime function, convert back
-                const valueToJS = (v: Value): any => {
-                  switch (v.kind) {
-                    case "number":
-                    case "string":
-                    case "boolean":
+          runtimeNamespace[key] = makeBuiltin(
+            `runtime/${key}`,
+            (args: readonly Value[], span: any) => {
+              const valueToJS = (v: Value): any => {
+                switch (v.kind) {
+                  case "number":
+                  case "string":
+                  case "boolean":
+                    return v.value;
+                  case "nil":
+                    return null;
+                  case "symbol":
+                    try {
+                      const name = v.value as string;
+                      if (typeof (runtime as any).symbol === "function") {
+                        return (runtime as any).symbol(name);
+                      }
+                      return name;
+                    } catch {
                       return v.value;
-                    case "nil":
-                      return null;
-                    case "symbol":
-                      try {
-                        const name = v.value as string;
-                        if (typeof (runtime as any).symbol === "function") {
-                          return (runtime as any).symbol(name);
-                        }
-                        return name;
-                      } catch {
-                        return v.value;
-                      }
-                    case "keyword":
-                      try {
-                        const name = v.value as string;
-                        if (typeof (runtime as any).keyword === "function") {
-                          return (runtime as any).keyword(name);
-                        }
-                        return name;
-                      } catch {
-                        return v.value;
-                      }
-                    case "list":
-                    case "vector":
-                      return v.elements.map(valueToJS);
-                    case "map":
-                      const obj: Record<string, any> = {};
-                      for (const [k, val] of v.entries) {
-                        obj[k] = valueToJS(val);
-                      }
-                      return obj;
-                    default:
-                      return v;
-                  }
-                };
-                const jsToValue = (jsVal: any): Value => {
-                  if (jsVal === null || jsVal === undefined)
-                    return { kind: "nil" };
-                  // If runtime exported tagged symbols/keywords, convert them back
-                  try {
-                    if (
-                      jsVal &&
-                      typeof jsVal === "object" &&
-                      typeof (runtime as any).keyword_QMARK === "function" &&
-                      (runtime as any).keyword_QMARK(jsVal)
-                    ) {
-                      return {
-                        kind: "keyword",
-                        // use the raw runtime name (no leading ':')
-                        value: (jsVal as any).name,
-                      };
                     }
-                    if (
-                      jsVal &&
-                      typeof jsVal === "object" &&
-                      typeof (runtime as any).symbol_QMARK === "function" &&
-                      (runtime as any).symbol_QMARK(jsVal)
-                    ) {
-                      return { kind: "symbol", value: (jsVal as any).name };
+                  case "keyword":
+                    try {
+                      const name = v.value as string;
+                      if (typeof (runtime as any).keyword === "function") {
+                        return (runtime as any).keyword(name);
+                      }
+                      return name;
+                    } catch {
+                      return v.value;
                     }
-                  } catch {
-                    // fallthrough to primitive handling
-                  }
-                  if (typeof jsVal === "number")
-                    return { kind: "number", value: jsVal };
-                  if (typeof jsVal === "string")
-                    return { kind: "string", value: jsVal };
-                  if (typeof jsVal === "boolean")
-                    return { kind: "boolean", value: jsVal };
-                  if (Array.isArray(jsVal))
-                    return { kind: "list", elements: jsVal.map(jsToValue) };
+                  case "list":
+                  case "vector":
+                    return v.elements.map(valueToJS);
+                  default:
+                    return v;
+                }
+              };
+              const jsToValue = (jsVal: any): Value => {
+                if (jsVal === null || jsVal === undefined)
                   return { kind: "nil" };
-                };
-                const jsArgs = args.map(valueToJS);
-                const result = (value as any)(...jsArgs);
-                return jsToValue(result);
-              }
-            )
+                try {
+                  if (
+                    jsVal &&
+                    typeof jsVal === "object" &&
+                    typeof (runtime as any).keyword_QMARK === "function" &&
+                    (runtime as any).keyword_QMARK(jsVal)
+                  ) {
+                    return { kind: "keyword", value: (jsVal as any).name };
+                  }
+                  if (
+                    jsVal &&
+                    typeof jsVal === "object" &&
+                    typeof (runtime as any).symbol_QMARK === "function" &&
+                    (runtime as any).symbol_QMARK(jsVal)
+                  ) {
+                    return { kind: "symbol", value: (jsVal as any).name };
+                  }
+                } catch {
+                  // fallthrough
+                }
+                if (typeof jsVal === "number")
+                  return { kind: "number", value: jsVal };
+                if (typeof jsVal === "string")
+                  return { kind: "string", value: jsVal };
+                if (typeof jsVal === "boolean")
+                  return { kind: "boolean", value: jsVal };
+                if (Array.isArray(jsVal))
+                  return { kind: "list", elements: jsVal.map(jsToValue) };
+                return { kind: "nil" };
+              };
+              const jsArgs = args.map(valueToJS);
+              const result = (value as any)(...jsArgs);
+              return jsToValue(result);
+            }
           );
         }
       }
-      defineVariable(globalEnv, "runtime", makeMap(runtimeNamespace));
+      defineVariable(
+        globalEnv,
+        "runtime",
+        makeExternalNamespace(runtimeNamespace)
+      );
 
       // Try multiple possible locations for the prelude
       const possiblePaths = [

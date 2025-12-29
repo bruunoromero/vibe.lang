@@ -10,6 +10,10 @@
 - `get` now accepts namespace objects emitted by codegen as well as plain `Map` instances, returning `null` (or an explicit default) when a member is missing. This makes `(prelude/get alias member)` work the same way for runtime data structures and imported modules.
 - Keywords now mirror symbols at the JS boundary: `keyword`/`keyword?` create `{ __vibeType: "keyword", name }` objects, `type` returns tagged keywords, and equality/string helpers understand them. Keywords are interned so runtime map destructuring can rely on object identity.
 
+## 2025-12-29
+
+- Removed specialized `MapValue` runtime shapes and map-literal helpers that assumed `{ ... }` syntax. Runtime helpers now operate over plain JS objects or `Map` instances where appropriate, but the language no longer emits map literals; prefer vectors and explicit accessors or prelude helpers for associative data.
+
 ## 2025-12-23
 
 - Added tagged runtime symbols (`{ __vibeType: "symbol", name }`) plus `symbol`/`symbol?` helpers so user code can distinguish symbols from raw strings without new special forms.

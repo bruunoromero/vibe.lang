@@ -252,22 +252,27 @@ export const str = (...args: unknown[]): string => {
 
 // Map operations
 export const get_STAR = (target: unknown, key: unknown): unknown => {
+  // Support plain JS objects (namespaces) and Map instances.
   if (target instanceof Map) {
-    const direct = target.get(key);
-    if (direct !== undefined) {
-      return direct;
+    // Direct key lookup (handles keyword/symbol objects that are used as keys)
+    if ((target as Map<any, any>).has(key)) {
+      return (target as Map<any, any>).get(key) as unknown;
     }
-    const fallback = target.get(coerceKey(key));
-    if (fallback !== undefined) {
-      return fallback;
+    // Fallback to stringified/coerced key (for string keys stored in the map)
+    const coerced = coerceKey(key);
+    if ((target as Map<any, any>).has(coerced)) {
+      return (target as Map<any, any>).get(coerced) as unknown;
     }
     return null;
   }
-  if (typeof target === "object" && target !== null && !Array.isArray(target)) {
-    const value = (target as Record<string, unknown>)[coerceKey(key)];
-    return value !== undefined ? value : null;
+
+  if (typeof target === "object" && target !== null) {
+    const coerced = coerceKey(key);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (target as any)[coerced] ?? null;
   }
-  throw new Error("get requires a map or namespace object as first argument");
+
+  return null;
 };
 
 export const assoc_STAR = (
@@ -275,42 +280,71 @@ export const assoc_STAR = (
   key: unknown,
   value: unknown
 ): Map<unknown, unknown> => {
-  if (!(map instanceof Map)) {
-    throw new Error("assoc requires a map as first argument");
+  if (map instanceof Map) {
+    const out = new Map(map as Map<unknown, unknown>);
+    out.set(key, value);
+    return out;
   }
-
-  const newMap = new Map(map);
-  newMap.set(key, value);
-  return newMap;
+  // If a plain object is provided, return a new Map with object's own props and the new key
+  if (typeof map === "object" && map !== null) {
+    const out = new Map<unknown, unknown>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const k of Object.keys(map as any)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      out.set(k, (map as any)[k]);
+    }
+    out.set(key, value);
+    return out;
+  }
+  // Otherwise create a new Map with the provided key/value
+  const out = new Map<unknown, unknown>();
+  out.set(key, value);
+  return out;
 };
 
 export const dissoc_STAR = (
   map: unknown,
   key: unknown
 ): Map<unknown, unknown> => {
-  if (!(map instanceof Map)) {
-    throw new Error("dissoc requires a map as first argument");
+  if (map instanceof Map) {
+    const out = new Map(map as Map<unknown, unknown>);
+    // Remove both direct key and coerced string key if present
+    out.delete(key);
+    out.delete(coerceKey(key));
+    return out;
   }
-
-  const newMap = new Map(map);
-  newMap.delete(key);
-  return newMap;
+  if (typeof map === "object" && map !== null) {
+    const out = new Map<unknown, unknown>();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const k of Object.keys(map as any)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      out.set(k, (map as any)[k]);
+    }
+    out.delete(coerceKey(key));
+    return out;
+  }
+  return new Map();
 };
 
 export const keys_STAR = (map: unknown): unknown[] => {
-  if (!(map instanceof Map)) {
-    throw new Error("keys requires a map");
+  if (map instanceof Map) {
+    return Array.from((map as Map<unknown, unknown>).keys());
   }
-
-  return Array.from(map.keys());
+  if (typeof map === "object" && map !== null) {
+    return Object.keys(map as any);
+  }
+  return [];
 };
 
 export const vals_STAR = (map: unknown): unknown[] => {
-  if (!(map instanceof Map)) {
-    throw new Error("keys requires a map");
+  if (map instanceof Map) {
+    return Array.from((map as Map<unknown, unknown>).values());
   }
-
-  return Array.from(map.values());
+  if (typeof map === "object" && map !== null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return Object.keys(map as any).map((k) => (map as any)[k]);
+  }
+  return [];
 };
 
 export const apply = (f: unknown, args: unknown[]): unknown => {

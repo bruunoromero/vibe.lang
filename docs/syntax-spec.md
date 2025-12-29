@@ -28,7 +28,7 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 
 | `(` `)` | `(` `)` | Begin/end list |
 | `[` `]` | `[` `]` | Begin/end vector |
-| `{` `}` | `{` `}` | Begin/end map |
+| `{` `}` | (removed) | Map literal syntax removed (see changelog, 2025-12-29) |
 | `'` | `'form` | Quote reader macro |
 | `` ` `` | `` `form`` | Syntax-quote reader macro |
 | `~` | `~form` | Unquote |
@@ -61,7 +61,7 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 
 | List | `(...)` | `ListNode` | Function call or special form; empty list evaluates to `null` in codegen. |
 | Vector | `[...]` | `VectorNode` | Ordered collection; used for binding forms (`let`, `fn`). |
-| Map | `{key value ...}` | `MapNode` | Must contain an even number of forms; otherwise emits `PARSE_MAP_ODD_ENTRIES` and pairs dangling key with `null`. |
+| Map | `{...}` | (removed) | Map literal syntax (`{ key value ... }`) was removed from the language on 2025-12-29. Use vectors, lists, or module namespaces for associative data instead. |
 
 All delimiters must balance. Unmatched closers report `PARSE_UNEXPECTED_CLOSING`; missing closers report `PARSE_*_UNTERMINATED` diagnostics.
 
@@ -113,13 +113,9 @@ Arithmetic helpers (`+`, `-`, `*`, `/`, comparisons, sequence utilities, etc.) a
   - `binding` entries may be symbols or nested patterns. Missing positions bind to `nil`.
   - `& rest` (optional) captures the remaining elements as a vector bound to another pattern (usually a symbol).
   - `:as alias` (optional) binds the entire matched value—before any destructuring—to a symbol for later reuse.
-- **Map pattern** — `{:keys [a b] :strs [c] :syms [d] key binding ... :or {a 1} :as alias}`
-  - Explicit `key binding` pairs accept a literal key (keyword, string, or symbol) on the left and any binding pattern on the right.
-  - `:keys`, `:strs`, and `:syms` expand shorthand vectors into multiple symbol bindings that read from keyword (`:foo`), string (`"foo"`), or symbol (`'foo`) map keys respectively.
-  - `:or {binding-name default-expr ...}` supplies defaults for symbol bindings introduced by the pattern. Defaults evaluate lazily in the surrounding scope and only run when the corresponding map entry is missing.
-  - `:as alias` captures the entire map argument prior to destructuring, mirroring vector `:as` semantics.
+- **Map patterns removed** — Map destructuring patterns (the `{:keys ...}` / `:strs` / `:syms` forms and explicit key bindings) were removed from the language on 2025-12-29. Use vector patterns, explicit accessors, or module namespaces and helper functions from the prelude for associative data access.
 
-Vector and map patterns can nest arbitrarily, enabling structures such as `[{:keys [x]} [y & rest]]`. All alias symbols introduced by the pattern share the same scope as the binding form. Attempts to reuse a name inside the same pattern surface deterministic diagnostics (`PATTERN_DUPLICATE_BINDING`, etc.).
+Vector patterns can nest arbitrarily, enabling structures such as `[[1] [y & rest]]`. All alias symbols introduced by the pattern share the same scope as the binding form. Attempts to reuse a name inside the same pattern surface deterministic diagnostics (`PATTERN_DUPLICATE_BINDING`, etc.).
 
 Example:
 
@@ -166,8 +162,8 @@ Module-level dependencies opt into explicit `def` bindings that wrap `require` o
 program        ::= form*
 list           ::= '(' form* ')'
 vector         ::= '[' form* ']'
-map            ::= '{' (form form)* '}'
-form           ::= atom | list | vector | map | reader_macro | dispatch
+map            ::= /* removed */
+form           ::= atom | list | vector | reader_macro | dispatch
 reader_macro   ::= quote | syntax_quote | unquote | unquote_splicing
 quote          ::= "'" form
 syntax_quote   ::= "`" form
@@ -187,9 +183,9 @@ atom           ::= number | string | character | keyword | symbol | boolean | ni
 ## Diagnostics Overview
 
 - `LEX_*` codes originate from the lexer (invalid numbers, strings, characters, etc.).
-- `PARSE_LIST_UNTERMINATED`, `PARSE_VECTOR_UNTERMINATED`, `PARSE_MAP_UNTERMINATED` guard missing closers.
+  -- `PARSE_LIST_UNTERMINATED`, `PARSE_VECTOR_UNTERMINATED` guard missing closers.
 - `PARSE_UNEXPECTED_CLOSING` fires for stray `)`/`]`/`}`.
-- `PARSE_MAP_ODD_ENTRIES` indicates uneven map literals.
+  -- Map-literal diagnostics were removed when map literals were removed from the language on 2025-12-29.
 - `PARSE_MACRO_MISSING_TARGET` / `PARSE_DISPATCH_MISSING_TARGET` highlight reader/dispatch macros with no operand.
 - Semantic-only metadata (scope IDs, hygiene tags) remains outside this spec; refer to `docs/ADR-002-semantics.md` for details.
 - Macro helpers: `gensym` may appear only inside syntax-quoted macro bodies (e.g., `~(gensym "hint")`) to produce hygiene-friendly synthetic symbols. Document any new helpers alongside their ADR.

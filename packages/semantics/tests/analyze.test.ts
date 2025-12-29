@@ -89,17 +89,7 @@ const renameSymbolInNode = (
       elements,
     };
   }
-  if (node.kind === NodeKind.Map) {
-    const entries = node.entries.map((entry) => ({
-      ...entry,
-      key: renameSymbolInNode(entry.key, from, to) ?? entry.key,
-      value: renameSymbolInNode(entry.value, from, to) ?? entry.value,
-    }));
-    return {
-      ...node,
-      entries,
-    };
-  }
+
   if (
     node.kind === NodeKind.Dispatch ||
     node.kind === NodeKind.Quote ||
@@ -289,7 +279,7 @@ describe("analyzeProgram", () => {
 
   test("binds symbols from destructured let patterns", async () => {
     const analysis = await analyzeSource(
-      "(let [[x y & rest :as full] [1 2 3] {:keys [foo bar] :or {bar 10}} {:foo x}] [x y rest full foo bar])"
+      "(let [[x y & rest :as full] [1 2 3 4]] [x y rest full])"
     );
 
     expect(analysis.ok).toBeTrue();
@@ -297,13 +287,13 @@ describe("analyzeProgram", () => {
       .filter((node) => node.symbol?.role === "definition")
       .map((node) => node.symbol?.name);
     expect(definitions).toEqual(
-      expect.arrayContaining(["x", "y", "rest", "full", "foo", "bar"])
+      expect.arrayContaining(["x", "y", "rest", "full"])
     );
   });
 
   test("binds symbols from destructured fn parameters", async () => {
     const analysis = await analyzeSource(
-      withArithmeticPrelude("(fn [[x y] {:keys [z] :or {z 0}}] (+ x y z))")
+      withArithmeticPrelude("(fn [[x y] z] (+ x y z))")
     );
 
     expect(analysis.ok).toBeTrue();

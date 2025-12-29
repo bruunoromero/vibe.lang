@@ -10,8 +10,6 @@ import type {
   NilNode,
   ListNode,
   VectorNode,
-  MapNode,
-  MapEntryNode,
   BindingPattern,
 } from "@vibe/syntax";
 import { NodeKind as NK } from "@vibe/syntax";
@@ -32,7 +30,6 @@ export type Value =
   | KeywordValue
   | ListValue
   | VectorValue
-  | MapValue
   | FunctionValue
   | BuiltinValue
   | ExternalNamespaceValue
@@ -75,11 +72,6 @@ export interface ListValue {
 export interface VectorValue {
   readonly kind: "vector";
   readonly elements: readonly Value[];
-}
-
-export interface MapValue {
-  readonly kind: "map";
-  readonly entries: ReadonlyMap<string, Value>;
 }
 
 export interface FunctionClauseValue {
@@ -152,8 +144,6 @@ export const isList = (value: Value): value is ListValue =>
 export const isVector = (value: Value): value is VectorValue =>
   value.kind === "vector";
 
-export const isMap = (value: Value): value is MapValue => value.kind === "map";
-
 export const isFunction = (value: Value): value is FunctionValue =>
   value.kind === "function";
 
@@ -202,15 +192,7 @@ export const valuesEqual = (a: Value, b: Value): boolean => {
         valuesEqual(elem, bSeq.elements[i]!)
       );
     }
-    case "map": {
-      const bMap = b as MapValue;
-      if (a.entries.size !== bMap.entries.size) return false;
-      for (const [key, value] of a.entries) {
-        const bValue = bMap.entries.get(key);
-        if (!bValue || !valuesEqual(value, bValue)) return false;
-      }
-      return true;
-    }
+
     case "function":
     case "builtin":
       // Functions are compared by reference (identity)
@@ -299,38 +281,6 @@ export const valueToNode = (value: Value, span: SourceSpan): ExpressionNode => {
       return node;
     }
 
-    case "map": {
-      const entries: MapEntryNode[] = [];
-      for (const [keyStr, val] of value.entries) {
-        const keyIsKeyword =
-          typeof keyStr === "string" && keyStr.startsWith(":");
-        const key: SymbolNode | KeywordNode = keyIsKeyword
-          ? ({
-              kind: NK.Keyword,
-              span,
-              lexeme: keyStr,
-              value: keyStr,
-            } as KeywordNode)
-          : ({
-              kind: NK.Symbol,
-              span,
-              lexeme: keyStr,
-              value: keyStr,
-            } as SymbolNode);
-        entries.push({
-          kind: NK.MapEntry,
-          span,
-          key,
-          value: valueToNode(val, span),
-        });
-      }
-      const node: MapNode = {
-        kind: NK.Map,
-        span,
-        entries,
-      };
-      return node;
-    }
     case "function":
       throw new Error(
         "Cannot convert function value to AST node (functions are not serializable)"
@@ -377,21 +327,6 @@ export const nodeToValue = (node: ExpressionNode): Value => {
           .map(nodeToValue),
       };
 
-    case NK.Map: {
-      const entries = new Map<string, Value>();
-      for (const entry of node.entries) {
-        if (entry.key && entry.value) {
-          const key = nodeToValue(entry.key);
-          if (!isSymbol(key) && !isString(key) && !isKeyword(key)) {
-            throw new Error("Map keys must be symbols, strings, or keywords");
-          }
-          const keyStr =
-            isSymbol(key) || isKeyword(key) ? key.value : key.value;
-          entries.set(keyStr, nodeToValue(entry.value));
-        }
-      }
-      return { kind: "map", entries };
-    }
     default:
       throw new Error(
         `Cannot convert AST node kind ${node.kind} to literal value`
@@ -443,10 +378,7 @@ export const makeVector = (elements: readonly Value[]): VectorValue => ({
   elements,
 });
 
-export const makeMap = (entries: Map<string, Value>): MapValue => ({
-  kind: "map",
-  entries,
-});
+/* makeMap removed */
 
 export const makeFunction = (
   clauses: readonly FunctionClauseValue[],

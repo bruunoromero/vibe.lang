@@ -285,17 +285,17 @@ describe("tokenize", () => {
   });
 
   test("treats trailing # as gensym placeholder suffix", async () => {
-    const result = await collectTokens("(foo# {1 2} foo#)");
+    const result = await collectTokens("(foo# [1 2] foo#)");
 
     expect(result.ok).toBeTrue();
     expect(result.diagnostics).toHaveLength(0);
     expect(result.tokens.map((token) => token.kind)).toEqual([
       TokenType.LeftParen,
       TokenType.Symbol,
-      TokenType.LeftBrace,
+      TokenType.LeftBracket,
       TokenType.Number,
       TokenType.Number,
-      TokenType.RightBrace,
+      TokenType.RightBracket,
       TokenType.Symbol,
       TokenType.RightParen,
     ]);

@@ -9,6 +9,9 @@
 
 - **Destructuring patterns for bindings** — `let` bindings and `fn` parameters now flow through the shared `parseBindingPattern` helper so vector/map patterns (including nested forms, `& rest`, `:keys`/`:strs`/`:syms`, `:or`, and `:as`) introduce scoped symbols deterministically. The analyzer reports the new `SEM_PATTERN_*` diagnostics when a pattern is malformed and visits `:or` defaults eagerly so their expressions participate in dependency analysis.
 - **Alias + default traversal** — Map defaults (`:or`) and alias expressions are now revisited during analysis so macro-generated defaults and nested destructuring emit the same diagnostics as ordinary bindings.
+
+- Removed map-literal syntax and map-pattern destructuring support on 2025-12-29. The analyzer no longer emits `NodeKind.Map` shapes or visits map-pattern branches; use vector patterns and explicit helpers for associative access.
+- Removed reader-dispatch (`#`) support and the `Dispatch` AST node. The analyzer no longer treats dispatch nodes specially during macro instantiation or quoted traversal; any logic that depended on `NodeKind.Dispatch` has been removed. Authors should migrate `#`-prefixed reader usage to explicit helper forms or ordinary collections.
 - Tests in `packages/semantics/tests/analyze.test.ts` cover both let-bound and function-parameter destructuring, ensuring every introduced symbol appears in the semantic graph.
 
 ## 2025-12-28

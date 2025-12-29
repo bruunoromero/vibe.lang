@@ -223,17 +223,13 @@ describe("generateModule", () => {
       (def builder
         (fn [x]
           (let [nums [x (+ x 1)]]
-            {:nums nums
-             :echo (println "value" x)})))
+            nums)))
       (def result (builder 5))
     `.trim()
     );
-
     const { runtime } = await runProgram(fixture);
-    expect(runtime.result).toBeInstanceOf(Map);
-    const record = runtime.result as Map<unknown, unknown>;
-    expect(Array.isArray(record.get(runtimeKeyword("nums")))).toBeTrue();
-    expect(record.get(runtimeKeyword("echo"))).toBe(5);
+    expect(Array.isArray(runtime.result)).toBeTrue();
+    expect(runtime.result).toEqual([5, 6]);
     expect(typeof runtime.builder).toBe("function");
   });
 
@@ -241,34 +237,21 @@ describe("generateModule", () => {
     const fixture = withRuntimePrelude(
       `
       (def describe
-        (fn [[x y & tail :as original]
-             {:keys [bonus extra] :or {bonus (runtime/add* x y) extra 5} :as opts}]
-          {:original original
-           :tail tail
-           :bonus bonus
-           :extra extra
-           :opts opts}))
+        (fn [[x y & tail :as original] bonus]
+          [original tail bonus]))
 
       (def output
         (let [[a b & rest :as raw] [10 20 30 40]
-              {:keys [note] :or {note (runtime/add* a 1)}} {}]
-          (describe raw {:bonus note})))
+              note (runtime/add* a 1)]
+          (describe raw note)))
 
       output
     `.trim()
     );
 
     const { runtime } = await runProgram(fixture);
-    expect(runtime.output).toBeInstanceOf(Map);
-    const record = runtime.output as Map<unknown, unknown>;
-    expect(record.get(runtimeKeyword("original"))).toEqual([10, 20, 30, 40]);
-    expect(record.get(runtimeKeyword("tail"))).toEqual([30, 40]);
-    expect(record.get(runtimeKeyword("bonus"))).toBe(11);
-    expect(record.get(runtimeKeyword("extra"))).toBe(5);
-    const optsEntry = record.get(runtimeKeyword("opts"));
-    expect(optsEntry).toBeInstanceOf(Map);
-    const opts = optsEntry as Map<unknown, unknown>;
-    expect(opts.get(runtimeKeyword("bonus"))).toBe(11);
+    expect(Array.isArray(runtime.output)).toBeTrue();
+    expect(runtime.output).toEqual([[10, 20, 30, 40], [30, 40], 11]);
   });
 
   test("skips macro bindings inside let expressions", async () => {

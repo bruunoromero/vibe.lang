@@ -4,9 +4,9 @@ import { tokenizeStream } from "@vibe/lexer";
 import type { Diagnostic, Token } from "@vibe/syntax";
 
 const sources = [
-  "(def foo [:bar {:baz 1}])",
-  "'(println ~x ~@xs #{:a :b} #(+ 1 foo))",
-  '#^{:doc "hi"} (defrecord User [id ^:required name])',
+  "(def foo [:bar [:baz 1]])",
+  "'(println ~x ~@xs [:a :b] #(+ 1 foo))",
+  "(defrecord User [id ^:required name])",
   "(let [x 1 y 2] (+ x y))",
   '(println "unterminated',
 ];

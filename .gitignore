@@ -1,4 +1,7 @@
-# dependencies (bun install)
+node_modules/
+dist/
+.DS_Store
+/.vscode/# dependencies (bun install)
 node_modules
 
 # output

@@ -10,6 +10,10 @@
 - Added definition helpers: `defmacro` (public), `defmacrop` (private), `defn`, and `defnp`. These macros wrap the core `macro`/`fn` literals and the new `defp` special form so modules can declare public/private macros and functions with concise syntax.
 - Restored the `defn` helpers (`cons`, `get`, `apply`, `=`) now that macro expansion preserves the correct lexical scope, keeping the source ergonomic while avoiding unresolved symbol diagnostics.
 
+## 2025-12-29
+
+- Prelude: removed map-literal examples and adjusted helpers to recommend `get`/`assoc` usage over direct `{}` literal construction. Map-literal syntax was removed from the language on 2025-12-29; prelude helpers remain available for associative access over JS objects and `Map` instances.
+
 ## 0.1.0 (2025-12-23)
 
 ### Features

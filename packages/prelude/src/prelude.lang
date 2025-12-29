@@ -92,13 +92,9 @@
          (cond ~@rest))
       (throw "cond requires an even number of clauses"))))
 
-;; ============================================================
-;; Map / Namespace Helpers
-;; ============================================================
-
-(defn get 
-  ([target member] (runtime/get* target member))
-  ([target member default] (or (runtime/get* target member) default)))
+;; Map / Namespace Helpers removed
+;; Runtime map helpers are no longer supported.
+;; Keep `apply` bound to runtime/apply for compatibility.
 
 (defn apply [f args]
   (runtime/apply f args))

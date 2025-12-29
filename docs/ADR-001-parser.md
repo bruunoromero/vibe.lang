@@ -5,11 +5,16 @@
 
 ## Context
 
-We have a working lexer that produces rich token streams, but there is no parser or AST schema to move toward semantic analysis or code generation. The language targets a Lisp-like syntax similar to Clojure, meaning the parser must understand lists, vectors, maps, reader macros (quote, syntax-quote, unquote, unquote-splicing), and generic dispatch forms. Downstream stages will require immutable AST nodes with precise source spans, all centralized within `@vibe/syntax`.
+We have a working lexer that produces rich token streams, but there is no parser or AST schema to move toward semantic analysis or code generation. The language targets a Lisp-like syntax similar to Clojure, meaning the parser must understand lists, vectors, maps, and reader macros (quote, syntax-quote, unquote, unquote-splicing). Downstream stages will require immutable AST nodes with precise source spans, all centralized within `@vibe/syntax`.
 
 ## Decision
 
-1. Extend `@vibe/syntax` to define immutable AST node types (`Program`, `List`, `Vector`, `Map`, reader macros, atoms, and dispatch) plus lightweight helpers for working with spans.
+1. Extend `@vibe/syntax` to define immutable AST node types (`Program`, `List`, `Vector`, `Map`, reader macros, and atoms) plus lightweight helpers for working with spans.
+
+### Update – Dispatch Reader Removal (2025-12-29)
+
+- Removed the generic reader-dispatch syntax (`#`) and associated reader forms (including set-literals such as `#{...}`) from the language surface. The lexer, parser, and `@vibe/syntax` no longer emit or consume a `Dispatch` node. Authors should rewrite uses of `#` forms to explicit helper functions (for example, provide a `(set ...)` helper in the prelude) or to ordinary list/map forms. This clarifies reader responsibilities and avoids conflating reader-level sugar with runtime multi-arity dispatch semantics.
+
 2. Introduce a new workspace package, `@vibe/parser`, that consumes lexer streams and produces ASTs. The parser will:
    - Gather lexical diagnostics and preserve them in the final result.
    - Emit additional diagnostics for unmatched delimiters, unexpected tokens, uneven map literals, and missing macro operands.

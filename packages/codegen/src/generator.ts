@@ -4,7 +4,6 @@ import {
   type Diagnostic,
   type ExpressionNode,
   type ListNode,
-  type MapNode,
   type NamespaceImportKind,
   type NamespaceImportNode,
   type ProgramNode,
@@ -14,7 +13,6 @@ import {
   type VectorNode,
   parseBindingPattern,
   type BindingPattern,
-  type MapBindingPattern,
   type VectorBindingPattern,
 } from "@vibe/syntax";
 import type {
@@ -572,8 +570,6 @@ class ModuleEmitter {
         return `[${elements}]`;
       }
 
-      case NodeKind.Map:
-        return this.emitMap(node);
       default:
         return this.unsupported(node);
     }
@@ -614,18 +610,6 @@ class ModuleEmitter {
         return `[${seq}]`;
       }
 
-      case NodeKind.Map: {
-        const pairs = (node as any).entries
-          .map((entry: any) => {
-            if (!entry.key || !entry.value) return null;
-            const k = this.emitQuotedExpression(entry.key);
-            const v = this.emitQuotedExpression(entry.value);
-            return `[${k}, ${v}]`;
-          })
-          .filter(Boolean)
-          .join(", ");
-        return `new Map([${pairs}])`;
-      }
       default:
         throw new Error(`Unsupported quoted node kind: ${node.kind}`);
     }
@@ -1108,20 +1092,7 @@ ${block}
     return symbolRecord.alias;
   }
 
-  private emitMap(node: MapNode): string {
-    const pairs = node.entries
-      .map((entry) => {
-        if (!entry.key || !entry.value) {
-          return null;
-        }
-        const key = this.emitExpression(entry.key);
-        const value = this.emitExpression(entry.value);
-        return `[${key}, ${value}]`;
-      })
-      .filter(Boolean)
-      .join(", ");
-    return `new Map([${pairs}])`;
-  }
+  /* Map emission removed */
 
   private allocateBindingTemp(prefix = "__binding"): string {
     return `${prefix}_${this.bindingTempCounter++}`;
@@ -1149,9 +1120,6 @@ ${block}
       }
       case "vector":
         this.emitVectorPattern(pattern, sourceExpr, statements);
-        return;
-      case "map":
-        this.emitMapPattern(pattern, sourceExpr, statements);
         return;
       default:
         throw new Error("Unsupported binding pattern kind");
@@ -1184,50 +1152,7 @@ ${block}
     }
   }
 
-  private emitMapPattern(
-    pattern: MapBindingPattern,
-    sourceExpr: string,
-    statements: string[]
-  ): void {
-    const valueTemp = this.allocateBindingTemp("value");
-    statements.push(`const ${valueTemp} = ${sourceExpr};`);
-    const mapTemp = this.allocateBindingTemp("map");
-    statements.push(
-      `const ${mapTemp} = ${valueTemp} instanceof Map ? ${valueTemp} : new Map();`
-    );
-    if (pattern.as) {
-      const alias = this.resolveBindingIdentifier(pattern.as);
-      statements.push(`const ${alias} = ${valueTemp};`);
-    }
-    const defaults = new Map<string, ExpressionNode>();
-    for (const entry of pattern.defaults) {
-      defaults.set(entry.binding, entry.value);
-    }
-    for (const property of pattern.properties) {
-      const keyExpr = this.emitMapKey(property.key);
-      let fallbackExpr = "null";
-      if (property.pattern.kind === "symbol") {
-        const defaultExpr = defaults.get(property.pattern.node.value);
-        if (defaultExpr) {
-          fallbackExpr = `(${this.emitExpression(defaultExpr)})`;
-        }
-      }
-      const valueExpr = `${mapTemp}.has(${keyExpr}) ? ${mapTemp}.get(${keyExpr}) : ${fallbackExpr}`;
-      const temp = this.allocateBindingTemp("value");
-      statements.push(`const ${temp} = ${valueExpr};`);
-      this.emitPatternDestructuring(property.pattern, temp, statements);
-    }
-  }
-
-  private emitMapKey(descriptor: {
-    readonly kind: string;
-    readonly value: string;
-  }): string {
-    if (descriptor.kind === "keyword") {
-      return this.emitKeywordLiteral(descriptor.value);
-    }
-    return JSON.stringify(descriptor.value);
-  }
+  /* Map pattern emission removed */
 
   private buildSequenceStatements(
     expressions: readonly ExpressionNode[]

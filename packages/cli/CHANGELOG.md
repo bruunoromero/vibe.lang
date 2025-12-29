@@ -54,3 +54,7 @@
 - Added the `lang compile` command to emit the generated JavaScript to stdout or a file.
 - Added a shared parser → analyzer pipeline plus `--debug-macros`/`--pretty` flags so `analyze`, `run`, and `compile` surface macro-aware diagnostics consistently and can dump semantic graphs to stderr without breaking primary output.
 - `lang run` and `lang compile` now accept `--show-ast`/`--show-ir` flags that print the parsed AST and generated IR JSON to stderr, making it easier to inspect snapshots without interfering with primary output streams.
+
+## 2025-12-29
+
+- Removed literal map `{ ... }` support from the language; the REPL and CLI pipeline no longer accept map literals and related helpers were updated to use vectors or prelude accessors. See package changelogs for details.

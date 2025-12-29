@@ -8,6 +8,10 @@
 ## 2025-12-29
 
 - **Destructuring in let/fn** — The evaluator now parses binding targets through the shared `parseBindingPattern` helper, caches patterns per AST node, and binds destructured values for both `let` bindings and function parameters. Vector patterns support nested bindings, `& rest`, and `:as` aliases, while map patterns understand explicit keys plus the `:keys`/`:strs`/`:syms` shorthands with lazy `:or` defaults.
+
+## 2025-12-29 (maps removed)
+
+- Removed runtime `MapValue` and direct support for `{ ... }` map literals. Map destructuring and `MapValue`-specific evaluation flows were removed on 2025-12-29; use vectors or explicit accessor helpers from the prelude/runtime for associative operations.
 - **Runtime diagnostics for malformed patterns** — Pattern parse failures surface `INTERP_PATTERN_*` diagnostics that mirror the analyzer’s feedback, keeping REPL and interpreter error messages aligned with compile-time checks.
 - Added coverage in `packages/interpreter/tests/evaluate.test.ts` for destructured let expressions and function parameters, including aliasing, rest collection, and default expressions that depend on previously bound symbols.
 

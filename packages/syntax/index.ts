@@ -3,8 +3,6 @@ export enum TokenType {
   RightParen = "right_paren",
   LeftBracket = "left_bracket",
   RightBracket = "right_bracket",
-  LeftBrace = "left_brace",
-  RightBrace = "right_brace",
   Quote = "quote",
   SyntaxQuote = "syntax_quote",
   Unquote = "unquote",
@@ -86,8 +84,6 @@ export enum NodeKind {
   Program = "program",
   List = "list",
   Vector = "vector",
-  Map = "map",
-  MapEntry = "map_entry",
   Quote = "quote",
   SyntaxQuote = "syntax_quote",
   Unquote = "unquote",
@@ -139,14 +135,6 @@ export interface SequenceNode<K extends SequenceNodeKind> extends AstNode<K> {
 
 export type ListNode = SequenceNode<NodeKind.List>;
 export type VectorNode = SequenceNode<NodeKind.Vector>;
-export interface MapEntryNode extends AstNode<NodeKind.MapEntry> {
-  readonly key: ExpressionNode | null;
-  readonly value: ExpressionNode | null;
-}
-
-export interface MapNode extends AstNode<NodeKind.Map> {
-  readonly entries: readonly MapEntryNode[];
-}
 
 export type ReaderMacroKind =
   | NodeKind.Quote
@@ -205,7 +193,6 @@ export type AtomNode =
 export type ExpressionNode =
   | ListNode
   | VectorNode
-  | MapNode
   | ReaderMacroNode
   | NamespaceImportNode
   | AtomNode;

@@ -4,7 +4,7 @@ import { NodeKind, type ReaderMacroKind, type SymbolNode } from "@vibe/syntax";
 
 describe("parseSource", () => {
   test("parses nested collections", async () => {
-    const result = await parseSource("(def foo [:bar {:baz 1}])");
+    const result = await parseSource("(def foo [:bar [:baz 1]])");
 
     expect(result.ok).toBeTrue();
     expect(result.diagnostics).toHaveLength(0);
@@ -27,22 +27,16 @@ describe("parseSource", () => {
       throw new Error("Expected vector node");
     }
 
-    const [keyword, map] = vector.elements;
+    const [keyword, innerVector] = vector.elements;
     expect(keyword?.kind).toBe(NodeKind.Keyword);
-    expect(map?.kind).toBe(NodeKind.Map);
+    expect(innerVector?.kind).toBe(NodeKind.Vector);
 
-    if (map?.kind !== NodeKind.Map) {
-      throw new Error("Expected map node");
+    if (innerVector?.kind !== NodeKind.Vector) {
+      throw new Error("Expected inner vector node");
     }
 
-    expect(map.entries).toHaveLength(1);
-    const entry = map.entries[0];
-    expect(entry).toBeDefined();
-    if (!entry) {
-      throw new Error("Expected map entry");
-    }
-    expect(entry.key?.kind).toBe(NodeKind.Keyword);
-    expect(entry.value?.kind).toBe(NodeKind.Number);
+    expect(innerVector.elements[0]?.kind).toBe(NodeKind.Keyword);
+    expect(innerVector.elements[1]?.kind).toBe(NodeKind.Number);
   });
 
   test("parses atom literals with correct values", async () => {
@@ -131,24 +125,7 @@ describe("parseSource", () => {
     expect(splicingNode?.kind).toBe(NodeKind.UnquoteSplicing);
   });
 
-  test("reports uneven map entries", async () => {
-    const result = await parseSource("{:a 1 :b}");
-
-    expect(result.ok).toBeFalse();
-    expect(result.diagnostics.map((d) => d.code)).toContain(
-      "PARSE_MAP_ODD_ENTRIES"
-    );
-
-    const mapNode = result.program.body[0];
-    expect(mapNode?.kind).toBe(NodeKind.Map);
-    if (mapNode?.kind !== NodeKind.Map) {
-      throw new Error("Expected map node");
-    }
-
-    expect(mapNode.entries).toHaveLength(2);
-    const [, dangling] = mapNode.entries;
-    expect(dangling?.value).toBeNull();
-  });
+  // Map literals removed from the language; related tests deleted.
 
   test("reports unexpected closing tokens", async () => {
     const result = await parseSource(")");
@@ -162,15 +139,11 @@ describe("parseSource", () => {
   test("reports unterminated sequences", async () => {
     const list = await parseSource("(foo");
     const vector = await parseSource("[1 2");
-    const map = await parseSource("{:a 1");
     expect(list.diagnostics.map((d) => d.code)).toContain(
       "PARSE_LIST_UNTERMINATED"
     );
     expect(vector.diagnostics.map((d) => d.code)).toContain(
       "PARSE_VECTOR_UNTERMINATED"
-    );
-    expect(map.diagnostics.map((d) => d.code)).toContain(
-      "PARSE_MAP_UNTERMINATED"
     );
     // set literals (reader dispatch) removed; no test here
   });

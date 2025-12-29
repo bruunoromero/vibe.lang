@@ -1,5 +1,10 @@
 # @vibe/syntax Changelog
 
+## 2025-12-29
+
+- Removed map literal syntax (`{ key value ... }`) and associated `MapNode`/token kinds across the syntax package. The language no longer supports `{}` map literals as of this date; documentation (`docs/syntax-spec.md`) was updated to reflect the removal.
+- Removed the reader-dispatch syntax (`#`) and the `Dispatch` AST node. Set-literals and other `#`-prefixed reader forms have been retired; authors should use explicit helper forms or ordinary collections instead. The lexer, parser, and `@vibe/syntax` package were updated accordingly.
+
 ## 2025-12-28
 
 - Added `try`, `throw` to `BUILTIN_SYMBOLS` to designate them as reserved special forms for error handling. These symbols are now recognized by downstream analyzers and must not be redefined in user code.
@@ -33,7 +38,7 @@
 
 ## 2025-12-20
 
-- Added foundational AST node kinds for programs, collections, reader macros, dispatch forms, and atoms.
+- Added foundational AST node kinds for programs, collections, reader macros, and atoms.
 - Documented the semantic analyzer's metadata expectations (ADR-002) while keeping AST shapes immutable.
 - Captured macro declaration/usage shapes via new parser snapshots so tooling consumers have concrete AST samples for `defmacro` forms.
 - Introduced optional `scopeId` metadata on every AST node so the parser can tag lexical scope boundaries deterministically.

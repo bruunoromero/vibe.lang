@@ -9,6 +9,10 @@
 
 - **Destructuring emission** — `let` bindings and function parameters now run through the shared binding-pattern parser before code generation. Vector patterns emit deterministic destructuring helpers (including nested patterns, `& rest`, and `:as` aliases) while map patterns expand explicit keys plus the `:keys`/`:strs`/`:syms` shorthands with inline default expressions. Generated modules now mirror the interpreter’s runtime binding semantics, and new tests in `packages/codegen/tests/generate.test.ts` exercise end-to-end destructuring.
 
+## 2025-12-29 (maps removed)
+
+- Removed emission support for map literals and map-pattern lowering. The codegen no longer emits code for `{ ... }` map literals; callers should use vectors, explicit accessors, or prelude helpers for associative data access.
+
 ## 2025-12-28
 
 - **Code generation for try/catch/finally** — Added `emitTry` and `emitThrow` methods that lower try forms to JavaScript try/catch/finally blocks wrapped in IIFEs to preserve value semantics. The catch binding is resolved from the semantic graph and sanitized to a valid JavaScript identifier.

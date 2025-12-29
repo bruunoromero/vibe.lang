@@ -4,7 +4,6 @@ import type {
   SourceSpan,
   ListNode,
   VectorNode,
-  MapNode,
   Diagnostic,
   NamespaceImportNode,
   ReaderMacroNode,
@@ -48,7 +47,6 @@ import {
   makeError,
   makeList,
   makeVector,
-  makeMap,
   makeFunction,
   makeBuiltin,
   makeExternalNamespace,
@@ -192,8 +190,6 @@ const evaluateNode = async (
       return await evaluateList(node, env, context);
     case NK.Vector:
       return await evaluateVector(node, env, context);
-    case NK.Map:
-      return await evaluateMap(node, env, context);
     case NK.NamespaceImport:
       // NamespaceImportNodes are promoted from lists, handle them as special forms
       if (node.importKind === "require") {
@@ -240,7 +236,6 @@ const evaluateNode = async (
         env,
         context
       );
-    case NK.Unquote:
     case NK.UnquoteSplicing:
       return {
         ok: false,
@@ -563,50 +558,7 @@ const evaluateVector = async (
   return { ok: true, value: makeVector(elements), diagnostics: [] };
 };
 
-const evaluateMap = async (
-  node: MapNode,
-  env: Environment,
-  context: EvalContext
-): Promise<EvalResult> => {
-  const entries = new Map<string, Value>();
-  const diagnostics: Diagnostic[] = [];
-
-  for (const entry of node.entries) {
-    if (!entry.key || !entry.value) continue;
-
-    const keyResult = await evaluateNode(entry.key, env, context);
-    if (!keyResult.ok) {
-      diagnostics.push(...keyResult.diagnostics);
-      continue;
-    }
-
-    const valueResult = await evaluateNode(entry.value, env, context);
-    if (!valueResult.ok) {
-      diagnostics.push(...valueResult.diagnostics);
-      continue;
-    }
-
-    const key = keyResult.value!;
-    if (!isSymbol(key) && !isString(key) && !isKeyword(key)) {
-      diagnostics.push({
-        message: "Map keys must be symbols, strings, or keywords",
-        span: entry.key.span,
-        severity: DiagnosticSeverity.Error,
-        code: "INTERP_MAP_KEY_TYPE",
-      });
-      continue;
-    }
-
-    const keyStr = isSymbol(key) || isKeyword(key) ? key.value : key.value;
-    entries.set(keyStr, valueResult.value!);
-  }
-
-  if (diagnostics.length > 0) {
-    return { ok: false, diagnostics };
-  }
-
-  return { ok: true, value: makeMap(entries), diagnostics: [] };
-};
+/* Map evaluation removed */
 
 const tryEvaluateSpecialForm = async (
   node: ListNode,
@@ -930,39 +882,6 @@ const evaluateQuote = (node: ExpressionNode, env: Environment): EvalResult => {
       return { ok: true, value: makeVector(elements), diagnostics: [] };
     }
 
-    case NK.Map: {
-      const quotedEntries = new Map<string, Value>();
-      for (const entry of node.entries) {
-        if (!entry.key || !entry.value) {
-          continue;
-        }
-
-        const keyResult = evaluateQuote(entry.key, env);
-        if (!keyResult.ok) return keyResult;
-        const key = keyResult.value!;
-
-        if (!isSymbol(key) && !isString(key) && !isKeyword(key)) {
-          return {
-            ok: false,
-            diagnostics: [
-              {
-                message: "Map keys must be symbols, strings, or keywords",
-                span: entry.key.span,
-                severity: DiagnosticSeverity.Error,
-                code: "INTERP_MAP_KEY_TYPE",
-              },
-            ],
-          };
-        }
-
-        const valueResult = evaluateQuote(entry.value, env);
-        if (!valueResult.ok) return valueResult;
-
-        const keyStr = key.value;
-        quotedEntries.set(keyStr, valueResult.value!);
-      }
-      return { ok: true, value: makeMap(quotedEntries), diagnostics: [] };
-    }
     case NK.Quote:
       // Nested quote - just quote the target
       if (!node.target) {
@@ -1077,8 +996,6 @@ const instantiateSyntaxNode = async (
         node.span
       );
 
-    case NK.Map:
-      return await instantiateSyntaxMap(node as MapNode, env, context, gensyms);
     case NK.SyntaxQuote: {
       const target = (node as ReaderMacroNode).target;
       if (!target) {
@@ -1192,57 +1109,7 @@ const instantiateSyntaxSequence = async (
   }
 };
 
-const instantiateSyntaxMap = async (
-  node: MapNode,
-  env: Environment,
-  context: EvalContext,
-  gensyms: AutoGensymScope
-): Promise<EvalResult<Value>> => {
-  const entries = new Map<string, Value>();
-  for (const entry of node.entries) {
-    if (!entry.key || !entry.value) {
-      continue;
-    }
-    const keyResult = await instantiateSyntaxNode(
-      entry.key,
-      env,
-      context,
-      gensyms
-    );
-    if (!keyResult.ok) {
-      return keyResult;
-    }
-    const keyValue = keyResult.value;
-    if (
-      !keyValue ||
-      (!isSymbol(keyValue) && !isString(keyValue) && !isKeyword(keyValue))
-    ) {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: "Map keys must be symbols, strings, or keywords",
-            span: entry.key.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_SYNTAX_MAP_KEY_TYPE",
-          },
-        ],
-      };
-    }
-    const valueResult = await instantiateSyntaxNode(
-      entry.value,
-      env,
-      context,
-      gensyms
-    );
-    if (!valueResult.ok) {
-      return valueResult;
-    }
-    const keyName = keyValue.value;
-    entries.set(keyName, valueResult.value ?? makeNil());
-  }
-  return { ok: true, value: makeMap(entries), diagnostics: [] };
-};
+/* instantiateSyntaxMap removed */
 
 const evaluateUnquoteNode = async (
   node: ReaderMacroNode<NodeKind.Unquote>,
@@ -2020,7 +1887,9 @@ const evaluateRequire = async (
     }
 
     // Create a namespace object from the module environment's bindings
-    const namespace = makeMap(new Map(moduleEnv.bindings));
+    const namespace = makeExternalNamespace(
+      Object.fromEntries(moduleEnv.bindings)
+    );
 
     // Bind the namespace to the alias in the current environment
     defineVariable(env, aliasNode.value, namespace);
@@ -2313,7 +2182,7 @@ const jsToValue = (jsValue: any): Value => {
     for (const [k, v] of Object.entries(jsValue)) {
       entries.set(k, jsToValue(v));
     }
-    return makeMap(entries);
+    return makeExternalNamespace(Object.fromEntries(entries));
   }
   // For functions and other types, wrap as a string representation
   return makeString(String(jsValue));

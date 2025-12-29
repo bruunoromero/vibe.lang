@@ -92,14 +92,7 @@ export class Lexer {
           await this.advance();
           this.addToken(TokenType.RightBracket, start);
           continue;
-        case "{":
-          await this.advance();
-          this.addToken(TokenType.LeftBrace, start);
-          continue;
-        case "}":
-          await this.advance();
-          this.addToken(TokenType.RightBrace, start);
-          continue;
+        /* brace tokens removed */
         case "'":
           await this.advance();
           this.addToken(TokenType.Quote, start);
@@ -125,7 +118,7 @@ export class Lexer {
           await this.readCharacter(start);
           continue;
         default:
-          break;
+          case "]":
       }
 
       if (await this.isNumberStart(ch)) {
@@ -710,9 +703,6 @@ export class Lexer {
   }
 
   private isAutoGensymSuffixBoundary(next: string): boolean {
-    if (next === "{") {
-      return false;
-    }
     if (next === "") {
       return true;
     }
