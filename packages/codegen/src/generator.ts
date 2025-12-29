@@ -550,7 +550,6 @@ class ModuleEmitter {
       }
       case NodeKind.Number:
       case NodeKind.String:
-      case NodeKind.Character:
         return JSON.stringify(node.value);
       case NodeKind.Keyword: {
         return this.emitKeywordLiteral(node.value);
@@ -586,7 +585,6 @@ class ModuleEmitter {
         return this.emitKeywordLiteral((node as any).value);
       case NodeKind.Number:
       case NodeKind.String:
-      case NodeKind.Character:
         return JSON.stringify((node as any).value);
       case NodeKind.Boolean:
         return (node as any).value ? "true" : "false";

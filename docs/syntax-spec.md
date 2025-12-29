@@ -36,7 +36,6 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 | `#` | `#dispatch` | Dispatch macro prefix |
 | Numbers | `42` `-3.14` `6.022e23` | Optional sign, decimal part, exponent |
 | Strings | `"hello"` | Double-quoted with escapes |
-| Characters | `\a` `\newline` `\u03bb` | Backslash-prefixed literals |
 | Symbols | `foo` `user/name` `*main*` `foo?` `bar!` `baz*` `foo#` | Cannot start with digits or delimiters; may end with `?`, `!`, `*`, `+`, `-`, `=`, `<`, `>`, `/`. A trailing `#` is reserved for auto-gensym placeholders inside syntax-quoted forms. |
 | Keywords | `:ok` `::auto` | Optional double-colon auto-namespace |
 | Boolean/Nil | `true` `false` `nil` | Case-insensitive |
@@ -46,8 +45,6 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 - Begin and end with `"`.
 - Supports escapes: `\"`, `\'`, `\\`, `\n`, `\r`, `\t`, `\b`, `\f`, and `\uXXXX` (four hex digits).
 - Unterminated strings emit `LEX_STRING_UNTERMINATED` diagnostics but still produce a token to keep parsing moving.
-
-### Characters
 
 ### Numbers
 
@@ -170,7 +167,7 @@ syntax_quote   ::= "`" form
 unquote        ::= "~" form
 unquote_splicing ::= "~@" form
 dispatch       ::= '#' form
-atom           ::= number | string | character | keyword | symbol | boolean | nil
+atom           ::= number | string | keyword | symbol | boolean | nil
 ```
 
 ### Auto Gensym Placeholders

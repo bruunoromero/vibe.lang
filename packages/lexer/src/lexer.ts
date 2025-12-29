@@ -114,11 +114,9 @@ export class Lexer {
         case '"':
           await this.readString(start);
           continue;
-        case "\\":
-          await this.readCharacter(start);
-          continue;
+
         default:
-          case "]":
+        case "]":
       }
 
       if (await this.isNumberStart(ch)) {
@@ -293,104 +291,6 @@ export class Lexer {
           "LEX_STRING_ESCAPE"
         );
         return ch ?? "";
-    }
-  }
-
-  private async readCharacter(start: SourcePosition): Promise<void> {
-    await this.advance();
-    if (await this.isAtEnd()) {
-      this.report(
-        "Unterminated character literal",
-        start,
-        this.snapshot(),
-        "LEX_CHAR_UNTERMINATED"
-      );
-      return;
-    }
-
-    if ((await this.peek()) === "u") {
-      await this.advance();
-      let hex = "";
-      for (let i = 0; i < 4; i += 1) {
-        const next = await this.peek();
-        if (!this.isHexDigit(next)) {
-          this.report(
-            "Invalid unicode character literal",
-            start,
-            this.snapshot(),
-            "LEX_CHAR_INVALID"
-          );
-          break;
-        }
-        hex += await this.advance();
-      }
-      const codePoint = Number.parseInt(hex, 16);
-      if (Number.isNaN(codePoint)) {
-        this.report(
-          "Invalid unicode character literal",
-          start,
-          this.snapshot(),
-          "LEX_CHAR_INVALID"
-        );
-        return;
-      }
-      this.addToken(
-        TokenType.Character,
-        start,
-        String.fromCodePoint(codePoint)
-      );
-      return;
-    }
-
-    let literal = "";
-    while (!(await this.isAtEnd()) && !this.isDelimiter(await this.peek())) {
-      literal += await this.advance();
-    }
-
-    if (literal.length === 0) {
-      this.report(
-        "Invalid character literal",
-        start,
-        this.snapshot(),
-        "LEX_CHAR_INVALID"
-      );
-      return;
-    }
-
-    const value = this.resolveNamedCharacter(literal);
-    if (value === undefined) {
-      if (literal.length === 1) {
-        this.addToken(TokenType.Character, start, literal);
-      } else {
-        this.report(
-          "Unknown character literal",
-          start,
-          this.snapshot(),
-          "LEX_CHAR_UNKNOWN"
-        );
-      }
-      return;
-    }
-
-    this.addToken(TokenType.Character, start, value);
-  }
-
-  private resolveNamedCharacter(name: string): string | undefined {
-    switch (name) {
-      case "space":
-        return " ";
-      case "tab":
-        return "\t";
-      case "newline":
-        return "\n";
-      case "return":
-        return "\r";
-      case "formfeed":
-        return "\f";
-      case "backspace":
-        return "\b";
-      default:
-        return undefined;
     }
   }
 

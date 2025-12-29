@@ -6,7 +6,6 @@ import {
   type Diagnostic,
   type ExpressionNode,
   type ListNode,
-  
   type NamespaceImportKind,
   type NamespaceImportNode,
   type ProgramNode,
@@ -365,7 +364,7 @@ export class SemanticAnalyzer {
         this.recordNode(node, nodeScopeId);
         await this.visitSequence(node as VectorNode, nodeScopeId);
         break;
-      
+
       case NodeKind.Quote:
         this.recordNode(node, nodeScopeId);
         await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
@@ -1998,12 +1997,11 @@ export class SemanticAnalyzer {
         }
         break;
       }
-      
+
       case NodeKind.Symbol:
       case NodeKind.Keyword:
       case NodeKind.Number:
       case NodeKind.String:
-      case NodeKind.Character:
       case NodeKind.Boolean:
       case NodeKind.Nil: {
         // Record the node but do not resolve usages or alter bindings.
@@ -2044,7 +2042,6 @@ export class SemanticAnalyzer {
       case NodeKind.Vector:
         return (await this.instantiateSequence(node, context)) as VectorNode;
 
-      
       case NodeKind.Quote:
         return await this.instantiateReader(node as ReaderMacroNode, context);
 
@@ -2466,14 +2463,6 @@ export class SemanticAnalyzer {
           this.defineSymbol(pattern.as, scopeId, kind, role);
         }
         return;
-      case "map":
-        for (const property of pattern.properties) {
-          this.declarePatternBindings(property.pattern, scopeId, kind, role);
-        }
-        if (pattern.as) {
-          this.defineSymbol(pattern.as, scopeId, kind, role);
-        }
-        return;
       default:
         return;
     }
@@ -2483,15 +2472,6 @@ export class SemanticAnalyzer {
     pattern: BindingPattern,
     scopeId: ScopeId
   ): Promise<void> {
-    if (pattern.kind === "map") {
-      for (const entry of pattern.defaults) {
-        await this.visit(entry.value, scopeId);
-      }
-      for (const property of pattern.properties) {
-        await this.visitPatternDefaults(property.pattern, scopeId);
-      }
-      return;
-    }
     if (pattern.kind === "vector") {
       for (const element of pattern.elements) {
         await this.visitPatternDefaults(element, scopeId);
@@ -2558,7 +2538,7 @@ export class SemanticAnalyzer {
           this.stripScopeMetadata(element);
         }
         break;
-      
+
       case NodeKind.Quote:
       case NodeKind.SyntaxQuote:
       case NodeKind.Unquote:

@@ -40,13 +40,13 @@ describe("parseSource", () => {
   });
 
   test("parses atom literals with correct values", async () => {
-    const source = String.raw`42 "hi" \newline :ns/foo ::auto true false nil`;
+    const source = String.raw`42 "hi" :ns/foo ::auto true false nil`;
     const result = await parseSource(source);
 
     expect(result.ok).toBeTrue();
     expect(result.diagnostics).toHaveLength(0);
 
-    const [num, str, charNode, keyword, autoKeyword, boolTrue, boolFalse, nil] =
+    const [num, str, keyword, autoKeyword, boolTrue, boolFalse, nil] =
       result.program.body;
 
     expect(num?.kind).toBe(NodeKind.Number);
@@ -61,12 +61,6 @@ describe("parseSource", () => {
       throw new Error("Expected string node");
     }
     expect(str.value).toBe("hi");
-
-    expect(charNode?.kind).toBe(NodeKind.Character);
-    if (charNode?.kind !== NodeKind.Character) {
-      throw new Error("Expected character node");
-    }
-    expect(charNode.value).toBe("\n");
 
     expect(keyword?.kind).toBe(NodeKind.Keyword);
     if (keyword?.kind !== NodeKind.Keyword) {

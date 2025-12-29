@@ -116,24 +116,6 @@ describe("tokenize", () => {
     ]);
   });
 
-  test("lexes character literals and reports invalid forms", async () => {
-    const codePoints = [
-      92, 97, 32, 92, 110, 101, 119, 108, 105, 110, 101, 32, 92, 117, 48, 48,
-      52, 50, 32, 92, 110, 111, 112, 101, 32, 92,
-    ];
-    const source = String.fromCharCode(...codePoints);
-    const result = await collectTokens(source);
-
-    const chars = result.tokens
-      .filter((token) => token.kind === TokenType.Character)
-      .map((token) => token.value);
-    expect(chars).toEqual(["a", "\n", "B"]);
-    expect(result.diagnostics.map((diag) => diag.code)).toEqual([
-      "LEX_CHAR_UNKNOWN",
-      "LEX_CHAR_UNTERMINATED",
-    ]);
-  });
-
   test("parses numeric edge cases", async () => {
     const source = ".5 -0.25 6.02e23 +42";
     const result = await collectTokens(source);

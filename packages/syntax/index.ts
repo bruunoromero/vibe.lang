@@ -9,7 +9,6 @@ export enum TokenType {
   UnquoteSplicing = "unquote_splicing",
   Number = "number",
   String = "string",
-  Character = "character",
   Symbol = "symbol",
   Keyword = "keyword",
   Boolean = "boolean",
@@ -92,7 +91,6 @@ export enum NodeKind {
   Keyword = "keyword",
   Number = "number",
   String = "string",
-  Character = "character",
   Boolean = "boolean",
   Nil = "nil",
   NamespaceImport = "namespace_import",
@@ -152,7 +150,6 @@ export type AtomKind =
   | NodeKind.Keyword
   | NodeKind.Number
   | NodeKind.String
-  | NodeKind.Character
   | NodeKind.Boolean
   | NodeKind.Nil;
 
@@ -165,7 +162,6 @@ export type SymbolNode = AtomNodeBase<NodeKind.Symbol, string>;
 export type KeywordNode = AtomNodeBase<NodeKind.Keyword, string>;
 export type NumberNode = AtomNodeBase<NodeKind.Number, number>;
 export type StringNode = AtomNodeBase<NodeKind.String, string>;
-export type CharacterNode = AtomNodeBase<NodeKind.Character, string>;
 export type BooleanNode = AtomNodeBase<NodeKind.Boolean, boolean>;
 export type NilNode = AtomNodeBase<NodeKind.Nil, null>;
 
@@ -186,7 +182,6 @@ export type AtomNode =
   | KeywordNode
   | NumberNode
   | StringNode
-  | CharacterNode
   | BooleanNode
   | NilNode;
 

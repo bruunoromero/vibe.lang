@@ -116,7 +116,7 @@ export class Parser {
           structure: "vector literal",
           unterminatedCode: "PARSE_VECTOR_UNTERMINATED",
         });
-      
+
       case TokenType.Quote:
         return this.parseReaderMacro(NodeKind.Quote, token);
       case TokenType.SyntaxQuote:
@@ -135,12 +135,6 @@ export class Parser {
       case TokenType.String:
         return this.createAtomNode(
           NodeKind.String,
-          token,
-          this.stringValue(token)
-        );
-      case TokenType.Character:
-        return this.createAtomNode(
-          NodeKind.Character,
           token,
           this.stringValue(token)
         );
@@ -236,8 +230,6 @@ export class Parser {
     return node;
   }
 
-  
-
   private async parseReaderMacro<K extends ReaderMacroKind>(
     kind: K,
     macroToken: Token
@@ -261,8 +253,6 @@ export class Parser {
       span: this.spanFromRefs(macroToken, endRef),
     } satisfies ReaderMacroNode<K>;
   }
-
-  
 
   private createAtomNode<T>(
     kind: NodeKind,
@@ -716,7 +706,10 @@ class ScopeAnnotator {
     }
   }
 
-  private assignScope(node: ProgramNode | ExpressionNode, scopeId: ScopeId): void {
+  private assignScope(
+    node: ProgramNode | ExpressionNode,
+    scopeId: ScopeId
+  ): void {
     (node as { scopeId?: ScopeId }).scopeId = scopeId;
   }
 
