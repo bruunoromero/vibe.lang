@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { _PLUS, _DASH, _STAR, _SLASH, get } from "../src/prelude.js";
+import { _PLUS, _DASH, _STAR, _SLASH } from "../src/prelude.js";
 
 describe("prelude arithmetic operators", () => {
   test("+ mirrors identity, unary, and variadic semantics", () => {
