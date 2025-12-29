@@ -33,11 +33,9 @@ import {
 } from "./environment";
 import type { FunctionClauseValue, FunctionValue, Value } from "./values";
 import {
-  isCallable,
   isFunction,
   isBuiltin,
   isTruthy,
-  isKeyword,
   makeNumber,
   makeString,
   makeBoolean,
@@ -51,8 +49,6 @@ import {
   makeBuiltin,
   makeExternalNamespace,
   isSequence,
-  isSymbol,
-  isString,
   isErrorValue,
 } from "./values";
 
@@ -216,26 +212,6 @@ const evaluateNode = async (
       return evaluateQuote(node.target, env);
     case NK.SyntaxQuote:
       return await evaluateSyntaxQuote(node as ReaderMacroNode, env, context);
-    case NK.Dispatch:
-      // At compile-time dispatch nodes evaluate to their target expression.
-      if (!(node as any).target) {
-        return {
-          ok: false,
-          diagnostics: [
-            {
-              message: "Dispatch expression is missing target",
-              span: node.span,
-              severity: DiagnosticSeverity.Error,
-              code: "INTERP_DISPATCH_MISSING_TARGET",
-            },
-          ],
-        };
-      }
-      return await evaluateNode(
-        (node as any).target as ExpressionNode,
-        env,
-        context
-      );
     case NK.UnquoteSplicing:
       return {
         ok: false,
@@ -357,39 +333,6 @@ const evaluateSymbol = (
         };
       }
     }
-
-    // Namespace should be a map
-    if (namespace.kind !== "map") {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: `${alias} is not a namespace (expected map, got ${namespace.kind})`,
-            span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_NOT_NAMESPACE",
-          },
-        ],
-      };
-    }
-
-    // Look up the member in the namespace
-    const value = namespace.entries.get(member);
-    if (value === undefined) {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: `Undefined member ${member} in namespace ${alias}`,
-            span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_UNDEFINED_MEMBER",
-          },
-        ],
-      };
-    }
-
-    return { ok: true, value, diagnostics: [] };
   }
 
   // Regular variable lookup
@@ -1699,8 +1642,6 @@ const bindPatternValue = async (
       return okVoid();
     case "vector":
       return await bindVectorPattern(pattern, value, env, context);
-    case "map":
-      return await bindMapPattern(pattern, value, env, context);
     default:
       return okVoid();
   }
@@ -1742,60 +1683,6 @@ const bindVectorPattern = async (
     defineVariable(env, pattern.as.value, value);
   }
   return okVoid();
-};
-
-const bindMapPattern = async (
-  pattern: Extract<BindingPattern, { kind: "map" }>,
-  value: Value,
-  env: Environment,
-  context: EvalContext
-): Promise<EvalResult<void>> => {
-  const entries =
-    value.kind === "map" ? value.entries : new Map<string, Value>();
-  if (pattern.as) {
-    defineVariable(env, pattern.as.value, value);
-  }
-  const defaults = new Map<string, ExpressionNode>();
-  for (const entry of pattern.defaults) {
-    defaults.set(entry.binding, entry.value);
-  }
-  for (const property of pattern.properties) {
-    const key = mapKeyToString(property.key);
-    let resolved = entries.get(key);
-    if (resolved === undefined && property.pattern.kind === "symbol") {
-      const fallbackExpr = defaults.get(property.pattern.node.value);
-      if (fallbackExpr) {
-        const fallbackResult = await evaluateNode(fallbackExpr, env, context);
-        if (!fallbackResult.ok) {
-          return { ok: false, diagnostics: fallbackResult.diagnostics };
-        }
-        resolved = fallbackResult.value ?? makeNil();
-      }
-    }
-    const bindResult = await bindPatternValue(
-      property.pattern,
-      resolved ?? makeNil(),
-      env,
-      context
-    );
-    if (!bindResult.ok) {
-      return bindResult;
-    }
-  }
-  return okVoid();
-};
-
-const mapKeyToString = (key: {
-  readonly kind: string;
-  readonly value: string;
-}): string => {
-  if (key.kind === "keyword") {
-    return key.value.startsWith(":") ? key.value : `:${key.value}`;
-  }
-  if (key.kind === "string") {
-    return key.value;
-  }
-  return key.value;
 };
 
 const sequenceElements = (value: Value): Value[] => {
@@ -2113,12 +2000,6 @@ const valueToJS = (value: Value): any => {
     case "list":
     case "vector":
       return value.elements.map(valueToJS);
-    case "map":
-      const obj: Record<string, any> = {};
-      for (const [k, v] of value.entries) {
-        obj[k] = valueToJS(v);
-      }
-      return obj;
     case "function":
     case "builtin":
       return (...args: any[]) => {

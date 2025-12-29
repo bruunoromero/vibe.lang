@@ -76,6 +76,7 @@ export interface ModuleImportRecord {
 export interface FlattenedImportBinding {
   readonly exportedName: string;
   readonly identifier: string;
+  readonly exportedIdentifier?: string;
 }
 
 export type ModuleExportKind = "var" | "macro";
@@ -102,6 +103,7 @@ export interface ModuleExportEntry {
   readonly kind: ModuleExportKind;
   readonly macro?: ModuleExportedMacro;
   readonly macroRuntimeValue?: Value;
+  readonly identifier?: string;
 }
 
 export interface ModuleExportRecord {
@@ -1841,6 +1843,7 @@ export class SemanticAnalyzer {
           bindings.push({
             exportedName,
             identifier: record.alias,
+            exportedIdentifier: (entry as any).identifier ?? exportedName,
           });
         }
       }
@@ -1913,6 +1916,15 @@ export class SemanticAnalyzer {
       (e) => e.name === symbol.name
     );
     if (existingIndex !== -1) {
+      if (process.env.VIBE_DEBUG) {
+        try {
+          console.debug(
+            `[SemanticAnalyzer] update export name=${symbol.name} identifier=${
+              symbol.alias
+            } span=${JSON.stringify(span)}`
+          );
+        } catch {}
+      }
       // Replace the whole record rather than mutating readonly properties
       this.moduleExportsTable[existingIndex] = {
         name: symbol.name,
@@ -1920,6 +1932,15 @@ export class SemanticAnalyzer {
         span,
       };
       return;
+    }
+    if (process.env.VIBE_DEBUG) {
+      try {
+        console.debug(
+          `[SemanticAnalyzer] add export name=${symbol.name} identifier=${
+            symbol.alias
+          } span=${JSON.stringify(span)}`
+        );
+      } catch {}
     }
     this.moduleExportsTable.push({
       name: symbol.name,
@@ -2898,7 +2919,7 @@ export class SemanticAnalyzer {
 }
 
 class AliasAllocator {
-  private readonly used = new Set<string>(["__println", "eq", "count"]);
+  private readonly used = new Set<string>([]);
 
   private readonly operatorNames = new Map<string, string>([
     // Comparison operators
@@ -2982,10 +3003,30 @@ class AliasAllocator {
 
   private reserve(initial: string): string {
     let candidate = initial;
+    if (process.env.VIBE_DEBUG) {
+      try {
+        // lightweight debug to trace alias allocation
+        console.debug(
+          `[AliasAllocator] reserve initial=${initial} usedSize=${this.used.size}`
+        );
+      } catch {}
+    }
     while (this.used.has(candidate)) {
+      if (process.env.VIBE_DEBUG) {
+        try {
+          console.debug(
+            `[AliasAllocator] conflict candidate=${candidate} nextSuffix=${this.used.size}`
+          );
+        } catch {}
+      }
       candidate = `${candidate}_${this.used.size}`;
     }
     this.used.add(candidate);
+    if (process.env.VIBE_DEBUG) {
+      try {
+        console.debug(`[AliasAllocator] reserved ${candidate}`);
+      } catch {}
+    }
     return candidate;
   }
 }

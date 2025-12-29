@@ -66,7 +66,37 @@ export const extractTopLevelExports = async (
     moduleResolver: options.moduleResolver,
     moduleExports: options.moduleExports,
   });
-  return collectExportsFromProgram(program, analysis.macroRuntime);
+  // Build a map of analyzer-provided export identifiers (emitted aliases)
+  const analyzerExportMap = new Map<string, string>();
+  try {
+    for (const e of analysis.graph.exports ?? []) {
+      if (e && (e as any).name && (e as any).identifier) {
+        analyzerExportMap.set((e as any).name, (e as any).identifier);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  if (process.env.VIBE_DEBUG) {
+    try {
+      console.debug(
+        `[extractTopLevelExports] module=${
+          options.moduleId
+        } analyzerExports=${JSON.stringify(analysis.graph.exports)}`
+      );
+    } catch {}
+  }
+
+  const raw = collectExportsFromProgram(program, analysis.macroRuntime);
+  // Attach analyzer-assigned identifier when available so importers can
+  // reference the actual emitted property name.
+  const decorated = raw.map((entry) =>
+    analyzerExportMap.has(entry.name)
+      ? { ...entry, identifier: analyzerExportMap.get(entry.name) }
+      : entry
+  );
+  return decorated;
 };
 
 const collectExportsFromProgram = (

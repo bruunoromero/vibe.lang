@@ -513,11 +513,22 @@ class ModuleEmitter {
   private emitNamespaceDefinition(spec: NamespaceImportSpec): void {
     if (spec.kind === "import" && spec.flatten && spec.flatten.length > 0) {
       for (const binding of spec.flatten) {
-        const access = this.emitNamespaceMemberAccess(
-          spec.aliasIdentifier,
-          binding.exportedName,
-          spec.kind
-        );
+        const exportedIdentifier = (binding as any).exportedIdentifier as
+          | string
+          | undefined;
+        const memberKey = exportedIdentifier ?? binding.exportedName;
+        let access: string;
+        if (exportedIdentifier) {
+          // Use the analyzer-provided emitted identifier directly when present
+          // (this is already sanitized by the analyzer/alias allocator).
+          access = this.emitPropertyAccess(spec.aliasIdentifier, memberKey);
+        } else {
+          access = this.emitNamespaceMemberAccess(
+            spec.aliasIdentifier,
+            memberKey,
+            spec.kind
+          );
+        }
         this.addLine(
           `const ${binding.identifier} = ${access};`,
           spec.statementNode.span
