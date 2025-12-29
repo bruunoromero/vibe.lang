@@ -203,7 +203,7 @@ describe("parseSource", () => {
   });
 
   test("annotates lexical scope identifiers", async () => {
-    const result = await parseSource("(let [x 1] (fn [y] y) x)");
+    const result = await parseSource("(let [x 1] (fn+ [y] y) x)");
 
     expect(result.ok).toBeTrue();
     const program = result.program;
@@ -313,10 +313,10 @@ describe("parseSource", () => {
 
   test("parses function definitions with Clojure-style names", async () => {
     const result = await parseSource(`
-      (def is-valid? (fn [x] (> x 0)))
-      (def set-value! (fn [v] v))
-      (def splat* (fn [] 42))
-      (def foo-bar? (fn [] true))
+      (def is-valid? (fn+ [x] (> x 0)))
+      (def set-value! (fn+ [v] v))
+      (def splat* (fn+ [] 42))
+      (def foo-bar? (fn+ [] true))
     `);
 
     expect(result.ok).toBeTrue();

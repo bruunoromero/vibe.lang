@@ -14,7 +14,7 @@ const snapshotCases = [
     name: "macro declaration and usage",
     source: `
       (def with-temp
-        (macro [expr]
+        (macro+ [expr]
           \`(let [tmp ~expr]
              (println tmp)
              tmp)))

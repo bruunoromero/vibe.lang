@@ -271,7 +271,7 @@ const isMacroLiteralNode = (
   }
   const head = node.elements[0];
   return Boolean(
-    head && head.kind === NodeKind.Symbol && head.value === "macro"
+    head && head.kind === NodeKind.Symbol && head.value === "macro+"
   );
 };
 

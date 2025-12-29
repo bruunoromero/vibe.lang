@@ -375,7 +375,7 @@ describe("Interpreter - Special Forms", () => {
 describe("Interpreter - Functions", () => {
   test("define and call function", async () => {
     const result = await evalMulti(
-      "(def add (fn [x y] (runtime/add* x y))) (add 3 4)",
+      "(def add (fn+ [x y] (runtime/add* x y))) (add 3 4)",
       true
     );
     expect(result.ok).toBeTrue();
@@ -384,7 +384,7 @@ describe("Interpreter - Functions", () => {
 
   test("function with single parameter", async () => {
     const result = await evalMulti(
-      "(def double (fn [x] (runtime/mul* x 2))) (double 5)",
+      "(def double (fn+ [x] (runtime/mul* x 2))) (double 5)",
       true
     );
     expect(result.ok).toBeTrue();
@@ -393,7 +393,7 @@ describe("Interpreter - Functions", () => {
 
   test("function closes over environment", async () => {
     const result = await evalMulti(
-      "(def make-adder (fn [x] (fn [y] (runtime/add* x y)))) (def add5 (make-adder 5)) (add5 3)",
+      "(def make-adder (fn+ [x] (fn+ [y] (runtime/add* x y)))) (def add5 (make-adder 5)) (add5 3)",
       true
     );
     expect(result.ok).toBeTrue();
@@ -402,7 +402,7 @@ describe("Interpreter - Functions", () => {
 
   // test("variadic function with rest parameter", async () => {
   //   const result = await evalMulti(
-  //     "(def sum (fn [& nums] (runtime/first nums))) (sum 1 2 3)",
+  //     "(def sum (fn+ [& nums] (runtime/first nums))) (sum 1 2 3)",
   //     true
   //   );
   //   expect(result.ok).toBeTrue();
@@ -411,7 +411,7 @@ describe("Interpreter - Functions", () => {
 
   test("function with mixed and rest parameters", async () => {
     const parseResult = await parseSource(
-      "(def f (fn [x & rest] x)) (f 42 1 2 3)"
+      "(def f (fn+ [x & rest] x)) (f 42 1 2 3)"
     );
     const env = createRootEnvironment();
     await evaluate(parseResult.program.body[0]!, env);
@@ -423,7 +423,7 @@ describe("Interpreter - Functions", () => {
   test("multi-arity function dispatches the matching clause", async () => {
     const result = await evalMulti(`
       (def picker
-        (fn
+        (fn+
           ([x] 1)
           ([x y] 2)
           ([x y & rest] 3)))
@@ -437,7 +437,7 @@ describe("Interpreter - Functions", () => {
 
   test("multi-arity function reports missing clauses", async () => {
     const result = await evalMulti(`
-      (def only-one (fn ([x] x)))
+      (def only-one (fn+ ([x] x)))
       (only-one 1 2)
     `);
     expect(result.ok).toBeFalse();
@@ -483,7 +483,7 @@ describe("Interpreter - Collections", () => {
 
   test("function call supports runtime spread in args", async () => {
     const result = await evalMulti(
-      `(def nums [1 2 3]) (def f (fn [& xs] (runtime/count xs))) (f (spread nums))`,
+      `(def nums [1 2 3]) (def f (fn+ [& xs] (runtime/count xs))) (f (spread nums))`,
       true
     );
     expect(result.ok).toBeTrue();
@@ -691,7 +691,7 @@ describe("Interpreter - Module Imports", () => {
       const result = await evalMulti(
         `
         (def describe
-          (fn [[x y & tail] bonus]
+          (fn+ [[x y & tail] bonus]
             [x y tail bonus]))
         (describe [10 20 30] 7)
       `,
@@ -758,7 +758,7 @@ describe("Interpreter - Error Handling", () => {
 
   test("arity mismatch - too few args", async () => {
     const parseResult = await parseSource(
-      "(def f (fn [x y] (runtime/add* x y))) (f 1)"
+      "(def f (fn+ [x y] (runtime/add* x y))) (f 1)"
     );
     const env = createRootEnvironment();
     await evaluate(parseResult.program.body[0]!, env);
@@ -768,7 +768,7 @@ describe("Interpreter - Error Handling", () => {
   });
 
   test("arity mismatch - too many args", async () => {
-    const parseResult = await parseSource("(def f (fn [x] (* x 2))) (f 1 2 3)");
+    const parseResult = await parseSource("(def f (fn+ [x] (* x 2))) (f 1 2 3)");
     const env = createRootEnvironment();
     await evaluate(parseResult.program.body[0]!, env);
     const result = await evaluate(parseResult.program.body[1]!, env);

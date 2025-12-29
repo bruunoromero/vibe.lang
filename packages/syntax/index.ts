@@ -100,9 +100,9 @@ export const BUILTIN_SYMBOLS = [
   // Special forms (required even without user-provided definitions)
   "def",
   "defp",
-  "macro",
+  "macro+",
   "let",
-  "fn",
+  "fn+",
   "if",
   "quote",
   "do",

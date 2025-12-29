@@ -701,7 +701,7 @@ export class SemanticAnalyzer {
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleLet(node, scopeId);
         return true;
-      case "fn":
+      case "fn+":
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleFn(node, scopeId);
         return true;
@@ -717,10 +717,10 @@ export class SemanticAnalyzer {
         this.recordSymbolUsage(head, scopeId, "usage");
         await this.handleSpread(node, scopeId);
         return true;
-      case "macro":
+      case "macro+":
         this.recordSymbolUsage(head, scopeId, "usage");
         this.report(
-          "macro literals are only supported inside binding forms",
+          "macro+ literals are only supported inside binding forms",
           node.span,
           "SEM_MACRO_LITERAL_CONTEXT"
         );
@@ -1409,7 +1409,7 @@ export class SemanticAnalyzer {
     }
     const head = node.elements[0];
     return Boolean(
-      head && head.kind === NodeKind.Symbol && head.value === "macro"
+      head && head.kind === NodeKind.Symbol && head.value === "macro+"
     );
   }
 

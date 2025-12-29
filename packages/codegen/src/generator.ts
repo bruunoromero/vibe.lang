@@ -672,7 +672,7 @@ class ModuleEmitter {
           throw new Error("def is only supported at the top level");
         case "let":
           return this.emitLet(node);
-        case "fn":
+        case "fn+":
           return this.emitFn(node);
         case "if":
           return this.emitIf(tail);

@@ -32,15 +32,15 @@ ${RUNTIME_PRELUDE}
 
   (require prelude "${PRELUDE_JS}")
 
-  (def reduce (fn [f init coll]
+  (def reduce (fn+ [f init coll]
     (if (runtime/eq* (runtime/count coll) 0)
       init
       (reduce f (f init (prelude/first coll)) (prelude/rest coll)))))
 
-  (def + (fn [& xs]
+  (def + (fn+ [& xs]
     (reduce runtime/add* 0 xs)))
 
-  (def - (fn [& xs]
+  (def - (fn+ [& xs]
     (let [cnt (runtime/count xs)]
       (if (runtime/eq* cnt 0)
         0
@@ -48,10 +48,10 @@ ${RUNTIME_PRELUDE}
           (runtime/sub* 0 (prelude/first xs))
           (reduce runtime/sub* (prelude/first xs) (prelude/rest xs)))))))
 
-  (def * (fn [& xs]
+  (def * (fn+ [& xs]
     (reduce runtime/mul* 1 xs)))
 
-  (def / (fn [& xs]
+  (def / (fn+ [& xs]
     (let [cnt (runtime/count xs)]
       (if (runtime/eq* cnt 0)
         0
@@ -131,10 +131,10 @@ const runProgram = async (source: string, options?: GenerateModuleOptions) => {
 const macroPipelineSource = withArithmeticPrelude(
   `
   (def build-pipeline
-    (fn [seed]
-      (fn [value]
+    (fn+ [seed]
+      (fn+ [value]
         (let [tmp (+ value seed)]
-          (fn [extra]
+          (fn+ [extra]
             (let [tmp (+ tmp extra)
                   final (+ tmp seed)]
               (println "macro-stage" final)
@@ -221,7 +221,7 @@ describe("generateModule", () => {
     const fixture = withArithmeticPrelude(
       `
       (def builder
-        (fn [x]
+        (fn+ [x]
           (let [nums [x (+ x 1)]]
             nums)))
       (def result (builder 5))
@@ -237,7 +237,7 @@ describe("generateModule", () => {
     const fixture = withRuntimePrelude(
       `
       (def describe
-        (fn [[x y & tail :as original] bonus]
+        (fn+ [[x y & tail :as original] bonus]
           [original tail bonus]))
 
       (def output
@@ -258,7 +258,7 @@ describe("generateModule", () => {
     const fixture = `
       (def answer
         (let [local-macro
-                (macro
+                (macro+
                   ([x] \`(+ ~x ~x)))
               value 21]
           value))
@@ -276,7 +276,7 @@ describe("generateModule", () => {
     const fixture = withArithmeticPrelude(
       `
       (def picker
-        (fn
+        (fn+
           ([x] 1)
           ([x y] 2)
           ([x y & rest] 3)))
@@ -337,7 +337,7 @@ describe("generateModule", () => {
       (require math "./math.lang")
       (require prelude "@vibe/prelude")
       (external path "node:path")
-      (def compute (fn [x] (math/add x 1)))
+      (def compute (fn+ [x] (math/add x 1)))
       (def path-info path)
       path/sep
       path-info/path-separator

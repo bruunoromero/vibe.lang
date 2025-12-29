@@ -42,7 +42,7 @@ describe("module exports helpers", () => {
   test("extractTopLevelExports returns unique def names", async () => {
     const result = await parseSource(`
       (def foo 1)
-      (def build (macro [] foo))
+      (def build (macro+ [] foo))
       (def foo 2)
       foo
     `);
@@ -56,7 +56,7 @@ describe("module exports helpers", () => {
   test("records macro dependency metadata for externals", async () => {
     const result = await parseSource(`
       (external runtime "@vibe/runtime")
-      (def with-runtime (macro [] (runtime/eq* 1 1)))
+      (def with-runtime (macro+ [] (runtime/eq* 1 1)))
     `);
 
     const exports = await extractTopLevelExports(result.program);
@@ -75,7 +75,7 @@ describe("module exports helpers", () => {
   test("captures multi-clause macro metadata", async () => {
     const result = await parseSource(`
       (def choose
-        (macro
+        (macro+
           ([x] x)
           ([x y] y)))
     `);
@@ -90,10 +90,10 @@ describe("module exports helpers", () => {
   test("extracts macros declared via defmacro helper", async () => {
     const result = await parseSource(`
       (def defmacro
-        (macro
+        (macro+
           ([name & clauses]
             \`(def ~name
-               (macro ~@clauses)))))
+               (macro+ ~@clauses)))))
 
       (defmacro when
         ([pred body]
@@ -109,10 +109,10 @@ describe("module exports helpers", () => {
   test("captures functions declared via defn helper", async () => {
     const result = await parseSource(`
       (defp defn
-        (macro
+        (macro+
           ([name & clauses]
             \`(def ~name
-               (fn ~@clauses)))))
+               (fn+ ~@clauses)))))
 
       (defn add [x y]
         (+ x y))
@@ -137,7 +137,7 @@ describe("module exports helpers", () => {
   test("macro metadata strips scope ids", async () => {
     const result = await parseSource(`
       (def wrap
-        (macro [msg]
+        (macro+ [msg]
           (println msg)))
     `);
 

@@ -497,7 +497,7 @@ class ScopeAnnotator {
         case "let":
           this.annotateLet(node, scopeId);
           return;
-        case "fn":
+        case "fn+":
           this.annotateFn(node, scopeId);
           return;
         case "try":

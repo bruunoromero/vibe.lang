@@ -516,7 +516,7 @@ const tryEvaluateSpecialForm = async (
       return evaluateDef(node, env, context);
     case "let":
       return await evaluateLet(node, env, context);
-    case "fn":
+    case "fn+":
       return evaluateFn(node, env);
     case "if":
       return await evaluateIf(node, env, context);
@@ -534,7 +534,7 @@ const tryEvaluateSpecialForm = async (
       return await evaluateImport(node, env, context);
     case "external":
       return evaluateExternal(node, env, context);
-    case "macro":
+    case "macro+":
       return evaluateMacroLiteral(node);
     case "gensym":
       return evaluateGensym(node, env, context);

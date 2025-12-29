@@ -1,3 +1,3 @@
 (def alpha 1)
-(def beta (macro [] 2))
+(def beta (macro+ [] 2))
 (println alpha)

@@ -9,26 +9,29 @@
 ;; ============================================================
 
 (def defmacro
-  (macro
+  (macro+
     ([name & clauses]
       `(def ~name
-         (macro ~@clauses)))))
+         (macro+ ~@clauses)))))
+
+(defmacro fn
+  [& clauses]
+    `(fn+ (~@clauses)))
 
 (defmacro defmacrop
   ([name & clauses]
     `(defp ~name
-        (macro ~@clauses))))
+        (macro+ ~@clauses))))
 
 (defmacro defn
   ([name & clauses]
     `(def ~name
-        (fn ~@clauses))))
+        (fn+ ~@clauses))))
 
 (defmacro defnp
   ([name & clauses]
     `(defp ~name
-      (fn ~@clauses))))
-
+      (fn+ ~@clauses))))
 
 ;; ============================================================
 ;; Collection Constructors
@@ -112,16 +115,16 @@
       (apply = (cons y rest))
       false)))
 
-(def < (fn [x y]
+(def < (fn+ [x y]
   (runtime/lt* x y)))
 
-(def > (fn [x y]
+(def > (fn+ [x y]
   (runtime/gt* x y)))
 
-(def <= (fn [x y]
+(def <= (fn+ [x y]
   (runtime/lte* x y)))
 
-(def >= (fn [x y]
+(def >= (fn+ [x y]
   (runtime/gte* x y)))
 
 ;; ============================================================
@@ -184,7 +187,7 @@
         (filter pred xs)))))
 
 (defn concat [& colls]
-  (reduce (fn [acc coll]
+  (reduce (fn+ [acc coll]
             (if (empty? coll)
               acc
               (concat acc (cons (first coll) (rest coll)))))
@@ -204,7 +207,7 @@
     :else (drop (dec n) (rest coll))))
 
 (defn reverse [coll]
-  (reduce (fn [acc x] (cons x acc)) [] coll))
+  (reduce (fn+ [acc x] (cons x acc)) [] coll))
 
 ;; ============================================================
 ;; I/O Functions

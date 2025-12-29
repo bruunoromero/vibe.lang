@@ -4,10 +4,10 @@ import { analyzeProgram } from "../src/analyzer";
 import { TEST_BUILTINS } from "./test-builtins";
 
 const ARITHMETIC_STUB = `
-  (def + (fn [& xs] xs))
-  (def - (fn [& xs] xs))
-  (def * (fn [& xs] xs))
-  (def / (fn [& xs] xs))
+  (def + (fn+ [& xs] xs))
+  (def - (fn+ [& xs] xs))
+  (def * (fn+ [& xs] xs))
+  (def / (fn+ [& xs] xs))
 `;
 
 const withArithmeticPrelude = (source: string) =>
@@ -27,7 +27,7 @@ const analyzeSource = async (source: string) => {
 describe("advanced macros", () => {
   test("variadic macro with & rest parameter", async () => {
     const result = await analyzeSource(`
-      (def my-list (macro [& items] \`[~@items]))
+      (def my-list (macro+ [& items] \`[~@items]))
       (my-list 1 2 3)
     `);
 
@@ -39,7 +39,7 @@ describe("advanced macros", () => {
     // Simplified version that doesn't require runtime functions
     const result = await analyzeSource(`
       (def simple-and
-        (macro [a b]
+        (macro+ [a b]
           \`(if ~a ~b false)))
       (simple-and true false)
     `);
@@ -52,7 +52,7 @@ describe("advanced macros", () => {
     const result = await analyzeSource(
       withArithmeticPrelude(`
         (def thread-first
-          (macro [x & forms]
+          (macro+ [x & forms]
             \`~x))
         (thread-first 5 (+ 3) (* 2))
       `)
@@ -64,7 +64,7 @@ describe("advanced macros", () => {
   test("variadic macro collects remaining args", async () => {
     const result = await analyzeSource(`
       (def variadic-test
-        (macro [first & rest]
+        (macro+ [first & rest]
           \`[~first ~@rest]))
       (variadic-test :a :b :c :d)
     `);
@@ -75,7 +75,7 @@ describe("advanced macros", () => {
   test("empty variadic args", async () => {
     const result = await analyzeSource(`
       (def maybe-list
-        (macro [& items]
+        (macro+ [& items]
           \`[~@items]))
       (maybe-list)
     `);
@@ -86,7 +86,7 @@ describe("advanced macros", () => {
   test("compile-time count and eq* check", async () => {
     const result = await analyzeSource(`
       (def is-empty
-        (macro [& items]
+        (macro+ [& items]
           \`(eq* 0 (count ~items))))
       (is-empty)
       (is-empty 42)
@@ -98,8 +98,8 @@ describe("advanced macros", () => {
 
   test("nested variadic macro expansion", async () => {
     const result = await analyzeSource(`
-      (def outer (macro [& args] \`[~@args]))
-      (def inner (macro [x] \`(outer ~x :extra)))
+      (def outer (macro+ [& args] \`[~@args]))
+      (def inner (macro+ [x] \`(outer ~x :extra)))
       (inner 42)
     `);
 
@@ -110,10 +110,10 @@ describe("advanced macros", () => {
     const result = await analyzeSource(`
       (external runtime "@vibe/runtime")
       (def even?
-        (fn [n]
+        (fn+ [n]
           (runtime/eq* 0 (runtime/mod* n 2))))
       (def classify
-        (macro [value]
+        (macro+ [value]
           (if (even? value)
             \`["even" ~value]
             \`["odd" ~value])))
@@ -127,7 +127,7 @@ describe("advanced macros", () => {
 
   test("detects when & is not followed by symbol", async () => {
     const result = await analyzeSource(`
-      (def bad (macro [&] \`nil))
+      (def bad (macro+ [&] \`nil))
     `);
 
     expect(result.ok).toBeFalse();
@@ -140,7 +140,7 @@ describe("advanced macros", () => {
 
   test("detects multiple & parameters", async () => {
     const result = await analyzeSource(`
-      (def bad (macro [& a & b] \`nil))
+      (def bad (macro+ [& a & b] \`nil))
     `);
 
     expect(result.ok).toBeFalse();
@@ -151,7 +151,7 @@ describe("advanced macros", () => {
 
   test("detects params after & rest", async () => {
     const result = await analyzeSource(`
-      (def bad (macro [& rest extra] \`nil))
+      (def bad (macro+ [& rest extra] \`nil))
     `);
 
     expect(result.ok).toBeFalse();
@@ -164,7 +164,7 @@ describe("advanced macros", () => {
 describe("advanced functions with rest params", () => {
   test("function with & rest parameter", async () => {
     const result = await analyzeSource(`
-      (def variadic-fn (fn [x & rest] x))
+      (def variadic-fn (fn+ [x & rest] x))
       (variadic-fn 1 2 3)
     `);
 
@@ -173,7 +173,7 @@ describe("advanced functions with rest params", () => {
 
   test("function with only rest parameter", async () => {
     const result = await analyzeSource(`
-      (def all-rest (fn [& args] args))
+      (def all-rest (fn+ [& args] args))
       (all-rest 1 2 3)
     `);
 
@@ -182,7 +182,7 @@ describe("advanced functions with rest params", () => {
 
   test("detects multiple & in functions", async () => {
     const result = await analyzeSource(`
-      (def bad-fn (fn [& a & b] a))
+      (def bad-fn (fn+ [& a & b] a))
     `);
 
     expect(result.ok).toBeFalse();
@@ -193,7 +193,7 @@ describe("advanced functions with rest params", () => {
 
   test("detects params after & in functions", async () => {
     const result = await analyzeSource(`
-      (def bad-fn (fn [& rest extra] rest))
+      (def bad-fn (fn+ [& rest extra] rest))
     `);
 
     expect(result.ok).toBeFalse();
