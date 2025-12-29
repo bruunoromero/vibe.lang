@@ -5,11 +5,11 @@
 
 ## Context
 
-We have a working lexer that produces rich token streams, but there is no parser or AST schema to move toward semantic analysis or code generation. The language targets a Lisp-like syntax similar to Clojure, meaning the parser must understand lists, vectors, maps, sets, reader macros (quote, syntax-quote, unquote, unquote-splicing), and generic dispatch forms. Downstream stages will require immutable AST nodes with precise source spans, all centralized within `@vibe/syntax`.
+We have a working lexer that produces rich token streams, but there is no parser or AST schema to move toward semantic analysis or code generation. The language targets a Lisp-like syntax similar to Clojure, meaning the parser must understand lists, vectors, maps, reader macros (quote, syntax-quote, unquote, unquote-splicing), and generic dispatch forms. Downstream stages will require immutable AST nodes with precise source spans, all centralized within `@vibe/syntax`.
 
 ## Decision
 
-1. Extend `@vibe/syntax` to define immutable AST node types (`Program`, `List`, `Vector`, `Map`, `Set`, reader macros, atoms, and dispatch) plus lightweight helpers for working with spans.
+1. Extend `@vibe/syntax` to define immutable AST node types (`Program`, `List`, `Vector`, `Map`, reader macros, atoms, and dispatch) plus lightweight helpers for working with spans.
 2. Introduce a new workspace package, `@vibe/parser`, that consumes lexer streams and produces ASTs. The parser will:
    - Gather lexical diagnostics and preserve them in the final result.
    - Emit additional diagnostics for unmatched delimiters, unexpected tokens, uneven map literals, and missing macro operands.

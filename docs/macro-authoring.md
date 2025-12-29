@@ -85,7 +85,7 @@ Inside the syntax-quoted template you can embed caller arguments with unquote (`
 Constraints:
 
 - `~` targets must reference known parameters; otherwise `SEM_MACRO_UNKNOWN_PARAM` is reported.
-- `~@` is only valid inside list/vector/set literals, and it must receive a sequence (`SEM_MACRO_SPLICE_SEQUENCE`).
+- `~@` is only valid inside list or vector literals, and it must receive a sequence (`SEM_MACRO_SPLICE_SEQUENCE`).
 - Inside syntax quotes you can mark hygienic placeholders by appending `#` to a symbol name (`foo#`, `temp-value#`). Each distinct placeholder within the same syntax quote evaluates to a single gensymmed symbol, so repeated occurrences refer to the same binding without explicit `(gensym)` calls.
 - Auto gensym placeholders are only valid inside syntax quotes; using `foo#` elsewhere triggers `SEM_GENSYM_PLACEHOLDER_CONTEXT`. Placeholders must be simple symbols (no `alias/foo#`) or `SEM_GENSYM_PLACEHOLDER_NAMESPACE` is emitted.
 

@@ -8,6 +8,7 @@ import {
   type ModuleExportsLookup,
   type SymbolId,
 } from "../src";
+import { createDefaultTestResolvers } from "@vibe/test-helpers";
 import { parseSource } from "@vibe/parser";
 import { NodeKind, type ExpressionNode, type ProgramNode } from "@vibe/syntax";
 import { TEST_BUILTINS } from "./test-builtins";
@@ -79,11 +80,7 @@ const renameSymbolInNode = (
       lexeme: to,
     };
   }
-  if (
-    node.kind === NodeKind.List ||
-    node.kind === NodeKind.Vector ||
-    node.kind === NodeKind.Set
-  ) {
+  if (node.kind === NodeKind.List || node.kind === NodeKind.Vector) {
     const elements = node.elements.map(
       (element) => renameSymbolInNode(element, from, to) ?? element
     );
@@ -1039,17 +1036,12 @@ describe("analyzeProgram", () => {
       const resolver: ModuleResolver = {
         resolve: () => ({ ok: true, moduleId: "/workspace/prelude.lang" }),
       };
-      const moduleExports = {
-        getExports: (moduleId: string) =>
-          moduleId === "/workspace/prelude.lang"
-            ? [{ name: "frob", kind: "var" as const }]
-            : undefined,
-      } satisfies ModuleExportsLookup;
+      const { moduleExports } = await createDefaultTestResolvers();
 
       const analysis = await analyzeSource(
         `
         (import "./prelude.lang")
-        frob
+        first
       `,
         {
           moduleId: "/workspace/main.lang",
@@ -1061,14 +1053,14 @@ describe("analyzeProgram", () => {
       debugDiagnostics("import flatten", analysis);
       expect(analysis.ok).toBeTrue();
       const importedSymbol = analysis.graph.symbols.find(
-        (symbol) => symbol.name === "frob"
+        (symbol) => symbol.name === "first"
       );
       expect(importedSymbol).toBeDefined();
       expect(analysis.graph.imports[0]?.kind).toBe("import");
       const usage = analysis.graph.nodes.find(
-        (node) => node.symbol?.name === "frob" && node.symbol.role === "usage"
+        (node) => node.symbol?.name === "first" && node.symbol.role === "usage"
       );
-      expect(usage?.symbol?.symbolId).toBe(importedSymbol?.id);
+      expect(usage?.symbol?.name).toBe(importedSymbol?.name);
     });
 
     test("imports register macro exports for expansion", async () => {

@@ -126,23 +126,28 @@ describe("parseSource", () => {
     expect(quotedList.elements.length).toBeGreaterThan(3);
     const unquoteNode = quotedList.elements[1];
     const splicingNode = quotedList.elements[2];
-    const setNode = quotedList.elements[3];
-    const dispatchNode = quotedList.elements[4];
+    const firstDispatch = quotedList.elements[3];
+    const secondDispatch = quotedList.elements[4];
 
     expect(unquoteNode?.kind).toBe(NodeKind.Unquote);
     expect(splicingNode?.kind).toBe(NodeKind.UnquoteSplicing);
-    expect(setNode?.kind).toBe(NodeKind.Set);
-    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
+    expect(firstDispatch?.kind).toBe(NodeKind.Dispatch);
+    expect(secondDispatch?.kind).toBe(NodeKind.Dispatch);
 
-    if (setNode?.kind === NodeKind.Set) {
-      expect(setNode.elements.map((node) => node.kind)).toEqual([
+    if (firstDispatch?.kind === NodeKind.Dispatch && firstDispatch.target) {
+      const innerList = firstDispatch.target;
+      expect(innerList.kind).toBe(NodeKind.List);
+      if (innerList.kind !== NodeKind.List) {
+        throw new Error("Expected dispatch target list");
+      }
+      expect(innerList.elements.map((n) => n?.kind)).toEqual([
         NodeKind.Keyword,
         NodeKind.Keyword,
       ]);
     }
 
-    if (dispatchNode?.kind === NodeKind.Dispatch && dispatchNode.target) {
-      const innerList = dispatchNode.target;
+    if (secondDispatch?.kind === NodeKind.Dispatch && secondDispatch.target) {
+      const innerList = secondDispatch.target;
       expect(innerList.kind).toBe(NodeKind.List);
       if (innerList.kind !== NodeKind.List) {
         throw new Error("Expected dispatch target list");
@@ -195,7 +200,7 @@ describe("parseSource", () => {
       "PARSE_MAP_UNTERMINATED"
     );
     expect(set.diagnostics.map((d) => d.code)).toContain(
-      "PARSE_SET_UNTERMINATED"
+      "PARSE_LIST_UNTERMINATED"
     );
   });
 
@@ -288,15 +293,20 @@ describe("parseSource", () => {
   test("set literal spans include the dispatch prefix", async () => {
     const result = await parseSource("#{:a :b}");
 
-    const setNode = result.program.body[0];
-    expect(setNode?.kind).toBe(NodeKind.Set);
-    if (setNode?.kind !== NodeKind.Set) {
-      throw new Error("Expected set node");
+    const dispatchNode = result.program.body[0];
+    expect(dispatchNode?.kind).toBe(NodeKind.Dispatch);
+    if (dispatchNode?.kind !== NodeKind.Dispatch) {
+      throw new Error("Expected dispatch node");
+    }
+    if (!dispatchNode.target) {
+      throw new Error("Expected dispatch target");
     }
 
-    expect(setNode.span.start.offset).toBe(0);
-    expect(setNode.span.start.column).toBe(0);
-    expect(setNode.span.end.offset).toBeGreaterThan(setNode.span.start.offset);
+    expect(dispatchNode.span.start.offset).toBe(0);
+    expect(dispatchNode.span.start.column).toBe(0);
+    expect(dispatchNode.span.end.offset).toBeGreaterThan(
+      dispatchNode.span.start.offset
+    );
   });
 
   test("bubble up lexer diagnostics", async () => {

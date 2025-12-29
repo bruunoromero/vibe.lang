@@ -17,7 +17,6 @@ import {
   type ScopeId,
   type SequenceNode,
   type SequenceNodeKind,
-  type SetNode,
   type VectorNode,
   type SourcePosition,
   type SourceSpan,
@@ -274,17 +273,6 @@ export class Parser {
     } satisfies MapNode;
   }
 
-  private parseSet(dispatch: Token, open: Token): Promise<SetNode> {
-    return this.parseSequenceNode({
-      kind: NodeKind.Set,
-      open,
-      closing: TokenType.RightBrace,
-      structure: "set literal",
-      unterminatedCode: "PARSE_SET_UNTERMINATED",
-      spanStart: dispatch,
-    });
-  }
-
   private async parseReaderMacro<K extends ReaderMacroKind>(
     kind: K,
     macroToken: Token
@@ -313,7 +301,19 @@ export class Parser {
     if (await this.check(TokenType.LeftBrace)) {
       const open = await this.advance();
       if (open) {
-        return this.parseSet(token, open);
+        const seq = await this.parseSequenceNode({
+          kind: NodeKind.List,
+          open,
+          closing: TokenType.RightBrace,
+          structure: "list",
+          unterminatedCode: "PARSE_LIST_UNTERMINATED",
+          spanStart: token,
+        });
+        return {
+          kind: NodeKind.Dispatch,
+          target: seq as ExpressionNode,
+          span: this.spanFromRefs(token, seq as SpanCarrier),
+        } satisfies ExpressionNode;
       }
     }
     let target: ExpressionNode | null = null;
@@ -575,8 +575,7 @@ class ScopeAnnotator {
         this.annotateNamespaceImport(node as NamespaceImportNode, scopeId);
         break;
       case NodeKind.Vector:
-      case NodeKind.Set:
-        this.annotateSequence(node as VectorNode | SetNode, scopeId);
+        this.annotateSequence(node as VectorNode, scopeId);
         break;
       case NodeKind.Map:
         this.annotateMap(node, scopeId);
@@ -798,7 +797,7 @@ class ScopeAnnotator {
     }
   }
 
-  private annotateSequence(node: VectorNode | SetNode, scopeId: ScopeId): void {
+  private annotateSequence(node: VectorNode, scopeId: ScopeId): void {
     for (const element of node.elements) {
       if (element) {
         this.annotateExpression(element, scopeId);

@@ -12,5 +12,8 @@
   "devDependencies": {
     "@tsconfig/bun": "^1.0.10",
     "@types/bun": "latest"
+  },
+  "scripts": {
+    "bootstrap": "bun install"
   }
 }

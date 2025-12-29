@@ -10,7 +10,6 @@ import type {
   NilNode,
   ListNode,
   VectorNode,
-  SetNode,
   MapNode,
   MapEntryNode,
   BindingPattern,
@@ -33,7 +32,6 @@ export type Value =
   | KeywordValue
   | ListValue
   | VectorValue
-  | SetValue
   | MapValue
   | FunctionValue
   | BuiltinValue
@@ -76,11 +74,6 @@ export interface ListValue {
 
 export interface VectorValue {
   readonly kind: "vector";
-  readonly elements: readonly Value[];
-}
-
-export interface SetValue {
-  readonly kind: "set";
   readonly elements: readonly Value[];
 }
 
@@ -159,8 +152,6 @@ export const isList = (value: Value): value is ListValue =>
 export const isVector = (value: Value): value is VectorValue =>
   value.kind === "vector";
 
-export const isSet = (value: Value): value is SetValue => value.kind === "set";
-
 export const isMap = (value: Value): value is MapValue => value.kind === "map";
 
 export const isFunction = (value: Value): value is FunctionValue =>
@@ -174,10 +165,8 @@ export const isCallable = (
 ): value is FunctionValue | BuiltinValue =>
   isFunction(value) || isBuiltin(value);
 
-export const isSequence = (
-  value: Value
-): value is ListValue | VectorValue | SetValue =>
-  isList(value) || isVector(value) || isSet(value);
+export const isSequence = (value: Value): value is ListValue | VectorValue =>
+  isList(value) || isVector(value);
 
 export const isErrorValue = (value: Value): value is ErrorValue =>
   value.kind === "error";
@@ -206,9 +195,8 @@ export const valuesEqual = (a: Value, b: Value): boolean => {
     case "keyword":
       return a.value === (b as KeywordValue).value;
     case "list":
-    case "vector":
-    case "set": {
-      const bSeq = b as ListValue | VectorValue | SetValue;
+    case "vector": {
+      const bSeq = b as ListValue | VectorValue;
       if (a.elements.length !== bSeq.elements.length) return false;
       return a.elements.every((elem, i) =>
         valuesEqual(elem, bSeq.elements[i]!)
@@ -310,14 +298,7 @@ export const valueToNode = (value: Value, span: SourceSpan): ExpressionNode => {
       };
       return node;
     }
-    case "set": {
-      const node: SetNode = {
-        kind: NK.Set,
-        span,
-        elements: value.elements.map((elem) => valueToNode(elem, span)),
-      };
-      return node;
-    }
+
     case "map": {
       const entries: MapEntryNode[] = [];
       for (const [keyStr, val] of value.entries) {
@@ -395,13 +376,7 @@ export const nodeToValue = (node: ExpressionNode): Value => {
           .filter((e): e is ExpressionNode => e !== null)
           .map(nodeToValue),
       };
-    case NK.Set:
-      return {
-        kind: "set",
-        elements: node.elements
-          .filter((e): e is ExpressionNode => e !== null)
-          .map(nodeToValue),
-      };
+
     case NK.Map: {
       const entries = new Map<string, Value>();
       for (const entry of node.entries) {
@@ -465,11 +440,6 @@ export const makeList = (elements: readonly Value[]): ListValue => ({
 
 export const makeVector = (elements: readonly Value[]): VectorValue => ({
   kind: "vector",
-  elements,
-});
-
-export const makeSet = (elements: readonly Value[]): SetValue => ({
-  kind: "set",
   elements,
 });
 

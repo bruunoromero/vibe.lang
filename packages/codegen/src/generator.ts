@@ -8,7 +8,6 @@ import {
   type NamespaceImportKind,
   type NamespaceImportNode,
   type ProgramNode,
-  type SetNode,
   type SourceSpan,
   type StringNode,
   type SymbolNode,
@@ -572,10 +571,7 @@ class ModuleEmitter {
           .join(", ");
         return `[${elements}]`;
       }
-      case NodeKind.Set:
-        return `new Set([${node.elements
-          .map((element) => (element ? this.emitExpression(element) : "null"))
-          .join(", ")}])`;
+
       case NodeKind.Map:
         return this.emitMap(node);
       default:
@@ -617,14 +613,7 @@ class ModuleEmitter {
           .join(", ");
         return `[${seq}]`;
       }
-      case NodeKind.Set: {
-        const elems = (node as any).elements
-          .map((el: ExpressionNode | null | undefined) =>
-            el ? this.emitQuotedExpression(el) : "null"
-          )
-          .join(", ");
-        return `new Set([${elems}])`;
-      }
+
       case NodeKind.Map: {
         const pairs = (node as any).entries
           .map((entry: any) => {

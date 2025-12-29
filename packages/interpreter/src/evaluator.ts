@@ -4,7 +4,6 @@ import type {
   SourceSpan,
   ListNode,
   VectorNode,
-  SetNode,
   MapNode,
   Diagnostic,
   NamespaceImportNode,
@@ -49,7 +48,6 @@ import {
   makeError,
   makeList,
   makeVector,
-  makeSet,
   makeMap,
   makeFunction,
   makeBuiltin,
@@ -194,8 +192,6 @@ const evaluateNode = async (
       return await evaluateList(node, env, context);
     case NK.Vector:
       return await evaluateVector(node, env, context);
-    case NK.Set:
-      return await evaluateSet(node, env, context);
     case NK.Map:
       return await evaluateMap(node, env, context);
     case NK.NamespaceImport:
@@ -224,6 +220,26 @@ const evaluateNode = async (
       return evaluateQuote(node.target, env);
     case NK.SyntaxQuote:
       return await evaluateSyntaxQuote(node as ReaderMacroNode, env, context);
+    case NK.Dispatch:
+      // At compile-time dispatch nodes evaluate to their target expression.
+      if (!(node as any).target) {
+        return {
+          ok: false,
+          diagnostics: [
+            {
+              message: "Dispatch expression is missing target",
+              span: node.span,
+              severity: DiagnosticSeverity.Error,
+              code: "INTERP_DISPATCH_MISSING_TARGET",
+            },
+          ],
+        };
+      }
+      return await evaluateNode(
+        (node as any).target as ExpressionNode,
+        env,
+        context
+      );
     case NK.Unquote:
     case NK.UnquoteSplicing:
       return {
@@ -545,31 +561,6 @@ const evaluateVector = async (
   }
 
   return { ok: true, value: makeVector(elements), diagnostics: [] };
-};
-
-const evaluateSet = async (
-  node: SetNode,
-  env: Environment,
-  context: EvalContext
-): Promise<EvalResult> => {
-  const elements: Value[] = [];
-  const diagnostics: Diagnostic[] = [];
-
-  for (const elem of node.elements) {
-    if (!elem) continue;
-    const elemResult = await evaluateNode(elem, env, context);
-    if (!elemResult.ok) {
-      diagnostics.push(...elemResult.diagnostics);
-      continue;
-    }
-    elements.push(elemResult.value!);
-  }
-
-  if (diagnostics.length > 0) {
-    return { ok: false, diagnostics };
-  }
-
-  return { ok: true, value: makeSet(elements), diagnostics: [] };
 };
 
 const evaluateMap = async (
@@ -938,15 +929,7 @@ const evaluateQuote = (node: ExpressionNode, env: Environment): EvalResult => {
       }
       return { ok: true, value: makeVector(elements), diagnostics: [] };
     }
-    case NK.Set: {
-      const elements: Value[] = [];
-      for (const elem of node.elements) {
-        const result = evaluateQuote(elem, env);
-        if (!result.ok) return result;
-        elements.push(result.value!);
-      }
-      return { ok: true, value: makeSet(elements), diagnostics: [] };
-    }
+
     case NK.Map: {
       const quotedEntries = new Map<string, Value>();
       for (const entry of node.entries) {
@@ -1093,15 +1076,7 @@ const instantiateSyntaxNode = async (
         "vector",
         node.span
       );
-    case NK.Set:
-      return await instantiateSyntaxSequence(
-        node.elements,
-        env,
-        context,
-        gensyms,
-        "set",
-        node.span
-      );
+
     case NK.Map:
       return await instantiateSyntaxMap(node as MapNode, env, context, gensyms);
     case NK.SyntaxQuote: {
@@ -1128,7 +1103,7 @@ const instantiateSyntaxNode = async (
         diagnostics: [
           {
             message:
-              "Unquote splicing cannot appear outside of list/vector/set literals",
+              "Unquote splicing cannot appear outside of list or vector literals",
             span: node.span,
             severity: DiagnosticSeverity.Error,
             code: "INTERP_SYNTAX_SPLICE_CONTEXT",
@@ -1154,7 +1129,7 @@ const instantiateSyntaxSequence = async (
   env: Environment,
   context: EvalContext,
   gensyms: AutoGensymScope,
-  container: "list" | "vector" | "set",
+  container: "list" | "vector",
   span: SourceSpan
 ): Promise<EvalResult<Value>> => {
   const values: Value[] = [];
@@ -1202,8 +1177,6 @@ const instantiateSyntaxSequence = async (
       return { ok: true, value: makeList(values), diagnostics: [] };
     case "vector":
       return { ok: true, value: makeVector(values), diagnostics: [] };
-    case "set":
-      return { ok: true, value: makeSet(values), diagnostics: [] };
     default:
       return {
         ok: false,
@@ -1962,7 +1935,6 @@ const sequenceElements = (value: Value): Value[] => {
   switch (value.kind) {
     case "vector":
     case "list":
-    case "set":
       return [...value.elements];
     default:
       return [];
@@ -2272,8 +2244,6 @@ const valueToJS = (value: Value): any => {
     case "list":
     case "vector":
       return value.elements.map(valueToJS);
-    case "set":
-      return new Set(value.elements.map(valueToJS));
     case "map":
       const obj: Record<string, any> = {};
       for (const [k, v] of value.entries) {
@@ -2325,7 +2295,7 @@ const jsToValue = (jsValue: any): Value => {
     return makeList(jsValue.map(jsToValue));
   }
   if (jsValue instanceof Set) {
-    return makeSet(Array.from(jsValue).map(jsToValue));
+    return makeList(Array.from(jsValue).map(jsToValue));
   }
   if (runtimeKeyword_QMARK(jsValue)) {
     // runtime keyword names are stored without a leading colon; use the raw

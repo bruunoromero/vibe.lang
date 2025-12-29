@@ -5,7 +5,7 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 ## Guiding Principles
 
 1. Source files are UTF-8 text processed by Bun. A UTF-8 BOM and a leading shebang (`#!/usr/bin/env vibe`) are ignored when present.
-2. The syntax favors homoiconicity: the primary data structures (lists, vectors, maps, sets) double as the core program representation.
+2. The syntax favors homoiconicity: the primary data structures (lists, vectors, maps) double as the core program representation.
 3. Reader macros stay close to Clojure semantics so upstream Lisp users can predict behavior.
 4. AST nodes defined in `@vibe/syntax` map one-to-one with the forms described below and remain immutable.
 
@@ -28,12 +28,12 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 
 | `(` `)` | `(` `)` | Begin/end list |
 | `[` `]` | `[` `]` | Begin/end vector |
-| `{` `}` | `{` `}` | Begin/end map or (with dispatch) set |
+| `{` `}` | `{` `}` | Begin/end map |
 | `'` | `'form` | Quote reader macro |
 | `` ` `` | `` `form`` | Syntax-quote reader macro |
 | `~` | `~form` | Unquote |
 | `~@` | `~@form` | Unquote splicing |
-| `#` | `#dispatch` | Dispatch macro prefix (currently `#{` for sets) |
+| `#` | `#dispatch` | Dispatch macro prefix |
 | Numbers | `42` `-3.14` `6.022e23` | Optional sign, decimal part, exponent |
 | Strings | `"hello"` | Double-quoted with escapes |
 | Characters | `\a` `\newline` `\u03bb` | Backslash-prefixed literals |
@@ -62,19 +62,18 @@ This document is the canonical description of the Lisp-inspired surface syntax t
 | List | `(...)` | `ListNode` | Function call or special form; empty list evaluates to `null` in codegen. |
 | Vector | `[...]` | `VectorNode` | Ordered collection; used for binding forms (`let`, `fn`). |
 | Map | `{key value ...}` | `MapNode` | Must contain an even number of forms; otherwise emits `PARSE_MAP_ODD_ENTRIES` and pairs dangling key with `null`. |
-| Set | `#{...}` | `SetNode` | Created via dispatch macro `#` immediately followed by `{`. |
 
 All delimiters must balance. Unmatched closers report `PARSE_UNEXPECTED_CLOSING`; missing closers report `PARSE_*_UNTERMINATED` diagnostics.
 
 ## Reader Macros & Dispatch
 
-| Reader macro | Expands to             | Description                                                                                                                                           |
-| ------------ | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `'form`      | `Quote` node           | Prevents evaluation.                                                                                                                                  |
-| `` `form``   | `SyntaxQuote` node     | Like quote but supports hygiene-aware unquoting.                                                                                                      |
-| `~form`      | `Unquote` node         | Allowed inside syntax-quoted forms only.                                                                                                              |
-| `~@form`     | `UnquoteSplicing` node | Inserts a sequence into the surrounding form.                                                                                                         |
-| `#form`      | `Dispatch` node        | Generic dispatch marker; currently only `#{...}` is recognized as a set literal. Additional dispatch targets must be documented here when introduced. |
+| Reader macro | Expands to             | Description                                                                                   |
+| ------------ | ---------------------- | --------------------------------------------------------------------------------------------- |
+| `'form`      | `Quote` node           | Prevents evaluation.                                                                          |
+| `` `form``   | `SyntaxQuote` node     | Like quote but supports hygiene-aware unquoting.                                              |
+| `~form`      | `Unquote` node         | Allowed inside syntax-quoted forms only.                                                      |
+| `~@form`     | `UnquoteSplicing` node | Inserts a sequence into the surrounding form.                                                 |
+| `#form`      | `Dispatch` node        | Generic dispatch marker; additional dispatch targets must be documented here when introduced. |
 
 If a reader or dispatch macro lacks a following form, the parser emits `PARSE_MACRO_MISSING_TARGET` or `PARSE_DISPATCH_MISSING_TARGET` but still constructs a node with `target = null`.
 
@@ -165,11 +164,10 @@ Module-level dependencies opt into explicit `def` bindings that wrap `require` o
 
 ```
 program        ::= form*
-form           ::= atom | list | vector | map | set | reader_macro | dispatch
 list           ::= '(' form* ')'
 vector         ::= '[' form* ']'
 map            ::= '{' (form form)* '}'
-set            ::= '#{' form* '}'
+form           ::= atom | list | vector | map | reader_macro | dispatch
 reader_macro   ::= quote | syntax_quote | unquote | unquote_splicing
 quote          ::= "'" form
 syntax_quote   ::= "`" form
@@ -189,7 +187,7 @@ atom           ::= number | string | character | keyword | symbol | boolean | ni
 ## Diagnostics Overview
 
 - `LEX_*` codes originate from the lexer (invalid numbers, strings, characters, etc.).
-- `PARSE_LIST_UNTERMINATED`, `PARSE_VECTOR_UNTERMINATED`, `PARSE_MAP_UNTERMINATED`, `PARSE_SET_UNTERMINATED` guard missing closers.
+- `PARSE_LIST_UNTERMINATED`, `PARSE_VECTOR_UNTERMINATED`, `PARSE_MAP_UNTERMINATED` guard missing closers.
 - `PARSE_UNEXPECTED_CLOSING` fires for stray `)`/`]`/`}`.
 - `PARSE_MAP_ODD_ENTRIES` indicates uneven map literals.
 - `PARSE_MACRO_MISSING_TARGET` / `PARSE_DISPATCH_MISSING_TARGET` highlight reader/dispatch macros with no operand.

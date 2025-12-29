@@ -89,7 +89,6 @@ export enum NodeKind {
   Vector = "vector",
   Map = "map",
   MapEntry = "map_entry",
-  Set = "set",
   Quote = "quote",
   SyntaxQuote = "syntax_quote",
   Unquote = "unquote",
@@ -134,7 +133,7 @@ export interface ProgramNode extends AstNode<NodeKind.Program> {
   readonly body: readonly ExpressionNode[];
 }
 
-export type SequenceNodeKind = NodeKind.List | NodeKind.Vector | NodeKind.Set;
+export type SequenceNodeKind = NodeKind.List | NodeKind.Vector;
 
 export interface SequenceNode<K extends SequenceNodeKind> extends AstNode<K> {
   readonly elements: readonly ExpressionNode[];
@@ -142,8 +141,6 @@ export interface SequenceNode<K extends SequenceNodeKind> extends AstNode<K> {
 
 export type ListNode = SequenceNode<NodeKind.List>;
 export type VectorNode = SequenceNode<NodeKind.Vector>;
-export type SetNode = SequenceNode<NodeKind.Set>;
-
 export interface MapEntryNode extends AstNode<NodeKind.MapEntry> {
   readonly key: ExpressionNode | null;
   readonly value: ExpressionNode | null;
@@ -213,7 +210,6 @@ export type ExpressionNode =
   | ListNode
   | VectorNode
   | MapNode
-  | SetNode
   | ReaderMacroNode
   | DispatchNode
   | NamespaceImportNode

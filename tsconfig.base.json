@@ -9,7 +9,8 @@
         "packages/*/src/index.ts",
         "packages/*/src",
         "packages/*/index.ts"
-      ]
+      ],
+      "@vibe/test-helpers": ["packages/test-helpers/src/index.ts"]
     }
   }
 }

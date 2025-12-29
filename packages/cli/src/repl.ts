@@ -28,7 +28,6 @@ const UNTERMINATED_CODES = new Set([
   "PARSE_LIST_UNTERMINATED",
   "PARSE_VECTOR_UNTERMINATED",
   "PARSE_MAP_UNTERMINATED",
-  "PARSE_SET_UNTERMINATED",
   "PARSE_MACRO_MISSING_TARGET",
 ]);
 
@@ -126,8 +125,6 @@ const valueToJS = (value: Value): unknown => {
     case "list":
     case "vector":
       return value.elements.map(valueToJS);
-    case "set":
-      return { __set: value.elements.map(valueToJS) };
     case "map": {
       const obj: Record<string, unknown> = {};
       for (const [key, val] of value.entries) {

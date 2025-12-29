@@ -14,7 +14,6 @@ import {
   type ProgramNode,
   type ReaderMacroNode,
   type ScopeId,
-  type SetNode,
   type SourceSpan,
   type StringNode,
   type SymbolNode,
@@ -365,9 +364,8 @@ export class SemanticAnalyzer {
         );
         break;
       case NodeKind.Vector:
-      case NodeKind.Set:
         this.recordNode(node, nodeScopeId);
-        await this.visitSequence(node as VectorNode | SetNode, nodeScopeId);
+        await this.visitSequence(node as VectorNode, nodeScopeId);
         break;
       case NodeKind.Map:
         this.recordNode(node, nodeScopeId);
@@ -1943,7 +1941,7 @@ export class SemanticAnalyzer {
   }
 
   private async visitSequence(
-    node: VectorNode | SetNode,
+    node: VectorNode,
     scopeId: ScopeId
   ): Promise<void> {
     for (const element of node.elements) {
@@ -2016,8 +2014,7 @@ export class SemanticAnalyzer {
     const nodeScopeId = this.getScopeForNode(node, scopeId);
     switch (node.kind) {
       case NodeKind.List:
-      case NodeKind.Vector:
-      case NodeKind.Set: {
+      case NodeKind.Vector: {
         this.recordNode(node, nodeScopeId);
         for (const el of (node as any).elements) {
           if (el) await this.visitQuoted(el, nodeScopeId);
@@ -2077,8 +2074,7 @@ export class SemanticAnalyzer {
         return await this.instantiateSequence(node, context);
       case NodeKind.Vector:
         return (await this.instantiateSequence(node, context)) as VectorNode;
-      case NodeKind.Set:
-        return (await this.instantiateSequence(node, context)) as SetNode;
+
       case NodeKind.Map:
         return await this.instantiateMap(node, context);
       case NodeKind.Quote:
@@ -2104,7 +2100,7 @@ export class SemanticAnalyzer {
         );
       case NodeKind.UnquoteSplicing:
         this.report(
-          "Unquote splicing cannot appear outside of list/vector/set literals",
+          "Unquote splicing cannot appear outside of list or vector literals",
           node.span,
           "SEM_MACRO_SPLICE_CONTEXT"
         );
@@ -2115,9 +2111,9 @@ export class SemanticAnalyzer {
   }
 
   private async instantiateSequence(
-    node: ListNode | VectorNode | SetNode,
+    node: ListNode | VectorNode,
     context: MacroExpansionContext
-  ): Promise<ListNode | VectorNode | SetNode> {
+  ): Promise<ListNode | VectorNode> {
     const elements: ExpressionNode[] = [];
     for (const element of node.elements) {
       if (!element) {
@@ -2149,7 +2145,7 @@ export class SemanticAnalyzer {
     const instantiated = {
       ...node,
       elements,
-    } as ListNode | VectorNode | SetNode;
+    } as ListNode | VectorNode;
     this.clearScopeMetadata(instantiated);
     return instantiated;
   }
@@ -2289,11 +2285,7 @@ export class SemanticAnalyzer {
     if (!value) {
       return [];
     }
-    if (
-      value.kind === NodeKind.List ||
-      value.kind === NodeKind.Vector ||
-      value.kind === NodeKind.Set
-    ) {
+    if (value.kind === NodeKind.List || value.kind === NodeKind.Vector) {
       return value.elements
         .filter((element): element is ExpressionNode => Boolean(element))
         .map((element) => this.cloneExpression(element));
@@ -2633,7 +2625,6 @@ export class SemanticAnalyzer {
     switch (node.kind) {
       case NodeKind.List:
       case NodeKind.Vector:
-      case NodeKind.Set:
         for (const element of node.elements) {
           this.stripScopeMetadata(element);
         }

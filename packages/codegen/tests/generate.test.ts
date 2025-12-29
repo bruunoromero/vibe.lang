@@ -9,8 +9,12 @@ import {
   type ModuleResolver,
   type ModuleExportsLookup,
 } from "@vibe/semantics";
+import {
+  createDefaultTestResolvers,
+  getRuntimeSourceImportSpecifier,
+} from "@vibe/test-helpers";
 import { BUILTIN_SYMBOLS } from "@vibe/syntax";
-import { keyword_STAR as runtimeKeyword } from "@vibe/runtime";
+import { keyword_STAR as runtimeKeyword } from "../../runtime/src/index.ts";
 import { generateModule, type GenerateModuleOptions } from "../src";
 
 const RUNTIME_PRELUDE = `
@@ -68,46 +72,11 @@ const compile = async (source: string, options?: AnalyzeOptions) => {
         .join("\n")}`
     );
   }
-  // Provide a default module resolver and exports lookup for tests so
-  // requires of the prelude resolve to the local prelude source.
-  const preludeModuleId = join(
-    process.cwd(),
-    "packages/prelude/src/prelude.lang"
-  );
-  const defaultResolver: ModuleResolver = {
-    resolve: ({ specifier }) => {
-      if (
-        specifier === "@vibe/prelude" ||
-        specifier.startsWith("@vibe/prelude/")
-      ) {
-        return { ok: true, moduleId: preludeModuleId };
-      }
-      return { ok: false, reason: "unmapped" };
-    },
-  };
-
-  const defaultModuleExports: ModuleExportsLookup = {
-    getExports: (moduleId: string) => {
-      if (moduleId !== preludeModuleId) return undefined;
-      try {
-        const text = require("fs").readFileSync(preludeModuleId, "utf8");
-        const exports: { name: string; kind: "var" | "macro" }[] = [];
-        for (const line of text.split(/\r?\n/)) {
-          const m = line.match(
-            /^\s*\((defmacro|defmacrop|defn|defnp|def)\s+([^\s\)]+)/
-          );
-          if (m) {
-            const kind = m[1].startsWith("defmacro") ? "macro" : "var";
-            const name = m[2];
-            exports.push({ name, kind });
-          }
-        }
-        return exports.map((e) => ({ name: e.name, kind: e.kind }));
-      } catch {
-        return undefined;
-      }
-    },
-  };
+  // Use shared test helpers to resolve prelude and exports from workspace
+  const {
+    moduleResolver: defaultResolver,
+    moduleExports: defaultModuleExports,
+  } = await createDefaultTestResolvers();
 
   const analysis = await analyzeProgram(parseResult.program, {
     builtins: options?.builtins ?? [...BUILTIN_SYMBOLS],
@@ -127,40 +96,11 @@ const evaluateModule = async (code: string) => {
   const tempDir = join(process.cwd(), "tmp");
   mkdirSync(tempDir, { recursive: true });
   const fileName = join(tempDir, `vibe-codegen-${randomUUID()}.mjs`);
-  // Create a small runtime shim so generated modules that import
-  // "@vibe/runtime" can resolve legacy named imports to the
-  // current runtime export names without changing source runtime.
-  const shimName = "__vibe_runtime_shim.mjs";
-  const shimPath = join(tempDir, shimName);
-  const runtimeDist = join(process.cwd(), "packages/runtime/dist/index.js");
-  const shim = `export * from "file://${runtimeDist}";
-import * as R from "file://${runtimeDist}";
-export const keyword = R.keyword_STAR;
-export const symbol = R.symbol_STAR;
-export const get = R.get_STAR;
-export const assoc = R.assoc_STAR;
-export const dissoc = R.dissoc_STAR;
-export const keys = R.keys_STAR;
-export const vals = R.vals_STAR;
-export const add = R.add_STAR;
-export const sub = R.sub_STAR;
-export const mul = R.mul_STAR;
-export const div = R.div_STAR;
-export const mod = R.mod_STAR;
-export const eq = R.eq_STAR;
-export const lt = R.lt_STAR;
-export const gt = R.gt_STAR;
-export const lte = R.lte_STAR;
-export const gte = R.gte_STAR;
-export const symbol_STAR = R.symbol_STAR;
-export const keyword_STAR = R.keyword_STAR;
-export default R;`;
-  writeFileSync(shimPath, shim, "utf8");
-
-  // Rewrite imports of @vibe/runtime (single or double quotes) to the local shim
+  // Rewrite imports of @vibe/runtime to import the runtime source entry directly
+  const runtimeImport = getRuntimeSourceImportSpecifier();
   const rewritten = code.replace(
     /from\s+['"]@vibe\/runtime['"]/g,
-    `from "./${shimName}"`
+    `from "${runtimeImport}"`
   );
   writeFileSync(fileName, rewritten, "utf8");
   try {
@@ -168,9 +108,6 @@ export default R;`;
     return mod;
   } finally {
     unlinkSync(fileName);
-    try {
-      unlinkSync(shimPath);
-    } catch {}
   }
 };
 
@@ -280,14 +217,13 @@ describe("generateModule", () => {
     expect(result.moduleText).toContain("println");
   });
 
-  test("emits functions, vectors, sets, and maps", async () => {
+  test("emits functions, vectors and maps", async () => {
     const fixture = withArithmeticPrelude(
       `
       (def builder
         (fn [x]
           (let [nums [x (+ x 1)]]
             {:nums nums
-             :unique #{x}
              :echo (println "value" x)})))
       (def result (builder 5))
     `.trim()
@@ -297,9 +233,6 @@ describe("generateModule", () => {
     expect(runtime.result).toBeInstanceOf(Map);
     const record = runtime.result as Map<unknown, unknown>;
     expect(Array.isArray(record.get(runtimeKeyword("nums")))).toBeTrue();
-    const unique = record.get(runtimeKeyword("unique"));
-    expect(unique).toBeInstanceOf(Set);
-    expect((unique as Set<number>).has(5)).toBeTrue();
     expect(record.get(runtimeKeyword("echo"))).toBe(5);
     expect(typeof runtime.builder).toBe("function");
   });

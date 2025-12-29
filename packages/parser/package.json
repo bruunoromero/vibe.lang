@@ -12,6 +12,7 @@
     "@vibe/syntax": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@vibe/cli": "workspace:*"
   }
 }

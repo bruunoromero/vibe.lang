@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@vibe/parser": "workspace:*",
+    "@vibe/test-helpers": "workspace:*",
     "@types/bun": "latest"
   }
 }
