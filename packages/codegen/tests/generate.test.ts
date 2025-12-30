@@ -32,32 +32,32 @@ ${RUNTIME_PRELUDE}
 
   (require prelude "${PRELUDE_JS}")
 
-  (def reduce (fn+ [f init coll]
+  (def reduce (fn+ ([f init coll]
     (if (runtime/eq* (runtime/count coll) 0)
       init
-      (reduce f (f init (prelude/first coll)) (prelude/rest coll)))))
+      (reduce f (f init (prelude/first coll)) (prelude/rest coll))))))
 
-  (def + (fn+ [& xs]
-    (reduce runtime/add* 0 xs)))
+  (def + (fn+ ([& xs]
+    (reduce runtime/add* 0 xs))))
 
-  (def - (fn+ [& xs]
+  (def - (fn+ ([& xs]
     (let [cnt (runtime/count xs)]
       (if (runtime/eq* cnt 0)
         0
         (if (runtime/eq* cnt 1)
           (runtime/sub* 0 (prelude/first xs))
-          (reduce runtime/sub* (prelude/first xs) (prelude/rest xs)))))))
+          (reduce runtime/sub* (prelude/first xs) (prelude/rest xs))))))))
 
-  (def * (fn+ [& xs]
-    (reduce runtime/mul* 1 xs)))
+  (def * (fn+ ([& xs]
+    (reduce runtime/mul* 1 xs))))
 
-  (def / (fn+ [& xs]
+  (def / (fn+ ([& xs]
     (let [cnt (runtime/count xs)]
       (if (runtime/eq* cnt 0)
         0
         (if (runtime/eq* cnt 1)
           (runtime/div* 1 (prelude/first xs))
-          (reduce runtime/div* (prelude/first xs) (prelude/rest xs)))))))
+          (reduce runtime/div* (prelude/first xs) (prelude/rest xs))))))))
 `.trim();
 
 const withArithmeticPrelude = (source: string) =>
@@ -131,14 +131,14 @@ const runProgram = async (source: string, options?: GenerateModuleOptions) => {
 const macroPipelineSource = withArithmeticPrelude(
   `
   (def build-pipeline
-    (fn+ [seed]
-      (fn+ [value]
+    (fn+ ([seed]
+      (fn+ ([value]
         (let [tmp (+ value seed)]
-          (fn+ [extra]
+          (fn+ ([extra]
             (let [tmp (+ tmp extra)
                   final (+ tmp seed)]
               (println "macro-stage" final)
-              final))))))
+              final)))))))))
 
   (def total
     (let [stage-a ((build-pipeline 2) 3)
@@ -221,9 +221,9 @@ describe("generateModule", () => {
     const fixture = withArithmeticPrelude(
       `
       (def builder
-        (fn+ [x]
+        (fn+ ([x]
           (let [nums [x (+ x 1)]]
-            nums)))
+            nums))))
       (def result (builder 5))
     `.trim()
     );
@@ -237,8 +237,8 @@ describe("generateModule", () => {
     const fixture = withRuntimePrelude(
       `
       (def describe
-        (fn+ [[x y & tail :as original] bonus]
-          [original tail bonus]))
+        (fn+ ([[x y & tail :as original] bonus]
+          [original tail bonus])))
 
       (def output
         (let [[a b & rest :as raw] [10 20 30 40]
@@ -259,7 +259,7 @@ describe("generateModule", () => {
       (def answer
         (let [local-macro
                 (macro+
-                  ([x] \`(+ ~x ~x)))
+                  ([x] \`(+ (unquote x) (unquote x))))
               value 21]
           value))
       answer
@@ -270,6 +270,33 @@ describe("generateModule", () => {
     });
 
     expect(runtime.answer).toBe(21);
+  });
+
+  test("expands macro helper definitions recursively", async () => {
+    const fixture = `
+      (def defmacro+
+        (macro+
+          ([name & clauses]
+            \`(def (unquote name)
+               (macro+ (unquote-splicing clauses))))))
+
+      (defmacro+ defmacro
+        ([name args body]
+          \`(defmacro+ (unquote name) ((unquote args) (unquote body)))))
+
+      (defmacro define-const
+        [name value]
+        \`(def (unquote name) (unquote value)))
+
+      (define-const answer 42)
+      answer
+    `.trim();
+
+    const { runtime } = await runProgram(fixture, {
+      sourceName: "macro-helpers.lang",
+    });
+
+    expect(runtime.answer).toBe(42);
   });
 
   test("emits multi-arity functions with runtime dispatch", async () => {
@@ -337,7 +364,7 @@ describe("generateModule", () => {
       (require math "./math.lang")
       (require prelude "@vibe/prelude")
       (external path "node:path")
-      (def compute (fn+ [x] (math/add x 1)))
+      (def compute (fn+ ([x] (math/add x 1))))
       (def path-info path)
       path/sep
       path-info/path-separator

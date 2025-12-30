@@ -121,10 +121,6 @@ export class Parser {
         return this.parseReaderMacro(NodeKind.Quote, token);
       case TokenType.SyntaxQuote:
         return this.parseReaderMacro(NodeKind.SyntaxQuote, token);
-      case TokenType.Unquote:
-        return this.parseReaderMacro(NodeKind.Unquote, token);
-      case TokenType.UnquoteSplicing:
-        return this.parseReaderMacro(NodeKind.UnquoteSplicing, token);
 
       case TokenType.Number:
         return this.createAtomNode(
@@ -368,10 +364,6 @@ export class Parser {
         return "'";
       case TokenType.SyntaxQuote:
         return "`";
-      case TokenType.Unquote:
-        return "~";
-      case TokenType.UnquoteSplicing:
-        return "~@";
 
       default:
         return kind;
@@ -477,8 +469,6 @@ class ScopeAnnotator {
         break;
       case NodeKind.Quote:
       case NodeKind.SyntaxQuote:
-      case NodeKind.Unquote:
-      case NodeKind.UnquoteSplicing:
         this.annotateReaderMacro(node as ReaderMacroNode, scopeId);
         break;
 

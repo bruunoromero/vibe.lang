@@ -92,7 +92,6 @@ These symbols are intercepted by downstream stages for non-generic evaluation:
   ```
 - `if` — Branching form: `(if condition then [else])`. Missing else defaults to `nil`.
 - `quote` — Prevents evaluation, equivalent to `'form`.
-- `do` — Sequential evaluation in a single expression position: `(do form* expr)`.
 - `require` — Module import (see below). Restricted to the top level.
 - `external` — JavaScript module import (see below). Restricted to the top level.
 - `import` — Module import that flattens the target module's exports into the current scope (see below). Restricted to the top level.

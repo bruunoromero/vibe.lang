@@ -375,11 +375,6 @@ export class SemanticAnalyzer {
         this.recordNode(node, nodeScopeId);
         await this.visitSyntaxQuote(node, nodeScopeId);
         break;
-      case NodeKind.Unquote:
-      case NodeKind.UnquoteSplicing:
-        this.recordNode(node, nodeScopeId);
-        await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
-        break;
 
       case NodeKind.Symbol:
         if (
@@ -640,9 +635,9 @@ export class SemanticAnalyzer {
             );
 
             if (expanded) {
-              // Recursively expand with increased depth, passing current macro as parent
+              this.replaceNodeWithExpansion(node, expanded);
               await this.fullyExpandAndVisit(
-                expanded,
+                node,
                 scopeId,
                 depth + 1,
                 maxDepth,
@@ -1332,19 +1327,6 @@ export class SemanticAnalyzer {
   }
 
   private extractFnClauses(node: ListNode): readonly FnClauseDescriptor[] {
-    const paramsNode = node.elements[1];
-    if (paramsNode && paramsNode.kind === NodeKind.Vector) {
-      return [
-        {
-          paramsNode,
-          bodyNodes: node.elements
-            .slice(2)
-            .filter((element): element is ExpressionNode => Boolean(element)),
-          span: node.span,
-        },
-      ];
-    }
-
     const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
     if (tail.length === 0) {
       return [];
@@ -1369,19 +1351,6 @@ export class SemanticAnalyzer {
   private extractMacroLiteralClauses(
     node: ListNode
   ): readonly MacroClauseDescriptor[] {
-    const paramsNode = node.elements[1];
-    if (paramsNode && paramsNode.kind === NodeKind.Vector) {
-      return [
-        {
-          paramsNode,
-          bodyNodes: node.elements
-            .slice(2)
-            .filter((element): element is ExpressionNode => Boolean(element)),
-          span: node.span,
-        },
-      ];
-    }
-
     const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
     if (tail.length === 0) {
       return [];
@@ -2031,8 +2000,6 @@ export class SemanticAnalyzer {
       }
       case NodeKind.Quote:
       case NodeKind.SyntaxQuote:
-      case NodeKind.Unquote:
-      case NodeKind.UnquoteSplicing:
       case NodeKind.NamespaceImport: {
         // For nested reader-macros inside a quoted form, walk their target(s)
         // conservatively without triggering expansion.
@@ -2059,6 +2026,19 @@ export class SemanticAnalyzer {
   ): Promise<ExpressionNode | null> {
     switch (node.kind) {
       case NodeKind.List:
+        // Check if this is an unquote form: (unquote x)
+        if (this.isUnquoteCall(node)) {
+          return await this.handleUnquoteCall(node, context);
+        }
+        // Check if this is an unquote-splicing form: (unquote-splicing xs)
+        if (this.isUnquoteSplicingCall(node)) {
+          this.report(
+            "Unquote splicing cannot appear outside of list or vector literals",
+            node.span,
+            "SEM_MACRO_SPLICE_CONTEXT"
+          );
+          return this.createNilLiteral(context.callSpan);
+        }
         return await this.instantiateSequence(node, context);
       case NodeKind.Vector:
         return (await this.instantiateSequence(node, context)) as VectorNode;
@@ -2076,20 +2056,6 @@ export class SemanticAnalyzer {
         );
       case NodeKind.Symbol:
         return this.instantiateSymbolNode(node as SymbolNode, context);
-      case NodeKind.Unquote:
-        return (
-          (await this.materializeArgument(
-            node as ReaderMacroNode<NodeKind.Unquote>,
-            context
-          )) ?? this.createNilLiteral(context.callSpan)
-        );
-      case NodeKind.UnquoteSplicing:
-        this.report(
-          "Unquote splicing cannot appear outside of list or vector literals",
-          node.span,
-          "SEM_MACRO_SPLICE_CONTEXT"
-        );
-        return this.createNilLiteral(context.callSpan);
       default:
         return this.cloneExpression(node);
     }
@@ -2104,21 +2070,20 @@ export class SemanticAnalyzer {
       if (!element) {
         continue;
       }
-      if (element.kind === NodeKind.Unquote) {
-        const value = await this.materializeArgument(
-          element as ReaderMacroNode<NodeKind.Unquote>,
-          context
-        );
+      // Check if element is (unquote x)
+      if (element.kind === NodeKind.List && this.isUnquoteCall(element)) {
+        const value = await this.handleUnquoteCall(element, context);
         if (value) {
           elements.push(value);
         }
         continue;
       }
-      if (element.kind === NodeKind.UnquoteSplicing) {
-        const values = await this.materializeSplicedArgument(
-          element as ReaderMacroNode<NodeKind.UnquoteSplicing>,
-          context
-        );
+      // Check if element is (unquote-splicing xs)
+      if (
+        element.kind === NodeKind.List &&
+        this.isUnquoteSplicingCall(element)
+      ) {
+        const values = await this.handleUnquoteSplicingCall(element, context);
         elements.push(...values);
         continue;
       }
@@ -2201,11 +2166,22 @@ export class SemanticAnalyzer {
     return context.autoGensyms;
   }
 
-  private async materializeArgument(
-    node: ReaderMacroNode<NodeKind.Unquote>,
+  private isUnquoteCall(node: ListNode): boolean {
+    const head = node.elements[0];
+    return head?.kind === NodeKind.Symbol && head.value === "unquote";
+  }
+
+  private isUnquoteSplicingCall(node: ListNode): boolean {
+    const head = node.elements[0];
+    return head?.kind === NodeKind.Symbol && head.value === "unquote-splicing";
+  }
+
+  private async handleUnquoteCall(
+    node: ListNode,
     context: MacroExpansionContext
   ): Promise<ExpressionNode | null> {
-    if (!node.target) {
+    const arg = node.elements[1];
+    if (!arg) {
       this.report(
         "Unquote requires a target expression",
         node.span,
@@ -2213,14 +2189,15 @@ export class SemanticAnalyzer {
       );
       return null;
     }
-    return await this.evaluateUnquoteTarget(node.target, context);
+    return await this.evaluateUnquoteTarget(arg, context);
   }
 
-  private async materializeSplicedArgument(
-    node: ReaderMacroNode<NodeKind.UnquoteSplicing>,
+  private async handleUnquoteSplicingCall(
+    node: ListNode,
     context: MacroExpansionContext
   ): Promise<ExpressionNode[]> {
-    if (!node.target) {
+    const arg = node.elements[1];
+    if (!arg) {
       this.report(
         "Unquote splicing requires a target expression",
         node.span,
@@ -2228,7 +2205,7 @@ export class SemanticAnalyzer {
       );
       return [];
     }
-    const value = await this.evaluateUnquoteTarget(node.target, context);
+    const value = await this.evaluateUnquoteTarget(arg, context);
     if (!value) {
       return [];
     }
@@ -2562,8 +2539,6 @@ export class SemanticAnalyzer {
 
       case NodeKind.Quote:
       case NodeKind.SyntaxQuote:
-      case NodeKind.Unquote:
-      case NodeKind.UnquoteSplicing:
         this.stripScopeMetadata((node as ReaderMacroNode).target);
         break;
 

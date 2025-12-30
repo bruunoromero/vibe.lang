@@ -5,8 +5,6 @@ export enum TokenType {
   RightBracket = "right_bracket",
   Quote = "quote",
   SyntaxQuote = "syntax_quote",
-  Unquote = "unquote",
-  UnquoteSplicing = "unquote_splicing",
   Number = "number",
   String = "string",
   Symbol = "symbol",
@@ -85,8 +83,6 @@ export enum NodeKind {
   Vector = "vector",
   Quote = "quote",
   SyntaxQuote = "syntax_quote",
-  Unquote = "unquote",
-  UnquoteSplicing = "unquote_splicing",
   Symbol = "symbol",
   Keyword = "keyword",
   Number = "number",
@@ -105,7 +101,6 @@ export const BUILTIN_SYMBOLS = [
   "fn+",
   "if",
   "quote",
-  "do",
   "try",
   "throw",
   "require",
@@ -113,6 +108,8 @@ export const BUILTIN_SYMBOLS = [
   "import",
   "gensym",
   "spread",
+  "unquote",
+  "unquote-splicing",
 ] as const;
 
 export interface AstNode<K extends NodeKind = NodeKind> {
@@ -134,11 +131,7 @@ export interface SequenceNode<K extends SequenceNodeKind> extends AstNode<K> {
 export type ListNode = SequenceNode<NodeKind.List>;
 export type VectorNode = SequenceNode<NodeKind.Vector>;
 
-export type ReaderMacroKind =
-  | NodeKind.Quote
-  | NodeKind.SyntaxQuote
-  | NodeKind.Unquote
-  | NodeKind.UnquoteSplicing;
+export type ReaderMacroKind = NodeKind.Quote | NodeKind.SyntaxQuote;
 
 export interface ReaderMacroNode<K extends ReaderMacroKind = ReaderMacroKind>
   extends AstNode<K> {

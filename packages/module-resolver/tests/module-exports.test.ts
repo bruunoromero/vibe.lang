@@ -92,12 +92,12 @@ describe("module exports helpers", () => {
       (def defmacro
         (macro+
           ([name & clauses]
-            \`(def ~name
-               (macro+ ~@clauses)))))
+            \`(def (unquote name)
+               (macro+ (unquote-splicing clauses))))))
 
       (defmacro when
         ([pred body]
-          \`(if ~pred ~body nil)))
+          \`(if (unquote pred) (unquote body) nil)))
     `);
 
     const exports = await extractTopLevelExports(result.program);
@@ -111,8 +111,8 @@ describe("module exports helpers", () => {
       (defp defn
         (macro+
           ([name & clauses]
-            \`(def ~name
-               (fn+ ~@clauses)))))
+            \`(def (unquote name)
+               (fn+ (unquote-splicing clauses))))))
 
       (defn add [x y]
         (+ x y))

@@ -95,7 +95,7 @@ describe("parseSource", () => {
   });
 
   test("handles reader macros", async () => {
-    const source = "'(println ~x ~@xs :a :b)";
+    const source = "'(println (unquote x) (unquote-splicing xs) :a :b)";
     const result = await parseSource(source);
 
     expect(result.ok).toBeTrue();
@@ -115,8 +115,9 @@ describe("parseSource", () => {
     const unquoteNode = quotedList.elements[1];
     const splicingNode = quotedList.elements[2];
 
-    expect(unquoteNode?.kind).toBe(NodeKind.Unquote);
-    expect(splicingNode?.kind).toBe(NodeKind.UnquoteSplicing);
+    // Now unquote is a list node with 'unquote' as head
+    expect(unquoteNode?.kind).toBe(NodeKind.List);
+    expect(splicingNode?.kind).toBe(NodeKind.List);
   });
 
   // Map literals removed from the language; related tests deleted.
@@ -146,8 +147,6 @@ describe("parseSource", () => {
     const cases: Array<{ source: string; kind: ReaderMacroKind }> = [
       { source: "'", kind: NodeKind.Quote },
       { source: "`", kind: NodeKind.SyntaxQuote },
-      { source: "~", kind: NodeKind.Unquote },
-      { source: "~@", kind: NodeKind.UnquoteSplicing },
     ];
 
     for (const testCase of cases) {
@@ -159,9 +158,7 @@ describe("parseSource", () => {
       expect(node?.kind).toBe(testCase.kind);
       if (
         node?.kind === NodeKind.Quote ||
-        node?.kind === NodeKind.SyntaxQuote ||
-        node?.kind === NodeKind.Unquote ||
-        node?.kind === NodeKind.UnquoteSplicing
+        node?.kind === NodeKind.SyntaxQuote
       ) {
         expect(node.target).toBeNull();
       }
@@ -203,7 +200,7 @@ describe("parseSource", () => {
   });
 
   test("annotates lexical scope identifiers", async () => {
-    const result = await parseSource("(let [x 1] (fn+ [y] y) x)");
+    const result = await parseSource("(let [x 1] (fn+ ([y] y)) x)");
 
     expect(result.ok).toBeTrue();
     const program = result.program;
@@ -244,7 +241,12 @@ describe("parseSource", () => {
     const fnScope = fnNode.scopeId;
     expect(fnScope).toBe(bindingTarget.scopeId);
 
-    const fnParams = fnNode.elements[1];
+    const fnClause = fnNode.elements[1];
+    if (!fnClause || fnClause.kind !== NodeKind.List) {
+      throw new Error("Expected fn clause list");
+    }
+
+    const fnParams = fnClause.elements[0];
     if (!fnParams || fnParams.kind !== NodeKind.Vector) {
       throw new Error("Expected fn params vector");
     }
@@ -256,7 +258,7 @@ describe("parseSource", () => {
     }
     expect(parameterSymbol.scopeId).not.toBe(letNode.scopeId);
 
-    const bodySymbol = fnNode.elements[2];
+    const bodySymbol = fnClause.elements[1];
     if (!bodySymbol || bodySymbol.kind !== NodeKind.Symbol) {
       throw new Error("Expected fn body symbol");
     }
@@ -313,10 +315,10 @@ describe("parseSource", () => {
 
   test("parses function definitions with Clojure-style names", async () => {
     const result = await parseSource(`
-      (def is-valid? (fn+ [x] (> x 0)))
-      (def set-value! (fn+ [v] v))
-      (def splat* (fn+ [] 42))
-      (def foo-bar? (fn+ [] true))
+      (def is-valid? (fn+ ([x] (> x 0))))
+      (def set-value! (fn+ ([v] v)))
+      (def splat* (fn+ ([] 42)))
+      (def foo-bar? (fn+ ([] true)))
     `);
 
     expect(result.ok).toBeTrue();

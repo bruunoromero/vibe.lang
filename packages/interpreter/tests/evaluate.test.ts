@@ -297,7 +297,7 @@ describe("Interpreter - Special Forms", () => {
   test("syntax quote evaluates unquote and splicing", async () => {
     const result = await evalMulti(`
       (def xs (quote (1 2)))
-      \`(list ~@xs ~(if true 3 4))
+      \`(list (unquote-splicing xs) (unquote (if true 3 4)))
     `);
     expect(result.ok).toBeTrue();
     expect(result.value).toMatchObject({
@@ -311,9 +311,9 @@ describe("Interpreter - Special Forms", () => {
     });
   });
 
-  test("do evaluates multiple forms", async () => {
-    const result = await evalSource(
-      "(do (def x 1) (def y 2) (runtime/add* x y))",
+  test("evaluates multiple forms", async () => {
+    const result = await evalMulti(
+      `(def x 1) (def y 2) (runtime/add* x y)`,
       true
     );
     expect(result.ok).toBeTrue();
@@ -768,7 +768,9 @@ describe("Interpreter - Error Handling", () => {
   });
 
   test("arity mismatch - too many args", async () => {
-    const parseResult = await parseSource("(def f (fn+ [x] (* x 2))) (f 1 2 3)");
+    const parseResult = await parseSource(
+      "(def f (fn+ [x] (* x 2))) (f 1 2 3)"
+    );
     const env = createRootEnvironment();
     await evaluate(parseResult.program.body[0]!, env);
     const result = await evaluate(parseResult.program.body[1]!, env);

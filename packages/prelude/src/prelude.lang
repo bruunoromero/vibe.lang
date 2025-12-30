@@ -8,30 +8,43 @@
 ;; Definition Helpers
 ;; ============================================================
 
-(def defmacro
+(def defmacro+
   (macro+
     ([name & clauses]
-      `(def ~name
-         (macro+ ~@clauses)))))
+      `(def (unquote name)
+         (macro+ (unquote-splicing clauses))))))
+
+(defmacro+ defmacro
+  ([name args & body]
+  `(defmacro+ (unquote name) ((unquote args) (unquote-splicing body)))))
 
 (defmacro fn
-  [& clauses]
-    `(fn+ (~@clauses)))
+  [args & body]
+  `(fn+ ((unquote args) (unquote-splicing body))))
 
-(defmacro defmacrop
-  ([name & clauses]
-    `(defp ~name
-        (macro+ ~@clauses))))
+(defmacro defmacrop+
+  [name & clauses]
+  `(defp (unquote name)
+    (macro+ (unquote-splicing clauses))))
+
+(defmacro defn+
+  [name & clauses]
+  `(def (unquote name)
+    (fn+ (unquote-splicing clauses))))
 
 (defmacro defn
-  ([name & clauses]
-    `(def ~name
-        (fn+ ~@clauses))))
+  [name args & body]
+  `(defn+ (unquote name) ((unquote args) (unquote-splicing body))))
+
+(defmacro defnp+
+  [name & clauses]
+  `(defp (unquote name)
+    (fn+ (unquote-splicing clauses))))
+
 
 (defmacro defnp
-  ([name & clauses]
-    `(defp ~name
-      (fn+ ~@clauses))))
+  [name args & body]
+  `(defnp+ (unquote name) ((unquote args) (unquote-splicing body))))
 
 ;; ============================================================
 ;; Collection Constructors
@@ -47,23 +60,23 @@
 ;; Logic Macros (short-circuiting)
 ;; ============================================================
 
-(defmacro and
+(defmacro+ and
   ([] true)
   ([x] x)
   ([x & rest]
-    `(let [temp# ~x]
+    `(let [temp# (unquote x)]
         (if temp#
-          (and ~@rest)
+          (and (unquote-splicing rest))
           temp#))))
 
-(defmacro or
+(defmacro+ or
   ([] nil)
   ([x] x)
   ([x & rest]
-    `(let [temp# ~x]
+    `(let [temp# (unquote x)]
         (if temp#
           temp#
-          (or ~@rest)))))
+          (or (unquote-splicing rest))))))
 
 (defn count [coll]
   (runtime/count coll))
@@ -85,14 +98,14 @@
 (defn cons [x xs]
   (list x (spread xs)))
 
-(defmacro cond 
+(defmacro+ cond 
   ([]
     nil)
   ([test expr & rest]
     (if (even? (count rest))
-      `(if ~test
-         ~expr
-         (cond ~@rest))
+      `(if (unquote test)
+         (unquote expr)
+         (cond (unquote-splicing rest)))
       (throw "cond requires an even number of clauses"))))
 
 ;; Map / Namespace Helpers removed
@@ -106,7 +119,7 @@
 ;; Comparison Operators (user-friendly names)
 ;; ============================================================
 
-(defn = 
+(defn+ = 
   ([x] true)
   ([x y]
     (runtime/eq* x y))
@@ -115,17 +128,17 @@
       (apply = (cons y rest))
       false)))
 
-(def < (fn+ [x y]
-  (runtime/lt* x y)))
+(def < (fn+ ([x y]
+  (runtime/lt* x y))))
 
-(def > (fn+ [x y]
-  (runtime/gt* x y)))
+(def > (fn+ ([x y]
+  (runtime/gt* x y))))
 
-(def <= (fn+ [x y]
-  (runtime/lte* x y)))
+(def <= (fn+ ([x y]
+  (runtime/lte* x y))))
 
-(def >= (fn+ [x y]
-  (runtime/gte* x y)))
+(def >= (fn+ ([x y]
+  (runtime/gte* x y))))
 
 ;; ============================================================
 ;; Core Sequence Helpers
@@ -143,7 +156,7 @@
 (defn + [& xs]
   (reduce runtime/add* 0 xs))
 
-(defn - 
+(defn+ - 
   ([] 0)
   ([x] (runtime/sub* 0 x))
   ([& xs]
@@ -152,7 +165,7 @@
 (defn * [& xs]
   (reduce runtime/mul* 1 xs))
 
-(defn / 
+(defn+ / 
   ([] 0)
   ([x] (runtime/div* 1 x))
   ([& xs]
@@ -187,10 +200,10 @@
         (filter pred xs)))))
 
 (defn concat [& colls]
-  (reduce (fn+ [acc coll]
+  (reduce (fn+ ([acc coll]
             (if (empty? coll)
               acc
-              (concat acc (cons (first coll) (rest coll)))))
+              (concat acc (cons (first coll) (rest coll))))))
           []
           colls))
 
@@ -207,7 +220,7 @@
     :else (drop (dec n) (rest coll))))
 
 (defn reverse [coll]
-  (reduce (fn+ [acc x] (cons x acc)) [] coll))
+  (reduce (fn+ ([acc x] (cons x acc))) [] coll))
 
 ;; ============================================================
 ;; I/O Functions

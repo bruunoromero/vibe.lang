@@ -5,7 +5,7 @@
 (def favorite-number 42)
 
 (defmacro a [x]
-  `(println ~x))
+  `(println (unquote x)))
 
 (defn greet [name]
   (a name)

@@ -14,10 +14,10 @@ import { NodeKind, type ExpressionNode, type ProgramNode } from "@vibe/syntax";
 import { TEST_BUILTINS } from "./test-builtins";
 
 const ARITHMETIC_STUB = `
-  (def + (fn+ [& xs] xs))
-  (def - (fn+ [& xs] xs))
-  (def * (fn+ [& xs] xs))
-  (def / (fn+ [& xs] xs))
+  (def + (fn+ ([& xs] xs)))
+  (def - (fn+ ([& xs] xs)))
+  (def * (fn+ ([& xs] xs)))
+  (def / (fn+ ([& xs] xs)))
 `;
 
 const withArithmeticPrelude = (source: string) =>
@@ -90,13 +90,7 @@ const renameSymbolInNode = (
     };
   }
 
-  if (
-    node.kind === NodeKind.Dispatch ||
-    node.kind === NodeKind.Quote ||
-    node.kind === NodeKind.SyntaxQuote ||
-    node.kind === NodeKind.Unquote ||
-    node.kind === NodeKind.UnquoteSplicing
-  ) {
+  if (node.kind === NodeKind.Quote || node.kind === NodeKind.SyntaxQuote) {
     const originalTarget =
       (node as { target?: ExpressionNode | null }).target ?? null;
     const updatedTarget = renameSymbolInNode(originalTarget, from, to);
@@ -111,7 +105,7 @@ const renameSymbolInNode = (
 
 describe("analyzeProgram", () => {
   test("aligns semantic scopes with parser annotations", async () => {
-    const parseResult = await parseSource("(let [x 1] (fn+ [y] y) x)");
+    const parseResult = await parseSource("(let [x 1] (fn+ ([y] y)) x)");
     if (!parseResult.ok) {
       throw new Error("Failed to parse scope fixture");
     }
@@ -258,7 +252,7 @@ describe("analyzeProgram", () => {
 
   test("creates scoped bindings for let and fn", async () => {
     const analysis = await analyzeSource(
-      withArithmeticPrelude("(let [x 1] (fn+ [y] (+ x y)))")
+      withArithmeticPrelude("(let [x 1] (fn+ ([y] (+ x y))))")
     );
 
     expect(analysis.ok).toBeTrue();
@@ -293,7 +287,7 @@ describe("analyzeProgram", () => {
 
   test("binds symbols from destructured fn parameters", async () => {
     const analysis = await analyzeSource(
-      withArithmeticPrelude("(fn+ [[x y] z] (+ x y z))")
+      withArithmeticPrelude("(fn+ ([[x y] z] (+ x y z)))")
     );
 
     expect(analysis.ok).toBeTrue();
@@ -415,10 +409,10 @@ describe("analyzeProgram", () => {
       withArithmeticPrelude(`
         (def root 0)
         (let [outer 1]
-          (fn+ [mid]
+          (fn+ ([mid]
             (let [inner (+ outer mid root)]
-              (fn+ [leaf]
-                (+ root outer mid inner leaf)))))
+              (fn+ ([leaf]
+                (+ root outer mid inner leaf)))))))
       `)
     );
 
@@ -524,9 +518,10 @@ describe("analyzeProgram", () => {
   test("records gensym-generated bindings with unique names", async () => {
     const analysis = await analyzeSource(`
       (def with-unique
-        (macro+ [expr]
-          \`(let [~(gensym "tmp") ~expr]
-             42)))
+        (macro+ ([expr]
+          (let [tmp (gensym "tmp")]
+            \`(let [(unquote tmp) (unquote expr)]
+               42)))))
 
       (with-unique 10)
     `);
@@ -546,7 +541,7 @@ describe("analyzeProgram", () => {
 
   test("analyzes try/catch binding scopes", async () => {
     const analysis = await analyzeSource(`
-      (def noop (fn+ [] 0))
+      (def noop (fn+ ([] 0)))
       (try
         (noop)
         (catch err err)
@@ -586,9 +581,9 @@ describe("analyzeProgram", () => {
   test("instantiates auto gensym placeholders inside syntax quotes", async () => {
     const analysis = await analyzeSource(`
       (def capture
-        (macro+ [expr]
-          \`(let [foo# ~expr]
-             foo#)))
+        (macro+ ([expr]
+          \`(let [foo# (unquote expr)]
+             foo#))))
 
       (capture 99)
     `);
@@ -622,9 +617,9 @@ describe("analyzeProgram", () => {
     const analysis = await analyzeSource(
       withArithmeticPrelude(`
         (def with-temp
-          (macro+ [value]
-            \`(let [tmp ~value]
-               tmp)))
+          (macro+ ([value]
+            \`(let [tmp (unquote value)]
+               tmp))))
 
         (let [a (with-temp 1)
               b (with-temp 2)]
@@ -650,9 +645,9 @@ describe("analyzeProgram", () => {
     const analysis = await analyzeSource(
       withArithmeticPrelude(`
         (def with-temp
-          (macro+ [expr]
-            \`(let [tmp ~expr]
-               tmp)))
+          (macro+ ([expr]
+            \`(let [tmp (unquote expr)]
+               tmp))))
 
         (def answer (with-temp (+ 1 2)))
       `)
@@ -672,7 +667,7 @@ describe("analyzeProgram", () => {
 
   test("detects recursive macros", async () => {
     const analysis = await analyzeSource(`
-      (def looped (macro+ [] \`(looped)))
+      (def looped (macro+ ([] \`(looped))))
       (looped)
     `);
 
@@ -708,7 +703,7 @@ describe("analyzeProgram", () => {
     });
 
     test("requires fn parameters to be symbols", async () => {
-      const analysis = await analyzeSource("(fn+ [42] 42)");
+      const analysis = await analyzeSource("(fn+ ([42] 42))");
 
       expectDiagnostic(analysis, "SEM_PATTERN_UNSUPPORTED");
     });
@@ -730,7 +725,7 @@ describe("analyzeProgram", () => {
 
   describe("macro literal validation", () => {
     test("requires macro names to be symbols", async () => {
-      const analysis = await analyzeSource("(def 1 (macro+ [] `42))");
+      const analysis = await analyzeSource("(def 1 (macro+ ([] `42)))");
 
       expectDiagnostic(analysis, "SEM_BINDING_REQUIRES_SYMBOL");
     });
@@ -742,28 +737,28 @@ describe("analyzeProgram", () => {
     });
 
     test("requires macro parameters to be symbols", async () => {
-      const analysis = await analyzeSource("(def foo (macro+ [1] `42))");
+      const analysis = await analyzeSource("(def foo (macro+ ([1] `42)))");
 
       expectDiagnostic(analysis, "SEM_MACRO_PARAM_SYMBOL");
     });
 
     test("reports duplicate macro parameters", async () => {
       const analysis = await analyzeSource(
-        "(def foo (macro+ [x x] `(list ~x)))"
+        "(def foo (macro+ ([x x] `(list (unquote x)))))"
       );
 
       expectDiagnostic(analysis, "SEM_MACRO_DUPLICATE_PARAM");
     });
 
     test("requires macro bodies", async () => {
-      const analysis = await analyzeSource("(def foo (macro+ [x]))");
+      const analysis = await analyzeSource("(def foo (macro+ ([x])))");
 
       expectDiagnostic(analysis, "SEM_MACRO_REQUIRES_BODY");
     });
 
     test("allows macro bodies to return raw forms", async () => {
       const analysis = await analyzeSource(`
-        (def passthrough (macro+ [x] x))
+        (def passthrough (macro+ ([x] x)))
         (passthrough 42)
       `);
 
@@ -774,10 +769,10 @@ describe("analyzeProgram", () => {
     test("evaluates syntax-quoted templates produced by interpreter logic", async () => {
       const analysis = await analyzeSource(`
         (def wrap
-          (macro+ [expr]
+          (macro+ ([expr]
             (let [tmp (gensym "wrap")]
-              \`(let [~tmp ~expr]
-                 ~tmp))))
+              \`(let [(unquote tmp) (unquote expr)]
+                 (unquote tmp))))))
         (wrap 1)
       `);
 
@@ -787,7 +782,7 @@ describe("analyzeProgram", () => {
 
     test("supports only a single macro body expression", async () => {
       const analysis = await analyzeSource(
-        "(def foo (macro+ [x] `(list ~x) `(list ~x)))"
+        "(def foo (macro+ ([x] `(list (unquote x)) `(list (unquote x)))))"
       );
 
       expectDiagnostic(analysis, "SEM_MACRO_SINGLE_BODY");
@@ -835,7 +830,7 @@ describe("analyzeProgram", () => {
   describe("macro expansion diagnostics", () => {
     test("reports macro arity mismatches and missing args", async () => {
       const analysis = await analyzeSource(`
-        (def pair (macro+ [a b] \`(vector ~a ~b)))
+        (def pair (macro+ ([a b] \`(vector (unquote a) (unquote b)))))
         (pair 1)
       `);
 
@@ -845,7 +840,7 @@ describe("analyzeProgram", () => {
 
     test("reports unknown parameters referenced via unquote", async () => {
       const analysis = await analyzeSource(`
-        (def uses-missing (macro+ [] \`(~ missing)))
+        (def uses-missing (macro+ ([] \`((unquote missing)))))
         (uses-missing)
       `);
 
@@ -854,7 +849,7 @@ describe("analyzeProgram", () => {
 
     test("evaluates full expressions inside unquote at compile time", async () => {
       const analysis = await analyzeSource(`
-        (def simple (macro+ [] \`~(if true 1 2)))
+        (def simple (macro+ ([] \`(unquote (if true 1 2)))))
         (simple)
       `);
 
@@ -865,7 +860,7 @@ describe("analyzeProgram", () => {
 
     test("rejects unquote splicing at the top level", async () => {
       const analysis = await analyzeSource(`
-        (def spread (macro+ [items] \`~@items))
+        (def spread (macro+ ([items] \`(unquote-splicing items))))
         (spread [1 2])
       `);
 
@@ -874,7 +869,7 @@ describe("analyzeProgram", () => {
 
     test("requires unquote splicing targets to produce sequences", async () => {
       const analysis = await analyzeSource(`
-        (def spread (macro+ [item] \`(list ~@item)))
+        (def spread (macro+ ([item] \`(list (unquote-splicing item)))))
         (spread 42)
       `);
 
@@ -1058,7 +1053,9 @@ describe("analyzeProgram", () => {
         resolve: () => ({ ok: true, moduleId: "/workspace/macros.lang" }),
       };
 
-      const macroParse = await parseSource("(def inline-true (macro+ [] true))");
+      const macroParse = await parseSource(
+        "(def inline-true (macro+ ([] true)))"
+      );
       if (!macroParse.ok) {
         throw new Error("Failed to parse macro fixture");
       }
@@ -1070,7 +1067,11 @@ describe("analyzeProgram", () => {
       if (!macroLiteral || macroLiteral.kind !== NodeKind.List) {
         throw new Error("Macro literal missing in def form");
       }
-      const macroBody = macroLiteral.elements[2];
+      const macroClause = macroLiteral.elements[1];
+      if (!macroClause || macroClause.kind !== NodeKind.List) {
+        throw new Error("Macro clause missing in macro+ form");
+      }
+      const macroBody = macroClause.elements[1];
       if (!macroBody) {
         throw new Error("Macro body missing in fixture");
       }
@@ -1277,10 +1278,10 @@ describe("analyzeProgram", () => {
   describe("operator identifier sanitization", () => {
     test("generates distinct readable names for comparison operators", async () => {
       const analysis = await analyzeSource(`
-        (def <= (fn+ [a b] a))
-        (def >= (fn+ [a b] b))
-        (def < (fn+ [a b] a))
-        (def > (fn+ [a b] b))
+        (def <= (fn+ ([a b] a)))
+        (def >= (fn+ ([a b] b)))
+        (def < (fn+ ([a b] a)))
+        (def > (fn+ ([a b] b)))
       `);
 
       expect(analysis.ok).toBeTrue();
@@ -1306,10 +1307,10 @@ describe("analyzeProgram", () => {
 
     test("generates readable names for arithmetic operators", async () => {
       const analysis = await analyzeSource(`
-        (def + (fn+ [a b] a))
-        (def - (fn+ [a b] b))
-        (def * (fn+ [a b] a))
-        (def / (fn+ [a b] b))
+        (def + (fn+ ([a b] a)))
+        (def - (fn+ ([a b] b)))
+        (def * (fn+ ([a b] a)))
+        (def / (fn+ ([a b] b)))
       `);
 
       expect(analysis.ok).toBeTrue();
@@ -1329,9 +1330,9 @@ describe("analyzeProgram", () => {
 
     test("handles compound names with special characters", async () => {
       const analysis = await analyzeSource(`
-        (def is-valid? (fn+ [x] true))
-        (def set-value! (fn+ [v] v))
-        (def map* (fn+ [f c] c))
+        (def is-valid? (fn+ ([x] true)))
+        (def set-value! (fn+ ([v] v)))
+        (def map* (fn+ ([f c] c)))
       `);
 
       expect(analysis.ok).toBeTrue();

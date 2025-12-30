@@ -101,15 +101,6 @@ export class Lexer {
           await this.advance();
           this.addToken(TokenType.SyntaxQuote, start);
           continue;
-        case "~":
-          await this.advance();
-          if ((await this.peek()) === "@") {
-            await this.advance();
-            this.addToken(TokenType.UnquoteSplicing, start);
-          } else {
-            this.addToken(TokenType.Unquote, start);
-          }
-          continue;
         // '#' reader-dispatch removed; preserve '#!' shebang handling elsewhere
         case '"':
           await this.readString(start);

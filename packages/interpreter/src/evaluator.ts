@@ -212,25 +212,15 @@ const evaluateNode = async (
       return evaluateQuote(node.target, env);
     case NK.SyntaxQuote:
       return await evaluateSyntaxQuote(node as ReaderMacroNode, env, context);
-    case NK.UnquoteSplicing:
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: "unquote forms may only appear inside a syntax quote",
-            span: node.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_SYNTAX_UNQUOTE_CONTEXT",
-          },
-        ],
-      };
     default:
       return {
         ok: false,
         diagnostics: [
           {
-            message: `Unsupported node kind for evaluation: ${node.kind}`,
-            span: node.span,
+            message: `Unsupported node kind for evaluation: ${
+              (node as any).kind
+            }`,
+            span: (node as any).span,
             severity: DiagnosticSeverity.Error,
             code: "INTERP_UNSUPPORTED_NODE",
           },
@@ -522,8 +512,6 @@ const tryEvaluateSpecialForm = async (
       return await evaluateIf(node, env, context);
     case "quote":
       return evaluateQuoteForm(node, env);
-    case "do":
-      return await evaluateDo(node, env, context);
     case "try":
       return await evaluateTry(node, env, context);
     case "throw":
@@ -921,6 +909,25 @@ const instantiateSyntaxNode = async (
 ): Promise<EvalResult<Value>> => {
   switch (node.kind) {
     case NK.List:
+      // Check if this is (unquote x)
+      if (isUnquoteCall(node)) {
+        return await handleUnquoteCall(node, env, context);
+      }
+      // Check if this is (unquote-splicing xs)
+      if (isUnquoteSplicingCall(node)) {
+        return {
+          ok: false,
+          diagnostics: [
+            {
+              message:
+                "Unquote splicing cannot appear outside of list or vector literals",
+              span: node.span,
+              severity: DiagnosticSeverity.Error,
+              code: "INTERP_SYNTAX_SPLICE_CONTEXT",
+            },
+          ],
+        };
+      }
       return await instantiateSyntaxSequence(
         node.elements,
         env,
@@ -951,25 +958,6 @@ const instantiateSyntaxNode = async (
         new Map<string, string>()
       );
     }
-    case NK.Unquote:
-      return await evaluateUnquoteNode(
-        node as ReaderMacroNode<NodeKind.Unquote>,
-        env,
-        context
-      );
-    case NK.UnquoteSplicing:
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message:
-              "Unquote splicing cannot appear outside of list or vector literals",
-            span: node.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_SYNTAX_SPLICE_CONTEXT",
-          },
-        ],
-      };
     case NK.Symbol:
       if (isAutoGensymPlaceholder(node.value)) {
         return instantiateAutoGensymSymbol(
@@ -997,12 +985,9 @@ const instantiateSyntaxSequence = async (
     if (!element) {
       continue;
     }
-    if (element.kind === NK.Unquote) {
-      const result = await evaluateUnquoteNode(
-        element as ReaderMacroNode<NodeKind.Unquote>,
-        env,
-        context
-      );
+    // Check if element is (unquote x)
+    if (element.kind === NK.List && isUnquoteCall(element)) {
+      const result = await handleUnquoteCall(element, env, context);
       if (!result.ok) {
         return result;
       }
@@ -1011,12 +996,9 @@ const instantiateSyntaxSequence = async (
       }
       continue;
     }
-    if (element.kind === NK.UnquoteSplicing) {
-      const result = await evaluateUnquoteSplicing(
-        element as ReaderMacroNode<NodeKind.UnquoteSplicing>,
-        env,
-        context
-      );
+    // Check if element is (unquote-splicing xs)
+    if (element.kind === NK.List && isUnquoteSplicingCall(element)) {
+      const result = await handleUnquoteSplicingCall(element, env, context);
       if (!result.ok) {
         return { ok: false, diagnostics: result.diagnostics };
       }
@@ -1054,12 +1036,23 @@ const instantiateSyntaxSequence = async (
 
 /* instantiateSyntaxMap removed */
 
-const evaluateUnquoteNode = async (
-  node: ReaderMacroNode<NodeKind.Unquote>,
+const isUnquoteCall = (node: ListNode): boolean => {
+  const head = node.elements[0];
+  return head?.kind === NK.Symbol && head.value === "unquote";
+};
+
+const isUnquoteSplicingCall = (node: ListNode): boolean => {
+  const head = node.elements[0];
+  return head?.kind === NK.Symbol && head.value === "unquote-splicing";
+};
+
+const handleUnquoteCall = async (
+  node: ListNode,
   env: Environment,
   context: EvalContext
 ): Promise<EvalResult<Value>> => {
-  if (!node.target) {
+  const arg = node.elements[1];
+  if (!arg) {
     return {
       ok: false,
       diagnostics: [
@@ -1072,7 +1065,7 @@ const evaluateUnquoteNode = async (
       ],
     };
   }
-  const result = await evaluateNode(node.target, env, context);
+  const result = await evaluateNode(arg, env, context);
   if (!result.ok) {
     return result;
   }
@@ -1083,12 +1076,13 @@ const evaluateUnquoteNode = async (
   };
 };
 
-const evaluateUnquoteSplicing = async (
-  node: ReaderMacroNode<NodeKind.UnquoteSplicing>,
+const handleUnquoteSplicingCall = async (
+  node: ListNode,
   env: Environment,
   context: EvalContext
 ): Promise<EvalResult<readonly Value[]>> => {
-  if (!node.target) {
+  const arg = node.elements[1];
+  if (!arg) {
     return {
       ok: false,
       diagnostics: [
@@ -1101,7 +1095,7 @@ const evaluateUnquoteSplicing = async (
       ],
     };
   }
-  const result = await evaluateNode(node.target, env, context);
+  const result = await evaluateNode(arg, env, context);
   if (!result.ok) {
     return { ok: false, diagnostics: result.diagnostics };
   }
@@ -1248,24 +1242,6 @@ const evaluateIf = async (
     }
     return { ok: true, value: makeNil(), diagnostics: [] };
   }
-};
-
-const evaluateDo = async (
-  node: ListNode,
-  env: Environment,
-  context: EvalContext
-): Promise<EvalResult> => {
-  const bodyNodes = node.elements.slice(1);
-  let lastResult: EvalResult = { ok: true, value: makeNil(), diagnostics: [] };
-
-  for (const bodyNode of bodyNodes) {
-    lastResult = await evaluateNode(bodyNode, env, context);
-    if (!lastResult.ok) {
-      return lastResult;
-    }
-  }
-
-  return lastResult;
 };
 
 type SequenceOutcome =

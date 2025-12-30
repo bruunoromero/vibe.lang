@@ -30,7 +30,7 @@ describe("tokenize", () => {
   });
 
   test("supports keywords, booleans, strings, and reader macros", async () => {
-    const source = '\'[:ok true false nil "hi\\n" (+ foo) ~@bar]';
+    const source = '\'[:ok true false nil "hi\\n" (+ foo) bar]';
     const result = await collectTokens(source);
 
     expect(result.ok).toBeTrue();
@@ -47,7 +47,6 @@ describe("tokenize", () => {
       TokenType.Symbol,
       TokenType.Symbol,
       TokenType.RightParen,
-      TokenType.UnquoteSplicing,
       TokenType.Symbol,
       TokenType.RightBracket,
     ]);

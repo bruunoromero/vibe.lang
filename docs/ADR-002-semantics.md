@@ -14,7 +14,7 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
    - Symbol bindings (variables, parameters, macros, built-ins) with stable IDs that reference their defining scope and node.
    - Node metadata records (one per AST node) that describe which scope a node belongs to plus optional symbol resolution info (definition vs. usage, resolved symbol ID, hygiene tag).
 2. Maintain AST immutability by keeping metadata out-of-band. `@vibe/semantics` assigns opaque `nodeId` values while traversing, and maps additional information via plain records in the returned graph.
-3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `defp` (a private-only variant of `def` that skips module exports), `macro` (as a literal restricted to binding positions), `let`, `fn`, `if`, `quote`, `do`, plus the import heads (`require`, `external`). Additional forms can be layered on via feature flags without changing existing consumers.
+3. Recognize the minimal set of special forms needed to bootstrap symbol resolution: `def`, `defp` (a private-only variant of `def` that skips module exports), `macro` (as a literal restricted to binding positions), `let`, `fn`, `if`, `quote`, plus the import heads (`require`, `external`). Additional forms can be layered on via feature flags without changing existing consumers.
 4. Export a default list of builtin symbols that matches those special forms so unresolved symbol diagnostics stay meaningful even before user code (or the prelude) defines helpers such as arithmetic or collection operations.
 5. Extend the CLI with a new `vibe analyze` command that parses source, invokes the semantic analyzer, prints the AST alongside semantic metadata, and surfaces combined diagnostics.
 

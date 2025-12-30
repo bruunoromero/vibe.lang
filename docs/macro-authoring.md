@@ -68,7 +68,7 @@ Rules mirror `fn`:
 - Clauses are attempted in the order they are written.
 - Each fixed-arity clause must use a unique arity (`SEM_MACRO_DUPLICATE_ARITY`).
 - Only one variadic clause is permitted, it must appear last, and it still enforces its fixed prefix (`SEM_MACRO_REST_POSITION`, `SEM_MACRO_MULTIPLE_REST_CLAUSES`).
-- Clause bodies remain single expressions evaluated at analysis time, so wrap multiple steps in `let`/`do` if needed.
+- Clause bodies remain single expressions evaluated at analysis time, so wrap multiple steps in `let` if needed.
 
 ## Syntax Quote, Unquote, and Splicing
 

@@ -4,7 +4,7 @@ import { parseSource } from "../src";
 const snapshotCases = [
   {
     name: "nested quotes and splicing",
-    source: "''(foo `(bar ~baz ~@(+ 1 2)))",
+    source: "''(foo `(bar (unquote baz) (unquote-splicing (+ 1 2))))",
   },
   {
     name: "metadata with map and def",
@@ -15,7 +15,7 @@ const snapshotCases = [
     source: `
       (def with-temp
         (macro+ [expr]
-          \`(let [tmp ~expr]
+          \`(let [tmp (unquote expr)]
              (println tmp)
              tmp)))
 
