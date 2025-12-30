@@ -10,10 +10,9 @@ import {
   type SourceSpan,
   type StringNode,
   type SymbolNode,
-  type VectorNode,
   parseBindingPattern,
   type BindingPattern,
-  type VectorBindingPattern,
+  type SequenceBindingPattern,
 } from "@vibe/syntax";
 import type {
   NodeId,
@@ -214,12 +213,10 @@ class ModuleEmitter {
       this.requireRuntimeHelper("keyword*");
     }
     const hasQuoteNodes = graph.nodes.some(
-      (node) =>
-        node.kind === NodeKind.Quote || node.kind === NodeKind.SyntaxQuote
+      (node) => node.kind === NodeKind.Quote
     );
     if (hasQuoteNodes) {
       this.requireRuntimeHelper("symbol*");
-      this.requireRuntimeHelper("list*");
     }
   }
 
@@ -548,13 +545,6 @@ class ModuleEmitter {
   private emitExpression(node: ExpressionNode): string {
     switch (node.kind) {
       case NodeKind.Quote: {
-        // quoted forms produce literal data structures: symbols become runtime
-        // symbols, lists/vectors become JS arrays, maps -> Map, sets -> Set
-        const target = (node as any).target as ExpressionNode | null;
-        if (!target) return "null";
-        return this.emitQuotedExpression(target);
-      }
-      case NodeKind.SyntaxQuote: {
         const target = (node as any).target as ExpressionNode | null;
         if (!target) return "null";
         return this.emitQuotedExpression(target);
@@ -573,12 +563,6 @@ class ModuleEmitter {
         return this.emitSymbol(node);
       case NodeKind.List:
         return this.emitListExpression(node);
-      case NodeKind.Vector: {
-        const elements = node.elements
-          .map((element) => (element ? this.emitExpression(element) : "null"))
-          .join(", ");
-        return `[${elements}]`;
-      }
 
       default:
         return this.unsupported(node);
@@ -602,15 +586,6 @@ class ModuleEmitter {
       case NodeKind.Nil:
         return "null";
       case NodeKind.List: {
-        const seq = (node as any).elements
-          .map((el: ExpressionNode | null | undefined) =>
-            el ? this.emitQuotedExpression(el) : "null"
-          )
-          .join(", ");
-        const helper = this.requireRuntimeHelper("list*");
-        return `${helper}([${seq}])`;
-      }
-      case NodeKind.Vector: {
         const seq = (node as any).elements
           .map((el: ExpressionNode | null | undefined) =>
             el ? this.emitQuotedExpression(el) : "null"
@@ -681,7 +656,9 @@ class ModuleEmitter {
         case "throw":
           return this.emitThrow(node);
         case "spread":
-          return this.emitSpread(tail);
+          throw new Error(
+            "spread expressions can only appear inside function calls"
+          );
         default:
           break;
       }
@@ -729,17 +706,24 @@ class ModuleEmitter {
     args: readonly (ExpressionNode | null | undefined)[]
   ): string {
     const callee = this.emitExpression(head);
-    const argList = args
-      .filter((arg): arg is ExpressionNode => Boolean(arg))
-      .map((arg) => this.emitExpression(arg))
-      .join(", ");
-    return `${callee}(${argList})`;
+    const argParts: string[] = [];
+    for (const arg of args) {
+      if (!arg) {
+        continue;
+      }
+      if (this.isSpreadCall(arg)) {
+        argParts.push(this.emitSpread(arg));
+        continue;
+      }
+      argParts.push(this.emitExpression(arg));
+    }
+    return `${callee}(${argParts.join(", ")})`;
   }
 
   private emitLet(node: ListNode): string {
     const bindingsNode = node.elements[1];
-    if (!bindingsNode || bindingsNode.kind !== NodeKind.Vector) {
-      throw new Error("let requires a vector of bindings");
+    if (!bindingsNode || bindingsNode.kind !== NodeKind.List) {
+      throw new Error("let requires a list of bindings");
     }
 
     const declarations: string[] = [];
@@ -783,35 +767,35 @@ class ModuleEmitter {
     return this.emitMultiClauseFn(clauses);
   }
 
-  private collectFnClauses(node: ListNode): readonly FnClauseEmitDescriptor[] {
-    const paramsNode = node.elements[1];
-    if (paramsNode && paramsNode.kind === NodeKind.Vector) {
-      return [
-        {
-          paramsNode,
-          bodyNodes: node.elements
-            .slice(2)
-            .filter((element): element is ExpressionNode => Boolean(element)),
-        },
-      ];
-    }
+  private isFnClauseNode(node: ListNode | null | undefined): node is ListNode {
+    return Boolean(
+      node &&
+        node.kind === NodeKind.List &&
+        node.elements[0]?.kind === NodeKind.List
+    );
+  }
 
+  private collectFnClauses(node: ListNode): readonly FnClauseEmitDescriptor[] {
     const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
     if (tail.length === 0) {
-      return [];
+      throw new Error("fn requires at least one clause");
     }
 
-    const clauseLists = tail.filter(
-      (element): element is ListNode => element.kind === NodeKind.List
+    const invalid = tail.find(
+      (element) =>
+        element.kind !== NodeKind.List ||
+        !this.isFnClauseNode(element as ListNode)
     );
-    if (clauseLists.length !== tail.length) {
-      throw new Error("fn clauses must be provided as list literals");
+    if (invalid) {
+      throw new Error(
+        "fn clauses must be provided as list literals like ([args] body ...)"
+      );
     }
 
-    return clauseLists.map((clause) => {
+    return (tail as ListNode[]).map((clause) => {
       const clauseParams = clause.elements[0];
-      if (!clauseParams || clauseParams.kind !== NodeKind.Vector) {
-        throw new Error("fn clause requires a parameter vector");
+      if (!clauseParams || clauseParams.kind !== NodeKind.List) {
+        throw new Error("fn clause requires a parameter list");
       }
       return {
         paramsNode: clauseParams,
@@ -823,7 +807,7 @@ class ModuleEmitter {
   }
 
   private emitFnClause(
-    paramsNode: VectorNode,
+    paramsNode: ListNode,
     bodyNodes: readonly ExpressionNode[]
   ): string {
     const plan = this.parseFnParameters(paramsNode);
@@ -873,7 +857,7 @@ ${dispatchBlock}
 })`;
   }
 
-  private parseFnParameters(paramsNode: VectorNode): FnParameterPlan {
+  private parseFnParameters(paramsNode: ListNode): FnParameterPlan {
     const placeholders: string[] = [];
     const destructures: PatternDestructure[] = [];
     let restParam: string | undefined;
@@ -1042,21 +1026,29 @@ ${block}
     return `(() => {\n  const __error = ${valueExpr};\n  throw (__error instanceof Error ? __error : new Error(String(__error)));\n})()`;
   }
 
-  private emitSpread(
-    tail: readonly (ExpressionNode | null | undefined)[]
-  ): string {
-    const argNode = tail[0];
+  private emitSpread(node: ListNode): string {
+    const argNode = node.elements[1];
     if (!argNode) {
       throw new Error("spread requires a value expression");
     }
-    const extras = tail
-      .slice(1)
+    const extras = node.elements
+      .slice(2)
       .filter((element): element is ExpressionNode => Boolean(element));
     if (extras.length > 0) {
       throw new Error("spread accepts exactly one argument");
     }
     const valueExpr = this.emitExpression(argNode);
     return `...${valueExpr}`;
+  }
+
+  private isSpreadCall(
+    node: ExpressionNode | null | undefined
+  ): node is ListNode {
+    if (!node || node.kind !== NodeKind.List) {
+      return false;
+    }
+    const head = node.elements[0];
+    return head?.kind === NodeKind.Symbol && head.value === "spread";
   }
 
   private partitionTryForm(node: ListNode): {
@@ -1127,16 +1119,16 @@ ${block}
         statements.push(`const ${identifier} = ${sourceExpr};`);
         return;
       }
-      case "vector":
-        this.emitVectorPattern(pattern, sourceExpr, statements);
+      case "sequence":
+        this.emitSequencePattern(pattern, sourceExpr, statements);
         return;
       default:
         throw new Error("Unsupported binding pattern kind");
     }
   }
 
-  private emitVectorPattern(
-    pattern: VectorBindingPattern,
+  private emitSequencePattern(
+    pattern: SequenceBindingPattern,
     sourceExpr: string,
     statements: string[]
   ): void {
@@ -1316,7 +1308,7 @@ interface MappingSegment {
 }
 
 interface FnClauseEmitDescriptor {
-  readonly paramsNode: VectorNode;
+  readonly paramsNode: ListNode;
   readonly bodyNodes: readonly ExpressionNode[];
 }
 

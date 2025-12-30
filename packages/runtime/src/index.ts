@@ -127,7 +127,7 @@ export const type = (v: unknown): RuntimeKeyword => {
   if (isRuntimeSymbol(v)) return createRuntimeKeyword("symbol");
   if (isRuntimeKeyword(v)) return createRuntimeKeyword("keyword");
   if (isRuntimeList(v)) return createRuntimeKeyword("list");
-  if (Array.isArray(v)) return createRuntimeKeyword("vector");
+  if (Array.isArray(v)) return createRuntimeKeyword("list");
   if (v instanceof Set) return createRuntimeKeyword("list");
   if (v instanceof Map) return createRuntimeKeyword("map");
   if (typeof v === "boolean") return createRuntimeKeyword("boolean");

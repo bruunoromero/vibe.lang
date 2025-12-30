@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { parseSource } from "../src";
-import { NodeKind, type ReaderMacroKind, type SymbolNode } from "@vibe/syntax";
+import { NodeKind, type SymbolNode } from "@vibe/syntax";
 
 describe("parseSource", () => {
   test("parses nested collections", async () => {
@@ -18,25 +18,25 @@ describe("parseSource", () => {
       throw new Error("Expected list node");
     }
 
-    const [defSym, fooSym, vector] = list.elements;
+    const [defSym, fooSym, sequence] = list.elements;
     expect(defSym?.kind).toBe(NodeKind.Symbol);
     expect(fooSym?.kind).toBe(NodeKind.Symbol);
-    expect(vector?.kind).toBe(NodeKind.Vector);
+    expect(sequence?.kind).toBe(NodeKind.List);
 
-    if (vector?.kind !== NodeKind.Vector) {
-      throw new Error("Expected vector node");
+    if (sequence?.kind !== NodeKind.List) {
+      throw new Error("Expected list node");
     }
 
-    const [keyword, innerVector] = vector.elements;
+    const [keyword, innerList] = sequence.elements;
     expect(keyword?.kind).toBe(NodeKind.Keyword);
-    expect(innerVector?.kind).toBe(NodeKind.Vector);
+    expect(innerList?.kind).toBe(NodeKind.List);
 
-    if (innerVector?.kind !== NodeKind.Vector) {
-      throw new Error("Expected inner vector node");
+    if (innerList?.kind !== NodeKind.List) {
+      throw new Error("Expected inner list node");
     }
 
-    expect(innerVector.elements[0]?.kind).toBe(NodeKind.Keyword);
-    expect(innerVector.elements[1]?.kind).toBe(NodeKind.Number);
+    expect(innerList.elements[0]?.kind).toBe(NodeKind.Keyword);
+    expect(innerList.elements[1]?.kind).toBe(NodeKind.Number);
   });
 
   test("parses atom literals with correct values", async () => {
@@ -95,7 +95,7 @@ describe("parseSource", () => {
   });
 
   test("handles reader macros", async () => {
-    const source = "'(println (unquote x) (unquote-splicing xs) :a :b)";
+    const source = "(quote (println (unquote x) (spread (unquote xs)) :a :b))";
     const result = await parseSource(source);
 
     expect(result.ok).toBeTrue();
@@ -115,7 +115,7 @@ describe("parseSource", () => {
     const unquoteNode = quotedList.elements[1];
     const splicingNode = quotedList.elements[2];
 
-    // Now unquote is a list node with 'unquote' as head
+    // Unquote forms remain list nodes with 'unquote' as the head symbol
     expect(unquoteNode?.kind).toBe(NodeKind.List);
     expect(splicingNode?.kind).toBe(NodeKind.List);
   });
@@ -138,35 +138,25 @@ describe("parseSource", () => {
       "PARSE_LIST_UNTERMINATED"
     );
     expect(vector.diagnostics.map((d) => d.code)).toContain(
-      "PARSE_VECTOR_UNTERMINATED"
+      "PARSE_LIST_UNTERMINATED"
     );
     // set literals (reader dispatch) removed; no test here
   });
 
-  test("reader macros require targets", async () => {
-    const cases: Array<{ source: string; kind: ReaderMacroKind }> = [
-      { source: "'", kind: NodeKind.Quote },
-      { source: "`", kind: NodeKind.SyntaxQuote },
-    ];
-
-    for (const testCase of cases) {
-      const result = await parseSource(testCase.source);
-      expect(result.diagnostics.map((d) => d.code)).toContain(
-        "PARSE_MACRO_MISSING_TARGET"
-      );
-      const node = result.program.body[0];
-      expect(node?.kind).toBe(testCase.kind);
-      if (
-        node?.kind === NodeKind.Quote ||
-        node?.kind === NodeKind.SyntaxQuote
-      ) {
-        expect(node.target).toBeNull();
-      }
+  test("quote forms require targets", async () => {
+    const result = await parseSource("(quote)");
+    expect(result.diagnostics.map((d) => d.code)).toContain(
+      "PARSE_MACRO_MISSING_TARGET"
+    );
+    const node = result.program.body[0];
+    expect(node?.kind).toBe(NodeKind.Quote);
+    if (node?.kind === NodeKind.Quote) {
+      expect(node.target).toBeNull();
     }
   });
 
-  test("reader macros missing targets inside sequences keep delimiters", async () => {
-    const result = await parseSource("(foo ')");
+  test("quote forms missing targets inside sequences keep delimiters", async () => {
+    const result = await parseSource("(foo (quote))");
 
     expect(result.ok).toBeFalse();
     expect(result.diagnostics.map((d) => d.code)).toEqual([
@@ -213,13 +203,13 @@ describe("parseSource", () => {
       throw new Error("Expected let list");
     }
 
-    const bindingsVector = letNode.elements[1];
-    if (!bindingsVector || bindingsVector.kind !== NodeKind.Vector) {
-      throw new Error("Expected let bindings vector");
+    const bindingsList = letNode.elements[1];
+    if (!bindingsList || bindingsList.kind !== NodeKind.List) {
+      throw new Error("Expected let bindings list");
     }
 
-    const bindingTarget = bindingsVector.elements[0];
-    const bindingValue = bindingsVector.elements[1];
+    const bindingTarget = bindingsList.elements[0];
+    const bindingValue = bindingsList.elements[1];
     if (
       !bindingTarget ||
       !bindingValue ||
@@ -247,8 +237,8 @@ describe("parseSource", () => {
     }
 
     const fnParams = fnClause.elements[0];
-    if (!fnParams || fnParams.kind !== NodeKind.Vector) {
-      throw new Error("Expected fn params vector");
+    if (!fnParams || fnParams.kind !== NodeKind.List) {
+      throw new Error("Expected fn params list");
     }
     expect(fnParams.scopeId).toBe(fnNode.scopeId);
 
@@ -356,27 +346,27 @@ describe("parseSource", () => {
     }
   });
 
-  test("parses gensym placeholders inside syntax quotes", async () => {
-    const source = "`(let [foo# 1 bar# foo#] bar#)";
+  test("parses gensym placeholders inside quote forms", async () => {
+    const source = "(quote (let [foo# 1 bar# foo#] bar#))";
     const result = await parseSource(source);
 
     expect(result.ok).toBeTrue();
     expect(result.diagnostics).toHaveLength(0);
     const programBody = result.program.body[0];
-    expect(programBody?.kind).toBe(NodeKind.SyntaxQuote);
-    if (!programBody || programBody.kind !== NodeKind.SyntaxQuote) {
-      throw new Error("Expected syntax quote node");
+    expect(programBody?.kind).toBe(NodeKind.Quote);
+    if (!programBody || programBody.kind !== NodeKind.Quote) {
+      throw new Error("Expected quote node");
     }
     const target = programBody.target;
     if (!target || target.kind !== NodeKind.List) {
       throw new Error("Expected list expression inside syntax quote");
     }
-    const vector = target.elements[1];
-    if (!vector || vector.kind !== NodeKind.Vector) {
-      throw new Error("Expected binding vector inside syntax quote");
+    const bindings = target.elements[1];
+    if (!bindings || bindings.kind !== NodeKind.List) {
+      throw new Error("Expected binding list inside syntax quote");
     }
     const placeholderSymbols = target.elements
-      .concat(vector.elements)
+      .concat(bindings.elements)
       .filter(
         (node): node is SymbolNode =>
           Boolean(node) && node.kind === NodeKind.Symbol

@@ -5,7 +5,7 @@
 (def favorite-number 42)
 
 (defmacro a [x]
-  `(println (unquote x)))
+  (quote (println (unquote x))))
 
 (defn greet [name]
   (a name)
@@ -25,4 +25,4 @@
   :else (println "Just a number."))
 
 (println (cons 1 [1 2 3]))
-`(or 1 2)
+(quote (or 1 2))

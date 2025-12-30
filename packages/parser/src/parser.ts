@@ -9,12 +9,10 @@ import {
   type ListNode,
   type NamespaceImportNode,
   type ProgramNode,
-  type ReaderMacroKind,
   type ReaderMacroNode,
   type ScopeId,
   type SequenceNode,
   type SequenceNodeKind,
-  type VectorNode,
   type SourcePosition,
   type SourceSpan,
   type Token,
@@ -110,17 +108,12 @@ export class Parser {
       }
       case TokenType.LeftBracket:
         return this.parseSequenceNode({
-          kind: NodeKind.Vector,
+          kind: NodeKind.List,
           open: token,
           closing: TokenType.RightBracket,
-          structure: "vector literal",
-          unterminatedCode: "PARSE_VECTOR_UNTERMINATED",
+          structure: "list",
+          unterminatedCode: "PARSE_LIST_UNTERMINATED",
         });
-
-      case TokenType.Quote:
-        return this.parseReaderMacro(NodeKind.Quote, token);
-      case TokenType.SyntaxQuote:
-        return this.parseReaderMacro(NodeKind.SyntaxQuote, token);
 
       case TokenType.Number:
         return this.createAtomNode(
@@ -201,6 +194,9 @@ export class Parser {
     if (!head || head.kind !== NodeKind.Symbol) {
       return node;
     }
+    if (head.value === "quote" && node.elements.length <= 2) {
+      return this.createQuoteNode(node);
+    }
     if (head.value === "require" || head.value === "external") {
       return {
         kind: NodeKind.NamespaceImport,
@@ -226,28 +222,21 @@ export class Parser {
     return node;
   }
 
-  private async parseReaderMacro<K extends ReaderMacroKind>(
-    kind: K,
-    macroToken: Token
-  ): Promise<ReaderMacroNode<K>> {
-    let target: ExpressionNode | null = null;
-    if (!(await this.isExpressionTerminator())) {
-      target = await this.parseExpression();
-    }
+  private createQuoteNode(node: ListNode): ReaderMacroNode<NodeKind.Quote> {
+    const target = node.elements[1] ?? null;
     if (!target) {
       this.report(
         "Reader macro requires a following form",
-        macroToken.span.start,
-        macroToken.span.end,
+        node.span.start,
+        node.span.end,
         "PARSE_MACRO_MISSING_TARGET"
       );
     }
-    const endRef: SpanCarrier = (target ?? macroToken) as SpanCarrier;
     return {
-      kind,
-      target: target ?? null,
-      span: this.spanFromRefs(macroToken, endRef),
-    } satisfies ReaderMacroNode<K>;
+      kind: NodeKind.Quote,
+      target,
+      span: node.span,
+    } satisfies ReaderMacroNode<NodeKind.Quote>;
   }
 
   private createAtomNode<T>(
@@ -360,11 +349,6 @@ export class Parser {
         return "[";
       case TokenType.RightBracket:
         return "]";
-      case TokenType.Quote:
-        return "'";
-      case TokenType.SyntaxQuote:
-        return "`";
-
       default:
         return kind;
     }
@@ -464,11 +448,7 @@ class ScopeAnnotator {
       case NodeKind.NamespaceImport:
         this.annotateNamespaceImport(node as NamespaceImportNode, scopeId);
         break;
-      case NodeKind.Vector:
-        this.annotateSequence(node as VectorNode, scopeId);
-        break;
       case NodeKind.Quote:
-      case NodeKind.SyntaxQuote:
         this.annotateReaderMacro(node as ReaderMacroNode, scopeId);
         break;
 
@@ -518,7 +498,7 @@ class ScopeAnnotator {
 
   private annotateLet(node: ListNode, parentScopeId: ScopeId): void {
     const bindingsNode = node.elements[1];
-    if (!bindingsNode || bindingsNode.kind !== NodeKind.Vector) {
+    if (!bindingsNode || bindingsNode.kind !== NodeKind.List) {
       for (let index = 1; index < node.elements.length; index += 1) {
         const element = node.elements[index];
         if (element) {
@@ -559,7 +539,7 @@ class ScopeAnnotator {
 
     const fnScopeId = this.allocateScopeId();
     const paramsNode = node.elements[1];
-    if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+    if (paramsNode && paramsNode.kind === NodeKind.List) {
       this.assignScope(paramsNode, parentScopeId);
       for (const param of paramsNode.elements) {
         if (param) {
@@ -661,7 +641,7 @@ class ScopeAnnotator {
       this.assignScope(clause, parentScopeId);
       const clauseScopeId = this.allocateScopeId();
       const paramsNode = clause.elements[0];
-      if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+      if (paramsNode && paramsNode.kind === NodeKind.List) {
         this.assignScope(paramsNode, parentScopeId);
         for (const param of paramsNode.elements) {
           if (param) {
@@ -676,14 +656,6 @@ class ScopeAnnotator {
         if (element) {
           this.annotateExpression(element, clauseScopeId);
         }
-      }
-    }
-  }
-
-  private annotateSequence(node: VectorNode, scopeId: ScopeId): void {
-    for (const element of node.elements) {
-      if (element) {
-        this.annotateExpression(element, scopeId);
       }
     }
   }

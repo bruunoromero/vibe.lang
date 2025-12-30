@@ -93,14 +93,6 @@ export class Lexer {
           this.addToken(TokenType.RightBracket, start);
           continue;
         /* brace tokens removed */
-        case "'":
-          await this.advance();
-          this.addToken(TokenType.Quote, start);
-          continue;
-        case "`":
-          await this.advance();
-          this.addToken(TokenType.SyntaxQuote, start);
-          continue;
         // '#' reader-dispatch removed; preserve '#!' shebang handling elsewhere
         case '"':
           await this.readString(start);

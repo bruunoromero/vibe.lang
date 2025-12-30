@@ -4,19 +4,19 @@ import {
   type KeywordNode,
   type SourceSpan,
   type SymbolNode,
-  type VectorNode,
+  type ListNode,
 } from "./index";
 
-export type BindingPattern = SymbolBindingPattern | VectorBindingPattern;
+export type BindingPattern = SymbolBindingPattern | SequenceBindingPattern;
 
 export interface SymbolBindingPattern {
   readonly kind: "symbol";
   readonly node: SymbolNode;
 }
 
-export interface VectorBindingPattern {
-  readonly kind: "vector";
-  readonly node: VectorNode;
+export interface SequenceBindingPattern {
+  readonly kind: "sequence";
+  readonly node: ListNode;
   readonly elements: readonly BindingPattern[];
   readonly rest?: BindingPattern;
   readonly as?: SymbolNode;
@@ -70,7 +70,7 @@ export const parseBindingPattern = (
           : [
               {
                 kind: "PatternUnsupportedNode",
-                message: "Binding pattern must be a symbol or vector",
+                message: "Binding pattern must be a symbol or list",
                 span: node.span,
               },
             ],
@@ -86,12 +86,12 @@ const parsePattern = (
   switch (node.kind) {
     case NodeKind.Symbol:
       return registerSymbolPattern(node, context);
-    case NodeKind.Vector:
-      return parseVectorPattern(node, context);
+    case NodeKind.List:
+      return parseSequencePattern(node, context);
     default:
       context.errors.push({
         kind: "PatternUnsupportedNode",
-        message: "Binding pattern must be a symbol or vector",
+        message: "Binding pattern must be a symbol or list",
         span: node.span,
       });
       return null;
@@ -118,10 +118,10 @@ const registerSymbolPattern = (
   return { kind: "symbol", node };
 };
 
-const parseVectorPattern = (
-  node: VectorNode,
+const parseSequencePattern = (
+  node: ListNode,
   context: PatternContext
-): VectorBindingPattern | null => {
+): SequenceBindingPattern | null => {
   const elements: BindingPattern[] = [];
   let rest: BindingPattern | undefined;
   let asAlias: SymbolNode | undefined;
@@ -136,7 +136,7 @@ const parseVectorPattern = (
       if (rest) {
         context.errors.push({
           kind: "PatternRestDuplicate",
-          message: "Vector pattern allows only one & rest binding",
+          message: "Sequence pattern allows only one & rest binding",
           span: element.span,
         });
         continue;
@@ -169,7 +169,7 @@ const parseVectorPattern = (
       } else if (asAlias) {
         context.errors.push({
           kind: "PatternAsDuplicate",
-          message: "Vector pattern allows only one :as alias",
+          message: "Sequence pattern allows only one :as alias",
           span: aliasNode.span,
         });
       } else {
@@ -187,12 +187,12 @@ const parseVectorPattern = (
   }
 
   return {
-    kind: "vector",
+    kind: "sequence",
     node,
     elements,
     ...(rest ? { rest } : {}),
     ...(asAlias ? { as: asAlias } : {}),
-  } satisfies VectorBindingPattern;
+  } satisfies SequenceBindingPattern;
 };
 
 /* Map-related helpers removed */

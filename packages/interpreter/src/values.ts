@@ -9,7 +9,6 @@ import type {
   BooleanNode,
   NilNode,
   ListNode,
-  VectorNode,
   BindingPattern,
 } from "@vibe/syntax";
 import { NodeKind as NK } from "@vibe/syntax";
@@ -29,7 +28,6 @@ export type Value =
   | SymbolValue
   | KeywordValue
   | ListValue
-  | VectorValue
   | FunctionValue
   | BuiltinValue
   | ExternalNamespaceValue
@@ -66,11 +64,6 @@ export interface KeywordValue {
 
 export interface ListValue {
   readonly kind: "list";
-  readonly elements: readonly Value[];
-}
-
-export interface VectorValue {
-  readonly kind: "vector";
   readonly elements: readonly Value[];
 }
 
@@ -141,9 +134,6 @@ export const isKeyword = (value: Value): value is KeywordValue =>
 export const isList = (value: Value): value is ListValue =>
   value.kind === "list";
 
-export const isVector = (value: Value): value is VectorValue =>
-  value.kind === "vector";
-
 export const isFunction = (value: Value): value is FunctionValue =>
   value.kind === "function";
 
@@ -155,8 +145,7 @@ export const isCallable = (
 ): value is FunctionValue | BuiltinValue =>
   isFunction(value) || isBuiltin(value);
 
-export const isSequence = (value: Value): value is ListValue | VectorValue =>
-  isList(value) || isVector(value);
+export const isSequence = (value: Value): value is ListValue => isList(value);
 
 export const isErrorValue = (value: Value): value is ErrorValue =>
   value.kind === "error";
@@ -184,9 +173,8 @@ export const valuesEqual = (a: Value, b: Value): boolean => {
       return a.value === (b as SymbolValue).value;
     case "keyword":
       return a.value === (b as KeywordValue).value;
-    case "list":
-    case "vector": {
-      const bSeq = b as ListValue | VectorValue;
+    case "list": {
+      const bSeq = b as ListValue;
       if (a.elements.length !== bSeq.elements.length) return false;
       return a.elements.every((elem, i) =>
         valuesEqual(elem, bSeq.elements[i]!)
@@ -272,15 +260,6 @@ export const valueToNode = (value: Value, span: SourceSpan): ExpressionNode => {
       };
       return node;
     }
-    case "vector": {
-      const node: VectorNode = {
-        kind: NK.Vector,
-        span,
-        elements: value.elements.map((elem) => valueToNode(elem, span)),
-      };
-      return node;
-    }
-
     case "function":
       throw new Error(
         "Cannot convert function value to AST node (functions are not serializable)"
@@ -319,14 +298,6 @@ export const nodeToValue = (node: ExpressionNode): Value => {
           .filter((e): e is ExpressionNode => e !== null)
           .map(nodeToValue),
       };
-    case NK.Vector:
-      return {
-        kind: "vector",
-        elements: node.elements
-          .filter((e): e is ExpressionNode => e !== null)
-          .map(nodeToValue),
-      };
-
     default:
       throw new Error(
         `Cannot convert AST node kind ${node.kind} to literal value`
@@ -370,11 +341,6 @@ export const makeError = (error: Error): ErrorValue => ({
 
 export const makeList = (elements: readonly Value[]): ListValue => ({
   kind: "list",
-  elements,
-});
-
-export const makeVector = (elements: readonly Value[]): VectorValue => ({
-  kind: "vector",
   elements,
 });
 

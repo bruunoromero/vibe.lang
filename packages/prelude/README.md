@@ -37,8 +37,8 @@ For compiled code that needs stdlib functions, you would typically include a pre
 (def map (fn [f coll]
   (if (runtime/eq* (runtime/count coll) 0)
     []
-    (runtime/cons (f (runtime/first coll))
-                  (map f (runtime/rest coll))))))
+        (cons (f (first coll))
+          (map f (rest coll))))))
 ```
 
 ## Provided Functions

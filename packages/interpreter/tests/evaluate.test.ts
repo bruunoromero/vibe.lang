@@ -282,8 +282,8 @@ describe("Interpreter - Special Forms", () => {
     expect(result.value?.kind).toBe("list");
   });
 
-  test("syntax quote produces literal structures", async () => {
-    const result = await evalSource("`(alpha beta)");
+  test("quote produces literal structures", async () => {
+    const result = await evalSource("(quote (alpha beta))");
     expect(result.ok).toBeTrue();
     expect(result.value).toMatchObject({
       kind: "list",
@@ -294,10 +294,10 @@ describe("Interpreter - Special Forms", () => {
     });
   });
 
-  test("syntax quote evaluates unquote and splicing", async () => {
+  test("quote evaluates unquote and splicing helpers", async () => {
     const result = await evalMulti(`
       (def xs (quote (1 2)))
-      \`(list (unquote-splicing xs) (unquote (if true 3 4)))
+      (quote (list (spread (unquote xs)) (unquote (if true 3 4))))
     `);
     expect(result.ok).toBeTrue();
     expect(result.value).toMatchObject({
@@ -375,7 +375,7 @@ describe("Interpreter - Special Forms", () => {
 describe("Interpreter - Functions", () => {
   test("define and call function", async () => {
     const result = await evalMulti(
-      "(def add (fn+ [x y] (runtime/add* x y))) (add 3 4)",
+      "(def add (fn+ ([x y] (runtime/add* x y)))) (add 3 4)",
       true
     );
     expect(result.ok).toBeTrue();
@@ -384,7 +384,7 @@ describe("Interpreter - Functions", () => {
 
   test("function with single parameter", async () => {
     const result = await evalMulti(
-      "(def double (fn+ [x] (runtime/mul* x 2))) (double 5)",
+      "(def double (fn+ ([x] (runtime/mul* x 2)))) (double 5)",
       true
     );
     expect(result.ok).toBeTrue();
@@ -393,7 +393,7 @@ describe("Interpreter - Functions", () => {
 
   test("function closes over environment", async () => {
     const result = await evalMulti(
-      "(def make-adder (fn+ [x] (fn+ [y] (runtime/add* x y)))) (def add5 (make-adder 5)) (add5 3)",
+      "(def make-adder (fn+ ([x] (fn+ ([y] (runtime/add* x y)))))) (def add5 (make-adder 5)) (add5 3)",
       true
     );
     expect(result.ok).toBeTrue();
@@ -411,7 +411,7 @@ describe("Interpreter - Functions", () => {
 
   test("function with mixed and rest parameters", async () => {
     const parseResult = await parseSource(
-      "(def f (fn+ [x & rest] x)) (f 42 1 2 3)"
+      "(def f (fn+ ([x & rest] x))) (f 42 1 2 3)"
     );
     const env = createRootEnvironment();
     await evaluate(parseResult.program.body[0]!, env);
@@ -420,19 +420,30 @@ describe("Interpreter - Functions", () => {
     expect(result.value).toEqual({ kind: "number", value: 42 });
   });
 
+  test("fn+ rejects inline parameter lists", async () => {
+    const result = await evalSource("(fn+ [x] x)");
+    expect(result.ok).toBeFalse();
+    expect(
+      result.diagnostics.some((d) => d.code === "INTERP_FN_REQUIRES_CLAUSES")
+    ).toBeTrue();
+  });
+
   test("multi-arity function dispatches the matching clause", async () => {
     const result = await evalMulti(`
+      (def list (fn+ ([& xs] xs)))
       (def picker
         (fn+
           ([x] 1)
           ([x y] 2)
           ([x y & rest] 3)))
-      [(picker 10) (picker 1 2) (picker 1 2 3)]
+      (list (picker 10) (picker 1 2) (picker 1 2 3))
     `);
     expect(result.ok).toBeTrue();
-    const vector = result.value as any;
-    expect(vector.kind).toBe("vector");
-    expect(vector.elements.map((elem: any) => elem.value)).toEqual([1, 2, 3]);
+    const listValue = result.value as any;
+    expect(listValue.kind).toBe("list");
+    expect(listValue.elements.map((elem: any) => elem.value)).toEqual([
+      1, 2, 3,
+    ]);
   });
 
   test("multi-arity function reports missing clauses", async () => {
@@ -448,42 +459,23 @@ describe("Interpreter - Functions", () => {
 });
 
 describe("Interpreter - Collections", () => {
-  test("evaluate vector", async () => {
-    const result = await evalSource("[1 2 3]");
+  test("bracket syntax behaves like parentheses", async () => {
+    const result = await evalSource("[runtime/add* 2 3]", true);
     expect(result.ok).toBeTrue();
-    expect(result.value?.kind).toBe("vector");
-    expect((result.value as any).elements).toHaveLength(3);
+    expect(result.value).toEqual({ kind: "number", value: 5 });
   });
 
-  test("evaluate nested vectors", async () => {
-    const result = await evalSource("[[1 2] [3 4]]");
+  test("brackets support inline function calls", async () => {
+    const result = await evalSource("[(fn+ ([x] (runtime/mul* x 2))) 5]", true);
     expect(result.ok).toBeTrue();
-    expect(result.value?.kind).toBe("vector");
+    expect(result.value).toEqual({ kind: "number", value: 10 });
   });
+});
 
-  test("vector with expressions", async () => {
-    const result = await evalSource(
-      "[(runtime/add* 1 2) (runtime/mul* 3 4)]",
-      true
-    );
-    expect(result.ok).toBeTrue();
-    expect(result.value?.kind).toBe("vector");
-    const vec = result.value as any;
-    expect(vec.elements[0]).toEqual({ kind: "number", value: 3 });
-    expect(vec.elements[1]).toEqual({ kind: "number", value: 12 });
-  });
-
-  test("vector supports runtime spread (splice a vector)", async () => {
-    const result = await evalMulti(`(def nums [1 2 3]) [0 (spread nums) 4]`);
-    expect(result.ok).toBeTrue();
-    expect(result.value?.kind).toBe("vector");
-    const vec = result.value as any;
-    expect(vec.elements.map((e: any) => e.value)).toEqual([0, 1, 2, 3, 4]);
-  });
-
+describe("Interpreter - Spread", () => {
   test("function call supports runtime spread in args", async () => {
     const result = await evalMulti(
-      `(def nums [1 2 3]) (def f (fn+ [& xs] (runtime/count xs))) (f (spread nums))`,
+      `(def nums (quote (1 2 3))) (def f (fn+ ([& xs] (runtime/count xs)))) (f (spread nums))`,
       true
     );
     expect(result.ok).toBeTrue();
@@ -505,8 +497,8 @@ describe("Interpreter - Sequence Operations", () => {
   //   expect((result.value as any).elements).toHaveLength(2);
   // });
 
-  test("count of vector", async () => {
-    const result = await evalSource("(runtime/count [1 2 3 4])", true);
+  test("count of bracketed list", async () => {
+    const result = await evalSource("(runtime/count (quote (1 2 3 4)))", true);
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "number", value: 4 });
   });
@@ -612,8 +604,8 @@ describe("Interpreter - Utility", () => {
     expect((result.value as any).value).toContain("temp");
   });
 
-  test("syntax quote auto gensym placeholders reuse generated names", async () => {
-    const result = await evalSource("`(let [foo# 1] foo#)");
+  test("quote auto gensym placeholders reuse generated names", async () => {
+    const result = await evalSource("(quote (let [foo# 1] foo#))");
     expect(result.ok).toBeTrue();
     const quoted = result.value;
     expect(quoted?.kind).toBe("list");
@@ -621,9 +613,9 @@ describe("Interpreter - Utility", () => {
       throw new Error("Expected list value");
     }
     const [_letSym, bindings, usage] = quoted.elements;
-    expect(bindings?.kind).toBe("vector");
-    if (!bindings || bindings.kind !== "vector") {
-      throw new Error("Expected vector bindings");
+    expect(bindings?.kind).toBe("list");
+    if (!bindings || bindings.kind !== "list") {
+      throw new Error("Expected list bindings");
     }
     const bindingSymbol = bindings.elements[0];
     expect(bindingSymbol?.kind).toBe("symbol");
@@ -634,8 +626,8 @@ describe("Interpreter - Utility", () => {
     }
   });
 
-  test("syntax quote forbids namespace-qualified auto gensyms", async () => {
-    const result = await evalSource("`alias/foo#");
+  test("quote forbids namespace-qualified auto gensyms", async () => {
+    const result = await evalSource("(quote alias/foo#)");
     expect(result.ok).toBeFalse();
     expect(result.diagnostics[0]?.code).toBe("INTERP_SYNTAX_GENSYM_NAMESPACE");
   });
@@ -657,54 +649,56 @@ describe("Interpreter - Module Imports", () => {
   });
 
   describe("Interpreter - Destructuring", () => {
-    test("let destructures vector and map bindings", async () => {
-      const result = await evalSource(
+    test("let destructures bracketed bindings", async () => {
+      const result = await evalMulti(
         `
-        (let [[x y & rest :as full] [1 2 3 4]
+        (def list (fn+ ([& xs] xs)))
+        (let [[x y & rest :as full] (quote (1 2 3 4))
               bonus (runtime/add* x 3)
-              meta []]
-          [x y rest full bonus meta])
+              meta (quote ())]
+          (list x y rest full bonus meta))
       `,
         true
       );
 
       expect(result.ok).toBeTrue();
-      const vector = result.value as any;
-      expect(vector?.kind).toBe("vector");
-      const [x, y, rest, full, bonus, meta] = vector?.elements ?? [];
+      const listValue = result.value as any;
+      expect(listValue?.kind).toBe("list");
+      const [x, y, rest, full, bonus, meta] = listValue?.elements ?? [];
       expect(x).toMatchObject({ kind: "number", value: 1 });
       expect(y).toMatchObject({ kind: "number", value: 2 });
-      expect(rest).toMatchObject({ kind: "vector" });
+      expect(rest).toMatchObject({ kind: "list" });
       expect(rest?.elements?.map((element: any) => element.value)).toEqual([
         3, 4,
       ]);
-      expect(full).toMatchObject({ kind: "vector" });
+      expect(full).toMatchObject({ kind: "list" });
       expect(full?.elements?.map((element: any) => element.value)).toEqual([
         1, 2, 3, 4,
       ]);
       expect(bonus).toMatchObject({ kind: "number", value: 4 });
-      expect(meta).toMatchObject({ kind: "vector" });
+      expect(meta).toMatchObject({ kind: "list" });
       expect(meta?.elements?.length).toBe(0);
     });
 
-    test("fn destructures vector parameters", async () => {
+    test("fn destructures bracketed parameters", async () => {
       const result = await evalMulti(
         `
+        (def list (fn+ ([& xs] xs)))
         (def describe
-          (fn+ [[x y & tail] bonus]
-            [x y tail bonus]))
-        (describe [10 20 30] 7)
+          (fn+ ([[x y & tail] bonus]
+            (list x y tail bonus))))
+        (describe (quote (10 20 30)) 7)
       `,
         true
       );
 
       expect(result.ok).toBeTrue();
-      const vector = result.value as any;
-      expect(vector?.kind).toBe("vector");
-      const [x, y, tail, bonus, extra] = vector?.elements ?? [];
+      const listValue = result.value as any;
+      expect(listValue?.kind).toBe("list");
+      const [x, y, tail, bonus, extra] = listValue?.elements ?? [];
       expect(x).toMatchObject({ kind: "number", value: 10 });
       expect(y).toMatchObject({ kind: "number", value: 20 });
-      expect(tail).toMatchObject({ kind: "vector" });
+      expect(tail).toMatchObject({ kind: "list" });
       expect(tail?.elements?.map((element: any) => element.value)).toEqual([
         30,
       ]);
@@ -727,13 +721,14 @@ describe("Interpreter - Module Imports", () => {
 
   test("import makes all module definitions available", async () => {
     const source = `
+      (def list (fn+ ([& xs] xs)))
       (import "${IMPORT_FIXTURE}")
-      (def result [pulled (greet)])
+      (def result (list pulled (greet)))
       result
     `;
     const result = await evalMulti(source);
     expect(result.ok).toBeTrue();
-    expect(result.value?.kind).toBe("vector");
+    expect(result.value?.kind).toBe("list");
     const elements = (result.value as any)?.elements;
     expect(elements).toBeDefined();
     expect(elements).toHaveLength(2);
@@ -758,7 +753,7 @@ describe("Interpreter - Error Handling", () => {
 
   test("arity mismatch - too few args", async () => {
     const parseResult = await parseSource(
-      "(def f (fn+ [x y] (runtime/add* x y))) (f 1)"
+      "(def f (fn+ ([x y] (runtime/add* x y)))) (f 1)"
     );
     const env = createRootEnvironment();
     await evaluate(parseResult.program.body[0]!, env);
@@ -769,7 +764,7 @@ describe("Interpreter - Error Handling", () => {
 
   test("arity mismatch - too many args", async () => {
     const parseResult = await parseSource(
-      "(def f (fn+ [x] (* x 2))) (f 1 2 3)"
+      "(def f (fn+ ([x] (* x 2)))) (f 1 2 3)"
     );
     const env = createRootEnvironment();
     await evaluate(parseResult.program.body[0]!, env);

@@ -3,8 +3,6 @@ export enum TokenType {
   RightParen = "right_paren",
   LeftBracket = "left_bracket",
   RightBracket = "right_bracket",
-  Quote = "quote",
-  SyntaxQuote = "syntax_quote",
   Number = "number",
   String = "string",
   Symbol = "symbol",
@@ -80,9 +78,7 @@ export const createSpan = (
 export enum NodeKind {
   Program = "program",
   List = "list",
-  Vector = "vector",
   Quote = "quote",
-  SyntaxQuote = "syntax_quote",
   Symbol = "symbol",
   Keyword = "keyword",
   Number = "number",
@@ -109,7 +105,6 @@ export const BUILTIN_SYMBOLS = [
   "gensym",
   "spread",
   "unquote",
-  "unquote-splicing",
 ] as const;
 
 export interface AstNode<K extends NodeKind = NodeKind> {
@@ -122,16 +117,15 @@ export interface ProgramNode extends AstNode<NodeKind.Program> {
   readonly body: readonly ExpressionNode[];
 }
 
-export type SequenceNodeKind = NodeKind.List | NodeKind.Vector;
+export type SequenceNodeKind = NodeKind.List;
 
 export interface SequenceNode<K extends SequenceNodeKind> extends AstNode<K> {
   readonly elements: readonly ExpressionNode[];
 }
 
 export type ListNode = SequenceNode<NodeKind.List>;
-export type VectorNode = SequenceNode<NodeKind.Vector>;
 
-export type ReaderMacroKind = NodeKind.Quote | NodeKind.SyntaxQuote;
+export type ReaderMacroKind = NodeKind.Quote;
 
 export interface ReaderMacroNode<K extends ReaderMacroKind = ReaderMacroKind>
   extends AstNode<K> {
@@ -180,7 +174,6 @@ export type AtomNode =
 
 export type ExpressionNode =
   | ListNode
-  | VectorNode
   | ReaderMacroNode
   | NamespaceImportNode
   | AtomNode;

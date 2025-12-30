@@ -3,7 +3,6 @@ import type {
   NodeKind,
   SourceSpan,
   ListNode,
-  VectorNode,
   Diagnostic,
   NamespaceImportNode,
   ReaderMacroNode,
@@ -44,11 +43,9 @@ import {
   makeKeyword,
   makeError,
   makeList,
-  makeVector,
   makeFunction,
   makeBuiltin,
   makeExternalNamespace,
-  isSequence,
   isErrorValue,
 } from "./values";
 
@@ -184,8 +181,6 @@ const evaluateNode = async (
       return evaluateSymbol(node.value, node.span, env);
     case NK.List:
       return await evaluateList(node, env, context);
-    case NK.Vector:
-      return await evaluateVector(node, env, context);
     case NK.NamespaceImport:
       // NamespaceImportNodes are promoted from lists, handle them as special forms
       if (node.importKind === "require") {
@@ -196,21 +191,6 @@ const evaluateNode = async (
         return evaluateExternal(node, env, context);
       }
     case NK.Quote:
-      if (!node.target) {
-        return {
-          ok: false,
-          diagnostics: [
-            {
-              message: "Quote expression is missing target",
-              span: node.span,
-              severity: DiagnosticSeverity.Error,
-              code: "INTERP_QUOTE_MISSING_TARGET",
-            },
-          ],
-        };
-      }
-      return evaluateQuote(node.target, env);
-    case NK.SyntaxQuote:
       return await evaluateSyntaxQuote(node as ReaderMacroNode, env, context);
     default:
       return {
@@ -398,7 +378,7 @@ const evaluateList = async (
           continue;
         }
         const spreadVal = spreadResult.value!;
-        if (spreadVal.kind === "vector" || spreadVal.kind === "list") {
+        if (spreadVal.kind === "list") {
           for (const item of spreadVal.elements) {
             args.push(item);
           }
@@ -406,7 +386,7 @@ const evaluateList = async (
         }
         // Non-sequence values cannot be spliced
         diagnostics.push({
-          message: "spread expects a sequence (vector or list) to splice",
+          message: "spread expects a list to splice",
           span: argNode.span,
           severity: DiagnosticSeverity.Error,
           code: "INTERP_SPREAD_NOT_SEQUENCE",
@@ -430,67 +410,6 @@ const evaluateList = async (
   return await applyFunction(fn, args, node.span, context);
 };
 
-const evaluateVector = async (
-  node: VectorNode,
-  env: Environment,
-  context: EvalContext
-): Promise<EvalResult> => {
-  const elements: Value[] = [];
-  const diagnostics: Diagnostic[] = [];
-
-  for (const elem of node.elements) {
-    if (!elem) continue;
-    // Support runtime splicing via (spread <expr>) as vector elements
-    if (elem.kind === NK.List) {
-      const head = elem.elements[0];
-      if (head && head.kind === NK.Symbol && head.value === "spread") {
-        const inner = elem.elements[1];
-        if (!inner) {
-          diagnostics.push({
-            message: "spread requires a value expression",
-            span: elem.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_SPREAD_REQUIRES_VALUE",
-          });
-          continue;
-        }
-        const spreadResult = await evaluateNode(inner, env, context);
-        if (!spreadResult.ok) {
-          diagnostics.push(...spreadResult.diagnostics);
-          continue;
-        }
-        const spreadVal = spreadResult.value!;
-        if (spreadVal.kind === "vector" || spreadVal.kind === "list") {
-          for (const item of spreadVal.elements) {
-            elements.push(item);
-          }
-          continue;
-        }
-        diagnostics.push({
-          message: "spread expects a sequence (vector or list) to splice",
-          span: elem.span,
-          severity: DiagnosticSeverity.Error,
-          code: "INTERP_SPREAD_NOT_SEQUENCE",
-        });
-        continue;
-      }
-    }
-
-    const elemResult = await evaluateNode(elem, env, context);
-    if (!elemResult.ok) {
-      diagnostics.push(...elemResult.diagnostics);
-      continue;
-    }
-    elements.push(elemResult.value!);
-  }
-
-  if (diagnostics.length > 0) {
-    return { ok: false, diagnostics };
-  }
-
-  return { ok: true, value: makeVector(elements), diagnostics: [] };
-};
-
 /* Map evaluation removed */
 
 const tryEvaluateSpecialForm = async (
@@ -510,8 +429,6 @@ const tryEvaluateSpecialForm = async (
       return evaluateFn(node, env);
     case "if":
       return await evaluateIf(node, env, context);
-    case "quote":
-      return evaluateQuoteForm(node, env);
     case "try":
       return await evaluateTry(node, env, context);
     case "throw":
@@ -592,7 +509,22 @@ const evaluateDef = async (
 };
 
 const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
-  const clauses = collectFnClauses(node);
+  const clauseResult = collectFnClauses(node);
+  if (!clauseResult.ok) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message:
+            "fn requires clauses of the form ([args] body ...) passed as arguments",
+          span: clauseResult.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_FN_REQUIRES_CLAUSES",
+        },
+      ],
+    };
+  }
+  const clauses = clauseResult.clauses;
   const errorResult = (message: string, span: SourceSpan, code: string) => ({
     ok: false,
     diagnostics: [
@@ -605,14 +537,6 @@ const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
     ],
   });
 
-  if (clauses.length === 0) {
-    return errorResult(
-      "fn requires a parameter vector",
-      node.span,
-      "INTERP_FN_REQUIRES_VECTOR"
-    );
-  }
-
   const functionClauses: FunctionClauseValue[] = [];
   const seenFixedArities = new Set<number>();
   let variadicClauseIndex: number | null = null;
@@ -620,11 +544,11 @@ const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
   for (let clauseIndex = 0; clauseIndex < clauses.length; clauseIndex += 1) {
     const clause = clauses[clauseIndex]!;
     const paramsNode = clause.paramsNode;
-    if (!paramsNode || paramsNode.kind !== NK.Vector) {
+    if (!paramsNode || paramsNode.kind !== NK.List) {
       return errorResult(
-        "fn requires a parameter vector",
+        "fn requires a parameter list",
         paramsNode?.span ?? clause.span,
-        "INTERP_FN_REQUIRES_VECTOR"
+        "INTERP_FN_REQUIRES_LIST"
       );
     }
 
@@ -725,123 +649,36 @@ const evaluateFn = (node: ListNode, env: Environment): EvalResult => {
   return { ok: true, value: fn, diagnostics: [] };
 };
 
-const collectFnClauses = (node: ListNode): EvaluatorFnClause[] => {
-  const paramsNode = node.elements[1];
-  if (paramsNode && paramsNode.kind === NK.Vector) {
-    return [
-      {
-        paramsNode,
-        bodyNodes: node.elements
-          .slice(2)
-          .filter((element): element is ExpressionNode => Boolean(element)),
-        span: node.span,
-      },
-    ];
-  }
+const isFnClauseNode = (node: ListNode | null | undefined): node is ListNode =>
+  Boolean(node && node.kind === NK.List && node.elements[0]?.kind === NK.List);
 
+type CollectFnClausesResult =
+  | { ok: true; clauses: EvaluatorFnClause[] }
+  | { ok: false; span: SourceSpan };
+
+const collectFnClauses = (node: ListNode): CollectFnClausesResult => {
   const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
   if (tail.length === 0) {
-    return [];
+    return { ok: false, span: node.span };
   }
 
-  const clauseLists = tail.filter(
-    (element): element is ListNode => element.kind === NK.List
+  const invalid = tail.find(
+    (element) =>
+      element.kind !== NK.List || !isFnClauseNode(element as ListNode)
   );
-  if (clauseLists.length !== tail.length) {
-    return [];
+  if (invalid) {
+    return { ok: false, span: invalid.span };
   }
 
-  return clauseLists.map((clause) => ({
+  const clauses = (tail as ListNode[]).map((clause) => ({
     paramsNode: clause.elements[0] ?? null,
     bodyNodes: clause.elements
       .slice(1)
       .filter((element): element is ExpressionNode => Boolean(element)),
     span: clause.span,
   }));
-};
 
-const evaluateQuoteForm = (node: ListNode, env: Environment): EvalResult => {
-  const target = node.elements[1];
-  if (!target) {
-    return {
-      ok: false,
-      diagnostics: [
-        {
-          message: "quote requires a target expression",
-          span: node.span,
-          severity: DiagnosticSeverity.Error,
-          code: "INTERP_QUOTE_REQUIRES_TARGET",
-        },
-      ],
-    };
-  }
-  return evaluateQuote(target, env);
-};
-
-/**
- * Convert an AST node to a quoted Value without evaluation.
- * This turns symbols into symbol values, lists into list values, etc.
- */
-const evaluateQuote = (node: ExpressionNode, env: Environment): EvalResult => {
-  switch (node.kind) {
-    case NK.Number:
-      return { ok: true, value: makeNumber(node.value), diagnostics: [] };
-    case NK.String:
-      return { ok: true, value: makeString(node.value), diagnostics: [] };
-    case NK.Boolean:
-      return { ok: true, value: makeBoolean(node.value), diagnostics: [] };
-    case NK.Nil:
-      return { ok: true, value: makeNil(), diagnostics: [] };
-    case NK.Symbol:
-      return { ok: true, value: makeSymbol(node.value), diagnostics: [] };
-    case NK.List: {
-      const elements: Value[] = [];
-      for (const elem of node.elements) {
-        const result = evaluateQuote(elem, env);
-        if (!result.ok) return result;
-        elements.push(result.value!);
-      }
-      return { ok: true, value: makeList(elements), diagnostics: [] };
-    }
-    case NK.Vector: {
-      const elements: Value[] = [];
-      for (const elem of node.elements) {
-        const result = evaluateQuote(elem, env);
-        if (!result.ok) return result;
-        elements.push(result.value!);
-      }
-      return { ok: true, value: makeVector(elements), diagnostics: [] };
-    }
-
-    case NK.Quote:
-      // Nested quote - just quote the target
-      if (!node.target) {
-        return {
-          ok: false,
-          diagnostics: [
-            {
-              message: "Quote expression is missing target",
-              span: node.span,
-              severity: DiagnosticSeverity.Error,
-              code: "INTERP_QUOTE_MISSING_TARGET",
-            },
-          ],
-        };
-      }
-      return evaluateQuote(node.target, env);
-    default:
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: `Cannot quote node kind: ${node.kind}`,
-            span: node.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_QUOTE_UNSUPPORTED",
-          },
-        ],
-      };
-  }
+  return { ok: true, clauses };
 };
 
 const evaluateSyntaxQuote = async (
@@ -913,40 +750,15 @@ const instantiateSyntaxNode = async (
       if (isUnquoteCall(node)) {
         return await handleUnquoteCall(node, env, context);
       }
-      // Check if this is (unquote-splicing xs)
-      if (isUnquoteSplicingCall(node)) {
-        return {
-          ok: false,
-          diagnostics: [
-            {
-              message:
-                "Unquote splicing cannot appear outside of list or vector literals",
-              span: node.span,
-              severity: DiagnosticSeverity.Error,
-              code: "INTERP_SYNTAX_SPLICE_CONTEXT",
-            },
-          ],
-        };
-      }
       return await instantiateSyntaxSequence(
         node.elements,
         env,
         context,
         gensyms,
-        "list",
-        node.span
-      );
-    case NK.Vector:
-      return await instantiateSyntaxSequence(
-        node.elements,
-        env,
-        context,
-        gensyms,
-        "vector",
         node.span
       );
 
-    case NK.SyntaxQuote: {
+    case NK.Quote: {
       const target = (node as ReaderMacroNode).target;
       if (!target) {
         return { ok: true, value: makeNil(), diagnostics: [] };
@@ -966,9 +778,9 @@ const instantiateSyntaxNode = async (
           context
         );
       }
-      return evaluateQuote(node, env);
+      return quoteLiteral(node, env);
     default:
-      return evaluateQuote(node, env);
+      return quoteLiteral(node, env);
   }
 };
 
@@ -977,7 +789,6 @@ const instantiateSyntaxSequence = async (
   env: Environment,
   context: EvalContext,
   gensyms: AutoGensymScope,
-  container: "list" | "vector",
   span: SourceSpan
 ): Promise<EvalResult<Value>> => {
   const values: Value[] = [];
@@ -996,13 +807,15 @@ const instantiateSyntaxSequence = async (
       }
       continue;
     }
-    // Check if element is (unquote-splicing xs)
-    if (element.kind === NK.List && isUnquoteSplicingCall(element)) {
-      const result = await handleUnquoteSplicingCall(element, env, context);
-      if (!result.ok) {
-        return { ok: false, diagnostics: result.diagnostics };
+    if (element.kind === NK.List && isSpreadCall(element)) {
+      const spreadResult = await handleSpreadSyntaxCall(element, env, context);
+      if (!spreadResult.ok) {
+        return { ok: false, diagnostics: spreadResult.diagnostics };
       }
-      values.push(...(result.value ?? []));
+      const spreadValues = spreadResult.value ?? [];
+      for (const part of spreadValues) {
+        values.push(part);
+      }
       continue;
     }
     const nested = await instantiateSyntaxNode(element, env, context, gensyms);
@@ -1014,36 +827,74 @@ const instantiateSyntaxSequence = async (
     }
   }
 
-  switch (container) {
-    case "list":
-      return { ok: true, value: makeList(values), diagnostics: [] };
-    case "vector":
-      return { ok: true, value: makeVector(values), diagnostics: [] };
+  return { ok: true, value: makeList(values), diagnostics: [] };
+};
+
+/* instantiateSyntaxMap removed */
+
+const quoteLiteral = (
+  node: ExpressionNode,
+  env: Environment
+): EvalResult<Value> => {
+  switch (node.kind) {
+    case NK.Number:
+      return { ok: true, value: makeNumber(node.value), diagnostics: [] };
+    case NK.String:
+      return { ok: true, value: makeString(node.value), diagnostics: [] };
+    case NK.Boolean:
+      return { ok: true, value: makeBoolean(node.value), diagnostics: [] };
+    case NK.Nil:
+      return { ok: true, value: makeNil(), diagnostics: [] };
+    case NK.Symbol:
+      return { ok: true, value: makeSymbol(node.value), diagnostics: [] };
+    case NK.List: {
+      const elements: Value[] = [];
+      for (const elem of node.elements) {
+        const result = quoteLiteral(elem, env);
+        if (!result.ok) return result;
+        elements.push(result.value!);
+      }
+      return { ok: true, value: makeList(elements), diagnostics: [] };
+    }
+
+    case NK.Quote:
+      if (!(node as ReaderMacroNode).target) {
+        return {
+          ok: false,
+          diagnostics: [
+            {
+              message: "Quote expression is missing target",
+              span: node.span,
+              severity: DiagnosticSeverity.Error,
+              code: "INTERP_QUOTE_MISSING_TARGET",
+            },
+          ],
+        };
+      }
+      return quoteLiteral((node as ReaderMacroNode).target!, env);
     default:
       return {
         ok: false,
         diagnostics: [
           {
-            message: "Unsupported syntax-quote container",
-            span,
+            message: `Cannot quote node kind: ${node.kind}`,
+            span: node.span,
             severity: DiagnosticSeverity.Error,
-            code: "INTERP_SYNTAX_CONTAINER",
+            code: "INTERP_QUOTE_UNSUPPORTED",
           },
         ],
       };
   }
 };
 
-/* instantiateSyntaxMap removed */
-
 const isUnquoteCall = (node: ListNode): boolean => {
   const head = node.elements[0];
   return head?.kind === NK.Symbol && head.value === "unquote";
 };
 
-const isUnquoteSplicingCall = (node: ListNode): boolean => {
+const isSpreadCall = (node: ListNode): boolean => {
   const head = node.elements[0];
-  return head?.kind === NK.Symbol && head.value === "unquote-splicing";
+  return head?.kind === NK.Symbol && head.value === "spread";
 };
 
 const handleUnquoteCall = async (
@@ -1076,44 +927,48 @@ const handleUnquoteCall = async (
   };
 };
 
-const handleUnquoteSplicingCall = async (
+const handleSpreadSyntaxCall = async (
   node: ListNode,
   env: Environment,
   context: EvalContext
-): Promise<EvalResult<readonly Value[]>> => {
+): Promise<EvalResult<Value[]>> => {
   const arg = node.elements[1];
-  if (!arg) {
+  if (!arg || arg.kind !== NK.List || !isUnquoteCall(arg)) {
     return {
       ok: false,
       diagnostics: [
         {
-          message: "Unquote splicing requires a target expression",
+          message: "spread inside quote must wrap (unquote ...)",
           span: node.span,
           severity: DiagnosticSeverity.Error,
-          code: "INTERP_SYNTAX_SPLICE_EMPTY",
+          code: "INTERP_SYNTAX_SPREAD_FORM",
         },
       ],
     };
   }
-  const result = await evaluateNode(arg, env, context);
+  const result = await handleUnquoteCall(arg as ListNode, env, context);
   if (!result.ok) {
     return { ok: false, diagnostics: result.diagnostics };
   }
   const value = result.value ?? makeNil();
-  if (!isSequence(value)) {
+  if (value.kind !== "list") {
     return {
       ok: false,
       diagnostics: [
         {
-          message: "Unquote splicing requires a sequence expression",
+          message: "spread inside quote expects a list",
           span: node.span,
           severity: DiagnosticSeverity.Error,
-          code: "INTERP_SYNTAX_SPLICE_SEQUENCE",
+          code: "INTERP_SYNTAX_SPREAD_SEQUENCE",
         },
       ],
     };
   }
-  return { ok: true, value: value.elements, diagnostics: [] };
+  return {
+    ok: true,
+    value: [...value.elements],
+    diagnostics: [],
+  };
 };
 
 const evaluateLet = async (
@@ -1123,15 +978,15 @@ const evaluateLet = async (
 ): Promise<EvalResult> => {
   const bindingsNode = node.elements[1];
 
-  if (!bindingsNode || bindingsNode.kind !== NK.Vector) {
+  if (!bindingsNode || bindingsNode.kind !== NK.List) {
     return {
       ok: false,
       diagnostics: [
         {
-          message: "let requires a vector of bindings",
+          message: "let requires a list of bindings",
           span: node.span,
           severity: DiagnosticSeverity.Error,
-          code: "INTERP_LET_REQUIRES_VECTOR",
+          code: "INTERP_LET_REQUIRES_LIST",
         },
       ],
     };
@@ -1616,15 +1471,15 @@ const bindPatternValue = async (
     case "symbol":
       defineVariable(env, pattern.node.value, value);
       return okVoid();
-    case "vector":
-      return await bindVectorPattern(pattern, value, env, context);
+    case "sequence":
+      return await bindSequencePattern(pattern, value, env, context);
     default:
       return okVoid();
   }
 };
 
-const bindVectorPattern = async (
-  pattern: Extract<BindingPattern, { kind: "vector" }>,
+const bindSequencePattern = async (
+  pattern: Extract<BindingPattern, { kind: "sequence" }>,
   value: Value,
   env: Environment,
   context: EvalContext
@@ -1647,7 +1502,7 @@ const bindVectorPattern = async (
     const restValues = elements.slice(pattern.elements.length);
     const restResult = await bindPatternValue(
       pattern.rest,
-      makeVector(restValues),
+      makeList(restValues),
       env,
       context
     );
@@ -1662,13 +1517,10 @@ const bindVectorPattern = async (
 };
 
 const sequenceElements = (value: Value): Value[] => {
-  switch (value.kind) {
-    case "vector":
-    case "list":
-      return [...value.elements];
-    default:
-      return [];
+  if (value.kind === "list") {
+    return [...value.elements];
   }
+  return [];
 };
 
 /**
@@ -1974,7 +1826,6 @@ const valueToJS = (value: Value): any => {
         ? runtimeKeyword(value.value.slice(1))
         : runtimeSymbol(value.value);
     case "list":
-    case "vector":
       return value.elements.map(valueToJS);
     case "function":
     case "builtin":

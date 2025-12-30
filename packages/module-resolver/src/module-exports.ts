@@ -8,7 +8,6 @@ import {
   type ProgramNode,
   type ScopeId,
   type SymbolNode,
-  type VectorNode,
 } from "@vibe/syntax";
 import {
   analyzeProgram,
@@ -179,7 +178,7 @@ const createMacroExport = (
 
   const clauses = clauseNodes.map((clause) => {
     const paramsNode = clause.paramsNode;
-    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+    if (!paramsNode || paramsNode.kind !== NodeKind.List) {
       return null;
     }
     const parsedParams = parseMacroParams(paramsNode);
@@ -275,9 +274,40 @@ const isMacroLiteralNode = (
   );
 };
 
+const isMacroClauseNode = (
+  node: ListNode | null | undefined
+): node is ListNode =>
+  Boolean(
+    node &&
+      node.kind === NodeKind.List &&
+      node.elements[0]?.kind === NodeKind.List
+  );
+
 const extractMacroClauses = (node: ListNode): MacroClauseNodeDescriptor[] => {
+  const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+  if (tail.length === 0) {
+    return [];
+  }
+
+  const clauseLists = tail.filter(
+    (expr): expr is ListNode =>
+      expr.kind === NodeKind.List && isMacroClauseNode(expr)
+  );
+  if (clauseLists.length === tail.length) {
+    return clauseLists.map((clause) => ({
+      paramsNode: clause.elements[0] ?? null,
+      bodyNodes: clause.elements
+        .slice(1)
+        .filter((expr): expr is ExpressionNode => Boolean(expr)),
+    }));
+  }
+
   const paramsNode = node.elements[1];
-  if (paramsNode && paramsNode.kind === NodeKind.Vector) {
+  if (
+    paramsNode &&
+    paramsNode.kind === NodeKind.List &&
+    !isMacroClauseNode(paramsNode)
+  ) {
     return [
       {
         paramsNode,
@@ -288,28 +318,11 @@ const extractMacroClauses = (node: ListNode): MacroClauseNodeDescriptor[] => {
     ];
   }
 
-  const tail = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
-  if (tail.length === 0) {
-    return [];
-  }
-
-  const clauseLists = tail.filter(
-    (expr): expr is ListNode => expr.kind === NodeKind.List
-  );
-  if (clauseLists.length !== tail.length) {
-    return [];
-  }
-
-  return clauseLists.map((clause) => ({
-    paramsNode: clause.elements[0] ?? null,
-    bodyNodes: clause.elements
-      .slice(1)
-      .filter((expr): expr is ExpressionNode => Boolean(expr)),
-  }));
+  return [];
 };
 
 const parseMacroParams = (
-  node: VectorNode
+  node: ListNode
 ): { params: string[]; rest?: string } | null => {
   const params: string[] = [];
   let rest: string | undefined;

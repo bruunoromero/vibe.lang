@@ -29,14 +29,13 @@ describe("tokenize", () => {
     expect(result.tokens[3]?.value).toBe(2);
   });
 
-  test("supports keywords, booleans, strings, and reader macros", async () => {
-    const source = '\'[:ok true false nil "hi\\n" (+ foo) bar]';
+  test("supports keywords, booleans, and strings", async () => {
+    const source = '[:ok true false nil "hi\\n" (+ foo) bar]';
     const result = await collectTokens(source);
 
     expect(result.ok).toBeTrue();
     const kinds = result.tokens.map((token) => token.kind);
     expect(kinds).toEqual([
-      TokenType.Quote,
       TokenType.LeftBracket,
       TokenType.Keyword,
       TokenType.Boolean,
@@ -50,10 +49,10 @@ describe("tokenize", () => {
       TokenType.Symbol,
       TokenType.RightBracket,
     ]);
-    const keyword = result.tokens[2];
+    const keyword = result.tokens[1];
     expect(keyword?.lexeme).toBe(":ok");
     expect(keyword?.value).toBe("ok");
-    const str = result.tokens[6];
+    const str = result.tokens[5];
     expect(str?.value).toBe("hi\n");
   });
 

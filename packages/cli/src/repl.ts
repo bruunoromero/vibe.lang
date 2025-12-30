@@ -26,7 +26,6 @@ const ARITHMETIC_OPERATORS = new Set(["+", "-", "*", "/"]);
 
 const UNTERMINATED_CODES = new Set([
   "PARSE_LIST_UNTERMINATED",
-  "PARSE_VECTOR_UNTERMINATED",
   "PARSE_MACRO_MISSING_TARGET",
 ]);
 
@@ -122,7 +121,6 @@ const valueToJS = (value: Value): unknown => {
       // Display keywords as a friendly tag in the REPL output
       return `<keyword ${value.value}>`;
     case "list":
-    case "vector":
       return value.elements.map(valueToJS);
     case "map": {
       const obj: Record<string, unknown> = {};
@@ -242,7 +240,6 @@ export const runRepl = async (
                       return v.value;
                     }
                   case "list":
-                  case "vector":
                     return v.elements.map(valueToJS);
                   default:
                     return v;

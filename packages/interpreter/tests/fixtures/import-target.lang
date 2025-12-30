@@ -1,2 +1,2 @@
 (def pulled 42)
-(def greet (fn+ [] "hello"))
+(def greet (fn+ ([] "hello")))

@@ -11,40 +11,42 @@
 (def defmacro+
   (macro+
     ([name & clauses]
-      `(def (unquote name)
-         (macro+ (unquote-splicing clauses))))))
+      (quote (def (unquote name)
+        (macro+ (spread (unquote clauses))))))))
 
 (defmacro+ defmacro
   ([name args & body]
-  `(defmacro+ (unquote name) ((unquote args) (unquote-splicing body)))))
+    (quote (defmacro+ (unquote name)
+      ((unquote args) (spread (unquote body)))))))
 
 (defmacro fn
   [args & body]
-  `(fn+ ((unquote args) (unquote-splicing body))))
+  (quote (fn+ ((unquote args) (spread (unquote body))))))
 
 (defmacro defmacrop+
   [name & clauses]
-  `(defp (unquote name)
-    (macro+ (unquote-splicing clauses))))
+  (quote (defp (unquote name)
+    (macro+ (spread (unquote clauses))))))
 
 (defmacro defn+
   [name & clauses]
-  `(def (unquote name)
-    (fn+ (unquote-splicing clauses))))
+  (quote (def (unquote name)
+    (fn+ (spread (unquote clauses))))))
 
 (defmacro defn
   [name args & body]
-  `(defn+ (unquote name) ((unquote args) (unquote-splicing body))))
+  (quote (defn+ (unquote name)
+    ((unquote args) (spread (unquote body))))))
 
 (defmacro defnp+
   [name & clauses]
-  `(defp (unquote name)
-    (fn+ (unquote-splicing clauses))))
-
+  (quote (defp (unquote name)
+    (fn+ (spread (unquote clauses))))))
 
 (defmacro defnp
   [name args & body]
-  `(defnp+ (unquote name) ((unquote args) (unquote-splicing body))))
+  (quote (defnp+ (unquote name)
+    ((unquote args) (spread (unquote body))))))
 
 ;; ============================================================
 ;; Collection Constructors
@@ -64,19 +66,19 @@
   ([] true)
   ([x] x)
   ([x & rest]
-    `(let [temp# (unquote x)]
+    (quote (let [temp# (unquote x)]
         (if temp#
-          (and (unquote-splicing rest))
-          temp#))))
+          (and (spread (unquote rest)))
+          temp#)))))
 
 (defmacro+ or
   ([] nil)
   ([x] x)
   ([x & rest]
-    `(let [temp# (unquote x)]
+    (quote (let [temp# (unquote x)]
         (if temp#
           temp#
-          (or (unquote-splicing rest))))))
+          (or (spread (unquote rest))))))))
 
 (defn count [coll]
   (runtime/count coll))
@@ -103,9 +105,9 @@
     nil)
   ([test expr & rest]
     (if (even? (count rest))
-      `(if (unquote test)
+      (quote (if (unquote test)
          (unquote expr)
-         (cond (unquote-splicing rest)))
+        (cond (spread (unquote rest)))))
       (throw "cond requires an even number of clauses"))))
 
 ;; Map / Namespace Helpers removed

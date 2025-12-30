@@ -21,6 +21,7 @@ const RUNTIME_PRELUDE = `
   (external runtime "@vibe/runtime")
 
   (def println runtime/println)
+  (def list (fn+ ([& xs] xs)))
 `.trim();
 
 const withRuntimePrelude = (source: string) => `${RUNTIME_PRELUDE}\n${source}`;
@@ -222,7 +223,7 @@ describe("generateModule", () => {
       `
       (def builder
         (fn+ ([x]
-          (let [nums [x (+ x 1)]]
+          (let [nums (list x (+ x 1))]
             nums))))
       (def result (builder 5))
     `.trim()
@@ -238,10 +239,10 @@ describe("generateModule", () => {
       `
       (def describe
         (fn+ ([[x y & tail :as original] bonus]
-          [original tail bonus])))
+          (list original tail bonus))))
 
       (def output
-        (let [[a b & rest :as raw] [10 20 30 40]
+        (let [[a b & rest :as raw] (list 10 20 30 40)
               note (runtime/add* a 1)]
           (describe raw note)))
 
@@ -258,8 +259,8 @@ describe("generateModule", () => {
     const fixture = `
       (def answer
         (let [local-macro
-                (macro+
-                  ([x] \`(+ (unquote x) (unquote x))))
+              (macro+
+                ([x] (quote (+ (unquote x) (unquote x)))))
               value 21]
           value))
       answer
@@ -277,16 +278,17 @@ describe("generateModule", () => {
       (def defmacro+
         (macro+
           ([name & clauses]
-            \`(def (unquote name)
-               (macro+ (unquote-splicing clauses))))))
+            (quote (def (unquote name)
+               (macro+ (spread (unquote clauses))))))))
 
       (defmacro+ defmacro
-        ([name args body]
-          \`(defmacro+ (unquote name) ((unquote args) (unquote body)))))
+        ([name args & body]
+          (quote (defmacro+ (unquote name)
+                 ((unquote args) (spread (unquote body)))))))
 
       (defmacro define-const
         [name value]
-        \`(def (unquote name) (unquote value)))
+        (quote (def (unquote name) (unquote value))))
 
       (define-const answer 42)
       answer
@@ -516,8 +518,8 @@ describe("generateModule", () => {
 
   test("spread operator compiles to JavaScript spread", async () => {
     const fixture = withRuntimePrelude(`
-      (def arr [1 2 3])
-      (def combined [0 (spread arr) 4])
+      (def arr (list 1 2 3))
+      (def combined (list 0 (spread arr) 4))
       combined
     `);
     const { result, runtime } = await runProgram(fixture);
@@ -526,11 +528,24 @@ describe("generateModule", () => {
     expect(runtime.combined).toEqual([0, 1, 2, 3, 4]);
   });
 
+  test("spread operator works in function arguments", async () => {
+    const fixture = withRuntimePrelude(`
+      (def nums (list 1 2 3))
+      (def gather (fn+ ([& xs] xs)))
+      (def output (gather 0 (spread nums) 4))
+      output
+    `);
+    const { result, runtime } = await runProgram(fixture);
+    expect(result.ok).toBeTrue();
+    expect(result.moduleText).toContain("gather(0, ...nums, 4)");
+    expect(runtime.output).toEqual([0, 1, 2, 3, 4]);
+  });
+
   test("spread works in nested vectors", async () => {
     const fixture = withRuntimePrelude(`
-      (def nums [10 20])
-      (def more [30 40])
-      (def all [(spread nums) 25 (spread more)])
+      (def nums (list 10 20))
+      (def more (list 30 40))
+      (def all (list (spread nums) 25 (spread more)))
       all
     `);
     const { result, runtime } = await runProgram(fixture);
@@ -542,8 +557,8 @@ describe("generateModule", () => {
 
   test("spread with empty array", async () => {
     const fixture = withRuntimePrelude(`
-      (def empty [])
-      (def result [1 (spread empty) 2])
+      (def empty (list))
+      (def result (list 1 (spread empty) 2))
       result
     `);
     const { result, runtime } = await runProgram(fixture);

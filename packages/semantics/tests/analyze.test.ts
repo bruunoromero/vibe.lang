@@ -80,7 +80,7 @@ const renameSymbolInNode = (
       lexeme: to,
     };
   }
-  if (node.kind === NodeKind.List || node.kind === NodeKind.Vector) {
+  if (node.kind === NodeKind.List) {
     const elements = node.elements.map(
       (element) => renameSymbolInNode(element, from, to) ?? element
     );
@@ -90,7 +90,7 @@ const renameSymbolInNode = (
     };
   }
 
-  if (node.kind === NodeKind.Quote || node.kind === NodeKind.SyntaxQuote) {
+  if (node.kind === NodeKind.Quote) {
     const originalTarget =
       (node as { target?: ExpressionNode | null }).target ?? null;
     const updatedTarget = renameSymbolInNode(originalTarget, from, to);
@@ -115,11 +115,11 @@ describe("analyzeProgram", () => {
     if (!letNode || letNode.kind !== NodeKind.List) {
       throw new Error("Expected let node");
     }
-    const bindingsVector = letNode.elements[1];
-    if (!bindingsVector || bindingsVector.kind !== NodeKind.Vector) {
-      throw new Error("Expected bindings vector");
+    const bindingsList = letNode.elements[1];
+    if (!bindingsList || bindingsList.kind !== NodeKind.List) {
+      throw new Error("Expected bindings list");
     }
-    const bindingSymbol = bindingsVector.elements[0];
+    const bindingSymbol = bindingsList.elements[0];
     if (!bindingSymbol || bindingSymbol.kind !== NodeKind.Symbol) {
       throw new Error("Expected binding symbol");
     }
@@ -520,8 +520,8 @@ describe("analyzeProgram", () => {
       (def with-unique
         (macro+ ([expr]
           (let [tmp (gensym "tmp")]
-            \`(let [(unquote tmp) (unquote expr)]
-               42)))))
+            (quote (let [(unquote tmp) (unquote expr)]
+              42))))))
 
       (with-unique 10)
     `);
@@ -582,8 +582,8 @@ describe("analyzeProgram", () => {
     const analysis = await analyzeSource(`
       (def capture
         (macro+ ([expr]
-          \`(let [foo# (unquote expr)]
-             foo#))))
+           (quote (let [foo# (unquote expr)]
+             foo#)))))
 
       (capture 99)
     `);
@@ -618,8 +618,8 @@ describe("analyzeProgram", () => {
       withArithmeticPrelude(`
         (def with-temp
           (macro+ ([value]
-            \`(let [tmp (unquote value)]
-               tmp))))
+            (quote (let [tmp# (unquote value)]
+              tmp#)))))
 
         (let [a (with-temp 1)
               b (with-temp 2)]
@@ -630,7 +630,7 @@ describe("analyzeProgram", () => {
     expect(getDiagnosticCodes(analysis)).not.toContain("SEM_DUPLICATE_SYMBOL");
 
     const tmpSymbols = analysis.graph.symbols.filter(
-      (symbol) => symbol.name === "tmp" && symbol.kind === "var"
+      (symbol) => symbol.name.startsWith("tmp__") && symbol.kind === "var"
     );
     expect(tmpSymbols.length).toBe(2);
 
@@ -646,8 +646,8 @@ describe("analyzeProgram", () => {
       withArithmeticPrelude(`
         (def with-temp
           (macro+ ([expr]
-            \`(let [tmp (unquote expr)]
-               tmp))))
+            (quote (let [tmp# (unquote expr)]
+              tmp#)))))
 
         (def answer (with-temp (+ 1 2)))
       `)
@@ -655,7 +655,9 @@ describe("analyzeProgram", () => {
 
     expect(analysis.ok).toBeTrue();
     const tmpDefinition = analysis.graph.nodes.find(
-      (node) => node.symbol?.name === "tmp" && node.symbol.role === "definition"
+      (node) =>
+        node.symbol?.name?.startsWith("tmp__") &&
+        node.symbol.role === "definition"
     );
     expect(tmpDefinition).toBeDefined();
 
@@ -667,7 +669,7 @@ describe("analyzeProgram", () => {
 
   test("detects recursive macros", async () => {
     const analysis = await analyzeSource(`
-      (def looped (macro+ ([] \`(looped))))
+      (def looped (macro+ ([] (quote (looped)))))
       (looped)
     `);
 
@@ -678,10 +680,10 @@ describe("analyzeProgram", () => {
   });
 
   describe("special form diagnostics", () => {
-    test("reports when let bindings are not provided as a vector", async () => {
+    test("reports when let bindings are not provided as a list", async () => {
       const analysis = await analyzeSource("(let 42 1)");
 
-      expectDiagnostic(analysis, "SEM_LET_EXPECTS_VECTOR");
+      expectDiagnostic(analysis, "SEM_LET_EXPECTS_LIST");
     });
 
     test("reports odd numbers of let binding forms", async () => {
@@ -696,10 +698,10 @@ describe("analyzeProgram", () => {
       expectDiagnostic(analysis, "SEM_PATTERN_UNSUPPORTED");
     });
 
-    test("requires fn parameters to be declared via vectors", async () => {
+    test("requires fn parameters to be declared via lists", async () => {
       const analysis = await analyzeSource("(fn+ 42 1)");
 
-      expectDiagnostic(analysis, "SEM_FN_EXPECTS_VECTOR");
+      expectDiagnostic(analysis, "SEM_FN_EXPECTS_LIST");
     });
 
     test("requires fn parameters to be symbols", async () => {
@@ -725,26 +727,28 @@ describe("analyzeProgram", () => {
 
   describe("macro literal validation", () => {
     test("requires macro names to be symbols", async () => {
-      const analysis = await analyzeSource("(def 1 (macro+ ([] `42)))");
+      const analysis = await analyzeSource("(def 1 (macro+ ([] (quote 42))))");
 
       expectDiagnostic(analysis, "SEM_BINDING_REQUIRES_SYMBOL");
     });
 
-    test("requires macro parameters to be provided via vectors", async () => {
-      const analysis = await analyzeSource("(def foo (macro+ 1 `42))");
+    test("requires macro parameters to be provided via lists", async () => {
+      const analysis = await analyzeSource("(def foo (macro+ 1 (quote 42)))");
 
-      expectDiagnostic(analysis, "SEM_MACRO_EXPECTS_VECTOR");
+      expectDiagnostic(analysis, "SEM_MACRO_EXPECTS_LIST");
     });
 
     test("requires macro parameters to be symbols", async () => {
-      const analysis = await analyzeSource("(def foo (macro+ ([1] `42)))");
+      const analysis = await analyzeSource(
+        "(def foo (macro+ ([1] (quote 42))))"
+      );
 
       expectDiagnostic(analysis, "SEM_MACRO_PARAM_SYMBOL");
     });
 
     test("reports duplicate macro parameters", async () => {
       const analysis = await analyzeSource(
-        "(def foo (macro+ ([x x] `(list (unquote x)))))"
+        "(def foo (macro+ ([x x] (quote (list (unquote x))))))"
       );
 
       expectDiagnostic(analysis, "SEM_MACRO_DUPLICATE_PARAM");
@@ -771,8 +775,8 @@ describe("analyzeProgram", () => {
         (def wrap
           (macro+ ([expr]
             (let [tmp (gensym "wrap")]
-              \`(let [(unquote tmp) (unquote expr)]
-                 (unquote tmp))))))
+              (quote (let [(unquote tmp) (unquote expr)]
+                 (unquote tmp)))))))
         (wrap 1)
       `);
 
@@ -782,7 +786,7 @@ describe("analyzeProgram", () => {
 
     test("supports only a single macro body expression", async () => {
       const analysis = await analyzeSource(
-        "(def foo (macro+ ([x] `(list (unquote x)) `(list (unquote x)))))"
+        "(def foo (macro+ ([x] (quote (list (unquote x))) (quote (list (unquote x))))))"
       );
 
       expectDiagnostic(analysis, "SEM_MACRO_SINGLE_BODY");
@@ -830,7 +834,7 @@ describe("analyzeProgram", () => {
   describe("macro expansion diagnostics", () => {
     test("reports macro arity mismatches and missing args", async () => {
       const analysis = await analyzeSource(`
-        (def pair (macro+ ([a b] \`(vector (unquote a) (unquote b)))))
+        (def pair (macro+ ([a b] (quote (vector (unquote a) (unquote b))))))
         (pair 1)
       `);
 
@@ -840,7 +844,7 @@ describe("analyzeProgram", () => {
 
     test("reports unknown parameters referenced via unquote", async () => {
       const analysis = await analyzeSource(`
-        (def uses-missing (macro+ ([] \`((unquote missing)))))
+        (def uses-missing (macro+ ([] (quote ((unquote missing))))))
         (uses-missing)
       `);
 
@@ -849,31 +853,13 @@ describe("analyzeProgram", () => {
 
     test("evaluates full expressions inside unquote at compile time", async () => {
       const analysis = await analyzeSource(`
-        (def simple (macro+ ([] \`(unquote (if true 1 2)))))
+        (def simple (macro+ ([] (quote (unquote (if true 1 2))))))
         (simple)
       `);
 
       debugDiagnostics("macro unquote evaluation", analysis);
       expect(analysis.ok).toBeTrue();
       expect(getDiagnosticCodes(analysis)).toEqual([]);
-    });
-
-    test("rejects unquote splicing at the top level", async () => {
-      const analysis = await analyzeSource(`
-        (def spread (macro+ ([items] \`(unquote-splicing items))))
-        (spread [1 2])
-      `);
-
-      expectDiagnostic(analysis, "SEM_MACRO_SPLICE_CONTEXT");
-    });
-
-    test("requires unquote splicing targets to produce sequences", async () => {
-      const analysis = await analyzeSource(`
-        (def spread (macro+ ([item] \`(list (unquote-splicing item)))))
-        (spread 42)
-      `);
-
-      expectDiagnostic(analysis, "SEM_MACRO_SPLICE_SEQUENCE");
     });
   });
 

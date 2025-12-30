@@ -27,7 +27,7 @@ const analyzeSource = async (source: string) => {
 describe("advanced macros", () => {
   test("variadic macro with & rest parameter", async () => {
     const result = await analyzeSource(`
-      (def my-list (macro+ ([& items] \`[(unquote-splicing items)])))
+      (def my-list (macro+ ([& items] (quote [(spread (unquote items))]))))
       (my-list 1 2 3)
     `);
 
@@ -40,7 +40,7 @@ describe("advanced macros", () => {
     const result = await analyzeSource(`
       (def simple-and
         (macro+ ([a b]
-          \`(if (unquote a) (unquote b) false))))
+          (quote (if (unquote a) (unquote b) false)))))
       (simple-and true false)
     `);
 
@@ -53,7 +53,7 @@ describe("advanced macros", () => {
       withArithmeticPrelude(`
         (def thread-first
           (macro+ ([x & forms]
-            \`(unquote x))))
+            (quote (unquote x)))))
         (thread-first 5 (+ 3) (* 2))
       `)
     );
@@ -63,9 +63,9 @@ describe("advanced macros", () => {
 
   test("variadic macro collects remaining args", async () => {
     const result = await analyzeSource(`
-      (def variadic-test
-        (macro+ ([first & rest]
-          \`[(unquote first) (unquote-splicing rest)])))
+        (def variadic-test
+          (macro+ ([first & rest]
+            (quote [(unquote first) (spread (unquote rest))]))))
       (variadic-test :a :b :c :d)
     `);
 
@@ -74,9 +74,9 @@ describe("advanced macros", () => {
 
   test("empty variadic args", async () => {
     const result = await analyzeSource(`
-      (def maybe-list
-        (macro+ ([& items]
-          \`[(unquote-splicing items)])))
+        (def maybe-list
+          (macro+ ([& items]
+            (quote [(spread (unquote items))]))))
       (maybe-list)
     `);
 
@@ -85,9 +85,9 @@ describe("advanced macros", () => {
 
   test("compile-time count and eq* check", async () => {
     const result = await analyzeSource(`
-      (def is-empty
-        (macro+ ([& items]
-          \`(eq* 0 (count (unquote items))))))
+        (def is-empty
+          (macro+ ([& items]
+            (quote (eq* 0 (count (unquote items)))))))
       (is-empty)
       (is-empty 42)
     `);
@@ -98,8 +98,8 @@ describe("advanced macros", () => {
 
   test("nested variadic macro expansion", async () => {
     const result = await analyzeSource(`
-      (def outer (macro+ ([& args] \`[(unquote-splicing args)])))
-      (def inner (macro+ ([x] \`(outer (unquote x) :extra))))
+      (def outer (macro+ ([& args] (quote [(spread (unquote args))]))))
+      (def inner (macro+ ([x] (quote (outer (unquote x) :extra)))))
       (inner 42)
     `);
 
@@ -115,8 +115,8 @@ describe("advanced macros", () => {
       (def classify
         (macro+ ([value]
           (if (even? value)
-            \`["even" (unquote value)]
-            \`["odd" (unquote value)]))))
+            (quote ["even" (unquote value)])
+            (quote ["odd" (unquote value)])))))
       (classify 2)
       (classify 3)
     `);
@@ -127,7 +127,7 @@ describe("advanced macros", () => {
 
   test("detects when & is not followed by symbol", async () => {
     const result = await analyzeSource(`
-      (def bad (macro+ ([&] \`nil)))
+      (def bad (macro+ ([&] (quote nil))))
     `);
 
     expect(result.ok).toBeFalse();
@@ -140,7 +140,7 @@ describe("advanced macros", () => {
 
   test("detects multiple & parameters", async () => {
     const result = await analyzeSource(`
-      (def bad (macro+ ([& a & b] \`nil)))
+      (def bad (macro+ ([& a & b] (quote nil))))
     `);
 
     expect(result.ok).toBeFalse();
@@ -151,7 +151,7 @@ describe("advanced macros", () => {
 
   test("detects params after & rest", async () => {
     const result = await analyzeSource(`
-      (def bad (macro+ ([& rest extra] \`nil)))
+      (def bad (macro+ ([& rest extra] (quote nil))))
     `);
 
     expect(result.ok).toBeFalse();

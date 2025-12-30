@@ -14,7 +14,6 @@ import {
   type SourceSpan,
   type StringNode,
   type SymbolNode,
-  type VectorNode,
   BUILTIN_SYMBOLS,
   parseBindingPattern,
   type BindingPattern,
@@ -190,7 +189,7 @@ interface TryStructure {
 type MacroBody =
   | {
       readonly kind: "template";
-      readonly template: ReaderMacroNode<NodeKind.SyntaxQuote>;
+      readonly template: ReaderMacroNode<NodeKind.Quote>;
     }
   | {
       readonly kind: "expression";
@@ -362,18 +361,10 @@ export class SemanticAnalyzer {
           (node as NamespaceImportNode).importKind
         );
         break;
-      case NodeKind.Vector:
-        this.recordNode(node, nodeScopeId);
-        await this.visitSequence(node as VectorNode, nodeScopeId);
-        break;
 
       case NodeKind.Quote:
         this.recordNode(node, nodeScopeId);
-        await this.visitReaderMacro(node as ReaderMacroNode, nodeScopeId);
-        break;
-      case NodeKind.SyntaxQuote:
-        this.recordNode(node, nodeScopeId);
-        await this.visitSyntaxQuote(node, nodeScopeId);
+        await this.visitQuote(node as ReaderMacroNode, nodeScopeId);
         break;
 
       case NodeKind.Symbol:
@@ -558,8 +549,8 @@ export class SemanticAnalyzer {
 
     if (clause.rest) {
       const restArgs = args.slice(clause.params.length);
-      const restVector: VectorNode = {
-        kind: NodeKind.Vector,
+      const restVector: ListNode = {
+        kind: NodeKind.List,
         span: callSpan,
         elements: restArgs,
       };
@@ -794,10 +785,10 @@ export class SemanticAnalyzer {
   }
 
   private createMacroBody(node: ExpressionNode): MacroBody {
-    return node.kind === NodeKind.SyntaxQuote
+    return node.kind === NodeKind.Quote
       ? {
           kind: "template",
-          template: node as ReaderMacroNode<NodeKind.SyntaxQuote>,
+          template: node as ReaderMacroNode<NodeKind.Quote>,
         }
       : {
           kind: "expression",
@@ -842,9 +833,9 @@ export class SemanticAnalyzer {
         await this.visit(paramsNode, scopeId);
       }
       this.report(
-        "macro requires a vector of parameter symbols",
+        "macro requires a list of parameter symbols",
         node.span,
-        "SEM_MACRO_EXPECTS_VECTOR"
+        "SEM_MACRO_EXPECTS_LIST"
       );
       return null;
     }
@@ -952,14 +943,14 @@ export class SemanticAnalyzer {
 
   private async handleLet(node: ListNode, scopeId: ScopeId): Promise<void> {
     const bindingsNode = node.elements[1];
-    if (!bindingsNode || bindingsNode.kind !== NodeKind.Vector) {
+    if (!bindingsNode || bindingsNode.kind !== NodeKind.List) {
       if (bindingsNode) {
         await this.visit(bindingsNode, scopeId);
       }
       this.report(
-        "let requires a vector of binding pairs",
+        "let requires a list of binding pairs",
         node.span,
-        "SEM_LET_EXPECTS_VECTOR"
+        "SEM_LET_EXPECTS_LIST"
       );
       await this.visitLetBody(node, scopeId);
       return;
@@ -1042,9 +1033,9 @@ export class SemanticAnalyzer {
         await this.visit(paramsNode, scopeId);
       }
       this.report(
-        "fn requires a vector of parameter symbols",
+        "fn requires a list of parameter symbols",
         node.span,
-        "SEM_FN_EXPECTS_VECTOR"
+        "SEM_FN_EXPECTS_LIST"
       );
       for (let index = 2; index < node.elements.length; index += 1) {
         const element = node.elements[index];
@@ -1318,7 +1309,7 @@ export class SemanticAnalyzer {
     if (!node) {
       return [];
     }
-    if (node.kind === NodeKind.Vector) {
+    if (node.kind === NodeKind.List) {
       return node.elements.filter((element): element is ExpressionNode =>
         Boolean(element)
       );
@@ -1388,14 +1379,14 @@ export class SemanticAnalyzer {
     parentScopeId: ScopeId
   ): Promise<{ arity: number; isVariadic: boolean } | null> {
     const { paramsNode } = clause;
-    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+    if (!paramsNode || paramsNode.kind !== NodeKind.List) {
       if (paramsNode) {
         await this.visit(paramsNode, parentScopeId);
       }
       this.report(
-        "fn requires a vector of parameter symbols",
+        "fn requires a list of parameter symbols",
         paramsNode?.span ?? clause.span,
-        "SEM_FN_EXPECTS_VECTOR"
+        "SEM_FN_EXPECTS_LIST"
       );
       return null;
     }
@@ -1467,14 +1458,14 @@ export class SemanticAnalyzer {
     scopeId: ScopeId
   ): Promise<{ params: string[]; rest?: string } | null> {
     const { paramsNode } = clause;
-    if (!paramsNode || paramsNode.kind !== NodeKind.Vector) {
+    if (!paramsNode || paramsNode.kind !== NodeKind.List) {
       if (paramsNode) {
         await this.visit(paramsNode, scopeId);
       }
       this.report(
-        "macro requires a vector of parameter symbols",
+        "macro requires a list of parameter symbols",
         paramsNode?.span ?? clause.span,
-        "SEM_MACRO_EXPECTS_VECTOR"
+        "SEM_MACRO_EXPECTS_LIST"
       );
       return null;
     }
@@ -1918,26 +1909,11 @@ export class SemanticAnalyzer {
     });
   }
 
-  private async visitSequence(
-    node: VectorNode,
-    scopeId: ScopeId
-  ): Promise<void> {
-    for (const element of node.elements) {
-      if (element) {
-        await this.visit(element, scopeId);
-      }
-    }
-  }
-
-  private async visitSyntaxQuote(
+  private async visitQuote(
     node: ReaderMacroNode,
     scopeId: ScopeId,
     context?: MacroExpansionContext
   ): Promise<void> {
-    if (node.kind !== NodeKind.SyntaxQuote) {
-      await this.visitReaderMacro(node, scopeId);
-      return;
-    }
     if (!node.target) {
       return;
     }
@@ -1946,41 +1922,23 @@ export class SemanticAnalyzer {
       this.syntaxQuoteDepth += 1;
       try {
         // Walk the quoted structure without expanding macros or recording
-        // symbol usages so syntax-quoted forms remain literal data at runtime.
+        // symbol usages so quoted forms remain literal data at runtime.
         await this.visitQuoted(node.target, scopeId);
       } finally {
         this.syntaxQuoteDepth -= 1;
       }
       return;
     }
-    // This path is no longer used - macro expansion now goes through expandMacroOnce
     const expanded = await this.instantiateTemplate(node.target, context);
     if (expanded) {
       await this.visit(expanded, scopeId);
     }
   }
 
-  private async visitReaderMacro(
-    node: ReaderMacroNode,
-    scopeId: ScopeId
-  ): Promise<void> {
-    if (!node.target) return;
-    // Quoted forms should not trigger macro expansion or normal symbol
-    // resolution; walk the quoted structure without expanding macros or
-    // recording symbol usages so quoted literals remain literal.
-    if (node.kind === NodeKind.Quote) {
-      await this.visitQuoted(node.target, scopeId);
-      return;
-    }
-
-    await this.visit(node.target, scopeId);
-  }
-
   private async visitQuoted(node: ExpressionNode, scopeId: ScopeId) {
     const nodeScopeId = this.getScopeForNode(node, scopeId);
     switch (node.kind) {
-      case NodeKind.List:
-      case NodeKind.Vector: {
+      case NodeKind.List: {
         this.recordNode(node, nodeScopeId);
         for (const el of (node as any).elements) {
           if (el) await this.visitQuoted(el, nodeScopeId);
@@ -1999,7 +1957,6 @@ export class SemanticAnalyzer {
         break;
       }
       case NodeKind.Quote:
-      case NodeKind.SyntaxQuote:
       case NodeKind.NamespaceImport: {
         // For nested reader-macros inside a quoted form, walk their target(s)
         // conservatively without triggering expansion.
@@ -2030,23 +1987,9 @@ export class SemanticAnalyzer {
         if (this.isUnquoteCall(node)) {
           return await this.handleUnquoteCall(node, context);
         }
-        // Check if this is an unquote-splicing form: (unquote-splicing xs)
-        if (this.isUnquoteSplicingCall(node)) {
-          this.report(
-            "Unquote splicing cannot appear outside of list or vector literals",
-            node.span,
-            "SEM_MACRO_SPLICE_CONTEXT"
-          );
-          return this.createNilLiteral(context.callSpan);
-        }
         return await this.instantiateSequence(node, context);
-      case NodeKind.Vector:
-        return (await this.instantiateSequence(node, context)) as VectorNode;
 
       case NodeKind.Quote:
-        return await this.instantiateReader(node as ReaderMacroNode, context);
-
-      case NodeKind.SyntaxQuote:
         if (!node.target) {
           return null;
         }
@@ -2062,12 +2005,19 @@ export class SemanticAnalyzer {
   }
 
   private async instantiateSequence(
-    node: ListNode | VectorNode,
+    node: ListNode,
     context: MacroExpansionContext
-  ): Promise<ListNode | VectorNode> {
+  ): Promise<ListNode> {
     const elements: ExpressionNode[] = [];
     for (const element of node.elements) {
       if (!element) {
+        continue;
+      }
+      if (element.kind === NodeKind.List && this.isSpreadCall(element)) {
+        const spreadValues = await this.handleSpreadElement(element, context);
+        if (spreadValues) {
+          elements.push(...spreadValues);
+        }
         continue;
       }
       // Check if element is (unquote x)
@@ -2078,15 +2028,6 @@ export class SemanticAnalyzer {
         }
         continue;
       }
-      // Check if element is (unquote-splicing xs)
-      if (
-        element.kind === NodeKind.List &&
-        this.isUnquoteSplicingCall(element)
-      ) {
-        const values = await this.handleUnquoteSplicingCall(element, context);
-        elements.push(...values);
-        continue;
-      }
       const expanded = await this.instantiateTemplate(element, context);
       if (expanded) {
         elements.push(expanded);
@@ -2095,26 +2036,12 @@ export class SemanticAnalyzer {
     const instantiated = {
       ...node,
       elements,
-    } as ListNode | VectorNode;
+    } as ListNode;
     this.clearScopeMetadata(instantiated);
     return instantiated;
   }
 
   /* Map instantiation removed */
-
-  private async instantiateReader(
-    node: ReaderMacroNode,
-    context: MacroExpansionContext
-  ): Promise<ReaderMacroNode> {
-    const instantiated = {
-      ...node,
-      target: node.target
-        ? await this.instantiateTemplate(node.target, context)
-        : null,
-    };
-    this.clearScopeMetadata(instantiated);
-    return instantiated;
-  }
 
   private instantiateSymbolNode(
     node: SymbolNode,
@@ -2171,9 +2098,9 @@ export class SemanticAnalyzer {
     return head?.kind === NodeKind.Symbol && head.value === "unquote";
   }
 
-  private isUnquoteSplicingCall(node: ListNode): boolean {
+  private isSpreadCall(node: ListNode): boolean {
     const head = node.elements[0];
-    return head?.kind === NodeKind.Symbol && head.value === "unquote-splicing";
+    return head?.kind === NodeKind.Symbol && head.value === "spread";
   }
 
   private async handleUnquoteCall(
@@ -2190,36 +2117,6 @@ export class SemanticAnalyzer {
       return null;
     }
     return await this.evaluateUnquoteTarget(arg, context);
-  }
-
-  private async handleUnquoteSplicingCall(
-    node: ListNode,
-    context: MacroExpansionContext
-  ): Promise<ExpressionNode[]> {
-    const arg = node.elements[1];
-    if (!arg) {
-      this.report(
-        "Unquote splicing requires a target expression",
-        node.span,
-        "SEM_MACRO_SPLICE_EMPTY"
-      );
-      return [];
-    }
-    const value = await this.evaluateUnquoteTarget(arg, context);
-    if (!value) {
-      return [];
-    }
-    if (value.kind === NodeKind.List || value.kind === NodeKind.Vector) {
-      return value.elements
-        .filter((element): element is ExpressionNode => Boolean(element))
-        .map((element) => this.cloneExpression(element));
-    }
-    this.report(
-      "Unquote splicing requires a sequence expression",
-      node.span,
-      "SEM_MACRO_SPLICE_SEQUENCE"
-    );
-    return [value];
   }
 
   private async evaluateUnquoteTarget(
@@ -2241,6 +2138,44 @@ export class SemanticAnalyzer {
     }
 
     return await this.evaluateCompileTimeExpression(target, context);
+  }
+
+  private async handleSpreadElement(
+    node: ListNode,
+    context: MacroExpansionContext
+  ): Promise<ExpressionNode[] | null> {
+    const target = node.elements[1];
+    if (
+      !target ||
+      target.kind !== NodeKind.List ||
+      !this.isUnquoteCall(target)
+    ) {
+      this.report(
+        "spread inside quote must wrap (unquote ...)",
+        node.span,
+        "SEM_MACRO_SPREAD_UNQUOTE"
+      );
+      return null;
+    }
+    const value = await this.handleUnquoteCall(target as ListNode, context);
+    if (!value) {
+      return null;
+    }
+    if (value.kind === NodeKind.List) {
+      const expanded: ExpressionNode[] = [];
+      for (const element of value.elements) {
+        if (element) {
+          expanded.push(this.cloneExpression(element));
+        }
+      }
+      return expanded;
+    }
+    this.report(
+      "spread expects a list inside quote",
+      node.span,
+      "SEM_MACRO_SPREAD_SEQUENCE"
+    );
+    return [value];
   }
 
   private async evaluateCompileTimeExpression(
@@ -2450,7 +2385,7 @@ export class SemanticAnalyzer {
       case "symbol":
         this.defineSymbol(pattern.node, scopeId, kind, role);
         return;
-      case "vector":
+      case "sequence":
         for (const element of pattern.elements) {
           this.declarePatternBindings(element, scopeId, kind, role);
         }
@@ -2470,7 +2405,7 @@ export class SemanticAnalyzer {
     pattern: BindingPattern,
     scopeId: ScopeId
   ): Promise<void> {
-    if (pattern.kind === "vector") {
+    if (pattern.kind === "sequence") {
       for (const element of pattern.elements) {
         await this.visitPatternDefaults(element, scopeId);
       }
@@ -2531,14 +2466,12 @@ export class SemanticAnalyzer {
     this.clearScopeMetadata(node);
     switch (node.kind) {
       case NodeKind.List:
-      case NodeKind.Vector:
         for (const element of node.elements) {
           this.stripScopeMetadata(element);
         }
         break;
 
       case NodeKind.Quote:
-      case NodeKind.SyntaxQuote:
         this.stripScopeMetadata((node as ReaderMacroNode).target);
         break;
 
