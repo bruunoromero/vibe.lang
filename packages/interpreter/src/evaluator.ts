@@ -61,10 +61,7 @@ const EXTERNAL_MEMBER_SERIALIZATIONS: Record<string, string> = {
   ">": "_GT",
   "=": "_EQ",
   "/": "_SLASH",
-  "#": "_HASH",
 };
-
-type AutoGensymScope = Map<string, string>;
 
 const sanitizeExternalMemberName = (member: string): string => {
   let result = "";
@@ -139,7 +136,6 @@ export interface EvalResult<T = Value> {
 
 export interface EvalContext {
   readonly callDepth: number;
-  gensymCounter?: { value: number };
 }
 
 /**
@@ -441,8 +437,6 @@ const tryEvaluateSpecialForm = async (
       return evaluateExternal(node, env, context);
     case "macro+":
       return evaluateMacroLiteral(node);
-    case "gensym":
-      return evaluateGensym(node, env, context);
     case "spread":
       return evaluateSpread(node);
     default:
@@ -689,60 +683,13 @@ const evaluateSyntaxQuote = async (
   if (!node.target) {
     return { ok: true, value: makeNil(), diagnostics: [] };
   }
-  const gensyms: AutoGensymScope = new Map();
-  return await instantiateSyntaxNode(node.target, env, context, gensyms);
-};
-
-const isAutoGensymPlaceholder = (value: string): boolean => value.endsWith("#");
-
-const ensureGensymCounter = (context: EvalContext): { value: number } => {
-  if (!context.gensymCounter) {
-    context.gensymCounter = { value: 0 };
-  }
-  return context.gensymCounter;
-};
-
-const allocateRuntimeGensym = (hint: string, context: EvalContext): string => {
-  const counter = ensureGensymCounter(context);
-  const base = hint.length > 0 ? hint : "g";
-  const unique = `${base}__${counter.value++}`;
-  return unique;
-};
-
-const instantiateAutoGensymSymbol = (
-  node: SymbolNode,
-  gensyms: AutoGensymScope,
-  context: EvalContext
-): EvalResult<Value> => {
-  if (node.value.includes("/")) {
-    return {
-      ok: false,
-      diagnostics: [
-        {
-          message: `Auto gensym placeholder ${node.value} cannot include a namespace`,
-          span: node.span,
-          severity: DiagnosticSeverity.Error,
-          code: "INTERP_SYNTAX_GENSYM_NAMESPACE",
-        },
-      ],
-    };
-  }
-
-  const key = node.value;
-  let replacement = gensyms.get(key);
-  if (!replacement) {
-    const hint = key.slice(0, -1);
-    replacement = allocateRuntimeGensym(hint, context);
-    gensyms.set(key, replacement);
-  }
-  return { ok: true, value: makeSymbol(replacement), diagnostics: [] };
+  return await instantiateSyntaxNode(node.target, env, context);
 };
 
 const instantiateSyntaxNode = async (
   node: ExpressionNode,
   env: Environment,
-  context: EvalContext,
-  gensyms: AutoGensymScope
+  context: EvalContext
 ): Promise<EvalResult<Value>> => {
   switch (node.kind) {
     case NK.List:
@@ -754,7 +701,6 @@ const instantiateSyntaxNode = async (
         node.elements,
         env,
         context,
-        gensyms,
         node.span
       );
 
@@ -763,21 +709,9 @@ const instantiateSyntaxNode = async (
       if (!target) {
         return { ok: true, value: makeNil(), diagnostics: [] };
       }
-      return await instantiateSyntaxNode(
-        target,
-        env,
-        context,
-        new Map<string, string>()
-      );
+      return await instantiateSyntaxNode(target, env, context);
     }
     case NK.Symbol:
-      if (isAutoGensymPlaceholder(node.value)) {
-        return instantiateAutoGensymSymbol(
-          node as SymbolNode,
-          gensyms,
-          context
-        );
-      }
       return quoteLiteral(node, env);
     default:
       return quoteLiteral(node, env);
@@ -788,7 +722,6 @@ const instantiateSyntaxSequence = async (
   elements: readonly (ExpressionNode | null)[],
   env: Environment,
   context: EvalContext,
-  gensyms: AutoGensymScope,
   span: SourceSpan
 ): Promise<EvalResult<Value>> => {
   const values: Value[] = [];
@@ -818,7 +751,7 @@ const instantiateSyntaxSequence = async (
       }
       continue;
     }
-    const nested = await instantiateSyntaxNode(element, env, context, gensyms);
+    const nested = await instantiateSyntaxNode(element, env, context);
     if (!nested.ok) {
       return nested;
     }
@@ -1778,36 +1711,6 @@ const evaluateExternal = (
   }
 };
 
-const evaluateGensym = (
-  node: ListNode,
-  env: Environment,
-  context: EvalContext
-): EvalResult => {
-  // Optional hint argument
-  const hintNode = node.elements[1];
-  let hint = "g";
-
-  if (hintNode) {
-    if (hintNode.kind !== NK.String) {
-      return {
-        ok: false,
-        diagnostics: [
-          {
-            message: "gensym expects an optional string hint as argument",
-            span: node.span,
-            severity: DiagnosticSeverity.Error,
-            code: "INTERP_GENSYM_HINT",
-          },
-        ],
-      };
-    }
-    hint = hintNode.value;
-  }
-
-  const unique = allocateRuntimeGensym(hint, context);
-  return { ok: true, value: makeSymbol(unique), diagnostics: [] };
-};
-
 /**
  * Convert a vibe Value to a JavaScript value
  */
@@ -1901,7 +1804,7 @@ const jsToValue = (jsValue: any): Value => {
  *
  * NOTE: No builtins are pre-loaded. All runtime primitives are accessed
  * through the external module system (e.g., @vibe/runtime).
- * Special forms (def, fn, if, let, gensym, etc.) are handled directly in the evaluator.
+ * Special forms (def, fn, if, let, etc.) are handled directly in the evaluator.
  * The REPL loads prelude for convenience.
  */
 export const createRootEnvironment = (): Environment => {

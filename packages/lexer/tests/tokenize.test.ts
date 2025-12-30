@@ -264,27 +264,6 @@ describe("tokenize", () => {
     ]);
   });
 
-  test("treats trailing # as gensym placeholder suffix", async () => {
-    const result = await collectTokens("(foo# [1 2] foo#)");
-
-    expect(result.ok).toBeTrue();
-    expect(result.diagnostics).toHaveLength(0);
-    expect(result.tokens.map((token) => token.kind)).toEqual([
-      TokenType.LeftParen,
-      TokenType.Symbol,
-      TokenType.LeftBracket,
-      TokenType.Number,
-      TokenType.Number,
-      TokenType.RightBracket,
-      TokenType.Symbol,
-      TokenType.RightParen,
-    ]);
-    const symbols = result.tokens.filter(
-      (token) => token.kind === TokenType.Symbol
-    );
-    expect(symbols.map((token) => token.lexeme)).toEqual(["foo#", "foo#"]);
-  });
-
   test("reports stray deref reader macros", async () => {
     const result = await collectTokens("@foo");
 

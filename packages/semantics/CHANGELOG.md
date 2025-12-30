@@ -4,6 +4,7 @@
 
 - Added full analyzer support for the new `defp` special form. Private definitions now bind symbols, macros, and diagnostics exactly like `def` while skipping module-export registration so imports only see public APIs.
 - Analyzer fixtures now cover private exports to confirm local usages resolve correctly and the `graph.exports` payload remains unchanged.
+- Removed gensym-aware macro hygiene. Syntax-quoted placeholders (`foo#`) are no longer rewritten, the `gensym` builtin was dropped, and macro expansion now emits whatever bindings the template spells out. The `SEM_GENSYM_PLACEHOLDER_*` diagnostics and related bookkeeping disappeared together with the feature.
 
 ## 2025-12-29
 

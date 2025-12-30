@@ -212,12 +212,6 @@ class ModuleEmitter {
     if (hasKeywordNodes) {
       this.requireRuntimeHelper("keyword*");
     }
-    const hasQuoteNodes = graph.nodes.some(
-      (node) => node.kind === NodeKind.Quote
-    );
-    if (hasQuoteNodes) {
-      this.requireRuntimeHelper("symbol*");
-    }
   }
 
   private collectNamespaceImports(): void {
@@ -572,9 +566,7 @@ class ModuleEmitter {
   private emitQuotedExpression(node: ExpressionNode): string {
     switch (node.kind) {
       case NodeKind.Symbol: {
-        const helper = this.requireRuntimeHelper("symbol*");
-        const name = (node as any).lexeme ?? (node as any).value;
-        return `${helper}(${JSON.stringify(name)})`;
+        return this.emitSymbol(node);
       }
       case NodeKind.Keyword:
         return this.emitKeywordLiteral((node as any).value);

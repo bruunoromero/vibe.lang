@@ -4,6 +4,7 @@
 
 - Recognized the new `defp` special form inside the evaluator so private definitions behave identically to `def` at runtime. The interpreter still mutates the current environment for `defp`, ensuring private helpers are available within a module even though they remain hidden from import tables.
 - Extended the special-form regression suite to cover `defp` so REPL and interpreter flows stay in sync with the analyzer.
+- Removed the `gensym` special form and the auto-gensym placeholder machinery inside syntax-quote evaluation. Syntax quotes now emit the symbols authors spell out, and diagnostics such as `INTERP_SYNTAX_GENSYM_NAMESPACE` were dropped along with the feature.
 
 ## 2025-12-29
 

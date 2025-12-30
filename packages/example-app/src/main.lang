@@ -5,7 +5,9 @@
 (def favorite-number 42)
 
 (defmacro a [x]
-  (quote (println (unquote x))))
+  (quote 
+    (let [y (unquote x)]
+      (println "Inside macro a, got:" y))))
 
 (defn greet [name]
   (a name)
@@ -24,5 +26,4 @@
   (= favorite-number 7) (println "A lucky number.")
   :else (println "Just a number."))
 
-(println (cons 1 [1 2 3]))
-(quote (or 1 2))
+(println (cons 1 (list 1 2 3)))

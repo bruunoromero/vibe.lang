@@ -1,5 +1,9 @@
 # @vibe/parser Changelog
 
+## 2025-12-30
+
+- Removed the auto-gensym placeholder reader behavior. The parser once again treats `#` as a delimiter so `foo#` no longer lexes as a special symbol, and the associated regression tests were dropped alongside the feature.
+
 ## 2025-12-28
 
 - **Feature: try/catch/finally scoping** — The parser's `ScopeAnnotator` now recognizes try forms and allocates a dedicated child scope for catch clauses so caught error bindings are hygienically isolated from the try body. Finally clauses execute in the parent scope.

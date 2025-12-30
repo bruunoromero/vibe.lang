@@ -351,14 +351,6 @@ export class Lexer {
       length += 1;
     }
 
-    if (
-      length > 0 &&
-      (await this.peek()) === "#" &&
-      this.isAutoGensymSuffixBoundary(await this.peek(1))
-    ) {
-      await this.advance();
-    }
-
     const lexeme = this.sliceFrom(start);
     const normalized = lexeme.toLowerCase();
 
@@ -583,13 +575,6 @@ export class Lexer {
       return true;
     }
     return true;
-  }
-
-  private isAutoGensymSuffixBoundary(next: string): boolean {
-    if (next === "") {
-      return true;
-    }
-    return this.isDelimiter(next);
   }
 }
 

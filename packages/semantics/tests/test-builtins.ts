@@ -27,7 +27,6 @@ const EXTRA_SYMBOLS = [
   "vals",
   "type",
   "str",
-  "gensym",
 ] as const;
 
 export const TEST_BUILTINS: readonly string[] = [

@@ -345,36 +345,4 @@ describe("parseSource", () => {
       expect(nameSym4.value).toBe("foo-bar?");
     }
   });
-
-  test("parses gensym placeholders inside quote forms", async () => {
-    const source = "(quote (let [foo# 1 bar# foo#] bar#))";
-    const result = await parseSource(source);
-
-    expect(result.ok).toBeTrue();
-    expect(result.diagnostics).toHaveLength(0);
-    const programBody = result.program.body[0];
-    expect(programBody?.kind).toBe(NodeKind.Quote);
-    if (!programBody || programBody.kind !== NodeKind.Quote) {
-      throw new Error("Expected quote node");
-    }
-    const target = programBody.target;
-    if (!target || target.kind !== NodeKind.List) {
-      throw new Error("Expected list expression inside syntax quote");
-    }
-    const bindings = target.elements[1];
-    if (!bindings || bindings.kind !== NodeKind.List) {
-      throw new Error("Expected binding list inside syntax quote");
-    }
-    const placeholderSymbols = target.elements
-      .concat(bindings.elements)
-      .filter(
-        (node): node is SymbolNode =>
-          Boolean(node) && node.kind === NodeKind.Symbol
-      )
-      .map((node) => node.value);
-    const placeholders = placeholderSymbols.filter((value) =>
-      value.endsWith("#")
-    );
-    expect(placeholders).toEqual(["bar#", "foo#", "bar#", "foo#"]);
-  });
 });

@@ -4,6 +4,7 @@
 
 - Top-level emission now distinguishes between `def` and `defp`. Public defs still emit `export const` declarations while private defs emit unexported `const` bindings, keeping generated modules aligned with the new visibility semantics.
 - Macro filtering inspects both `def` and `defp` heads so private macros remain compile-time only. A new regression test in `packages/codegen/tests/generate.test.ts` verifies that `defp` bindings never appear in the compiled module exports.
+- Dropped the gensym-specific alias sanitizer path. Identifier mapping no longer reserves `_HASH` or rewrites `foo#` placeholders since the syntax was removed upstream.
 
 ## 2025-12-29
 

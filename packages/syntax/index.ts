@@ -102,7 +102,6 @@ export const BUILTIN_SYMBOLS = [
   "require",
   "external",
   "import",
-  "gensym",
   "spread",
   "unquote",
 ] as const;

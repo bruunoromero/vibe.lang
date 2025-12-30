@@ -339,28 +339,23 @@ describe("analyzeProgram", () => {
     expectDiagnostic(analysis, "SEM_FN_REST_POSITION");
   });
 
-  test("reports unresolved symbols", async () => {
+  test("allows unresolved symbols without diagnostics", async () => {
     const analysis = await analyzeSource(withArithmeticPrelude("(+ mystery)"));
 
-    expect(analysis.ok).toBeFalse();
-    expect(analysis.diagnostics.map((d) => d.code)).toContain(
-      "SEM_UNRESOLVED_SYMBOL"
-    );
+    expect(analysis.ok).toBeTrue();
+    expect(getDiagnosticCodes(analysis)).not.toContain("SEM_UNRESOLVED_SYMBOL");
   });
 
-  test("attaches spans to unresolved symbol diagnostics", async () => {
+  test("records metadata for unresolved symbol usages", async () => {
     const analysis = await analyzeSource(withArithmeticPrelude("(+ mystery)"));
 
-    const diagnostic = analysis.diagnostics.find(
-      (d) => d.code === "SEM_UNRESOLVED_SYMBOL"
-    );
     const mysteryUsage = analysis.graph.nodes.find(
       (node) => node.symbol?.name === "mystery" && node.symbol.role === "usage"
     );
 
-    expect(diagnostic).toBeDefined();
     expect(mysteryUsage).toBeDefined();
-    expect(diagnostic?.span).toEqual(mysteryUsage?.span);
+    expect(mysteryUsage?.symbol?.symbolId).toBeUndefined();
+    expect(mysteryUsage?.symbol?.name).toBe("mystery");
   });
 
   test("resolves shadowed bindings to the innermost scope", async () => {
@@ -515,21 +510,19 @@ describe("analyzeProgram", () => {
     expect(outerUsage?.symbol?.symbolId).toBe(outerSymbol?.id);
   });
 
-  test("records gensym-generated bindings with unique names", async () => {
+  test("records macro-generated bindings without gensym helpers", async () => {
     const analysis = await analyzeSource(`
       (def with-unique
         (macro+ ([expr]
-          (let [tmp (gensym "tmp")]
-            (quote (let [(unquote tmp) (unquote expr)]
-              42))))))
+          (quote (let [tmp (unquote expr)]
+            tmp)))))
 
       (with-unique 10)
     `);
 
-    debugDiagnostics("gensym-generated bindings", analysis);
     expect(analysis.ok).toBeTrue();
-    const generatedSymbol = analysis.graph.symbols.find((symbol) =>
-      symbol.name.startsWith("tmp__")
+    const generatedSymbol = analysis.graph.symbols.find(
+      (symbol) => symbol.name === "tmp"
     );
     expect(generatedSymbol).toBeDefined();
 
@@ -578,48 +571,13 @@ describe("analyzeProgram", () => {
     expectDiagnostic(extraArgs, "SEM_THROW_TOO_MANY_ARGS");
   });
 
-  test("instantiates auto gensym placeholders inside syntax quotes", async () => {
-    const analysis = await analyzeSource(`
-      (def capture
-        (macro+ ([expr]
-           (quote (let [foo# (unquote expr)]
-             foo#)))))
-
-      (capture 99)
-    `);
-
-    debugDiagnostics("auto gensym placeholders", analysis);
-    expect(getDiagnosticCodes(analysis)).not.toContain(
-      "SEM_GENSYM_PLACEHOLDER_CONTEXT"
-    );
-    const gensymSymbol = analysis.graph.symbols.find((symbol) =>
-      symbol.name.startsWith("foo__")
-    );
-    expect(gensymSymbol).toBeDefined();
-    const usages = analysis.graph.nodes.filter(
-      (node) => node.symbol?.symbolId === gensymSymbol?.id
-    );
-    expect(
-      usages.some((node) => node.symbol?.role === "definition")
-    ).toBeTrue();
-    expect(usages.some((node) => node.symbol?.role === "usage")).toBeTrue();
-  });
-
-  test("rejects gensym placeholders outside syntax quotes", async () => {
-    const analysis = await analyzeSource("(def bad foo#)");
-
-    expect(getDiagnosticCodes(analysis)).toContain(
-      "SEM_GENSYM_PLACEHOLDER_CONTEXT"
-    );
-  });
-
   test("assigns unique hygiene tags to macro-generated bindings", async () => {
     const analysis = await analyzeSource(
       withArithmeticPrelude(`
         (def with-temp
           (macro+ ([value]
-            (quote (let [tmp# (unquote value)]
-              tmp#)))))
+            (quote (let [tmp (unquote value)]
+              tmp)))))
 
         (let [a (with-temp 1)
               b (with-temp 2)]
@@ -630,7 +588,7 @@ describe("analyzeProgram", () => {
     expect(getDiagnosticCodes(analysis)).not.toContain("SEM_DUPLICATE_SYMBOL");
 
     const tmpSymbols = analysis.graph.symbols.filter(
-      (symbol) => symbol.name.startsWith("tmp__") && symbol.kind === "var"
+      (symbol) => symbol.name === "tmp" && symbol.kind === "var"
     );
     expect(tmpSymbols.length).toBe(2);
 
@@ -646,8 +604,8 @@ describe("analyzeProgram", () => {
       withArithmeticPrelude(`
         (def with-temp
           (macro+ ([expr]
-            (quote (let [tmp# (unquote expr)]
-              tmp#)))))
+            (quote (let [tmp (unquote expr)]
+              tmp)))))
 
         (def answer (with-temp (+ 1 2)))
       `)
@@ -655,9 +613,7 @@ describe("analyzeProgram", () => {
 
     expect(analysis.ok).toBeTrue();
     const tmpDefinition = analysis.graph.nodes.find(
-      (node) =>
-        node.symbol?.name?.startsWith("tmp__") &&
-        node.symbol.role === "definition"
+      (node) => node.symbol?.name === "tmp" && node.symbol.role === "definition"
     );
     expect(tmpDefinition).toBeDefined();
 
@@ -774,7 +730,7 @@ describe("analyzeProgram", () => {
       const analysis = await analyzeSource(`
         (def wrap
           (macro+ ([expr]
-            (let [tmp (gensym "wrap")]
+            (let [tmp (quote tmp)]
               (quote (let [(unquote tmp) (unquote expr)]
                  (unquote tmp)))))))
         (wrap 1)

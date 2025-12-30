@@ -583,56 +583,6 @@ describe("Interpreter - String Operations", () => {
   });
 });
 
-describe("Interpreter - Utility", () => {
-  test("gensym generates unique symbols", async () => {
-    const parseResult = await parseSource("(gensym) (gensym)");
-    const env = createRootEnvironment();
-    const context = { callDepth: 0, gensymCounter: { value: 0 } };
-    const result1 = await evaluate(parseResult.program.body[0]!, env, context);
-    const result2 = await evaluate(parseResult.program.body[1]!, env, context);
-    expect(result1.ok).toBeTrue();
-    expect(result2.ok).toBeTrue();
-    expect(result1.value?.kind).toBe("symbol");
-    expect(result2.value?.kind).toBe("symbol");
-    expect((result1.value as any).value).not.toBe((result2.value as any).value);
-  });
-
-  test("gensym with hint", async () => {
-    const result = await evalSource('(gensym "temp")');
-    expect(result.ok).toBeTrue();
-    expect(result.value?.kind).toBe("symbol");
-    expect((result.value as any).value).toContain("temp");
-  });
-
-  test("quote auto gensym placeholders reuse generated names", async () => {
-    const result = await evalSource("(quote (let [foo# 1] foo#))");
-    expect(result.ok).toBeTrue();
-    const quoted = result.value;
-    expect(quoted?.kind).toBe("list");
-    if (!quoted || quoted.kind !== "list") {
-      throw new Error("Expected list value");
-    }
-    const [_letSym, bindings, usage] = quoted.elements;
-    expect(bindings?.kind).toBe("list");
-    if (!bindings || bindings.kind !== "list") {
-      throw new Error("Expected list bindings");
-    }
-    const bindingSymbol = bindings.elements[0];
-    expect(bindingSymbol?.kind).toBe("symbol");
-    expect(usage?.kind).toBe("symbol");
-    if (bindingSymbol?.kind === "symbol" && usage?.kind === "symbol") {
-      expect(bindingSymbol.value).toBe(usage.value);
-      expect(bindingSymbol.value).toMatch(/^foo__\d+/);
-    }
-  });
-
-  test("quote forbids namespace-qualified auto gensyms", async () => {
-    const result = await evalSource("(quote alias/foo#)");
-    expect(result.ok).toBeFalse();
-    expect(result.diagnostics[0]?.code).toBe("INTERP_SYNTAX_GENSYM_NAMESPACE");
-  });
-});
-
 describe("Interpreter - Module Imports", () => {
   test("import flattens definitions into current namespace", async () => {
     const source = `(import "${IMPORT_FIXTURE}") pulled`;

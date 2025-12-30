@@ -66,18 +66,20 @@
   ([] true)
   ([x] x)
   ([x & rest]
-    (quote (let [temp# (unquote x)]
-        (if temp#
+    (quote
+     (let [temp (unquote x)]
+        (if temp
           (and (spread (unquote rest)))
-          temp#)))))
+          temp)))))
 
 (defmacro+ or
   ([] nil)
   ([x] x)
   ([x & rest]
-    (quote (let [temp# (unquote x)]
-        (if temp#
-          temp#
+    (quote
+     (let [temp (unquote x)]
+        (if temp
+          temp
           (or (spread (unquote rest))))))))
 
 (defn count [coll]

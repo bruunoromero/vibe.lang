@@ -232,7 +232,6 @@ interface MacroExpansionContext {
   readonly callSpan: SourceSpan;
   readonly dependencies?: readonly ModuleMacroDependency[];
   readonly originModuleId?: string;
-  autoGensyms?: Map<string, string>;
 }
 
 const PATTERN_ERROR_CODE_MAP: Record<PatternErrorKind, string> = {
@@ -293,9 +292,7 @@ export class SemanticAnalyzer {
   private nextScopeId = 0;
   private nextSymbolId = 0;
   private nextNodeId = 0;
-  private nextGensymId = 0;
   private rootScopeId: ScopeId | null = null;
-  private syntaxQuoteDepth = 0;
 
   constructor(options: AnalyzeOptions = {}) {
     this.builtins = options.builtins ?? (BUILTIN_SYMBOLS as readonly string[]);
@@ -368,16 +365,6 @@ export class SemanticAnalyzer {
         break;
 
       case NodeKind.Symbol:
-        if (
-          this.syntaxQuoteDepth === 0 &&
-          this.isAutoGensymPlaceholder(node.value)
-        ) {
-          this.report(
-            `Auto gensym placeholder ${node.value} may only appear inside a syntax-quoted template`,
-            node.span,
-            "SEM_GENSYM_PLACEHOLDER_CONTEXT"
-          );
-        }
         this.recordSymbolUsage(node, nodeScopeId, "usage");
         break;
       default:
@@ -1919,14 +1906,9 @@ export class SemanticAnalyzer {
     }
     // When not in a macro expansion context, just visit the target normally
     if (!context) {
-      this.syntaxQuoteDepth += 1;
-      try {
-        // Walk the quoted structure without expanding macros or recording
-        // symbol usages so quoted forms remain literal data at runtime.
-        await this.visitQuoted(node.target, scopeId);
-      } finally {
-        this.syntaxQuoteDepth -= 1;
-      }
+      // Walk the quoted structure without expanding macros or recording
+      // symbol usages so quoted forms remain literal data at runtime.
+      await this.visitQuoted(node.target, scopeId);
       return;
     }
     const expanded = await this.instantiateTemplate(node.target, context);
@@ -1993,10 +1975,7 @@ export class SemanticAnalyzer {
         if (!node.target) {
           return null;
         }
-        return await this.instantiateTemplate(
-          node.target,
-          this.forkAutoGensymContext(context)
-        );
+        return await this.instantiateTemplate(node.target, context);
       case NodeKind.Symbol:
         return this.instantiateSymbolNode(node as SymbolNode, context);
       default:
@@ -2045,52 +2024,9 @@ export class SemanticAnalyzer {
 
   private instantiateSymbolNode(
     node: SymbolNode,
-    context: MacroExpansionContext
+    _context: MacroExpansionContext
   ): SymbolNode {
-    if (!this.isAutoGensymPlaceholder(node.value)) {
-      return this.cloneExpression(node);
-    }
-
-    if (node.value.includes("/")) {
-      this.report(
-        `Auto gensym placeholder ${node.value} cannot include a namespace`,
-        node.span,
-        "SEM_GENSYM_PLACEHOLDER_NAMESPACE"
-      );
-      return this.cloneExpression(node);
-    }
-
-    const placeholders = this.ensureAutoGensymMap(context);
-    const existing = placeholders.get(node.value);
-    if (existing) {
-      return this.createSymbolLiteral(node.span, existing);
-    }
-
-    const hint = node.value.slice(0, -1);
-    const generated = this.createGensymSymbol(
-      node.span,
-      hint.length > 0 ? hint : null
-    );
-    placeholders.set(node.value, generated.value);
-    return generated;
-  }
-
-  private forkAutoGensymContext(
-    context: MacroExpansionContext
-  ): MacroExpansionContext {
-    return {
-      ...context,
-      autoGensyms: new Map<string, string>(),
-    };
-  }
-
-  private ensureAutoGensymMap(
-    context: MacroExpansionContext
-  ): Map<string, string> {
-    if (!context.autoGensyms) {
-      context.autoGensyms = new Map<string, string>();
-    }
-    return context.autoGensyms;
+    return this.cloneExpression(node);
   }
 
   private isUnquoteCall(node: ListNode): boolean {
@@ -2224,10 +2160,8 @@ export class SemanticAnalyzer {
 
     const evalContext = {
       callDepth: 0,
-      gensymCounter: { value: this.nextGensymId },
     };
     const result = await evaluate(node, env, evalContext);
-    this.nextGensymId = evalContext.gensymCounter.value;
 
     if (!result.ok) {
       for (const diagnostic of result.diagnostics) {
@@ -2489,15 +2423,6 @@ export class SemanticAnalyzer {
     };
   }
 
-  private createGensymSymbol(
-    span: SourceSpan,
-    hint: string | null
-  ): SymbolNode {
-    const base = hint && hint.length > 0 ? hint : "g";
-    const unique = `${base}__${this.nextGensymId++}`;
-    return this.createSymbolLiteral(span, unique);
-  }
-
   private createSymbolLiteral(span: SourceSpan, name: string): SymbolNode {
     return {
       kind: NodeKind.Symbol,
@@ -2505,10 +2430,6 @@ export class SemanticAnalyzer {
       lexeme: name,
       value: name,
     };
-  }
-
-  private isAutoGensymPlaceholder(value: string): boolean {
-    return value.endsWith("#");
   }
 
   private initializeRootScope(program: ProgramNode): ScopeId {
@@ -2678,13 +2599,6 @@ export class SemanticAnalyzer {
     }
 
     const binding = this.resolveSymbol(node.value, scopeId);
-    if (!binding) {
-      this.report(
-        `Unresolved symbol ${node.value}`,
-        node.span,
-        "SEM_UNRESOLVED_SYMBOL"
-      );
-    }
     this.recordNode(node, scopeId, {
       name: node.value,
       role,
@@ -2847,7 +2761,6 @@ class AliasAllocator {
     // Special
     ["~", "_TILDE"],
     ["@", "_AT"],
-    ["#", "_HASH"],
   ]);
 
   allocate(name: string, symbolId: SymbolId, preferRaw: boolean): string {
@@ -2865,7 +2778,7 @@ class AliasAllocator {
     }
 
     // For compound names, check for trailing special characters first
-    const trailingSpecialChars = new Set(["?", "!", "*", "+", "/", "%", "#"]);
+    const trailingSpecialChars = new Set(["?", "!", "*", "+", "/", "%"]);
     let trailingOp = "";
     let baseValue = value;
 
