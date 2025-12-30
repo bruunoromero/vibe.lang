@@ -637,7 +637,12 @@ class ModuleEmitter {
 
   private emitListExpression(node: ListNode): string {
     const [head, ...tail] = node.elements;
-    if (!head) {
+
+    if (node.elements.length === 0) {
+      return "[]";
+    }
+
+    if (head === null || head === undefined) {
       return "null";
     }
 

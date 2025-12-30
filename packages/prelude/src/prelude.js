@@ -130,10 +130,10 @@ export const dec = (x__symbol_89) => {
   return _DASH(x__symbol_89, 1);
 };
 export const map = (f__symbol_91, coll__symbol_92) => {
-  return (empty_QMARK(coll__symbol_92) ? null : cons(f__symbol_91(first(coll__symbol_92)), map(f__symbol_91, rest(coll__symbol_92))));
+  return (empty_QMARK(coll__symbol_92) ? [] : cons(f__symbol_91(first(coll__symbol_92)), map(f__symbol_91, rest(coll__symbol_92))));
 };
 export const filter = (pred__symbol_94, coll__symbol_95) => {
-  return (empty_QMARK(coll__symbol_95) ? null : (() => {
+  return (empty_QMARK(coll__symbol_95) ? [] : (() => {
   const x__symbol_96 = first(coll__symbol_95);
   const xs__symbol_97 = rest(coll__symbol_95);
   return (pred__symbol_94(x__symbol_96) ? cons(x__symbol_96, filter(pred__symbol_94, xs__symbol_97)) : filter(pred__symbol_94, xs__symbol_97));
@@ -142,18 +142,18 @@ export const filter = (pred__symbol_94, coll__symbol_95) => {
 export const concat = (...colls__symbol_99) => {
   return reduce((acc__symbol_100, coll__symbol_101) => {
   return (empty_QMARK(coll__symbol_101) ? acc__symbol_100 : concat(acc__symbol_100, cons(first(coll__symbol_101), rest(coll__symbol_101))));
-}, null, colls__symbol_99);
+}, [], colls__symbol_99);
 };
 export const take = (n__symbol_103, coll__symbol_104) => {
-  return (_LT_EQ(n__symbol_103, 0) ? null : (empty_QMARK(coll__symbol_104) ? null : (__runtime_keyword_STAR("else") ? cons(first(coll__symbol_104), take(dec(n__symbol_103), rest(coll__symbol_104))) : null)));
+  return (_LT_EQ(n__symbol_103, 0) ? [] : (empty_QMARK(coll__symbol_104) ? [] : (__runtime_keyword_STAR("else") ? cons(first(coll__symbol_104), take(dec(n__symbol_103), rest(coll__symbol_104))) : null)));
 };
 export const drop = (n__symbol_106, coll__symbol_107) => {
-  return (_LT_EQ(n__symbol_106, 0) ? coll__symbol_107 : (empty_QMARK(coll__symbol_107) ? null : (__runtime_keyword_STAR("else") ? drop(dec(n__symbol_106), rest(coll__symbol_107)) : null)));
+  return (_LT_EQ(n__symbol_106, 0) ? coll__symbol_107 : (empty_QMARK(coll__symbol_107) ? [] : (__runtime_keyword_STAR("else") ? drop(dec(n__symbol_106), rest(coll__symbol_107)) : null)));
 };
 export const reverse = (coll__symbol_109) => {
   return reduce((acc__symbol_110, x__symbol_111) => {
   return cons(x__symbol_111, acc__symbol_110);
-}, null, coll__symbol_109);
+}, [], coll__symbol_109);
 };
 export const println = (...args__symbol_113) => {
   return runtime.println(args__symbol_113);
