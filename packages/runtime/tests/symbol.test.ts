@@ -7,7 +7,7 @@ import {
   eq_STAR,
   assoc_STAR as assoc,
   get_STAR as get,
-  type,
+  type_STAR as type,
 } from "../src/index";
 
 describe("runtime symbols", () => {

@@ -139,8 +139,9 @@
     nil)
   ([test expr & rest]
     (if (even? (count rest))
-      (quote (if (unquote test)
-         (unquote expr)
+      (quote
+       (if (unquote test)
+        (unquote expr)
         (cond (spread (unquote rest)))))
       (throw "cond requires an even number of clauses"))))
 

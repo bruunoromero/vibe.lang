@@ -212,7 +212,7 @@ describe("Interpreter - Runtime Symbols", () => {
 
   test("runtime/type returns keyword-style symbols", async () => {
     const result = await evalSource(
-      '(runtime/type (runtime/symbol* "alpha"))',
+      '(runtime/type* (runtime/symbol* "alpha"))',
       true
     );
     expect(result.ok).toBeTrue();
@@ -567,21 +567,21 @@ describe("Interpreter - Sequence Operations", () => {
 describe("Interpreter - Type Predicates", () => {
   test("type returns :number", async () => {
     // TODO: Implement type function in @vibe/runtime
-    const result = await evalSource("(runtime/type 42)", true);
+    const result = await evalSource("(runtime/type* 42)", true);
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "keyword", value: "number" });
   });
 
   test("type returns :string", async () => {
     // TODO: Implement type function in @vibe/runtime
-    const result = await evalSource('(runtime/type "hello")', true);
+    const result = await evalSource('(runtime/type* "hello")', true);
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "keyword", value: "string" });
   });
 
   test("type returns :nil", async () => {
     // TODO: Implement type function in @vibe/runtime
-    const result = await evalSource("(runtime/type nil)", true);
+    const result = await evalSource("(runtime/type* nil)", true);
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "keyword", value: "nil" });
   });
