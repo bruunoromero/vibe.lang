@@ -234,6 +234,21 @@ describe("generateModule", () => {
     expect(typeof runtime.builder).toBe("function");
   });
 
+  test("quote emits runtime symbol values", async () => {
+    const fixture = withRuntimePrelude(
+      `
+      (def payload (quote [or 1 2]))
+      payload
+    `.trim()
+    );
+    const { result, runtime } = await runProgram(fixture);
+    expect(result.moduleText).toContain('__runtime_symbol_STAR("or")');
+    expect(runtime.payload[0]).toEqual(
+      expect.objectContaining({ __vibeType: "symbol", name: "or" })
+    );
+    expect(runtime.payload.slice(1)).toEqual([1, 2]);
+  });
+
   test("emits destructuring for let bindings and function parameters", async () => {
     const fixture = withRuntimePrelude(
       `

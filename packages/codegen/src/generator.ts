@@ -212,6 +212,12 @@ class ModuleEmitter {
     if (hasKeywordNodes) {
       this.requireRuntimeHelper("keyword*");
     }
+    const hasQuoteNodes = graph.nodes.some(
+      (node) => node.kind === NodeKind.Quote
+    );
+    if (hasQuoteNodes) {
+      this.requireRuntimeHelper("symbol*");
+    }
   }
 
   private collectNamespaceImports(): void {
@@ -566,7 +572,8 @@ class ModuleEmitter {
   private emitQuotedExpression(node: ExpressionNode): string {
     switch (node.kind) {
       case NodeKind.Symbol: {
-        return this.emitSymbol(node);
+        const helper = this.requireRuntimeHelper("symbol*");
+        return `${helper}(${JSON.stringify(node.value)})`;
       }
       case NodeKind.Keyword:
         return this.emitKeywordLiteral((node as any).value);
@@ -653,9 +660,7 @@ class ModuleEmitter {
         case "throw":
           return this.emitThrow(node);
         case "spread":
-          throw new Error(
-            "spread expressions can only appear inside function calls"
-          );
+          return this.emitSpread(node);
         default:
           break;
       }

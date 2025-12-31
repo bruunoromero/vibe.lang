@@ -2599,6 +2599,13 @@ export class SemanticAnalyzer {
     }
 
     const binding = this.resolveSymbol(node.value, scopeId);
+    if (!binding) {
+      this.report(
+        `Unresolved symbol ${node.value}`,
+        node.span,
+        "SEM_UNRESOLVED_SYMBOL"
+      );
+    }
     this.recordNode(node, scopeId, {
       name: node.value,
       role,

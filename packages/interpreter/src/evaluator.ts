@@ -438,7 +438,7 @@ const tryEvaluateSpecialForm = async (
     case "macro+":
       return evaluateMacroLiteral(node);
     case "spread":
-      return evaluateSpread(node);
+      return await evaluateSpread(node, env, context);
     default:
       return null;
   }
@@ -449,12 +449,64 @@ const evaluateMacroLiteral = (_node: ListNode): EvalResult => {
   return { ok: true, value: makeNil(), diagnostics: [] };
 };
 
-const evaluateSpread = (node: ListNode): EvalResult => {
-  // Spread is a codegen-only construct. At compile-time, we treat it as nil
-  // since it cannot be meaningfully evaluated. This allows definitions containing
-  // spread to pass semantic analysis, though they won't be fully evaluable at
-  // compile-time.
-  return { ok: true, value: makeNil(), diagnostics: [] };
+const evaluateSpread = async (
+  node: ListNode,
+  env: Environment,
+  context: EvalContext
+): Promise<EvalResult> => {
+  const argNode = node.elements[1];
+  if (!argNode) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "spread requires a value expression",
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SPREAD_REQUIRES_VALUE",
+        },
+      ],
+    };
+  }
+
+  const extras = node.elements
+    .slice(2)
+    .filter((element): element is ExpressionNode => Boolean(element));
+  if (extras.length > 0) {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "spread accepts exactly one argument",
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SPREAD_ARITY",
+        },
+      ],
+    };
+  }
+
+  const result = await evaluateNode(argNode, env, context);
+  if (!result.ok) {
+    return result;
+  }
+
+  const value = result.value ?? makeNil();
+  if (value.kind !== "list") {
+    return {
+      ok: false,
+      diagnostics: [
+        {
+          message: "spread expects a list to splice",
+          span: node.span,
+          severity: DiagnosticSeverity.Error,
+          code: "INTERP_SPREAD_NOT_SEQUENCE",
+        },
+      ],
+    };
+  }
+
+  return { ok: true, value, diagnostics: [] };
 };
 
 const evaluateDef = async (
@@ -1789,11 +1841,10 @@ const jsToValue = (jsValue: any): Value => {
     return makeError(jsValue);
   }
   if (typeof jsValue === "object") {
-    const entries = new Map<string, Value>();
-    for (const [k, v] of Object.entries(jsValue)) {
-      entries.set(k, jsToValue(v));
-    }
-    return makeExternalNamespace(Object.fromEntries(entries));
+    // Preserve references to arbitrary JS objects (including globalThis) so
+    // the interpreter can hand them back to runtime helpers without trying to
+    // recursively serialize potentially circular graphs.
+    return makeExternalNamespace(jsValue);
   }
   // For functions and other types, wrap as a string representation
   return makeString(String(jsValue));

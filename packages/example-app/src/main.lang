@@ -5,13 +5,15 @@
 (def favorite-number 42)
 
 (defmacro a [x]
-  (quote 
-    (let [y (unquote x)]
-      (println "Inside macro a, got:" y))))
+  (let [y (name x)]
+    (quote 
+      (println "Inside macro a, got:" (unquote y)))))
 
-(defn greet [name]
-  (a name)
-  (println "Hello, " name "!"))
+(defn greet [arg]
+  (a arg)
+  (println "Hello, " arg "!"))
+
+(declare Date)
 
 (println "Favorite number:" favorite-number)
 (println "math/add 40 2 ->" (math/add 40 2))
@@ -26,4 +28,10 @@
   (= favorite-number 7) (println "A lucky number.")
   :else (println "Just a number."))
 
-(println (cons 1 (list 1 2 3)))
+(println Date)
+(list 1 2 3)
+
+(do 
+  (println "This is line 1 of the do block.")
+  (println "This is line 2 of the do block.")
+  (println "This is line 3 of the do block."))

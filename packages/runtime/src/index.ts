@@ -122,14 +122,11 @@ export const println = (...args: unknown[]) => {
   return args.length === 0 ? null : args[args.length - 1];
 };
 
-export const type = (v: unknown): RuntimeKeyword => {
-  if (v === null) return createRuntimeKeyword("nil");
+export const type_STAR = (v: unknown): RuntimeKeyword => {
+  if (v === null || v === undefined) return createRuntimeKeyword("nil");
   if (isRuntimeSymbol(v)) return createRuntimeKeyword("symbol");
   if (isRuntimeKeyword(v)) return createRuntimeKeyword("keyword");
-  if (isRuntimeList(v)) return createRuntimeKeyword("list");
   if (Array.isArray(v)) return createRuntimeKeyword("list");
-  if (v instanceof Set) return createRuntimeKeyword("list");
-  if (v instanceof Map) return createRuntimeKeyword("map");
   if (typeof v === "boolean") return createRuntimeKeyword("boolean");
   if (typeof v === "number") return createRuntimeKeyword("number");
   if (typeof v === "string") return createRuntimeKeyword("string");
@@ -138,6 +135,13 @@ export const type = (v: unknown): RuntimeKeyword => {
   if (typeof v === "bigint") return createRuntimeKeyword("bigint");
   if (typeof v === "symbol") return createRuntimeKeyword("js-symbol");
   return createRuntimeKeyword("object");
+};
+
+export const name_STAR = (v: unknown): string => {
+  if (isRuntimeSymbol(v) || isRuntimeKeyword(v)) {
+    return v.name;
+  }
+  return "testing";
 };
 
 // Equality check
@@ -357,13 +361,15 @@ export const apply = (f: unknown, args: unknown[]): unknown => {
   return f(...args);
 };
 
+export const getGlobalThis = () => globalThis;
+
 export default {
   symbol_STAR,
   symbol_QMARK,
   keyword_STAR,
   keyword_QMARK,
   println,
-  type,
+  type_STAR,
   seq_QMARK,
   count,
   list_STAR,
@@ -385,4 +391,6 @@ export default {
   keys_STAR,
   vals_STAR,
   apply,
+  getGlobalThis,
+  name_STAR,
 };

@@ -481,6 +481,24 @@ describe("Interpreter - Spread", () => {
     expect(result.ok).toBeTrue();
     expect(result.value).toEqual({ kind: "number", value: 3 });
   });
+
+  test("spread form materializes list value", async () => {
+    const result = await evalSource("(spread (quote (1 2 3)))", true);
+    expect(result.ok).toBeTrue();
+    const list = result.value as any;
+    expect(list.kind).toBe("list");
+    expect(list.elements.map((elem: any) => elem.value)).toEqual([1, 2, 3]);
+  });
+
+  test("spread form rejects non-list inputs", async () => {
+    const result = await evalSource("(spread 42)", true);
+    expect(result.ok).toBeFalse();
+    expect(
+      result.diagnostics.some(
+        (diagnostic) => diagnostic.code === "INTERP_SPREAD_NOT_SEQUENCE"
+      )
+    ).toBeTrue();
+  });
 });
 
 describe("Interpreter - Sequence Operations", () => {
