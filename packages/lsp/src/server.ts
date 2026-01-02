@@ -102,11 +102,7 @@ function startSocketServer(options: CliOptions): void {
   const server = net.createServer((socket) => {
     const reader = new StreamMessageReader(socket);
     const writer = new StreamMessageWriter(socket);
-    const connection = createConnection(
-      ProposedFeatures.all,
-      reader,
-      writer
-    );
+    const connection = createConnection(ProposedFeatures.all, reader, writer);
     registerLanguageServer(connection, { transport: "socket" });
     connection.listen();
     socket.on("error", (error) => {

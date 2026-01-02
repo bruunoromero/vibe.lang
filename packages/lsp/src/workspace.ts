@@ -26,7 +26,10 @@ export interface WorkspaceContext {
 
 export class WorkspaceManager {
   private readonly contexts = new Map<string, Promise<WorkspaceContext>>();
-  private readonly formatterCache = new Map<string, FormFormattingConfig | undefined>();
+  private readonly formatterCache = new Map<
+    string,
+    FormFormattingConfig | undefined
+  >();
 
   constructor(private readonly connection: Connection) {}
 
@@ -42,7 +45,9 @@ export class WorkspaceManager {
     return pending;
   }
 
-  async getFormatterConfig(dir: string): Promise<FormFormattingConfig | undefined> {
+  async getFormatterConfig(
+    dir: string
+  ): Promise<FormFormattingConfig | undefined> {
     const normalized = path.resolve(dir);
     if (this.formatterCache.has(normalized)) {
       return this.formatterCache.get(normalized);
@@ -52,7 +57,9 @@ export class WorkspaceManager {
     return config;
   }
 
-  private async initializeContext(rootDir: string | null): Promise<WorkspaceContext> {
+  private async initializeContext(
+    rootDir: string | null
+  ): Promise<WorkspaceContext> {
     const packageRegistry = PackageRegistry.create(rootDir);
     const moduleExports = new ModuleExportsTable();
     const knownModules = new Set<string>();
@@ -90,7 +97,9 @@ export class WorkspaceManager {
       });
     } catch (error) {
       this.connection.console.error(
-        `[vibe][lsp] Failed to seed exports for ${metadata.name}: ${String(error)}`
+        `[vibe][lsp] Failed to seed exports for ${metadata.name}: ${String(
+          error
+        )}`
       );
     }
   }

@@ -59,7 +59,9 @@ export const registerLanguageServer = (
   connection.onInitialize((params: InitializeParams): InitializeResult => {
     const capabilities = params.capabilities;
     connection.console.info(
-      `[vibe][lsp] transport=${options.transport} clientName=${capabilities?.workspace?.workspaceEdit ? "workspace" : "unknown"}`
+      `[vibe][lsp] transport=${options.transport} clientName=${
+        capabilities?.workspace?.workspaceEdit ? "workspace" : "unknown"
+      }`
     );
     return {
       capabilities: {
@@ -221,7 +223,9 @@ export const registerLanguageServer = (
       workspace.moduleExports.register(moduleId, entries);
     } catch (error) {
       connection.console.error(
-        `[vibe][lsp] Failed to register exports for ${moduleId}: ${String(error)}`
+        `[vibe][lsp] Failed to register exports for ${moduleId}: ${String(
+          error
+        )}`
       );
     }
   }
@@ -276,7 +280,10 @@ const positionWithinSpan = (position: Position, span: SourceSpan): boolean => {
   if (position.line > span.end.line) {
     return false;
   }
-  if (position.line === span.start.line && position.character < span.start.column) {
+  if (
+    position.line === span.start.line &&
+    position.character < span.start.column
+  ) {
     return false;
   }
   if (position.line === span.end.line && position.character > span.end.column) {
