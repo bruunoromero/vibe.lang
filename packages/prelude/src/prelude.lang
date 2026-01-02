@@ -75,8 +75,8 @@
 (defmacro declarep [var]
   (quote 
     (defp (unquote var)
-          (get (global-this)
-              (unquote (name var))))))
+      (get (global-this)
+           (unquote (name var))))))
 
 (defmacro do [& body]
   (quote

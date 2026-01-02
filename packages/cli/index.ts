@@ -237,6 +237,11 @@ interface CompileSourcesResult {
   readonly fileCount: number;
 }
 
+interface CompileFailure {
+  readonly relativePath: string;
+  readonly stage: string;
+}
+
 const compileSources = async (
   options: CompileSourcesOptions
 ): Promise<CompileSourcesResult> => {
@@ -269,7 +274,10 @@ const compileSources = async (
   });
   await mkdir(outDir, { recursive: true });
   let hadFailure = false;
+  let processedCount = 0;
+  const failures: CompileFailure[] = [];
   for (const descriptor of descriptors) {
+    processedCount += 1;
     const moduleContext: FrontendContext = {
       moduleId: descriptor.absolutePath,
       moduleResolver,
@@ -281,33 +289,55 @@ const compileSources = async (
     if (options.debugMacros) {
       logMacroDebug(frontend.analysis, options.pretty);
     }
+    let failureStage: string | null = null;
     if (!frontend.ok) {
-      hadFailure = true;
-      continue;
-    }
-    const targetFileName = replaceLangExtension(descriptor.relativePath);
-    const outputPath = path.join(outDir, targetFileName);
-    const codegen = generateModule(
-      frontend.parse.program,
-      frontend.analysis.graph,
-      {
-        sourceName: descriptor.relativePath,
-        sourceContent: frontend.sourceText,
-        targetFileName,
+      failureStage = frontend.parse.ok ? "semantic analysis" : "parsing";
+    } else {
+      const targetFileName = replaceLangExtension(descriptor.relativePath);
+      const outputPath = path.join(outDir, targetFileName);
+      const codegen = generateModule(
+        frontend.parse.program,
+        frontend.analysis.graph,
+        {
+          sourceName: descriptor.relativePath,
+          sourceContent: frontend.sourceText,
+          targetFileName,
+        }
+      );
+      emitDiagnostics(codegen.diagnostics);
+      if (!codegen.ok) {
+        failureStage = "code generation";
+      } else {
+        await mkdir(path.dirname(outputPath), { recursive: true });
+        await writeFile(outputPath, codegen.moduleText, "utf8");
+        console.info(
+          `${logTag} wrote ${path.relative(process.cwd(), outputPath)}`
+        );
       }
-    );
-    emitDiagnostics(codegen.diagnostics);
-    if (!codegen.ok) {
-      hadFailure = true;
-      continue;
     }
-    await mkdir(path.dirname(outputPath), { recursive: true });
-    await writeFile(outputPath, codegen.moduleText, "utf8");
-    console.info(`${logTag} wrote ${path.relative(process.cwd(), outputPath)}`);
+    if (failureStage) {
+      hadFailure = true;
+      failures.push({
+        relativePath: descriptor.relativePath,
+        stage: failureStage,
+      });
+      console.error(
+        `${logTag} ${descriptor.relativePath} failed during ${failureStage}; continuing.`
+      );
+    }
+  }
+  if (failures.length > 0) {
+    const label = failures.length === 1 ? "module" : "modules";
+    console.error(
+      `${logTag} Encountered ${failures.length} ${label} with errors:`
+    );
+    for (const failure of failures) {
+      console.error(`${logTag}   • ${failure.relativePath} (${failure.stage})`);
+    }
   }
   return {
     ok: !hadFailure,
-    fileCount: descriptors.length,
+    fileCount: processedCount,
   };
 };
 
@@ -440,18 +470,32 @@ const runFrontend = async (
     (options.file ? path.resolve(options.file) : undefined);
   await ensureModuleExportsReady(targetModuleId);
   const parse = await parseSource(sourceText);
+  emitDiagnostics(parse.diagnostics);
+  if (!parse.ok) {
+    return {
+      sourceName,
+      sourceText,
+      parse,
+      analysis: {
+        ok: false,
+        graph: { nodes: [], symbols: [], scopes: [] },
+        diagnostics: [],
+      } as any,
+      ok: false,
+    } satisfies FrontendResult;
+  }
   const analysis = await analyzeProgram(parse.program, {
     moduleId: mergedContext.moduleId,
     moduleResolver: mergedContext.moduleResolver,
     moduleExports: MODULE_EXPORTS,
   });
-  emitDiagnostics([...parse.diagnostics, ...analysis.diagnostics]);
+  emitDiagnostics(analysis.diagnostics);
   return {
     sourceName,
     sourceText,
     parse,
     analysis,
-    ok: parse.ok && analysis.ok,
+    ok: analysis.ok,
   } satisfies FrontendResult;
 };
 
@@ -724,6 +768,7 @@ const runBuild = async (
       return 1;
     }
     let hadFailure = false;
+    const failedPackages: string[] = [];
     for (const node of graph.topoOrder) {
       const resolved = resolveVibePackageConfig(node.rootDir, node.vibe);
       if (resolved.sourceRoots.length === 0) {
@@ -741,6 +786,19 @@ const runBuild = async (
       });
       if (!result.ok) {
         hadFailure = true;
+        failedPackages.push(node.name);
+        console.error(
+          `[vibe][build] Package ${node.name} failed; continuing with remaining packages.`
+        );
+      }
+    }
+    if (failedPackages.length > 0) {
+      const label = failedPackages.length === 1 ? "package" : "packages";
+      console.error(
+        `[vibe][build] Encountered ${failedPackages.length} ${label} with errors:`
+      );
+      for (const name of failedPackages) {
+        console.error(`[vibe][build]   • ${name}`);
       }
     }
     return hadFailure ? 1 : 0;
