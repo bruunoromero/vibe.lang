@@ -31,11 +31,12 @@
 - [x] Surface diagnostics (with spans) from every stage and add `--show-ir`, `--show-ast`, and `--debug-macros` flags. **(Completed)** — `vibe run/compile` now accept `--show-ast` and `--show-ir` to stream AST + IR JSON to stderr alongside the existing diagnostics/pretty/debug-macro plumbing.
 - `--debug-macros` now streams semantic graphs + diagnostics to stderr for `analyze`, `run`, and `compile`. **(Completed)**
 - Capture the new behavior and flags in `packages/cli/CHANGELOG.md` and README usage examples. **(Completed)**
-- [x] Teach the CLI to read `package.json` `vibe.sources` plus `vibe.entry` metadata so `(require ...)` can target workspace packages (e.g., `@vibe/prelude`) while the emitted JavaScript relies on the package's published `exports` for runtime resolution.
-- [x] Introduce `vibe build [package|path]` which walks the workspace dependency graph, honors each package's `vibe.sources`/`vibe.outDir` config, and emits `.js` artifacts (in dependency order) so downstream packages import the published JavaScript instead of the `.lang` sources.
+- [x] Teach the CLI to read `vibe.config.ts` (`package.sources` + `package.entry`) metadata so `(require ...)` can target workspace packages (e.g., `@vibe/prelude`) while the emitted JavaScript relies on the package's published `exports` for runtime resolution.
+- [x] Introduce `vibe build [package|path]` which walks the workspace dependency graph, honors each package's `vibe.config.*` (`package.sources` / `package.outDir`) settings, and emits `.js` artifacts (in dependency order) so downstream packages import the published JavaScript instead of the `.lang` sources.
 
 ## 6. Docs, Tooling, and Automation
 
 - [x] Log every package-level change in its `CHANGELOG.md` and add a macro authoring guide under `docs/`. **(Completed)** — documented macro declaration, hygiene, and debugging workflows in `docs/macro-authoring.md` so contributors can follow consistent patterns.
 - Expand CI to run `bun test` and `bun run build` for all packages plus lint/format checks before release.
+- Introduce `@vibe/formatter` and wire `vibe fmt` (with `--check`) into the CLI so the repo has a canonical rewrite pass ready for future CI enforcement.
 - Ensure each package exposes the required scripts so `bun test` succeeds locally and in automation.

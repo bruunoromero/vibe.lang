@@ -1,12 +1,14 @@
 (import "@vibe/prelude")
+
 (require math "./math.lang")
+
 (external path "node:path")
 
 (def favorite-number 42)
 
 (defmacro a [x]
   (let [y (name x)]
-    (quote 
+    (quote
       (println "Inside macro a, got:" (unquote y)))))
 
 (defn greet [arg]
@@ -16,11 +18,17 @@
 (declare Date)
 
 (println "Favorite number:" favorite-number)
+
 (println "math/add 40 2 ->" (math/add 40 2))
+
 (println "math/multiply 6 7 ->" (math/multiply 6 7))
+
 (println "Path separator:" path/sep)
+
 (println "Joined path:" (path/join "/tmp" "example"))
+
 (greet "Node")
+
 (println (= 1 1 1 1 1))
 
 (cond
@@ -29,9 +37,10 @@
   :else (println "Just a number."))
 
 (println Date)
+
 (list 1 2 3)
 
-(do 
+(do
   (println "This is line 1 of the do block.")
   (println "This is line 2 of the do block.")
   (println "This is line 3 of the do block."))

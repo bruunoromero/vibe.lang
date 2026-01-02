@@ -1,5 +1,10 @@
 # @vibe/cli Changelog
 
+## 2026-01-02
+
+- Added `vibe fmt`, which rewrites `.lang` files in place using the new formatter package and surfaces parser diagnostics for invalid inputs. Use `--check` to exit with code `1` without touching the filesystem when files would change.
+- `vibe build`, the workspace module resolver, and the formatter now read package metadata and formatting presets from `vibe.config.ts` / `.js` (loaded via a new `@vibe/config` helper that also supports `defineConfig`). `package.json#vibe` is no longer consulted.
+
 ## 2025-12-31
 
 - Module export discovery now runs the semantic analyzer (with the module resolver/table) before scanning top-level forms, so helper macros such as `defmacro`, `defmacrop`, `defn`, and `defnp` expand into real `def`/`defp` bindings and get exported correctly.

@@ -1,0 +1,6 @@
+(def   foo   1)
+(def  bar   (+   foo  2))
+
+(do (println   "first log entry designed to trigger the formatter wrap because it is quite long")
+    (println "second log entry"   "with"   "extra"   "spacing")
+    (println   "third log entry that should also help exceed the width limit"))

@@ -9,6 +9,8 @@
     "repl": "bun index.ts repl"
   },
   "dependencies": {
+    "@vibe/config": "workspace:*",
+    "@vibe/formatter": "workspace:*",
     "@vibe/module-resolver": "workspace:*",
     "@vibe/syntax": "workspace:*",
     "@vibe/lexer": "workspace:*",

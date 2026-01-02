@@ -12,6 +12,7 @@
     "src"
   ],
   "dependencies": {
+    "@vibe/config": "workspace:*",
     "@vibe/semantics": "workspace:*",
     "@vibe/parser": "workspace:*",
     "@vibe/syntax": "workspace:*",

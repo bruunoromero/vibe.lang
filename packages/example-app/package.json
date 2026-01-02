@@ -7,14 +7,10 @@
     "clean": "rm -rf dist",
     "dev": "bun run ../cli/index.ts run --file src/main.lang",
     "build": "bun run ../cli/index.ts build --force",
-    "start": "node dist/main.js"
+    "start": "node dist/main.js",
+    "fmt": "bun run ../cli/index.ts fmt"
   },
   "dependencies": {
     "@vibe/prelude": "workspace:*"
-  },
-  "vibe": {
-    "sources": "./src",
-    "outDir": "./dist",
-    "entry": "./src/main.lang"
   }
 }

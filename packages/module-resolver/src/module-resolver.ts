@@ -11,7 +11,7 @@ import {
   normalizeRequireTarget,
 } from "./specifiers";
 import {
-  parseVibeConfig,
+  loadPackageVibeConfig,
   resolveVibePackageConfig,
   type VibePackageConfig,
 } from "./workspace-config";
@@ -144,7 +144,7 @@ const readPackageMetadata = (dir: string): PackageMetadata | null => {
     if (!name) {
       return null;
     }
-    const vibe = parseVibeConfig(manifest.vibe);
+    const vibe = loadPackageVibeConfig(dir);
     return { name, rootDir: dir, vibe } satisfies PackageMetadata;
   } catch {
     return null;

@@ -1,10 +1,5 @@
 import path from "node:path";
-
-export interface VibePackageConfig {
-  readonly sources?: readonly string[];
-  readonly outDir?: string;
-  readonly entry?: string;
-}
+import { loadVibeConfigForDir, type VibePackageConfig } from "@vibe/config";
 
 export interface ResolvedVibePackageConfig {
   readonly sourceRoots: readonly string[];
@@ -12,34 +7,23 @@ export interface ResolvedVibePackageConfig {
   readonly entry?: string;
 }
 
-export const parseVibeConfig = (
-  value: unknown
+const PACKAGE_CONFIG_CACHE = new Map<string, VibePackageConfig | null>();
+
+export const loadPackageVibeConfig = (
+  rootDir: string
 ): VibePackageConfig | undefined => {
-  if (!value || typeof value !== "object") {
+  const normalized = path.resolve(rootDir);
+  if (PACKAGE_CONFIG_CACHE.has(normalized)) {
+    return PACKAGE_CONFIG_CACHE.get(normalized) ?? undefined;
+  }
+  const loaded = loadVibeConfigForDir(normalized);
+  if (!loaded?.config.package) {
+    PACKAGE_CONFIG_CACHE.set(normalized, null);
     return undefined;
   }
-
-  const record = value as Record<string, unknown>;
-
-  const sources = normalizeStringArray(record.sources);
-  const outDir =
-    typeof record.outDir === "string" && record.outDir.length > 0
-      ? record.outDir
-      : undefined;
-  const entry =
-    typeof record.entry === "string" && record.entry.length > 0
-      ? record.entry
-      : undefined;
-
-  if ((!sources || sources.length === 0) && !outDir && !entry) {
-    return undefined;
-  }
-
-  return {
-    ...(sources ? { sources } : {}),
-    ...(outDir ? { outDir } : {}),
-    ...(entry ? { entry } : {}),
-  };
+  const normalizedConfig = normalizePackageConfig(loaded.config.package);
+  PACKAGE_CONFIG_CACHE.set(normalized, normalizedConfig ?? null);
+  return normalizedConfig;
 };
 
 export const resolveVibePackageConfig = (
@@ -62,8 +46,24 @@ export const hasVibeSources = (config?: VibePackageConfig): boolean => {
   return Boolean(config?.sources && config.sources.length > 0);
 };
 
+const normalizePackageConfig = (
+  config: VibePackageConfig
+): VibePackageConfig | undefined => {
+  const sources = normalizeStringArray(config.sources);
+  const outDir = normalizeString(config.outDir);
+  const entry = normalizeString(config.entry);
+  if (!sources && !outDir && !entry) {
+    return undefined;
+  }
+  return {
+    ...(sources ? { sources } : {}),
+    ...(outDir ? { outDir } : {}),
+    ...(entry ? { entry } : {}),
+  } satisfies VibePackageConfig;
+};
+
 const normalizeStringArray = (
-  value: unknown
+  value: readonly string[] | string | undefined
 ): readonly string[] | undefined => {
   if (Array.isArray(value)) {
     const entries = value.filter(
@@ -75,4 +75,8 @@ const normalizeStringArray = (
     return [value];
   }
   return undefined;
+};
+
+const normalizeString = (value: string | undefined): string | undefined => {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 };

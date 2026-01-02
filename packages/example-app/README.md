@@ -60,4 +60,4 @@ Feel free to add more `.lang` files under `src/` and adjust the build script to 
 - Because the Lang CLI already outputs ESM, Node.js can execute the generated files without extra bundling.
 - Pass flags like `--show-ast`, `--show-ir`, or `--debug-macros` to the CLI commands in `package.json` if you want more visibility into the pipeline.
 - `main.lang` demonstrates importing Node/Bun modules via `(external path "node:path")`, so feel free to swap in other externals like `node:fs`.
-- `package.json` now declares `vibe.sources` plus a `vibe.entry` so `(require prelude "@vibe/prelude")` resolves via the shared source tree while the emitted JavaScript keeps importing the package's published JS via Node's `exports` field.
+- `vibe.config.ts` declares the package's Lang sources, entry, and build output so `(require prelude "@vibe/prelude")` resolves via the shared source tree while the emitted JavaScript keeps importing the package's published JS via Node's `exports` field.

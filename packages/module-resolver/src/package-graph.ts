@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { PackageRegistry } from "@vibe/module-resolver";
-import { parseVibeConfig, type VibePackageConfig } from "@vibe/module-resolver";
+import type { VibePackageConfig } from "@vibe/config";
+import type { PackageRegistry } from "./module-resolver";
+import { loadPackageVibeConfig } from "./workspace-config";
 
 const resolveFromModule = createRequire(import.meta.url);
 
@@ -104,7 +105,7 @@ const readPackageManifest = (dir: string): PackageGraphNode => {
   }
 
   const dependencies = extractDependencyNames(manifest.dependencies);
-  const vibe = parseVibeConfig(manifest.vibe);
+  const vibe = loadPackageVibeConfig(dir);
 
   return {
     name,

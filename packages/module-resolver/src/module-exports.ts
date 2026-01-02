@@ -21,7 +21,10 @@ import { Dirent, existsSync, readFileSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import type { PackageMetadata } from "./module-resolver";
-import { parseVibeConfig, resolveVibePackageConfig } from "./workspace-config";
+import {
+  loadPackageVibeConfig,
+  resolveVibePackageConfig,
+} from "./workspace-config";
 import { LANG_EXTENSION } from "./specifiers";
 
 export class ModuleExportsTable implements ModuleExportsLookup {
@@ -461,7 +464,7 @@ const readPackageMetadata = (dir: string): PackageMetadata | null => {
       typeof manifest.name === "string" && manifest.name.length > 0
         ? manifest.name
         : path.basename(dir);
-    const vibe = parseVibeConfig(manifest.vibe);
+    const vibe = loadPackageVibeConfig(dir);
     return {
       name,
       rootDir: dir,

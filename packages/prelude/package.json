@@ -12,10 +12,5 @@
   },
   "dependencies": {
     "@vibe/runtime": "workspace:*"
-  },
-  "vibe": {
-    "sources": "./src",
-    "outDir": "./src",
-    "entry": "./src/prelude.lang"
   }
 }

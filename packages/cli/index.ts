@@ -7,6 +7,7 @@ import {
   type ModuleResolver,
 } from "@vibe/semantics";
 import { generateModule } from "@vibe/codegen";
+import { formatSource } from "@vibe/formatter";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import type { Stats } from "node:fs";
@@ -23,6 +24,7 @@ import {
   seedModuleExportsFromPackageJson,
   LANG_EXTENSION,
 } from "@vibe/module-resolver";
+import { loadFormatterFormConfig } from "./src/formatter-config";
 // Re-export selected internals as a stable public API surface for other workspace packages
 
 type TokenizeOptions = {
@@ -46,6 +48,10 @@ type CompileAllCliOptions = {
 
 type BuildCliOptions = CompileAllCliOptions & {
   force?: boolean;
+};
+
+type FmtCliOptions = {
+  check?: boolean;
 };
 
 type CliOptionBag = TokenizeOptions & Record<string, unknown>;
@@ -171,6 +177,34 @@ const collectLangFilesFromRoots = async (
     a.absolutePath.localeCompare(b.absolutePath)
   );
 };
+
+const resolveFmtTargets = async (
+  target: string | undefined
+): Promise<LangFileDescriptor[]> => {
+  if (!target) {
+    return collectLangFilesFromRoots([process.cwd()]);
+  }
+  const resolved = path.resolve(target);
+  const stats = await safeStat(resolved);
+  if (!stats) {
+    throw new Error(`[vibe][fmt] Unable to resolve target: ${target}`);
+  }
+  if (stats.isDirectory()) {
+    return collectLangFilesFromRoots([resolved]);
+  }
+  if (!resolved.endsWith(LANG_EXTENSION)) {
+    throw new Error(
+      `[vibe][fmt] ${target} is not a ${LANG_EXTENSION} file or directory`
+    );
+  }
+  return [createDescriptorForFile(resolved)];
+};
+
+const createDescriptorForFile = (filePath: string): LangFileDescriptor => ({
+  absolutePath: filePath,
+  relativePath: path.basename(filePath),
+  sourceRoot: path.dirname(filePath),
+});
 
 const safeStat = async (filePath: string): Promise<Stats | null> => {
   try {
@@ -730,6 +764,70 @@ const runCompileAll = async (
   }
 };
 
+const runFmt = async (
+  target: string | undefined,
+  options: FmtCliOptions
+): Promise<number> => {
+  const logTag = "[vibe][fmt]";
+  const checkOnly = options.check ?? false;
+  try {
+    const descriptors = await resolveFmtTargets(target);
+    if (descriptors.length === 0) {
+      const searchRoot = path.resolve(target ?? ".");
+      console.error(`${logTag} No .lang files found under ${searchRoot}`);
+      return 1;
+    }
+    const uniqueRoots = Array.from(
+      new Set(descriptors.map((descriptor) => descriptor.sourceRoot))
+    );
+    const formatterConfigs = new Map<
+      string,
+      ReturnType<typeof loadFormatterFormConfig>
+    >();
+    for (const root of uniqueRoots) {
+      formatterConfigs.set(root, loadFormatterFormConfig(root));
+    }
+    let hadErrors = false;
+    let hadUnformatted = false;
+    for (const descriptor of descriptors) {
+      const source = await readFile(descriptor.absolutePath, "utf8");
+      const formConfig = formatterConfigs.get(descriptor.sourceRoot);
+      const formatOptions = formConfig ? { formConfig } : undefined;
+      const result = await formatSource(source, formatOptions);
+      emitDiagnostics(result.diagnostics);
+      if (!result.ok) {
+        hadErrors = true;
+        console.error(
+          `${logTag} ${descriptor.relativePath} has syntax errors; skipping.`
+        );
+        continue;
+      }
+      if (result.formatted !== source) {
+        if (checkOnly) {
+          hadUnformatted = true;
+          console.error(
+            `${logTag} ${descriptor.relativePath} is not formatted`
+          );
+        } else {
+          await writeFile(descriptor.absolutePath, result.formatted, "utf8");
+          console.info(`${logTag} wrote ${descriptor.relativePath}`);
+        }
+      }
+    }
+    if (checkOnly) {
+      if (hadUnformatted) {
+        console.error(`${logTag} Found unformatted files.`);
+      } else if (!hadErrors) {
+        console.info(`${logTag} All files already formatted.`);
+      }
+    }
+    return hadErrors || (checkOnly && hadUnformatted) ? 1 : 0;
+  } catch (error) {
+    console.error(String(error));
+    return 1;
+  }
+};
+
 const resolveBuildTargetDir = (target: string | undefined): string => {
   if (!target) {
     return process.cwd();
@@ -987,6 +1085,23 @@ const bootstrapCli = (): void => {
           outDir: getOptionValue<string>(opts, "out-dir"),
           pretty: getNumberOption(opts, "pretty"),
           debugMacros: getBooleanOption(opts, "debug-macros"),
+        });
+        process.exit(exitCode);
+      }
+    );
+
+  cli
+    .command("fmt [target]")
+    .describe("Rewrite Lang source files in place using the formatter")
+    .option("--check", "Exit with code 1 when files need formatting")
+    .example("fmt")
+    .example("fmt src")
+    .example("fmt src/main.lang")
+    .example("fmt --check")
+    .action(
+      async (target: string | undefined, opts: CliOptionBag): Promise<void> => {
+        const exitCode = await runFmt(target, {
+          check: getBooleanOption(opts, "check"),
         });
         process.exit(exitCode);
       }
