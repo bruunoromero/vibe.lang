@@ -10,6 +10,7 @@ export type {
   ModuleExportKind,
   ModuleExportedMacro,
   ModuleExportedMacroClause,
+  ModuleMacroImportBinding,
   ModuleMacroDependency,
   ModuleResolver,
   ModuleResolutionRequest,

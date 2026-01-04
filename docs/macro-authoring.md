@@ -97,6 +97,14 @@ Constraints:
 - Inside `(quote ...)` you can mark hygienic placeholders by appending `#` to a symbol name (`foo#`, `temp-value#`). Each distinct placeholder within the same quote evaluates to a single gensymmed symbol, so repeated occurrences refer to the same binding without explicit `(gensym)` calls.
 - Auto gensym placeholders are only valid inside quoted templates; using `foo#` elsewhere triggers `SEM_GENSYM_PLACEHOLDER_CONTEXT`. Placeholders must be simple symbols (no `alias/foo#`) or `SEM_GENSYM_PLACEHOLDER_NAMESPACE` is emitted.
 
+## Template Context Diagnostics
+
+The analyzer walks macro arguments twice: once before expansion (to capture structure for tooling) and again after expansion (to verify the generated code). That first pass enters a **template context**, meaning:
+
+- Symbols encountered inside macro arguments or quoted payloads will not raise `SEM_UNRESOLVED_SYMBOL` even if their helpers are defined later in the file. The analyzer queues those usages, finishes the rest of the module, and then backfills metadata once the corresponding helper definitions exist.
+- Placeholders such as `name`, `value`, or variadic markers that exist solely inside a template stay inert—if they never resolve, the queued entry is simply dropped without emitting diagnostics. This mirrors traditional Lisp macro tooling where template placeholders are treated as literal data.
+- Template contexts apply only to the pre-expansion recording pass. Regular code (outside macro arguments) continues to surface unresolved symbol diagnostics immediately, so real bugs are still caught during `vibe analyze` / `bun test`.
+
 ### Compile-Time Evaluation in Unquotes
 
 Nested expressions inside `(unquote ...)` run through the **full interpreter** while the macro expands. Any construct that works at runtime—`if`, `let`, arithmetic, sequence helpers, even helper functions defined earlier in the same module—can execute during expansion. Macro parameters that represent literal data are converted into interpreter values, letting you inspect or transform them before producing new syntax.

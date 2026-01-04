@@ -387,7 +387,11 @@ class ProjectModuleResolver implements ModuleResolver {
       this.options.knownModules &&
       !this.options.knownModules.has(normalized)
     ) {
-      return { ok: false, reason: `module not found (${specifier})` };
+      if (existsSync(normalized)) {
+        this.options.knownModules.add(normalized);
+      } else {
+        return { ok: false, reason: `module not found (${specifier})` };
+      }
     }
     if (!existsSync(normalized)) {
       return { ok: false, reason: `module not found (${specifier})` };

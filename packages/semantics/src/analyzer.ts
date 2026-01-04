@@ -1,5 +1,5 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   DiagnosticSeverity,
   NodeKind,
@@ -70,11 +70,18 @@ export interface ModuleImportRecord {
   readonly span: SourceSpan;
   readonly moduleId?: string;
   readonly flatten?: readonly FlattenedImportBinding[];
+  readonly macros?: readonly ModuleMacroImportBinding[];
 }
 
 export interface FlattenedImportBinding {
   readonly exportedName: string;
   readonly identifier: string;
+  readonly exportedIdentifier?: string;
+}
+
+export interface ModuleMacroImportBinding {
+  readonly symbolId: SymbolId;
+  readonly exportedName: string;
   readonly exportedIdentifier?: string;
 }
 
@@ -103,6 +110,7 @@ export interface ModuleExportEntry {
   readonly macro?: ModuleExportedMacro;
   readonly macroRuntimeValue?: Value;
   readonly identifier?: string;
+  readonly span: SourceSpan;
 }
 
 export interface ModuleExportRecord {
@@ -266,6 +274,15 @@ interface ScopeInternal {
   readonly symbolIds: SymbolId[];
 }
 
+interface PendingTemplateSymbolResolution {
+  readonly nodeId: NodeId;
+  readonly scopeId: ScopeId;
+  readonly span: SourceSpan;
+  readonly role: NodeSymbolRole;
+  readonly name: string;
+  readonly namespace?: { alias: string; member: string };
+}
+
 const HYGIENE_PREFIX = "h";
 
 export class SemanticAnalyzer {
@@ -283,16 +300,20 @@ export class SemanticAnalyzer {
   private readonly macroDependencyCache = new Map<string, Value>();
   private readonly macroRuntimeEnv: Environment = createRootEnvironment();
   private readonly macroRuntimeBindings = new Map<string, Value>();
+  private readonly pendingTemplateSymbolResolutions: PendingTemplateSymbolResolution[] =
+    [];
   private readonly builtins: readonly string[];
   private readonly moduleId?: string;
   private readonly moduleResolver?: ModuleResolver;
   private readonly moduleExportsLookup?: ModuleExportsLookup;
   private readonly disableMacroRuntime: boolean;
   private readonly aliasAllocator = new AliasAllocator();
+  private readonly nodeIndexById = new Map<NodeId, number>();
   private nextScopeId = 0;
   private nextSymbolId = 0;
   private nextNodeId = 0;
   private rootScopeId: ScopeId | null = null;
+  private templateContextDepth = 0;
 
   constructor(options: AnalyzeOptions = {}) {
     this.builtins = options.builtins ?? (BUILTIN_SYMBOLS as readonly string[]);
@@ -310,6 +331,7 @@ export class SemanticAnalyzer {
         await this.visit(expr, rootScopeId);
       }
     }
+    this.resolvePendingTemplateSymbols();
   }
 
   toResult(): AnalyzeResult {
@@ -342,13 +364,22 @@ export class SemanticAnalyzer {
     };
   }
 
-  private async visit(node: ExpressionNode, scopeId: ScopeId): Promise<void> {
+  private async visit(
+    node: ExpressionNode,
+    scopeId: ScopeId,
+    options?: { expandMacros?: boolean }
+  ): Promise<void> {
+    const allowMacroExpansion = options?.expandMacros !== false;
     const nodeScopeId = this.getScopeForNode(node, scopeId);
     switch (node.kind) {
       case NodeKind.List:
-        if (!(await this.expandMacroIfNeeded(node, nodeScopeId))) {
-          await this.handleList(node, nodeScopeId);
+        if (
+          allowMacroExpansion &&
+          (await this.expandMacroIfNeeded(node, nodeScopeId))
+        ) {
+          break;
         }
+        await this.handleList(node, nodeScopeId);
         break;
       case NodeKind.NamespaceImport:
         this.recordNode(node, nodeScopeId);
@@ -416,6 +447,17 @@ export class SemanticAnalyzer {
     }
 
     const args = node.elements.slice(1).filter(Boolean) as ExpressionNode[];
+    const shouldRecordArgs = this.shouldRecordMacroArguments(definition);
+    if (shouldRecordArgs) {
+      this.templateContextDepth += 1;
+      try {
+        for (const arg of args) {
+          this.recordMacroArgumentForm(arg, scopeId);
+        }
+      } finally {
+        this.templateContextDepth -= 1;
+      }
+    }
 
     this.macroExpansionStack.push(binding.id);
     let expanded: ExpressionNode | null = null;
@@ -438,6 +480,13 @@ export class SemanticAnalyzer {
     }
 
     return true;
+  }
+
+  private shouldRecordMacroArguments(definition: MacroDefinition): boolean {
+    if (definition.originModuleId && this.moduleId) {
+      return definition.originModuleId === this.moduleId;
+    }
+    return !definition.originModuleId && !this.moduleId;
   }
 
   private async expandMacroCall(
@@ -837,8 +886,13 @@ export class SemanticAnalyzer {
       clauseIndex++
     ) {
       const clause = clauseDescriptors[clauseIndex]!;
+      const clauseScopeId = this.resolveChildScopeId(scopeId, [
+        ...(clause.paramsNode ? [clause.paramsNode] : []),
+        ...clause.bodyNodes,
+      ]);
       const paramInfo = await this.analyzeMacroClauseParameters(
         clause,
+        clauseScopeId,
         scopeId
       );
       if (!paramInfo) {
@@ -894,6 +948,17 @@ export class SemanticAnalyzer {
       const bodyNode = clause.bodyNodes[0];
       if (!bodyNode) {
         continue;
+      }
+
+      this.templateContextDepth += 1;
+      try {
+        for (const bodyExpression of clause.bodyNodes) {
+          await this.visit(bodyExpression, clauseScopeId, {
+            expandMacros: false,
+          });
+        }
+      } finally {
+        this.templateContextDepth -= 1;
       }
 
       macroClauses.push({
@@ -1442,12 +1507,13 @@ export class SemanticAnalyzer {
 
   private async analyzeMacroClauseParameters(
     clause: MacroClauseDescriptor,
-    scopeId: ScopeId
+    clauseScopeId: ScopeId,
+    parentScopeId: ScopeId
   ): Promise<{ params: string[]; rest?: string } | null> {
     const { paramsNode } = clause;
     if (!paramsNode || paramsNode.kind !== NodeKind.List) {
       if (paramsNode) {
-        await this.visit(paramsNode, scopeId);
+        await this.visit(paramsNode, parentScopeId);
       }
       this.report(
         "macro requires a list of parameter symbols",
@@ -1457,7 +1523,7 @@ export class SemanticAnalyzer {
       return null;
     }
 
-    this.recordNode(paramsNode, scopeId);
+    this.recordNode(paramsNode, parentScopeId);
     const params: string[] = [];
     let rest: string | undefined;
     let sawAmpersand = false;
@@ -1469,7 +1535,7 @@ export class SemanticAnalyzer {
       }
 
       if (param.kind !== NodeKind.Symbol) {
-        await this.visit(param, scopeId);
+        await this.visit(param, parentScopeId);
         this.report(
           "macro parameters must be symbols",
           param.span,
@@ -1496,7 +1562,21 @@ export class SemanticAnalyzer {
             "SEM_MACRO_REST_REQUIRES_SYMBOL"
           );
         } else {
-          rest = nextParam.value;
+          if (params.includes(nextParam.value)) {
+            this.report(
+              `Duplicate macro parameter ${nextParam.value}`,
+              nextParam.span,
+              "SEM_MACRO_DUPLICATE_PARAM"
+            );
+          } else {
+            rest = nextParam.value;
+            this.defineSymbol(
+              nextParam,
+              clauseScopeId,
+              "parameter",
+              "parameter"
+            );
+          }
           index += 1;
         }
         continue;
@@ -1520,6 +1600,7 @@ export class SemanticAnalyzer {
         continue;
       }
       params.push(param.value);
+      this.defineSymbol(param, clauseScopeId, "parameter", "parameter");
     }
 
     return { params, rest };
@@ -1732,6 +1813,7 @@ export class SemanticAnalyzer {
     }
 
     let flattenBindings: FlattenedImportBinding[] | undefined;
+    let macroBindings: ModuleMacroImportBinding[] | undefined;
 
     if (moduleId) {
       if (!this.moduleExportsLookup) {
@@ -1782,6 +1864,14 @@ export class SemanticAnalyzer {
               continue;
             }
             this.registerImportedMacro(record, entry.macro, moduleId);
+            if (!macroBindings) {
+              macroBindings = [];
+            }
+            macroBindings.push({
+              symbolId: record.id,
+              exportedName,
+              exportedIdentifier: entry.identifier ?? exportedName,
+            });
             continue;
           }
           if (entry.macroRuntimeValue) {
@@ -1790,7 +1880,7 @@ export class SemanticAnalyzer {
           bindings.push({
             exportedName,
             identifier: record.alias,
-            exportedIdentifier: (entry as any).identifier ?? exportedName,
+            exportedIdentifier: entry.identifier ?? exportedName,
           });
         }
       }
@@ -1806,6 +1896,7 @@ export class SemanticAnalyzer {
       span: pathNode.span,
       moduleId,
       flatten: flattenBindings,
+      ...(macroBindings ? { macros: macroBindings } : {}),
     });
   }
 
@@ -1917,18 +2008,44 @@ export class SemanticAnalyzer {
     }
   }
 
-  private async visitQuoted(node: ExpressionNode, scopeId: ScopeId) {
+  private async visitQuoted(
+    node: ExpressionNode,
+    scopeId: ScopeId,
+    inUnquote: boolean = false
+  ) {
     const nodeScopeId = this.getScopeForNode(node, scopeId);
+    const inTemplate = this.inTemplateContext();
     switch (node.kind) {
       case NodeKind.List: {
-        this.recordNode(node, nodeScopeId);
-        for (const el of (node as any).elements) {
-          if (el) await this.visitQuoted(el, nodeScopeId);
+        const listNode = node as ListNode;
+        if (this.isUnquoteCall(listNode)) {
+          this.recordNode(listNode, nodeScopeId);
+          const target = listNode.elements[1];
+          if (target) {
+            // Visit the unquote target in normal mode to resolve references
+            await this.visit(target, nodeScopeId, { expandMacros: false });
+          }
+          break;
+        }
+        this.recordNode(listNode, nodeScopeId);
+        for (const el of listNode.elements) {
+          if (el) await this.visitQuoted(el, nodeScopeId, inUnquote);
         }
         break;
       }
 
-      case NodeKind.Symbol:
+      case NodeKind.Symbol: {
+        const symbol = node as SymbolNode;
+        // In template context, record symbol usages to enable go-to-definition
+        // But skip special form names and builtins that don't need resolution
+        if (inTemplate && !this.isSpecialFormName(symbol.value)) {
+          this.recordSymbolUsage(symbol, nodeScopeId, "usage");
+        } else {
+          this.recordNode(symbol, nodeScopeId);
+        }
+        break;
+      }
+
       case NodeKind.Keyword:
       case NodeKind.Number:
       case NodeKind.String:
@@ -1944,11 +2061,11 @@ export class SemanticAnalyzer {
         // conservatively without triggering expansion.
         this.recordNode(node, nodeScopeId);
         if ((node as any).target) {
-          await this.visitQuoted((node as any).target, nodeScopeId);
+          await this.visitQuoted((node as any).target, nodeScopeId, inUnquote);
         }
         if (node.kind === NodeKind.NamespaceImport) {
           for (const el of (node as NamespaceImportNode).elements) {
-            if (el) await this.visitQuoted(el, nodeScopeId);
+            if (el) await this.visitQuoted(el, nodeScopeId, inUnquote);
           }
         }
         break;
@@ -1957,6 +2074,29 @@ export class SemanticAnalyzer {
         this.recordNode(node, nodeScopeId);
         break;
     }
+  }
+
+  private isSpecialFormName(name: string): boolean {
+    // Special forms and reader macros that are syntax, not regular symbols
+    const specialForms = new Set([
+      "quote",
+      "unquote",
+      "unquote-splicing",
+      "spread",
+      "def",
+      "defp",
+      "let",
+      "fn+",
+      "macro+",
+      "try",
+      "catch",
+      "finally",
+      "throw",
+      "require",
+      "external",
+      "import",
+    ]);
+    return specialForms.has(name);
   }
 
   private async instantiateTemplate(
@@ -2228,6 +2368,12 @@ export class SemanticAnalyzer {
       if (!resolvedSpecifier) {
         continue;
       }
+      if (
+        dependency.kind === "require" &&
+        this.isVibeSourceDependency(resolvedSpecifier)
+      ) {
+        continue;
+      }
       const cacheKey = this.dependencyCacheKey(
         dependency.kind,
         resolvedSpecifier
@@ -2288,6 +2434,18 @@ export class SemanticAnalyzer {
       return specifier;
     }
     return null;
+  }
+
+  private isVibeSourceDependency(specifier: string): boolean {
+    try {
+      if (specifier.startsWith("file:")) {
+        const filePath = fileURLToPath(specifier);
+        return filePath.endsWith(".lang");
+      }
+      return specifier.endsWith(".lang");
+    } catch {
+      return specifier.endsWith(".lang");
+    }
   }
 
   private parseBindingPatternOrReport(
@@ -2563,25 +2721,47 @@ export class SemanticAnalyzer {
     scopeId: ScopeId,
     role: NodeSymbolRole
   ): void {
+    if (this.isSpecialFormName(node.value)) {
+      this.recordBuiltinUsage(node, scopeId);
+      return;
+    }
+    const inTemplate = this.inTemplateContext();
     const namespaceRef = this.parseNamespaceReference(node.value);
     if (namespaceRef) {
       const binding = this.resolveSymbol(namespaceRef.alias, scopeId);
+      const nodeId = this.recordNode(node, scopeId, {
+        name: node.value,
+        role,
+        symbolId: binding?.id,
+      });
       if (!binding) {
-        this.report(
-          `Unresolved namespace alias ${namespaceRef.alias}`,
-          node.span,
-          "SEM_UNRESOLVED_NAMESPACE_ALIAS"
-        );
+        if (inTemplate) {
+          this.queueTemplateSymbolResolution({
+            nodeId,
+            scopeId,
+            span: node.span,
+            role,
+            name: node.value,
+            namespace: namespaceRef,
+          });
+        } else {
+          this.report(
+            `Unresolved namespace alias ${namespaceRef.alias}`,
+            node.span,
+            "SEM_UNRESOLVED_NAMESPACE_ALIAS"
+          );
+        }
+        return;
       }
-      if (binding) {
-        const importRecord = this.moduleImportsByAlias.get(namespaceRef.alias);
-        const moduleId = importRecord?.moduleId;
-        if (moduleId && this.moduleExportsLookup) {
-          const exports = this.moduleExportsLookup.getExports(moduleId);
-          if (
-            exports &&
-            !exports.some((entry) => entry.name === namespaceRef.member)
-          ) {
+      const importRecord = this.moduleImportsByAlias.get(namespaceRef.alias);
+      const moduleId = importRecord?.moduleId;
+      if (moduleId && this.moduleExportsLookup) {
+        const exports = this.moduleExportsLookup.getExports(moduleId);
+        if (
+          exports &&
+          !exports.some((entry) => entry.name === namespaceRef.member)
+        ) {
+          if (!inTemplate) {
             this.report(
               `Namespace ${namespaceRef.alias} does not export ${namespaceRef.member}`,
               node.span,
@@ -2590,27 +2770,69 @@ export class SemanticAnalyzer {
           }
         }
       }
-      this.recordNode(node, scopeId, {
-        name: node.value,
-        role,
-        symbolId: binding?.id,
-      });
       return;
     }
 
     const binding = this.resolveSymbol(node.value, scopeId);
-    if (!binding) {
-      this.report(
-        `Unresolved symbol ${node.value}`,
-        node.span,
-        "SEM_UNRESOLVED_SYMBOL"
-      );
-    }
-    this.recordNode(node, scopeId, {
+    const nodeId = this.recordNode(node, scopeId, {
       name: node.value,
       role,
       symbolId: binding?.id,
     });
+    if (!binding) {
+      if (inTemplate) {
+        this.queueTemplateSymbolResolution({
+          nodeId,
+          scopeId,
+          span: node.span,
+          role,
+          name: node.value,
+        });
+      } else {
+        this.report(
+          `Unresolved symbol ${node.value}`,
+          node.span,
+          "SEM_UNRESOLVED_SYMBOL"
+        );
+      }
+    }
+  }
+
+  private recordMacroArgumentForm(
+    node: ExpressionNode,
+    scopeId: ScopeId
+  ): void {
+    const nodeScopeId = this.getScopeForNode(node, scopeId);
+    switch (node.kind) {
+      case NodeKind.Symbol:
+        this.recordSymbolUsage(node, nodeScopeId, "usage");
+        return;
+      case NodeKind.List:
+        this.recordNode(node, nodeScopeId);
+        for (const element of node.elements) {
+          if (element) {
+            this.recordMacroArgumentForm(element, nodeScopeId);
+          }
+        }
+        return;
+      case NodeKind.NamespaceImport:
+        this.recordNode(node, nodeScopeId);
+        for (const element of node.elements) {
+          if (element) {
+            this.recordMacroArgumentForm(element, nodeScopeId);
+          }
+        }
+        return;
+      case NodeKind.Quote:
+        this.recordNode(node, nodeScopeId);
+        if (node.target) {
+          this.recordMacroArgumentForm(node.target, nodeScopeId);
+        }
+        return;
+      default:
+        this.recordNode(node, nodeScopeId);
+        return;
+    }
   }
 
   private recordBuiltinUsage(node: SymbolNode, scopeId: ScopeId): void {
@@ -2662,15 +2884,99 @@ export class SemanticAnalyzer {
     }
     this.assignScopeMetadata(node, scopeId);
     const nodeId = this.allocateNodeId();
-    this.nodes.push({
+    const record: SemanticNodeRecord = {
       nodeId,
       kind: node.kind,
       span: node.span,
       scopeId,
       hygieneTag: scope.record.hygieneTag,
       ...(symbol ? { symbol } : {}),
-    });
+    };
+    this.nodes.push(record);
+    this.nodeIndexById.set(nodeId, this.nodes.length - 1);
     return nodeId;
+  }
+
+  private inTemplateContext(): boolean {
+    return this.templateContextDepth > 0;
+  }
+
+  private queueTemplateSymbolResolution(
+    entry: PendingTemplateSymbolResolution
+  ): void {
+    this.pendingTemplateSymbolResolutions.push(entry);
+  }
+
+  private resolvePendingTemplateSymbols(): void {
+    if (this.pendingTemplateSymbolResolutions.length === 0) {
+      return;
+    }
+    for (const pending of this.pendingTemplateSymbolResolutions) {
+      if (pending.namespace) {
+        this.resolvePendingNamespaceSymbol(pending);
+      } else {
+        this.resolvePendingPlainSymbol(pending);
+      }
+    }
+    this.pendingTemplateSymbolResolutions.length = 0;
+  }
+
+  private resolvePendingPlainSymbol(
+    pending: PendingTemplateSymbolResolution
+  ): void {
+    const binding = this.resolveSymbol(pending.name, pending.scopeId);
+    if (!binding) {
+      return;
+    }
+    this.updateNodeSymbol(pending.nodeId, {
+      name: pending.name,
+      role: pending.role,
+      symbolId: binding.id,
+    });
+  }
+
+  private resolvePendingNamespaceSymbol(
+    pending: PendingTemplateSymbolResolution
+  ): void {
+    const namespace = pending.namespace;
+    if (!namespace) {
+      return;
+    }
+    const binding = this.resolveSymbol(namespace.alias, pending.scopeId);
+    if (!binding) {
+      return;
+    }
+    const importRecord = this.moduleImportsByAlias.get(namespace.alias);
+    const moduleId = importRecord?.moduleId;
+    if (moduleId && this.moduleExportsLookup) {
+      const exports = this.moduleExportsLookup.getExports(moduleId);
+      if (
+        exports &&
+        !exports.some((entry) => entry.name === namespace.member)
+      ) {
+        return;
+      }
+    }
+    this.updateNodeSymbol(pending.nodeId, {
+      name: pending.name,
+      role: pending.role,
+      symbolId: binding.id,
+    });
+  }
+
+  private updateNodeSymbol(nodeId: NodeId, symbol: NodeSymbolInfo): void {
+    const index = this.nodeIndexById.get(nodeId);
+    if (index === undefined) {
+      return;
+    }
+    const record = this.nodes[index];
+    if (!record) {
+      return;
+    }
+    this.nodes[index] = {
+      ...record,
+      symbol,
+    };
   }
 
   private report(message: string, span: SourceSpan, code: string): void {

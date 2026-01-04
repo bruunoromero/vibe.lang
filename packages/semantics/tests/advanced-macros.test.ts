@@ -159,6 +159,37 @@ describe("advanced macros", () => {
       result.diagnostics.some((d) => d.code === "SEM_MACRO_PARAMS_AFTER_REST")
     ).toBeTrue();
   });
+
+  test("template argument traversal waits for later helpers", async () => {
+    const result = await analyzeSource(`
+      (def make-const
+        (macro+ ([name value]
+          (quote (emit-helper (unquote name) (unquote value))))))
+      (def emit-helper
+        (macro+ ([name value]
+          (quote (def (unquote name) (unquote value))))))
+      (make-const answer 42)
+    `);
+
+    expect(result.ok).toBeTrue();
+    expect(
+      result.diagnostics.some((d) => d.code === "SEM_UNRESOLVED_SYMBOL")
+    ).toBeFalse();
+  });
+
+  test("template contexts still report missing helpers", async () => {
+    const result = await analyzeSource(`
+      (def wrap-value
+        (macro+ ([value]
+          (quote (missing-helper (unquote value))))))
+      (wrap-value 1)
+    `);
+
+    expect(result.ok).toBeFalse();
+    expect(
+      result.diagnostics.some((d) => d.code === "SEM_UNRESOLVED_SYMBOL")
+    ).toBeTrue();
+  });
 });
 
 describe("advanced functions with rest params", () => {

@@ -1,6 +1,8 @@
 import path from "node:path";
 import { loadVibeConfigForDir, type VibePackageConfig } from "@vibe/config";
 
+export type { VibePackageConfig } from "@vibe/config";
+
 export interface ResolvedVibePackageConfig {
   readonly sourceRoots: readonly string[];
   readonly outDir?: string;

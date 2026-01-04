@@ -22,8 +22,8 @@ test("wraps forms that exceed the configured width", async () => {
   );
 });
 
-test("aligns defmacro signatures and canonical binding vectors", async () => {
-  const source = "(defmacro a (x) (let (y (name x)) (quote (println :ok y))))";
+test("preserves defmacro signatures and binding vectors", async () => {
+  const source = "(defmacro a [x] (let [y (name x)] (quote (println :ok y))))";
   const result = await formatSource(source, { maxWidth: 40 });
   expect(result.ok).toBeTrue();
   expect(result.formatted).toBe(
@@ -81,5 +81,53 @@ test("applies user-provided form config for macros", async () => {
     "(defhandler greet [name]\n" +
       '  (println "Hi " name)\n' +
       '  (println "Done"))\n'
+  );
+});
+
+test("keeps explicit parens inside quoted fn clauses", async () => {
+  const source =
+    "(defmacro defn+ [name & clauses]\n" +
+    "  (quote\n" +
+    "    (def (unquote name) (fn+ (spread (unquote clauses))))))";
+  const result = await formatSource(source, { maxWidth: 80 });
+  expect(result.ok).toBeTrue();
+  expect(result.formatted).toBe(
+    "(defmacro defn+ [name & clauses]\n" +
+      "  (quote\n" +
+      "    (def (unquote name) (fn+ (spread (unquote clauses))))))\n"
+  );
+});
+
+test("keeps clause lists wrapped in parens for multi-arity defn", async () => {
+  const source =
+    "(defn+ =\n" +
+    "  ([x] true)\n" +
+    "  ([x y] (runtime/eq* x y))\n" +
+    "  ([x y & rest]\n" +
+    "    (if (runtime/eq* x y) (apply = (cons y rest)) false)))";
+  const result = await formatSource(source);
+  expect(result.ok).toBeTrue();
+  expect(result.formatted).toBe(
+    "(defn+ = ([x] true)\n" +
+      "  ([x y] (runtime/eq* x y))\n" +
+      "  ([x y & rest] (if (runtime/eq* x y) (apply = (cons y rest)) false)))\n"
+  );
+});
+
+test("preserves explicit empty list literals", async () => {
+  const source =
+    "(defn take [n coll]\n" +
+    "  (cond\n" +
+    "    (<= n 0) []\n" +
+    "    (empty? coll) []\n" +
+    "    :else (cons (first coll) (take (dec n) (rest coll)))))";
+  const result = await formatSource(source);
+  expect(result.ok).toBeTrue();
+  expect(result.formatted).toBe(
+    "(defn take [n coll]\n" +
+      "  (cond\n" +
+      "    (<= n 0) []\n" +
+      "    (empty? coll) []\n" +
+      "    :else (cons (first coll) (take (dec n) (rest coll)))))\n"
   );
 });

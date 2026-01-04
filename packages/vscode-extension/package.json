@@ -1,0 +1,97 @@
+{
+  "name": "vibe-vscode",
+  "displayName": "Vibe",
+  "description": "VS Code tooling for the Vibe language (syntax highlighting, formatter, and language server integration).",
+  "version": "0.1.0",
+  "publisher": "vibe",
+  "type": "commonjs",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vibe-lang/vibe"
+  },
+  "bugs": {
+    "url": "https://github.com/vibe-lang/vibe/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "vibe",
+    "lisp",
+    "language"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/vibe.config.{js,cjs,mjs,ts,cts,mts}"
+  ],
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "scripts": {
+    "clean": "bunx rimraf dist",
+    "build": "bun run clean && bunx esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "bunx esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
+    "package": "bun run scripts/package.ts"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "vibe",
+        "aliases": [
+          "Vibe",
+          "vibe"
+        ],
+        "extensions": [
+          ".lang"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vibe",
+        "scopeName": "source.vibe",
+        "path": "./syntaxes/vibe.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "vibe.formatDocument",
+        "title": "Vibe: Format Document",
+        "category": "Vibe"
+      }
+    ],
+    "configuration": {
+      "title": "Vibe",
+      "properties": {
+        "vibe.languageServer.extraArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional CLI arguments forwarded to the Vibe language server executable.",
+          "scope": "window"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@vibe/formatter": "workspace:*",
+    "@vibe/parser": "workspace:*",
+    "@vibe/lsp": "workspace:*",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.24.2",
+    "rimraf": "^5.0.5",
+    "typescript": "^5.5.4"
+  }
+}

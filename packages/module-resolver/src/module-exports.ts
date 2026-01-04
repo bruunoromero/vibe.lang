@@ -144,13 +144,16 @@ const collectExportsFromProgram = (
       const macro = createMacroExport(valueNode as ListNode, binding, [
         ...namespaceAliases,
       ]);
-      exports.push(macro ?? { name: binding.value, kind: "macro" });
+      exports.push(
+        macro ?? { name: binding.value, kind: "macro", span: binding.span }
+      );
       continue;
     }
     const runtimeValue = macroRuntime?.get(binding.value);
     exports.push({
       name: binding.value,
       kind: "var",
+      span: binding.span,
       ...(runtimeValue ? { macroRuntimeValue: runtimeValue } : {}),
     });
   }
@@ -208,6 +211,7 @@ const createMacroExport = (
   return {
     name: binding.value,
     kind: "macro",
+    span: binding.span,
     macro: {
       clauses: clauses as ModuleExportedMacroClause[],
       dependencies:

@@ -3,6 +3,7 @@ dist/
 .DS_Store
 /.vscode/# dependencies (bun install)
 node_modules
+packages/vscode-extension/.vsce-stage/
 
 # output
 out

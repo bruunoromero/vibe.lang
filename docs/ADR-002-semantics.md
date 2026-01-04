@@ -51,6 +51,12 @@ We have a working lexer and parser that can surface syntax diagnostics and emit 
 - Map patterns understand explicit key bindings plus the `:keys`/`:strs`/`:syms` shorthands. `:or` defaults are traversed eagerly so their expressions participate in dependency analysis and diagnostics even when the default is not taken at runtime.
 - Pattern diagnostics from the syntax package map directly to semantic `SEM_PATTERN_*` codes, keeping error spans deterministic whether they surface during analysis or evaluation.
 
+### Update – Template Context Recording (2026-01-03)
+
+- Same-module macro calls are now recorded inside explicit **template contexts** before their helper macros exist. While a template context is active, `recordMacroArgumentForm` visits every raw argument/quoted payload, records node metadata, and queues unresolved symbol usages instead of immediately raising `SEM_UNRESOLVED_SYMBOL`.
+- After the program traversal completes, `resolvePendingTemplateSymbols` replays the queued usages. Any symbol that becomes resolvable once helper macros have been defined retroactively updates its node metadata so editor tooling can offer go-to-definition. Entries that remain unresolved are left untouched—diagnostics stay suppressed to avoid false positives inside macro templates, mirroring the previous “record-but-don’t-error” behavior without sprinkling ad-hoc flags.
+- Template contexts only apply to macro argument capture prior to expansion. Ordinary user code still reports unresolved symbols eagerly, so legitimate mistakes outside macro templates remain visible during `vibe analyze` or `bun test` runs.
+
 ## Semantic Graph Contract
 
 `analyzeProgram(program, options)` is the stable entry point for consumers. It returns an `AnalyzeResult` object shaped as `{ ok, diagnostics, graph }`, where `diagnostics` mirrors the parser's diagnostic objects and `graph` is the semantic IR described below.

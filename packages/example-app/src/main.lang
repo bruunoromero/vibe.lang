@@ -36,8 +36,6 @@
   (= favorite-number 7) (println "A lucky number.")
   :else (println "Just a number."))
 
-(println Date)
-
 (list 1 2 3)
 
 (do

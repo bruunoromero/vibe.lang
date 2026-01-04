@@ -122,13 +122,6 @@ const valueToJS = (value: Value): unknown => {
       return `<keyword ${value.value}>`;
     case "list":
       return value.elements.map(valueToJS);
-    case "map": {
-      const obj: Record<string, unknown> = {};
-      for (const [key, val] of value.entries) {
-        obj[key] = valueToJS(val);
-      }
-      return { __map: obj };
-    }
     case "function":
       // Represent each clause as its arity (variadic clauses gain a trailing +)
       const arities = value.clauses
@@ -489,17 +482,21 @@ export const runRepl = async (
       const evalAnalysis = await analyzeProgram(evalParse.program, {
         builtins: buildAnalyzerBuiltins(globalEnv),
       });
-      // In REPL mode, show analysis warnings but don't fail on them
-      // since symbols might be dynamically loaded (e.g., from prelude)
+
+      const analysisWarnings = evalAnalysis.diagnostics.filter(
+        (d) => d.severity === "warning"
+      );
+      if (analysisWarnings.length > 0) {
+        emitDiagnostics(analysisWarnings, writeErr);
+      }
+
       const analysisErrors = evalAnalysis.diagnostics.filter(
         (d) => d.severity === "error"
       );
       if (analysisErrors.length > 0) {
-        // Show warnings but continue
-        emitDiagnostics(
-          evalAnalysis.diagnostics.filter((d) => d.severity === "warning"),
-          writeErr
-        );
+        emitDiagnostics(analysisErrors, writeErr);
+        buffer = "";
+        continue;
       }
 
       // Evaluate using the interpreter (after macros have been expanded by analyzer)

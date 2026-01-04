@@ -1,0 +1,124 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Vibe",
+  "scopeName": "source.vibe",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#definition" },
+    { "include": "#keyword" },
+    { "include": "#booleanNil" },
+    { "include": "#number" },
+    { "include": "#specialFormHead" },
+    { "include": "#functionCallHead" },
+    { "include": "#keywordLiteral" },
+    { "include": "#symbol" }
+  ],
+  "repository": {
+    "definition": {
+      "patterns": [
+        {
+          "name": "meta.definition.vibe",
+          "match": "(?<=\\(|\\[)\\s*(defp?|macro\\+)\\b(\\s+)((?:(?:[A-Za-z_][A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*\\/)*[A-Za-z_][A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*#?))",
+          "captures": {
+            "1": {
+              "name": "keyword.control.special-form.vibe"
+            },
+            "3": {
+              "name": "entity.name.function.definition.vibe"
+            }
+          }
+        }
+      ]
+    },
+    "comment": {
+      "patterns": [
+        {
+          "name": "comment.line.semicolon.vibe",
+          "match": ";.*$"
+        }
+      ]
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.vibe",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.vibe"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.vibe"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.vibe",
+              "match": "\\\\(?:[\\\"'bnrtf]|u[0-9A-Fa-f]{4})"
+            }
+          ]
+        }
+      ]
+    },
+    "keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.special-form.vibe",
+          "match": "(?<=\\(|\\[)(?:\\s*)(?:def[A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*|macro\\+|let|fn\\+|if|quote|require|external|import|try|throw)\\b"
+        }
+      ]
+    },
+    "booleanNil": {
+      "patterns": [
+        {
+          "name": "constant.language.vibe",
+          "match": "(?i)\\b(?:true|false|nil)\\b"
+        }
+      ]
+    },
+    "number": {
+      "patterns": [
+        {
+          "name": "constant.numeric.vibe",
+          "match": "(?<![A-Za-z0-9_])[-+]?((\\d+\\.\\d*)|(\\d*\\.\\d+)|\\d+)(?:[eE][-+]?\\d+)?"
+        }
+      ]
+    },
+    "specialFormHead": {
+      "patterns": [
+        {
+          "name": "entity.name.function.special.vibe",
+          "match": "(?<=\\(|\\[)(?:\\s*)(?:def[A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*|macro\\+|let|fn\\+|if|quote|require|external|import|try|throw)\\b"
+        }
+      ]
+    },
+    "functionCallHead": {
+      "patterns": [
+        {
+          "name": "entity.name.function.call.vibe",
+          "match": "(?<=\\(|\\[)\\s*(?!(?:def[A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*|macro\\+|let|fn\\+|if|quote|require|external|import|try|throw)(?![A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]))(?:(?:[A-Za-z_][A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*\\/)*[A-Za-z_][A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*#?)"
+        }
+      ]
+    },
+    "keywordLiteral": {
+      "patterns": [
+        {
+          "name": "constant.other.keyword.vibe",
+          "match": ":{1,2}[A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]+"
+        }
+      ]
+    },
+    "symbol": {
+      "patterns": [
+        {
+          "name": "variable.other.symbol.vibe",
+          "match": "(?<!:)(?<![A-Za-z0-9_\\-\\*\\+!\\?=<>\\/])(?:[A-Za-z_][A-Za-z0-9_\\-\\*\\+!\\?=<>\\/]*#?)"
+        }
+      ]
+    }
+  }
+}

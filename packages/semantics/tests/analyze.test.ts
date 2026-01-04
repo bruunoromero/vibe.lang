@@ -10,7 +10,12 @@ import {
 } from "../src";
 import { createDefaultTestResolvers } from "@vibe/test-helpers";
 import { parseSource } from "@vibe/parser";
-import { NodeKind, type ExpressionNode, type ProgramNode } from "@vibe/syntax";
+import {
+  NodeKind,
+  createSpan,
+  type ExpressionNode,
+  type ProgramNode,
+} from "@vibe/syntax";
 import { TEST_BUILTINS } from "./test-builtins";
 
 const ARITHMETIC_STUB = `
@@ -34,6 +39,11 @@ const analyzeSource = async (source: string, options?: AnalyzeOptions) => {
     builtins: options?.builtins ?? TEST_BUILTINS,
   });
 };
+
+const DUMMY_SPAN = createSpan(
+  { offset: 0, line: 0, column: 0 },
+  { offset: 0, line: 0, column: 0 }
+);
 
 type AnalysisResult = Awaited<ReturnType<typeof analyzeProgram>>;
 
@@ -532,6 +542,43 @@ describe("analyzeProgram", () => {
     expect(definitionNode?.symbol?.role).toBe("definition");
   });
 
+  test("resolves symbol usages inside macro templates", async () => {
+    const analysis = await analyzeSource(`
+      (def println (fn+ ([x] x)))
+      (def log-wrapper
+        (macro+ ([value]
+          (quote (println (unquote value))))))
+    `);
+
+    expect(analysis.ok).toBeTrue();
+    const printlnSymbol = analysis.graph.symbols.find(
+      (symbol) => symbol.name === "println" && symbol.kind === "var"
+    );
+    const templateUsage = analysis.graph.nodes.find(
+      (node) => node.symbol?.name === "println" && node.symbol.role === "usage"
+    );
+    expect(templateUsage?.symbol?.symbolId).toBe(printlnSymbol?.id);
+  });
+
+  test("resolves unquoted macro parameters to their definitions", async () => {
+    const analysis = await analyzeSource(`
+      (def emitter
+        (macro+ ([name]
+          (quote (unquote name)))))
+    `);
+
+    expect(analysis.ok).toBeTrue();
+    const parameterNode = analysis.graph.nodes.find(
+      (node) => node.symbol?.role === "parameter" && node.symbol.name === "name"
+    );
+    expect(parameterNode?.symbol?.symbolId).toBeDefined();
+
+    const usageNode = analysis.graph.nodes.find(
+      (node) => node.symbol?.name === "name" && node.symbol.role === "usage"
+    );
+    expect(usageNode?.symbol?.symbolId).toBe(parameterNode?.symbol?.symbolId);
+  });
+
   test("analyzes try/catch binding scopes", async () => {
     const analysis = await analyzeSource(`
       (def noop (fn+ ([] 0)))
@@ -922,7 +969,7 @@ describe("analyzeProgram", () => {
       const moduleExports = {
         getExports: (moduleId: string) =>
           moduleId === "/workspace/math.lang"
-            ? [{ name: "add", kind: "var" as const }]
+            ? [{ name: "add", kind: "var" as const, span: DUMMY_SPAN }]
             : undefined,
       };
 
@@ -1025,6 +1072,7 @@ describe("analyzeProgram", () => {
                 {
                   name: "inline-true",
                   kind: "macro",
+                  span: DUMMY_SPAN,
                   macro: {
                     clauses: [
                       {
@@ -1088,6 +1136,7 @@ describe("analyzeProgram", () => {
                 {
                   name: "runtime-macro",
                   kind: "macro",
+                  span: DUMMY_SPAN,
                   macro: {
                     clauses: [
                       {
@@ -1159,6 +1208,7 @@ describe("analyzeProgram", () => {
                 {
                   name: "runtime-macro",
                   kind: "macro",
+                  span: DUMMY_SPAN,
                   macro: {
                     clauses: [
                       {

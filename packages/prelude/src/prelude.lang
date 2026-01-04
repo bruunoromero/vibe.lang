@@ -1,61 +1,38 @@
-;; Vibe Standard Library (Prelude)
-;; Higher-level functions built on top of runtime primitives
-
-;; Import runtime primitives from @vibe/runtime
 (external runtime "@vibe/runtime")
-
-;; ============================================================
-;; Definition Helpers
-;; ============================================================
 
 (def defmacro+
   (macro+
-    ([name & clauses]
-      (quote 
-        (def (unquote name)
-             (macro+ (spread (unquote clauses))))))))
+    ((name & clauses)
+      (quote
+        (def (unquote name) (macro+ (spread (unquote clauses))))))))
 
-(defmacro+ defmacro
-  ([name args & body]
-    (quote 
-      (defmacro+ (unquote name)
-                 ((unquote args) (spread (unquote body)))))))
-
-(defmacro fn
-  [args & body]
-  (quote 
-    (fn+ ((unquote args)
-          (spread (unquote body))))))
-
-(defmacro defmacrop+
-  [name & clauses]
-  (quote 
-    (defp (unquote name)
-          (macro+ (spread (unquote clauses))))))
-
-(defmacro defn+
-  [name & clauses]
-  (quote 
-    (def (unquote name)
-         (fn+ (spread (unquote clauses))))))
-
-(defmacro defn
-  [name args & body]
-  (quote 
-    (defn+ (unquote name)
-           ((unquote args) (spread (unquote body))))))
-
-(defmacro defnp+
-  [name & clauses]
-  (quote 
-    (defp (unquote name)
-          (fn+ (spread (unquote clauses))))))
-
-(defmacro defnp
-  [name args & body]
+(defmacro+ defmacro ([name args & body]
   (quote
-   (defnp+ (unquote name)
-           ((unquote args) (spread (unquote body))))))
+    (defmacro+ (unquote name) ([unquote args] (spread (unquote body)))))))
+
+(defmacro fn [args & body]
+  (quote
+    (fn+ ([unquote args] (spread (unquote body))))))
+
+(defmacro defmacrop+ [name & clauses]
+  (quote
+    (defp (unquote name) (macro+ (spread (unquote clauses))))))
+
+(defmacro defn+ [name & clauses]
+  (quote
+    (def (unquote name) (fn+ (spread (unquote clauses))))))
+
+(defmacro defn [name args & body]
+  (quote
+    (defn+ (unquote name) ([unquote args] (spread (unquote body))))))
+
+(defmacro defnp+ [name & clauses]
+  (quote
+    (defp (unquote name) (fn+ (spread (unquote clauses))))))
+
+(defmacro defnp [name args & body]
+  (quote
+    (defnp+ (unquote name) ([unquote args] (spread (unquote body))))))
 
 (defn name [sym]
   (runtime/name* sym))
@@ -67,52 +44,31 @@
   (runtime/get* target key))
 
 (defmacro declare [var]
-  (quote 
-    (def (unquote var)
-      (get (global-this)
-           (unquote (name var))))))
+  (quote
+    (def (unquote var) (get (global-this) (unquote (name var))))))
 
 (defmacro declarep [var]
-  (quote 
-    (defp (unquote var)
-      (get (global-this)
-           (unquote (name var))))))
+  (quote
+    (defp (unquote var) (get (global-this) (unquote (name var))))))
 
 (defmacro do [& body]
   (quote
-    (let []
-      (spread (unquote body)))))
-
-;; ============================================================
-;; Collection Constructors
-;; ============================================================
+    (let [] (spread (unquote body)))))
 
 (defn list [& items]
   items)
 
-;; ============================================================
-;; Logic Macros (short-circuiting)
-;; ============================================================
-
-(defmacro+ and
-  ([] true)
+(defmacro+ and ([] true)
   ([x] x)
   ([x & rest]
     (quote
-     (let [temp (unquote x)]
-        (if temp
-          (and (spread (unquote rest)))
-          temp)))))
+      (let [temp (unquote x)] (if temp (and (spread (unquote rest))) temp)))))
 
-(defmacro+ or
-  ([] nil)
+(defmacro+ or ([] nil)
   ([x] x)
   ([x & rest]
     (quote
-     (let [temp (unquote x)]
-        (if temp
-          temp
-          (or (spread (unquote rest))))))))
+      (let [temp (unquote x)] (if temp temp (or (spread (unquote rest))))))))
 
 (defn count [coll]
   (runtime/count coll))
@@ -124,87 +80,57 @@
   (runtime/eq* (count coll) 0))
 
 (defn first [coll]
-  (let [[x] coll]
-    x))
+  (let [(x) coll] x))
 
 (defn rest [coll]
-  (let [[_ & xs] coll]
-    xs))
+  (let [(_ & xs) coll] xs))
 
 (defn cons [x xs]
   (list x (spread xs)))
 
-(defmacro+ cond 
-  ([]
-    nil)
+(defmacro+ cond ([] nil)
   ([test expr & rest]
-    (if (even? (count rest))
+    (if
+      (even? (count rest))
       (quote
-       (if (unquote test)
-        (unquote expr)
-        (cond (spread (unquote rest)))))
+        (if
+          (unquote test)
+          (unquote expr)
+          (cond
+            (spread (unquote rest)))))
       (throw "cond requires an even number of clauses"))))
-
-;; Keep `apply` bound to runtime/apply for compatibility.
 
 (defn apply [f args]
   (runtime/apply f args))
 
-;; ============================================================
-;; Comparison Operators (user-friendly names)
-;; ============================================================
+(defn+ = ([x] true)
+  ([x y] (runtime/eq* x y))
+  ([x y & rest] (if (runtime/eq* x y) (apply = (cons y rest)) false)))
 
-(defn+ = 
-  ([x] true)
-  ([x y]
-    (runtime/eq* x y))
-  ([x y & rest]
-    (if (runtime/eq* x y)
-      (apply = (cons y rest))
-      false)))
+(def < (fn+ ([x y] (runtime/lt* x y))))
 
-(def < (fn+ ([x y]
-  (runtime/lt* x y))))
+(def > (fn+ ([x y] (runtime/gt* x y))))
 
-(def > (fn+ ([x y]
-  (runtime/gt* x y))))
+(def <= (fn+ ([x y] (runtime/lte* x y))))
 
-(def <= (fn+ ([x y]
-  (runtime/lte* x y))))
-
-(def >= (fn+ ([x y]
-  (runtime/gte* x y))))
-
-;; ============================================================
-;; Core Sequence Helpers
-;; ============================================================
+(def >= (fn+ ([x y] (runtime/gte* x y))))
 
 (defn reduce [f init coll]
-  (if (empty? coll)
-    init
-    (reduce f (f init (first coll)) (rest coll))))
-
-;; ============================================================
-;; Arithmetic Operators
-;; ============================================================
+  (if (empty? coll) init (reduce f (f init (first coll)) (rest coll))))
 
 (defn + [& xs]
   (reduce runtime/add* 0 xs))
 
-(defn+ - 
-  ([] 0)
+(defn+ - ([] 0)
   ([x] (runtime/sub* 0 x))
-  ([& xs]
-    (reduce runtime/sub* (first xs) (rest xs))))
+  ([& xs] (reduce runtime/sub* (first xs) (rest xs))))
 
 (defn * [& xs]
   (reduce runtime/mul* 1 xs))
 
-(defn+ / 
-  ([] 0)
+(defn+ / ([] 0)
   ([x] (runtime/div* 1 x))
-  ([& xs]
-    (reduce runtime/div* (first xs) (rest xs))))
+  ([& xs] (reduce runtime/div* (first xs) (rest xs))))
 
 (defn mod [x y]
   (runtime/mod* x y))
@@ -215,35 +141,24 @@
 (defn dec [x]
   (- x 1))
 
-;; ============================================================
-;; Higher-Order Sequence Operations
-;; ============================================================
-
 (defn map [f coll]
-  (if (empty? coll)
-    []
-    (cons (f (first coll))
-          (map f (rest coll)))))
+  (if (empty? coll) [] (cons (f (first coll)) (map f (rest coll)))))
 
 (defn filter [pred coll]
-  (if (empty? coll)
+  (if
+    (empty? coll)
     []
-    (let [x (first coll)
-          xs (rest coll)]
-      (if (pred x)
-        (cons x (filter pred xs))
-        (filter pred xs)))))
+    (let [x (first coll) xs (rest coll)]
+      (if (pred x) (cons x (filter pred xs)) (filter pred xs)))))
 
 (defn concat [& colls]
-  (reduce (fn+ ([acc coll]
-            (if (empty? coll)
-              acc
-              (concat acc (cons (first coll) (rest coll))))))
-          []
-          colls))
+  (reduce
+    (fn+ ([acc coll] (if (empty? coll) acc (concat acc (cons (first coll) (rest coll))))))
+    []
+    colls))
 
 (defn take [n coll]
-  (cond 
+  (cond
     (<= n 0) []
     (empty? coll) []
     :else (cons (first coll) (take (dec n) (rest coll)))))
@@ -256,10 +171,6 @@
 
 (defn reverse [coll]
   (reduce (fn+ ([acc x] (cons x acc))) [] coll))
-
-;; ============================================================
-;; I/O Functions
-;; ============================================================
 
 (defn println [& args]
   (runtime/println args))

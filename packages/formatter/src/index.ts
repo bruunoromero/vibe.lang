@@ -9,7 +9,6 @@ import {
 } from "@vibe/syntax";
 import {
   DEFAULT_FORM_CONFIG,
-  FORM_PRESETS,
   mergeFormConfigs,
   type FormFormattingConfig,
   type FormFormattingSpec,
@@ -56,6 +55,7 @@ type SequenceDelimiter = "()" | "[]";
 
 interface ExpressionFormatOverrides {
   readonly delimiter?: SequenceDelimiter;
+  readonly vectorElementIndices?: readonly number[];
 }
 
 interface ListFormattingConfig {
@@ -65,6 +65,19 @@ interface ListFormattingConfig {
 }
 
 type ListLikeNode = ListNode | NamespaceImportNode;
+
+const resolveListDelimiter = (
+  node: ListLikeNode,
+  override?: SequenceDelimiter
+): SequenceDelimiter => {
+  if (override) {
+    return override;
+  }
+  if (node.elements.length === 0) {
+    return "[]";
+  }
+  return "()";
+};
 
 export const DEFAULT_FORMAT_OPTIONS: NormalizedFormatOptions = {
   indent: "  ",
@@ -124,9 +137,9 @@ const formatExpression = (
 ): FormatChunk => {
   switch (node.kind) {
     case NodeKind.List:
-      return formatListNode(node, level, options, overrides.delimiter);
+      return formatListNode(node, level, options, overrides);
     case NodeKind.NamespaceImport:
-      return formatListNode(node, level, options, overrides.delimiter);
+      return formatListNode(node, level, options, overrides);
     case NodeKind.Quote: {
       const children: FormatChunk[] = [createAtomChunk("quote", options)];
       const forceMultiline = Boolean(
@@ -155,8 +168,9 @@ const formatListNode = (
   node: ListLikeNode,
   level: number,
   options: NormalizedFormatOptions,
-  delimiterOverride?: SequenceDelimiter
+  overrides: ExpressionFormatOverrides = {}
 ): FormatChunk => {
+  const delimiterOverride = overrides?.delimiter;
   const headSymbol = getHeadSymbol(node.elements[0]);
   const formSpec = headSymbol ? options.formConfig[headSymbol] : undefined;
   if (formSpec?.clauseGrouping) {
@@ -164,19 +178,16 @@ const formatListNode = (
       node,
       level,
       options,
+      overrides,
       delimiterOverride,
       formSpec
     );
   }
   const inlineTailCount = formSpec?.inlineHeadArgCount ?? 0;
-  const chunks = node.elements.map((child, index) => {
-    const forceVector = shouldForceVector(formSpec, index);
-    return formatExpression(child, level + 1, options, {
-      delimiter: forceVector ? "[]" : undefined,
-    });
-  });
+  const chunks = formatListElements(node, level, options, formSpec, overrides);
+  const delimiter = resolveListDelimiter(node, delimiterOverride);
   return formatListChunks(chunks, level, options, {
-    delimiter: delimiterOverride ?? "()",
+    delimiter,
     inlineTailCount,
     forceMultiline: shouldForceMultilineBody(formSpec, node, inlineTailCount),
   });
@@ -186,15 +197,11 @@ const formatClauseGroupedList = (
   node: ListLikeNode,
   level: number,
   options: NormalizedFormatOptions,
+  overrides: ExpressionFormatOverrides = {},
   delimiterOverride: SequenceDelimiter | undefined,
   spec: FormFormattingSpec
 ): FormatChunk => {
-  const chunks = node.elements.map((child, index) => {
-    const forceVector = shouldForceVector(spec, index);
-    return formatExpression(child, level + 1, options, {
-      delimiter: forceVector ? "[]" : undefined,
-    });
-  });
+  const chunks = formatListElements(node, level, options, spec, overrides);
   if (chunks.length === 0) {
     return formatListChunks(chunks, level, options, {
       delimiter: delimiterOverride ?? "()",
@@ -215,10 +222,113 @@ const formatClauseGroupedList = (
     );
   }
   const combined = [head, ...clauseChunks];
+  const delimiter = resolveListDelimiter(node, delimiterOverride);
   return formatListChunks(combined, level, options, {
-    delimiter: delimiterOverride ?? "()",
+    delimiter,
     forceMultiline: clauseChunks.length > 0,
   });
+};
+
+const formatListElements = (
+  node: ListLikeNode,
+  level: number,
+  options: NormalizedFormatOptions,
+  formSpec: FormFormattingSpec | undefined,
+  overrides: ExpressionFormatOverrides = {}
+): FormatChunk[] => {
+  const vectorOverrideIndices = overrides.vectorElementIndices ?? [];
+  const clauseVectorStart = resolveClauseVectorStart(formSpec, node);
+  return node.elements.map((child, index) => {
+    const clauseContext =
+      clauseVectorStart !== null &&
+      index >= clauseVectorStart &&
+      isClauseListNode(child);
+    const forceVectorFromSpec =
+      !clauseContext && shouldForceVector(formSpec, index, child);
+    const forceVectorFromOverride = vectorOverrideIndices.includes(index);
+    const nestedVectorIndices = clauseContext ? ([0] as const) : undefined;
+    const childOverrides = createChildOverrides(
+      forceVectorFromSpec || forceVectorFromOverride,
+      nestedVectorIndices
+    );
+    return formatExpression(child, level + 1, options, childOverrides);
+  });
+};
+
+const resolveClauseVectorStart = (
+  spec: FormFormattingSpec | undefined,
+  node: ListLikeNode
+): number | null => {
+  if (
+    !spec?.vectorArgumentIndices?.length ||
+    spec.inlineHeadArgCount === undefined
+  ) {
+    return null;
+  }
+  const clauseStartIndex = spec.inlineHeadArgCount;
+  if (!spec.vectorArgumentIndices.includes(clauseStartIndex)) {
+    return null;
+  }
+  if (!areFunctionClauses(node, clauseStartIndex)) {
+    return null;
+  }
+  return clauseStartIndex;
+};
+
+const areFunctionClauses = (
+  node: ListLikeNode,
+  startIndex: number
+): boolean => {
+  if (node.elements.length <= startIndex) {
+    return false;
+  }
+  for (let index = startIndex; index < node.elements.length; index += 1) {
+    if (!isClauseListNode(node.elements[index])) {
+      return false;
+    }
+  }
+  return true;
+};
+
+const isClauseListNode = (
+  node: ExpressionNode | undefined
+): node is ListNode => {
+  if (!node || node.kind !== NodeKind.List) {
+    return false;
+  }
+  const clauseHead = node.elements[0];
+  return Boolean(clauseHead && clauseHead.kind === NodeKind.List);
+};
+
+const createChildOverrides = (
+  forceVector: boolean,
+  vectorElementIndices: readonly number[] | undefined
+): ExpressionFormatOverrides | undefined => {
+  if (!forceVector && !vectorElementIndices) {
+    return undefined;
+  }
+  return {
+    ...(forceVector ? { delimiter: "[]" as SequenceDelimiter } : {}),
+    ...(vectorElementIndices ? { vectorElementIndices } : {}),
+  } satisfies ExpressionFormatOverrides;
+};
+
+const shouldForceVector = (
+  spec: FormFormattingSpec | undefined,
+  elementIndex: number,
+  child: ExpressionNode | undefined
+): boolean => {
+  if (!spec?.vectorArgumentIndices?.includes(elementIndex)) {
+    return false;
+  }
+  if (!child || child.kind !== NodeKind.List) {
+    return false;
+  }
+  const head = getHeadSymbol(child.elements[0]);
+  if (head === "spread") {
+    return false;
+  }
+  return true;
 };
 
 const formatListChunks = (
@@ -274,16 +384,6 @@ const getHeadSymbol = (node: ExpressionNode | undefined): string | null => {
     return node.value;
   }
   return null;
-};
-
-const shouldForceVector = (
-  spec: FormFormattingSpec | undefined,
-  elementIndex: number
-): boolean => {
-  if (!spec?.vectorArgumentIndices) {
-    return false;
-  }
-  return spec.vectorArgumentIndices.includes(elementIndex);
 };
 
 const isComplexQuoteTarget = (node: ExpressionNode): boolean => {

@@ -13,7 +13,7 @@ import {
   createDefaultTestResolvers,
   getRuntimeSourceImportSpecifier,
 } from "@vibe/test-helpers";
-import { BUILTIN_SYMBOLS } from "@vibe/syntax";
+import { BUILTIN_SYMBOLS, createSpan } from "@vibe/syntax";
 import { keyword_STAR as runtimeKeyword } from "../../runtime/src/index.ts";
 import { generateModule, type GenerateModuleOptions } from "../src";
 
@@ -27,6 +27,11 @@ const RUNTIME_PRELUDE = `
 const withRuntimePrelude = (source: string) => `${RUNTIME_PRELUDE}\n${source}`;
 
 const PRELUDE_JS = join(process.cwd(), "packages/prelude/src/prelude.js");
+
+const DUMMY_SPAN = createSpan(
+  { offset: 0, line: 0, column: 0 },
+  { offset: 0, line: 0, column: 0 }
+);
 
 const ARITHMETIC_PRELUDE = `
 ${RUNTIME_PRELUDE}
@@ -454,7 +459,7 @@ describe("generateModule", () => {
     const moduleExports: ModuleExportsLookup = {
       getExports: (moduleId: string) =>
         moduleId === "/workspace/prelude.lang"
-          ? [{ name: "frob", kind: "var" as const }]
+          ? [{ name: "frob", kind: "var" as const, span: DUMMY_SPAN }]
           : undefined,
     };
     const fixture = `
@@ -492,10 +497,10 @@ describe("generateModule", () => {
     const moduleExports: ModuleExportsLookup = {
       getExports: (moduleId: string) => {
         if (moduleId === "/workspace/foo.lang") {
-          return [{ name: "fooValue", kind: "var" as const }];
+          return [{ name: "fooValue", kind: "var" as const, span: DUMMY_SPAN }];
         }
         if (moduleId === "/workspace/bar.lang") {
-          return [{ name: "barValue", kind: "var" as const }];
+          return [{ name: "barValue", kind: "var" as const, span: DUMMY_SPAN }];
         }
         return undefined;
       },
