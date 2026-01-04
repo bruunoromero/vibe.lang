@@ -2,11 +2,19 @@ export interface ClauseGroupingSpec {
   readonly groupSize: number;
 }
 
+export interface VectorArgumentGroupingSpec {
+  readonly argumentIndex: number;
+  readonly groupSize: number;
+  readonly inlineHangRelativeColumns?: number;
+}
+
 export interface FormFormattingSpec {
   readonly inlineHeadArgCount?: number;
   readonly vectorArgumentIndices?: readonly number[];
   readonly forceBodyMultiline?: boolean;
+  readonly forceListBodyMultiline?: boolean;
   readonly clauseGrouping?: ClauseGroupingSpec;
+  readonly vectorArgumentGroupings?: readonly VectorArgumentGroupingSpec[];
 }
 
 export type FormFormattingConfig = Record<string, FormFormattingSpec>;
@@ -29,10 +37,24 @@ const cloneClauseGrouping = (
   return { ...spec } satisfies ClauseGroupingSpec;
 };
 
+const cloneVectorArgumentGroupings = (
+  specs: readonly VectorArgumentGroupingSpec[] | undefined
+): readonly VectorArgumentGroupingSpec[] | undefined => {
+  if (!specs) {
+    return undefined;
+  }
+  return specs.map(
+    (spec) => ({ ...spec } satisfies VectorArgumentGroupingSpec)
+  );
+};
+
 const cloneSpec = (spec: FormFormattingSpec): FormFormattingSpec => ({
   ...spec,
   vectorArgumentIndices: cloneVectorArgumentIndices(spec.vectorArgumentIndices),
   clauseGrouping: cloneClauseGrouping(spec.clauseGrouping),
+  vectorArgumentGroupings: cloneVectorArgumentGroupings(
+    spec.vectorArgumentGroupings
+  ),
 });
 
 type FormSpecFactory = () => FormFormattingSpec;
@@ -42,7 +64,10 @@ const defineSpec = (spec: FormFormattingSpec): FormSpecFactory => {
   return () => cloneSpec(template);
 };
 
-const SIMPLE_INLINE_DEFINITION = defineSpec({ inlineHeadArgCount: 1 });
+const SIMPLE_INLINE_DEFINITION = defineSpec({
+  inlineHeadArgCount: 1,
+  forceListBodyMultiline: true,
+});
 
 const DEFINITION_WITH_BINDINGS = defineSpec({
   inlineHeadArgCount: 2,
@@ -59,12 +84,20 @@ const LAMBDA_WITH_BINDINGS = defineSpec({
 const LEXICAL_BINDING_FORM = defineSpec({
   inlineHeadArgCount: 1,
   vectorArgumentIndices: [1],
+  vectorArgumentGroupings: [
+    { argumentIndex: 1, groupSize: 2, inlineHangRelativeColumns: 1 },
+  ],
 });
 
 const COND_CLAUSE_GROUPING = defineSpec({
   clauseGrouping: {
     groupSize: 2,
   },
+});
+
+const IF_FORM = defineSpec({
+  inlineHeadArgCount: 1,
+  forceBodyMultiline: true,
 });
 
 export const FORM_PRESETS = {
@@ -88,6 +121,7 @@ const DEFAULT_FORM_ENTRIES: readonly (readonly [string, FormSpecFactory])[] = [
   ["fn", LAMBDA_WITH_BINDINGS],
   ["fn+", LAMBDA_WITH_BINDINGS],
   ["let", LEXICAL_BINDING_FORM],
+  ["if", IF_FORM],
   ["cond", COND_CLAUSE_GROUPING],
 ];
 
@@ -125,11 +159,19 @@ const mergeSpecs = (
       ? cloneClauseGrouping(base.clauseGrouping)
       : undefined;
 
+  const vectorArgumentGroupings =
+    "vectorArgumentGroupings" in override
+      ? cloneVectorArgumentGroupings(override.vectorArgumentGroupings)
+      : base?.vectorArgumentGroupings
+      ? cloneVectorArgumentGroupings(base.vectorArgumentGroupings)
+      : undefined;
+
   return {
     ...(base ?? {}),
     ...override,
     ...(vectorArgumentIndices ? { vectorArgumentIndices } : {}),
     ...(clauseGrouping ? { clauseGrouping } : {}),
+    ...(vectorArgumentGroupings ? { vectorArgumentGroupings } : {}),
   } satisfies FormFormattingSpec;
 };
 

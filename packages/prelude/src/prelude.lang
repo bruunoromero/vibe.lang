@@ -4,35 +4,44 @@
   (macro+
     ((name & clauses)
       (quote
-        (def (unquote name) (macro+ (spread (unquote clauses))))))))
+        (def (unquote name)
+          (macro+ (spread (unquote clauses))))))))
 
-(defmacro+ defmacro ([name args & body]
-  (quote
-    (defmacro+ (unquote name) ([unquote args] (spread (unquote body)))))))
+(defmacro+ defmacro
+  ([name args & body]
+    (quote
+      (defmacro+ (unquote name)
+        ([unquote args] (spread (unquote body)))))))
 
 (defmacro fn [args & body]
   (quote
-    (fn+ ([unquote args] (spread (unquote body))))))
+    (fn+
+      ([unquote args] (spread (unquote body))))))
 
 (defmacro defmacrop+ [name & clauses]
   (quote
-    (defp (unquote name) (macro+ (spread (unquote clauses))))))
+    (defp (unquote name)
+      (macro+ (spread (unquote clauses))))))
 
 (defmacro defn+ [name & clauses]
   (quote
-    (def (unquote name) (fn+ (spread (unquote clauses))))))
+    (def (unquote name)
+      (fn+ (spread (unquote clauses))))))
 
 (defmacro defn [name args & body]
   (quote
-    (defn+ (unquote name) ([unquote args] (spread (unquote body))))))
+    (defn+ (unquote name)
+      ([unquote args] (spread (unquote body))))))
 
 (defmacro defnp+ [name & clauses]
   (quote
-    (defp (unquote name) (fn+ (spread (unquote clauses))))))
+    (defp (unquote name)
+      (fn+ (spread (unquote clauses))))))
 
 (defmacro defnp [name args & body]
   (quote
-    (defnp+ (unquote name) ([unquote args] (spread (unquote body))))))
+    (defnp+ (unquote name)
+      ([unquote args] (spread (unquote body))))))
 
 (defn name [sym]
   (runtime/name* sym))
@@ -45,11 +54,13 @@
 
 (defmacro declare [var]
   (quote
-    (def (unquote var) (get (global-this) (unquote (name var))))))
+    (def (unquote var)
+      (get (global-this) (unquote (name var))))))
 
 (defmacro declarep [var]
   (quote
-    (defp (unquote var) (get (global-this) (unquote (name var))))))
+    (defp (unquote var)
+      (get (global-this) (unquote (name var))))))
 
 (defmacro do [& body]
   (quote
@@ -58,17 +69,25 @@
 (defn list [& items]
   items)
 
-(defmacro+ and ([] true)
+(defmacro+ and
+  ([] true)
   ([x] x)
   ([x & rest]
     (quote
-      (let [temp (unquote x)] (if temp (and (spread (unquote rest))) temp)))))
+      (let [temp (unquote x)]
+        (if temp
+          (and (spread (unquote rest)))
+          temp)))))
 
-(defmacro+ or ([] nil)
+(defmacro+ or
+  ([] nil)
   ([x] x)
   ([x & rest]
     (quote
-      (let [temp (unquote x)] (if temp temp (or (spread (unquote rest))))))))
+      (let [temp (unquote x)]
+        (if temp
+          temp
+          (or (spread (unquote rest))))))))
 
 (defn count [coll]
   (runtime/count coll))
@@ -88,13 +107,12 @@
 (defn cons [x xs]
   (list x (spread xs)))
 
-(defmacro+ cond ([] nil)
+(defmacro+ cond
+  ([] nil)
   ([test expr & rest]
-    (if
-      (even? (count rest))
+    (if (even? (count rest))
       (quote
-        (if
-          (unquote test)
+        (if (unquote test)
           (unquote expr)
           (cond
             (spread (unquote rest)))))
@@ -103,32 +121,51 @@
 (defn apply [f args]
   (runtime/apply f args))
 
-(defn+ = ([x] true)
+(defn+ =
+  ([x] true)
   ([x y] (runtime/eq* x y))
-  ([x y & rest] (if (runtime/eq* x y) (apply = (cons y rest)) false)))
+  ([x y & rest]
+    (if (runtime/eq* x y)
+      (apply = (cons y rest))
+      false)))
 
-(def < (fn+ ([x y] (runtime/lt* x y))))
+(def <
+  (fn+
+    ([x y] (runtime/lt* x y))))
 
-(def > (fn+ ([x y] (runtime/gt* x y))))
+(def >
+  (fn+
+    ([x y] (runtime/gt* x y))))
 
-(def <= (fn+ ([x y] (runtime/lte* x y))))
+(def <=
+  (fn+
+    ([x y] (runtime/lte* x y))))
 
-(def >= (fn+ ([x y] (runtime/gte* x y))))
+(def >=
+  (fn+
+    ([x y] (runtime/gte* x y))))
 
 (defn reduce [f init coll]
-  (if (empty? coll) init (reduce f (f init (first coll)) (rest coll))))
+  (if (empty? coll)
+    init
+    (reduce f (f init (first coll)) (rest coll))))
 
 (defn + [& xs]
   (reduce runtime/add* 0 xs))
 
-(defn+ - ([] 0)
+(defn+ -
+  ([] 0)
   ([x] (runtime/sub* 0 x))
-  ([& xs] (reduce runtime/sub* (first xs) (rest xs))))
+  ([& xs]
+    (reduce runtime/sub*
+            (first xs)
+            (rest xs))))
 
 (defn * [& xs]
   (reduce runtime/mul* 1 xs))
 
-(defn+ / ([] 0)
+(defn+ /
+  ([] 0)
   ([x] (runtime/div* 1 x))
   ([& xs] (reduce runtime/div* (first xs) (rest xs))))
 
@@ -142,18 +179,30 @@
   (- x 1))
 
 (defn map [f coll]
-  (if (empty? coll) [] (cons (f (first coll)) (map f (rest coll)))))
+  (if (empty? coll)
+    []
+    (cons
+      (f (first coll))
+      (map f (rest coll)))))
 
 (defn filter [pred coll]
-  (if
-    (empty? coll)
+  (if (empty? coll)
     []
-    (let [x (first coll) xs (rest coll)]
-      (if (pred x) (cons x (filter pred xs)) (filter pred xs)))))
+    (let [x (first coll)
+          xs (rest coll)]
+      (if (pred x)
+        (cons x (filter pred xs))
+        (filter pred xs)))))
 
 (defn concat [& colls]
   (reduce
-    (fn+ ([acc coll] (if (empty? coll) acc (concat acc (cons (first coll) (rest coll))))))
+    (fn+
+      ([acc coll]
+        (if (empty? coll)
+          acc
+          (concat
+            acc
+            (cons (first coll) (rest coll))))))
     []
     colls))
 
@@ -161,16 +210,21 @@
   (cond
     (<= n 0) []
     (empty? coll) []
-    :else (cons (first coll) (take (dec n) (rest coll)))))
+    :else (cons
+            (first coll)
+            (take (dec n) (rest coll)))))
 
 (defn drop [n coll]
   (cond
     (<= n 0) coll
     (empty? coll) []
-    :else (drop (dec n) (rest coll))))
+    :else (drop
+            (dec n)
+            (rest coll))))
 
 (defn reverse [coll]
-  (reduce (fn+ ([acc x] (cons x acc))) [] coll))
+  (reduce (fn+
+            ([acc x] (cons x acc))) [] coll))
 
 (defn println [& args]
   (runtime/println args))
