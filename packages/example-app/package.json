@@ -1,0 +1,13 @@
+{
+  "name": "@vibe/example-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "module": "src/ExampleApp.vibe",
+  "scripts": {
+    "tokenize": "bun ../cli/src/index.ts tokenize",
+    "parse": "bun ../cli/src/index.ts parse"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

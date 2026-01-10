@@ -1,0 +1,6 @@
+{
+  "name": "ExampleApp",
+  "src": "src",
+  "dist": "dist",
+  "packages": []
+}

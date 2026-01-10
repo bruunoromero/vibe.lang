@@ -1,0 +1,1547 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`parser snapshots nested quotes and splicing 1`] = `
+{
+  "body": [
+    {
+      "kind": "quote",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 29,
+          "line": 0,
+          "offset": 29,
+        },
+        "start": {
+          "column": 0,
+          "line": 0,
+          "offset": 0,
+        },
+      },
+      "target": {
+        "kind": "quote",
+        "scopeId": "scope_0",
+        "span": {
+          "end": {
+            "column": 29,
+            "line": 0,
+            "offset": 29,
+          },
+          "start": {
+            "column": 1,
+            "line": 0,
+            "offset": 1,
+          },
+        },
+        "target": {
+          "elements": [
+            {
+              "kind": "symbol",
+              "lexeme": "foo",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 6,
+                  "line": 0,
+                  "offset": 6,
+                },
+                "start": {
+                  "column": 3,
+                  "line": 0,
+                  "offset": 3,
+                },
+              },
+              "value": "foo",
+            },
+            {
+              "kind": "syntax_quote",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 28,
+                  "line": 0,
+                  "offset": 28,
+                },
+                "start": {
+                  "column": 7,
+                  "line": 0,
+                  "offset": 7,
+                },
+              },
+              "target": {
+                "elements": [
+                  {
+                    "kind": "symbol",
+                    "lexeme": "bar",
+                    "scopeId": "scope_0",
+                    "span": {
+                      "end": {
+                        "column": 12,
+                        "line": 0,
+                        "offset": 12,
+                      },
+                      "start": {
+                        "column": 9,
+                        "line": 0,
+                        "offset": 9,
+                      },
+                    },
+                    "value": "bar",
+                  },
+                  {
+                    "kind": "unquote",
+                    "scopeId": "scope_0",
+                    "span": {
+                      "end": {
+                        "column": 17,
+                        "line": 0,
+                        "offset": 17,
+                      },
+                      "start": {
+                        "column": 13,
+                        "line": 0,
+                        "offset": 13,
+                      },
+                    },
+                    "target": {
+                      "kind": "symbol",
+                      "lexeme": "baz",
+                      "scopeId": "scope_0",
+                      "span": {
+                        "end": {
+                          "column": 17,
+                          "line": 0,
+                          "offset": 17,
+                        },
+                        "start": {
+                          "column": 14,
+                          "line": 0,
+                          "offset": 14,
+                        },
+                      },
+                      "value": "baz",
+                    },
+                  },
+                  {
+                    "kind": "unquote_splicing",
+                    "scopeId": "scope_0",
+                    "span": {
+                      "end": {
+                        "column": 27,
+                        "line": 0,
+                        "offset": 27,
+                      },
+                      "start": {
+                        "column": 18,
+                        "line": 0,
+                        "offset": 18,
+                      },
+                    },
+                    "target": {
+                      "elements": [
+                        {
+                          "kind": "symbol",
+                          "lexeme": "+",
+                          "scopeId": "scope_0",
+                          "span": {
+                            "end": {
+                              "column": 22,
+                              "line": 0,
+                              "offset": 22,
+                            },
+                            "start": {
+                              "column": 21,
+                              "line": 0,
+                              "offset": 21,
+                            },
+                          },
+                          "value": "+",
+                        },
+                        {
+                          "kind": "number",
+                          "lexeme": "1",
+                          "scopeId": "scope_0",
+                          "span": {
+                            "end": {
+                              "column": 24,
+                              "line": 0,
+                              "offset": 24,
+                            },
+                            "start": {
+                              "column": 23,
+                              "line": 0,
+                              "offset": 23,
+                            },
+                          },
+                          "value": 1,
+                        },
+                        {
+                          "kind": "number",
+                          "lexeme": "2",
+                          "scopeId": "scope_0",
+                          "span": {
+                            "end": {
+                              "column": 26,
+                              "line": 0,
+                              "offset": 26,
+                            },
+                            "start": {
+                              "column": 25,
+                              "line": 0,
+                              "offset": 25,
+                            },
+                          },
+                          "value": 2,
+                        },
+                      ],
+                      "kind": "list",
+                      "scopeId": "scope_0",
+                      "span": {
+                        "end": {
+                          "column": 27,
+                          "line": 0,
+                          "offset": 27,
+                        },
+                        "start": {
+                          "column": 20,
+                          "line": 0,
+                          "offset": 20,
+                        },
+                      },
+                    },
+                  },
+                ],
+                "kind": "list",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 28,
+                    "line": 0,
+                    "offset": 28,
+                  },
+                  "start": {
+                    "column": 8,
+                    "line": 0,
+                    "offset": 8,
+                  },
+                },
+              },
+            },
+          ],
+          "kind": "list",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 29,
+              "line": 0,
+              "offset": 29,
+            },
+            "start": {
+              "column": 2,
+              "line": 0,
+              "offset": 2,
+            },
+          },
+        },
+      },
+    },
+  ],
+  "kind": "program",
+  "scopeId": "scope_0",
+  "span": {
+    "end": {
+      "column": 29,
+      "line": 0,
+      "offset": 29,
+    },
+    "start": {
+      "column": 0,
+      "line": 0,
+      "offset": 0,
+    },
+  },
+}
+`;
+
+exports[`parser snapshots metadata style dispatch 1`] = `
+{
+  "body": [
+    {
+      "kind": "dispatch",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 2,
+          "line": 0,
+          "offset": 2,
+        },
+        "start": {
+          "column": 0,
+          "line": 0,
+          "offset": 0,
+        },
+      },
+      "target": {
+        "kind": "symbol",
+        "lexeme": "^",
+        "scopeId": "scope_0",
+        "span": {
+          "end": {
+            "column": 2,
+            "line": 0,
+            "offset": 2,
+          },
+          "start": {
+            "column": 1,
+            "line": 0,
+            "offset": 1,
+          },
+        },
+        "value": "^",
+      },
+    },
+    {
+      "entries": [
+        {
+          "key": {
+            "kind": "keyword",
+            "lexeme": ":doc",
+            "scopeId": "scope_0",
+            "span": {
+              "end": {
+                "column": 7,
+                "line": 0,
+                "offset": 7,
+              },
+              "start": {
+                "column": 3,
+                "line": 0,
+                "offset": 3,
+              },
+            },
+            "value": "doc",
+          },
+          "kind": "map_entry",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 12,
+              "line": 0,
+              "offset": 12,
+            },
+            "start": {
+              "column": 3,
+              "line": 0,
+              "offset": 3,
+            },
+          },
+          "value": {
+            "kind": "string",
+            "lexeme": ""hi"",
+            "scopeId": "scope_0",
+            "span": {
+              "end": {
+                "column": 12,
+                "line": 0,
+                "offset": 12,
+              },
+              "start": {
+                "column": 8,
+                "line": 0,
+                "offset": 8,
+              },
+            },
+            "value": "hi",
+          },
+        },
+        {
+          "key": {
+            "kind": "keyword",
+            "lexeme": ":author",
+            "scopeId": "scope_0",
+            "span": {
+              "end": {
+                "column": 20,
+                "line": 0,
+                "offset": 20,
+              },
+              "start": {
+                "column": 13,
+                "line": 0,
+                "offset": 13,
+              },
+            },
+            "value": "author",
+          },
+          "kind": "map_entry",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 25,
+              "line": 0,
+              "offset": 25,
+            },
+            "start": {
+              "column": 13,
+              "line": 0,
+              "offset": 13,
+            },
+          },
+          "value": {
+            "kind": "string",
+            "lexeme": ""me"",
+            "scopeId": "scope_0",
+            "span": {
+              "end": {
+                "column": 25,
+                "line": 0,
+                "offset": 25,
+              },
+              "start": {
+                "column": 21,
+                "line": 0,
+                "offset": 21,
+              },
+            },
+            "value": "me",
+          },
+        },
+      ],
+      "kind": "map",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 26,
+          "line": 0,
+          "offset": 26,
+        },
+        "start": {
+          "column": 2,
+          "line": 0,
+          "offset": 2,
+        },
+      },
+    },
+    {
+      "elements": [
+        {
+          "kind": "symbol",
+          "lexeme": "def",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 31,
+              "line": 0,
+              "offset": 31,
+            },
+            "start": {
+              "column": 28,
+              "line": 0,
+              "offset": 28,
+            },
+          },
+          "value": "def",
+        },
+        {
+          "kind": "symbol",
+          "lexeme": "foo",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 35,
+              "line": 0,
+              "offset": 35,
+            },
+            "start": {
+              "column": 32,
+              "line": 0,
+              "offset": 32,
+            },
+          },
+          "value": "foo",
+        },
+        {
+          "entries": [
+            {
+              "key": {
+                "kind": "keyword",
+                "lexeme": ":a",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 39,
+                    "line": 0,
+                    "offset": 39,
+                  },
+                  "start": {
+                    "column": 37,
+                    "line": 0,
+                    "offset": 37,
+                  },
+                },
+                "value": "a",
+              },
+              "kind": "map_entry",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 41,
+                  "line": 0,
+                  "offset": 41,
+                },
+                "start": {
+                  "column": 37,
+                  "line": 0,
+                  "offset": 37,
+                },
+              },
+              "value": {
+                "kind": "number",
+                "lexeme": "1",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 41,
+                    "line": 0,
+                    "offset": 41,
+                  },
+                  "start": {
+                    "column": 40,
+                    "line": 0,
+                    "offset": 40,
+                  },
+                },
+                "value": 1,
+              },
+            },
+            {
+              "key": {
+                "kind": "keyword",
+                "lexeme": ":b",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 44,
+                    "line": 0,
+                    "offset": 44,
+                  },
+                  "start": {
+                    "column": 42,
+                    "line": 0,
+                    "offset": 42,
+                  },
+                },
+                "value": "b",
+              },
+              "kind": "map_entry",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 46,
+                  "line": 0,
+                  "offset": 46,
+                },
+                "start": {
+                  "column": 42,
+                  "line": 0,
+                  "offset": 42,
+                },
+              },
+              "value": {
+                "kind": "number",
+                "lexeme": "2",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 46,
+                    "line": 0,
+                    "offset": 46,
+                  },
+                  "start": {
+                    "column": 45,
+                    "line": 0,
+                    "offset": 45,
+                  },
+                },
+                "value": 2,
+              },
+            },
+          ],
+          "kind": "map",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 47,
+              "line": 0,
+              "offset": 47,
+            },
+            "start": {
+              "column": 36,
+              "line": 0,
+              "offset": 36,
+            },
+          },
+        },
+      ],
+      "kind": "list",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 48,
+          "line": 0,
+          "offset": 48,
+        },
+        "start": {
+          "column": 27,
+          "line": 0,
+          "offset": 27,
+        },
+      },
+    },
+  ],
+  "kind": "program",
+  "scopeId": "scope_0",
+  "span": {
+    "end": {
+      "column": 48,
+      "line": 0,
+      "offset": 48,
+    },
+    "start": {
+      "column": 0,
+      "line": 0,
+      "offset": 0,
+    },
+  },
+}
+`;
+
+exports[`parser snapshots dispatch variants inside collection 1`] = `
+{
+  "body": [
+    {
+      "kind": "quote",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 31,
+          "line": 0,
+          "offset": 31,
+        },
+        "start": {
+          "column": 0,
+          "line": 0,
+          "offset": 0,
+        },
+      },
+      "target": {
+        "elements": [
+          {
+            "kind": "dispatch",
+            "scopeId": "scope_0",
+            "span": {
+              "end": {
+                "column": 16,
+                "line": 0,
+                "offset": 16,
+              },
+              "start": {
+                "column": 3,
+                "line": 0,
+                "offset": 3,
+              },
+            },
+            "target": {
+              "elements": [
+                {
+                  "kind": "symbol",
+                  "lexeme": "println",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 12,
+                      "line": 0,
+                      "offset": 12,
+                    },
+                    "start": {
+                      "column": 5,
+                      "line": 0,
+                      "offset": 5,
+                    },
+                  },
+                  "value": "println",
+                },
+                {
+                  "kind": "symbol",
+                  "lexeme": "%1",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 15,
+                      "line": 0,
+                      "offset": 15,
+                    },
+                    "start": {
+                      "column": 13,
+                      "line": 0,
+                      "offset": 13,
+                    },
+                  },
+                  "value": "%1",
+                },
+              ],
+              "kind": "list",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 16,
+                  "line": 0,
+                  "offset": 16,
+                },
+                "start": {
+                  "column": 4,
+                  "line": 0,
+                  "offset": 4,
+                },
+              },
+            },
+          },
+          {
+            "kind": "dispatch",
+            "scopeId": "scope_0",
+            "span": {
+              "end": {
+                "column": 29,
+                "line": 0,
+                "offset": 29,
+              },
+              "start": {
+                "column": 17,
+                "line": 0,
+                "offset": 17,
+              },
+            },
+            "target": {
+              "elements": [
+                {
+                  "kind": "symbol",
+                  "lexeme": "+",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 20,
+                      "line": 0,
+                      "offset": 20,
+                    },
+                    "start": {
+                      "column": 19,
+                      "line": 0,
+                      "offset": 19,
+                    },
+                  },
+                  "value": "+",
+                },
+                {
+                  "kind": "number",
+                  "lexeme": "1",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 22,
+                      "line": 0,
+                      "offset": 22,
+                    },
+                    "start": {
+                      "column": 21,
+                      "line": 0,
+                      "offset": 21,
+                    },
+                  },
+                  "value": 1,
+                },
+                {
+                  "kind": "symbol",
+                  "lexeme": "state",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 28,
+                      "line": 0,
+                      "offset": 28,
+                    },
+                    "start": {
+                      "column": 23,
+                      "line": 0,
+                      "offset": 23,
+                    },
+                  },
+                  "value": "state",
+                },
+              ],
+              "kind": "list",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 29,
+                  "line": 0,
+                  "offset": 29,
+                },
+                "start": {
+                  "column": 18,
+                  "line": 0,
+                  "offset": 18,
+                },
+              },
+            },
+          },
+        ],
+        "kind": "vector",
+        "scopeId": "scope_0",
+        "span": {
+          "end": {
+            "column": 31,
+            "line": 0,
+            "offset": 31,
+          },
+          "start": {
+            "column": 1,
+            "line": 0,
+            "offset": 1,
+          },
+        },
+      },
+    },
+  ],
+  "kind": "program",
+  "scopeId": "scope_0",
+  "span": {
+    "end": {
+      "column": 31,
+      "line": 0,
+      "offset": 31,
+    },
+    "start": {
+      "column": 0,
+      "line": 0,
+      "offset": 0,
+    },
+  },
+}
+`;
+
+exports[`parser snapshots macro declaration and usage 1`] = `
+{
+  "body": [
+    {
+      "elements": [
+        {
+          "kind": "symbol",
+          "lexeme": "def",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 10,
+              "line": 1,
+              "offset": 11,
+            },
+            "start": {
+              "column": 7,
+              "line": 1,
+              "offset": 8,
+            },
+          },
+          "value": "def",
+        },
+        {
+          "kind": "symbol",
+          "lexeme": "with-temp",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 20,
+              "line": 1,
+              "offset": 21,
+            },
+            "start": {
+              "column": 11,
+              "line": 1,
+              "offset": 12,
+            },
+          },
+          "value": "with-temp",
+        },
+        {
+          "elements": [
+            {
+              "kind": "symbol",
+              "lexeme": "macro",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 14,
+                  "line": 2,
+                  "offset": 36,
+                },
+                "start": {
+                  "column": 9,
+                  "line": 2,
+                  "offset": 31,
+                },
+              },
+              "value": "macro",
+            },
+            {
+              "elements": [
+                {
+                  "kind": "symbol",
+                  "lexeme": "expr",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 20,
+                      "line": 2,
+                      "offset": 42,
+                    },
+                    "start": {
+                      "column": 16,
+                      "line": 2,
+                      "offset": 38,
+                    },
+                  },
+                  "value": "expr",
+                },
+              ],
+              "kind": "vector",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 21,
+                  "line": 2,
+                  "offset": 43,
+                },
+                "start": {
+                  "column": 15,
+                  "line": 2,
+                  "offset": 37,
+                },
+              },
+            },
+            {
+              "kind": "syntax_quote",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 17,
+                  "line": 5,
+                  "offset": 116,
+                },
+                "start": {
+                  "column": 10,
+                  "line": 3,
+                  "offset": 54,
+                },
+              },
+              "target": {
+                "elements": [
+                  {
+                    "kind": "symbol",
+                    "lexeme": "let",
+                    "scopeId": "scope_0",
+                    "span": {
+                      "end": {
+                        "column": 15,
+                        "line": 3,
+                        "offset": 59,
+                      },
+                      "start": {
+                        "column": 12,
+                        "line": 3,
+                        "offset": 56,
+                      },
+                    },
+                    "value": "let",
+                  },
+                  {
+                    "elements": [
+                      {
+                        "kind": "symbol",
+                        "lexeme": "tmp",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 20,
+                            "line": 3,
+                            "offset": 64,
+                          },
+                          "start": {
+                            "column": 17,
+                            "line": 3,
+                            "offset": 61,
+                          },
+                        },
+                        "value": "tmp",
+                      },
+                      {
+                        "kind": "unquote",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 26,
+                            "line": 3,
+                            "offset": 70,
+                          },
+                          "start": {
+                            "column": 21,
+                            "line": 3,
+                            "offset": 65,
+                          },
+                        },
+                        "target": {
+                          "kind": "symbol",
+                          "lexeme": "expr",
+                          "scopeId": "scope_1",
+                          "span": {
+                            "end": {
+                              "column": 26,
+                              "line": 3,
+                              "offset": 70,
+                            },
+                            "start": {
+                              "column": 22,
+                              "line": 3,
+                              "offset": 66,
+                            },
+                          },
+                          "value": "expr",
+                        },
+                      },
+                    ],
+                    "kind": "vector",
+                    "scopeId": "scope_0",
+                    "span": {
+                      "end": {
+                        "column": 27,
+                        "line": 3,
+                        "offset": 71,
+                      },
+                      "start": {
+                        "column": 16,
+                        "line": 3,
+                        "offset": 60,
+                      },
+                    },
+                  },
+                  {
+                    "elements": [
+                      {
+                        "kind": "symbol",
+                        "lexeme": "println",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 21,
+                            "line": 4,
+                            "offset": 93,
+                          },
+                          "start": {
+                            "column": 14,
+                            "line": 4,
+                            "offset": 86,
+                          },
+                        },
+                        "value": "println",
+                      },
+                      {
+                        "kind": "symbol",
+                        "lexeme": "tmp",
+                        "scopeId": "scope_1",
+                        "span": {
+                          "end": {
+                            "column": 25,
+                            "line": 4,
+                            "offset": 97,
+                          },
+                          "start": {
+                            "column": 22,
+                            "line": 4,
+                            "offset": 94,
+                          },
+                        },
+                        "value": "tmp",
+                      },
+                    ],
+                    "kind": "list",
+                    "scopeId": "scope_1",
+                    "span": {
+                      "end": {
+                        "column": 26,
+                        "line": 4,
+                        "offset": 98,
+                      },
+                      "start": {
+                        "column": 13,
+                        "line": 4,
+                        "offset": 85,
+                      },
+                    },
+                  },
+                  {
+                    "kind": "symbol",
+                    "lexeme": "tmp",
+                    "scopeId": "scope_1",
+                    "span": {
+                      "end": {
+                        "column": 16,
+                        "line": 5,
+                        "offset": 115,
+                      },
+                      "start": {
+                        "column": 13,
+                        "line": 5,
+                        "offset": 112,
+                      },
+                    },
+                    "value": "tmp",
+                  },
+                ],
+                "kind": "list",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 17,
+                    "line": 5,
+                    "offset": 116,
+                  },
+                  "start": {
+                    "column": 11,
+                    "line": 3,
+                    "offset": 55,
+                  },
+                },
+              },
+            },
+          ],
+          "kind": "list",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 18,
+              "line": 5,
+              "offset": 117,
+            },
+            "start": {
+              "column": 8,
+              "line": 2,
+              "offset": 30,
+            },
+          },
+        },
+      ],
+      "kind": "list",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 19,
+          "line": 5,
+          "offset": 118,
+        },
+        "start": {
+          "column": 6,
+          "line": 1,
+          "offset": 7,
+        },
+      },
+    },
+    {
+      "elements": [
+        {
+          "kind": "symbol",
+          "lexeme": "def",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 10,
+              "line": 7,
+              "offset": 130,
+            },
+            "start": {
+              "column": 7,
+              "line": 7,
+              "offset": 127,
+            },
+          },
+          "value": "def",
+        },
+        {
+          "kind": "symbol",
+          "lexeme": "answer",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 17,
+              "line": 7,
+              "offset": 137,
+            },
+            "start": {
+              "column": 11,
+              "line": 7,
+              "offset": 131,
+            },
+          },
+          "value": "answer",
+        },
+        {
+          "elements": [
+            {
+              "kind": "symbol",
+              "lexeme": "with-temp",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 28,
+                  "line": 7,
+                  "offset": 148,
+                },
+                "start": {
+                  "column": 19,
+                  "line": 7,
+                  "offset": 139,
+                },
+              },
+              "value": "with-temp",
+            },
+            {
+              "elements": [
+                {
+                  "kind": "symbol",
+                  "lexeme": "+",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 31,
+                      "line": 7,
+                      "offset": 151,
+                    },
+                    "start": {
+                      "column": 30,
+                      "line": 7,
+                      "offset": 150,
+                    },
+                  },
+                  "value": "+",
+                },
+                {
+                  "kind": "number",
+                  "lexeme": "1",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 33,
+                      "line": 7,
+                      "offset": 153,
+                    },
+                    "start": {
+                      "column": 32,
+                      "line": 7,
+                      "offset": 152,
+                    },
+                  },
+                  "value": 1,
+                },
+                {
+                  "kind": "number",
+                  "lexeme": "2",
+                  "scopeId": "scope_0",
+                  "span": {
+                    "end": {
+                      "column": 35,
+                      "line": 7,
+                      "offset": 155,
+                    },
+                    "start": {
+                      "column": 34,
+                      "line": 7,
+                      "offset": 154,
+                    },
+                  },
+                  "value": 2,
+                },
+              ],
+              "kind": "list",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 36,
+                  "line": 7,
+                  "offset": 156,
+                },
+                "start": {
+                  "column": 29,
+                  "line": 7,
+                  "offset": 149,
+                },
+              },
+            },
+          ],
+          "kind": "list",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 37,
+              "line": 7,
+              "offset": 157,
+            },
+            "start": {
+              "column": 18,
+              "line": 7,
+              "offset": 138,
+            },
+          },
+        },
+      ],
+      "kind": "list",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 38,
+          "line": 7,
+          "offset": 158,
+        },
+        "start": {
+          "column": 6,
+          "line": 7,
+          "offset": 126,
+        },
+      },
+    },
+  ],
+  "kind": "program",
+  "scopeId": "scope_0",
+  "span": {
+    "end": {
+      "column": 38,
+      "line": 7,
+      "offset": 158,
+    },
+    "start": {
+      "column": 6,
+      "line": 1,
+      "offset": 7,
+    },
+  },
+}
+`;
+
+exports[`parser snapshots metadata with map and def 1`] = `
+{
+  "body": [
+    {
+      "elements": [
+        {
+          "kind": "symbol",
+          "lexeme": "defn",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 5,
+              "line": 0,
+              "offset": 5,
+            },
+            "start": {
+              "column": 1,
+              "line": 0,
+              "offset": 1,
+            },
+          },
+          "value": "defn",
+        },
+        {
+          "kind": "symbol",
+          "lexeme": "info",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 10,
+              "line": 0,
+              "offset": 10,
+            },
+            "start": {
+              "column": 6,
+              "line": 0,
+              "offset": 6,
+            },
+          },
+          "value": "info",
+        },
+        {
+          "elements": [],
+          "kind": "vector",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 13,
+              "line": 0,
+              "offset": 13,
+            },
+            "start": {
+              "column": 11,
+              "line": 0,
+              "offset": 11,
+            },
+          },
+        },
+        {
+          "entries": [
+            {
+              "key": {
+                "kind": "keyword",
+                "lexeme": ":doc",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 19,
+                    "line": 0,
+                    "offset": 19,
+                  },
+                  "start": {
+                    "column": 15,
+                    "line": 0,
+                    "offset": 15,
+                  },
+                },
+                "value": "doc",
+              },
+              "kind": "map_entry",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 24,
+                  "line": 0,
+                  "offset": 24,
+                },
+                "start": {
+                  "column": 15,
+                  "line": 0,
+                  "offset": 15,
+                },
+              },
+              "value": {
+                "kind": "string",
+                "lexeme": ""hi"",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 24,
+                    "line": 0,
+                    "offset": 24,
+                  },
+                  "start": {
+                    "column": 20,
+                    "line": 0,
+                    "offset": 20,
+                  },
+                },
+                "value": "hi",
+              },
+            },
+            {
+              "key": {
+                "kind": "keyword",
+                "lexeme": ":author",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 32,
+                    "line": 0,
+                    "offset": 32,
+                  },
+                  "start": {
+                    "column": 25,
+                    "line": 0,
+                    "offset": 25,
+                  },
+                },
+                "value": "author",
+              },
+              "kind": "map_entry",
+              "scopeId": "scope_0",
+              "span": {
+                "end": {
+                  "column": 37,
+                  "line": 0,
+                  "offset": 37,
+                },
+                "start": {
+                  "column": 25,
+                  "line": 0,
+                  "offset": 25,
+                },
+              },
+              "value": {
+                "kind": "string",
+                "lexeme": ""me"",
+                "scopeId": "scope_0",
+                "span": {
+                  "end": {
+                    "column": 37,
+                    "line": 0,
+                    "offset": 37,
+                  },
+                  "start": {
+                    "column": 33,
+                    "line": 0,
+                    "offset": 33,
+                  },
+                },
+                "value": "me",
+              },
+            },
+          ],
+          "kind": "map",
+          "scopeId": "scope_0",
+          "span": {
+            "end": {
+              "column": 38,
+              "line": 0,
+              "offset": 38,
+            },
+            "start": {
+              "column": 14,
+              "line": 0,
+              "offset": 14,
+            },
+          },
+        },
+      ],
+      "kind": "list",
+      "scopeId": "scope_0",
+      "span": {
+        "end": {
+          "column": 39,
+          "line": 0,
+          "offset": 39,
+        },
+        "start": {
+          "column": 0,
+          "line": 0,
+          "offset": 0,
+        },
+      },
+    },
+  ],
+  "kind": "program",
+  "scopeId": "scope_0",
+  "span": {
+    "end": {
+      "column": 39,
+      "line": 0,
+      "offset": 39,
+    },
+    "start": {
+      "column": 0,
+      "line": 0,
+      "offset": 0,
+    },
+  },
+}
+`;

@@ -1,0 +1,191 @@
+(* Vibe Programming Language Grammar (EBNF) *)
+(* Inspired by Elm 0.18 *)
+
+(* ===== Program Structure ===== *)
+
+Program = [ModuleDeclaration], {ImportDeclaration}, {Declaration} ;
+
+ModuleDeclaration = "module", ModuleName, "exposing", Exposing ;
+
+ImportDeclaration = "import", ModuleName, ["as", UpperIdentifier], ["exposing", Exposing] ;
+
+Exposing = "(", "..", ")"                    (* expose all *)
+         | "(", IdentifierList, ")" ;        (* expose specific *)
+
+IdentifierList = Identifier, {",", Identifier} ;
+
+ModuleName = UpperIdentifier, {".", UpperIdentifier} ;
+
+
+(* ===== Declarations ===== *)
+
+Declaration = ExternalDeclaration
+            | TypeAnnotationDeclaration
+            | ValueDeclaration ;
+
+ExternalDeclaration = "@", "external", String, String, DeclarationName, ":", TypeExpr ;
+
+TypeAnnotationDeclaration = DeclarationName, ":", TypeExpr ;
+
+ValueDeclaration = DeclarationName, {Pattern}, "=", Expr ;
+
+DeclarationName = LowerIdentifier
+                | "(", Operator, ")" ;
+
+
+(* ===== Type Expressions ===== *)
+
+TypeExpr = TypeTerm, ["->", TypeExpr] ;
+
+TypeTerm = TypeRef
+         | "(", TypeExpr, ")"                (* parenthesized type *)
+         | "(", TypeExpr, {",", TypeExpr}, ")" ; (* tuple type *)
+
+TypeRef = Identifier, {TypeArg} ;
+
+TypeArg = Identifier
+        | "(", TypeExpr, ")" ;
+
+
+(* ===== Patterns ===== *)
+
+Pattern = VarPattern
+        | WildcardPattern
+        | ConstructorPattern
+        | TuplePattern
+        | "(", Pattern, ")" ;
+
+VarPattern = LowerIdentifier ;
+
+WildcardPattern = "_" ;
+
+ConstructorPattern = UpperIdentifier, {Pattern} ;
+
+TuplePattern = "(", Pattern, {",", Pattern}, ")" ;
+
+
+(* ===== Expressions ===== *)
+
+Expr = BinaryExpr ;
+
+BinaryExpr = Application, {Operator, Application} ;  (* precedence handled at runtime *)
+
+Application = PrimaryWithAccess, {PrimaryWithAccess} ;  (* function application via juxtaposition *)
+
+PrimaryWithAccess = Primary, {".", LowerIdentifier} ;  (* field access *)
+
+Primary = IfExpr
+        | LetInExpr
+        | CaseExpr
+        | LambdaExpr
+        | Variable
+        | Literal
+        | ListExpr
+        | TupleExpr
+        | RecordExpr
+        | RecordUpdateExpr
+        | "(", Expr, ")" ;
+
+IfExpr = "if", Expr, "then", Expr, "else", Expr ;
+
+LetInExpr = "let", {LetBinding}, "in", Expr ;
+
+LetBinding = ValueDeclaration ;  (* indentation-sensitive *)
+
+CaseExpr = "case", Expr, "of", {CaseBranch} ;
+
+CaseBranch = Pattern, "->", Expr ;  (* indentation-sensitive *)
+
+LambdaExpr = "\", {Pattern}, "->", Expr ;
+
+Variable = LowerIdentifier
+         | UpperIdentifier ;
+
+Literal = Number
+        | String
+        | Char
+        | Unit ;
+
+Unit = "(", ")" ;
+
+ListExpr = "[", "]"                          (* empty list *)
+         | "[", Expr, "..", Expr, "]"        (* range *)
+         | "[", Expr, {",", Expr}, "]" ;     (* list literal *)
+
+TupleExpr = "(", Expr, {",", Expr}, ")" ;    (* requires at least 2 elements *)
+
+RecordExpr = "{", "}"                        (* empty record *)
+           | "{", RecordField, {",", RecordField}, "}" ;
+
+RecordUpdateExpr = "{", LowerIdentifier, "|", RecordField, {",", RecordField}, "}" ;
+
+RecordField = LowerIdentifier, "=", Expr ;
+
+
+(* ===== Lexical Elements ===== *)
+
+Identifier = LowerIdentifier | UpperIdentifier ;
+
+LowerIdentifier = LowerLetter, {Letter | Digit | "_"} ;
+
+UpperIdentifier = UpperLetter, {Letter | Digit | "_"} ;
+
+Operator = OperatorChar, {OperatorChar} ;
+
+OperatorChar = "+" | "-" | "*" | "/" | "=" | "<" | ">" | "!" | "?" | ":" | "&" | "|" | "%" | "^" | "~" | "@" | "#" | "$" | "." ;
+
+Number = Digit, {Digit}, [".", Digit, {Digit}] ;
+
+String = '"', {StringChar}, '"' ;
+
+StringChar = ? any character except '"' and '\' ? | EscapeSequence ;
+
+Char = "'", (? any character except "'" and '\' ? | EscapeSequence), "'" ;
+
+EscapeSequence = "\", (? any escape character ?) ;
+
+Letter = LowerLetter | UpperLetter ;
+
+LowerLetter = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m"
+            | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z" ;
+
+UpperLetter = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M"
+            | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y" | "Z" ;
+
+Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+
+
+(* ===== Operator Precedence ===== *)
+
+(* 
+  Precedence levels (1-9, higher binds tighter):
+  
+  1: |>, <|              (application operators)
+  2: ||                  (logical or)
+  3: &&                  (logical and)
+  4: ==, /=, <, <=, >, >= (comparison)
+  5: ::, ++              (cons, append) - right associative
+  6: +, -                (addition, subtraction)
+  7: *, /, //, %         (multiplication, division, modulo)
+  8: ^                   (exponentiation) - right associative
+  9: <<, >>              (composition) - right associative
+  
+  Default for custom operators: 5, left associative
+*)
+
+
+(* ===== Layout Rules ===== *)
+
+(*
+  Vibe uses significant indentation (layout-sensitive parsing):
+  
+  1. Let bindings: All bindings must be indented past the "let" keyword
+  2. Case branches: All branches must be indented past the "of" keyword
+  3. Record fields: Continuation on new lines requires consistent indentation
+  4. List/Tuple elements: Continuation on new lines requires consistent indentation
+  5. Function application: Arguments on new lines must maintain or increase indentation
+  
+  Layout rule: A construct continues if the next token is either:
+    - On the same line, OR
+    - On a new line with column >= base indentation column
+*)

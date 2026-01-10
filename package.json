@@ -1,0 +1,22 @@
+{
+  "name": "vibe",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "packageManager": "bun@1.3.5",
+  "workspaces": [
+    "packages/*"
+  ],
+  "dependencies": {
+    "@vibe/config": "workspace:*",
+    "@vibe/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "^1.0.10",
+    "@types/bun": "latest",
+    "turbo": "^2.7.2"
+  },
+  "scripts": {
+    "build": "bun install && turbo run build"
+  }
+}

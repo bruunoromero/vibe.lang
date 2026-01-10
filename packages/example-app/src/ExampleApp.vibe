@@ -1,0 +1,4 @@
+module ExampleApp exposing (..)
+
+main =
+  "Hello, Vibe!"

@@ -1,0 +1,17 @@
+{
+  "name": "@vibe/semantics",
+  "version": "0.0.0",
+  "type": "module",
+  "module": "src/index.ts",
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@vibe/syntax": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@vibe/parser": "workspace:*"
+  }
+}

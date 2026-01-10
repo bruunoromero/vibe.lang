@@ -1,0 +1,12 @@
+{
+  "name": "@vibe/module-resolver",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@vibe/config": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
