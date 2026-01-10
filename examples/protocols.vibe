@@ -1,0 +1,96 @@
+-- Example: Protocol-based Type Class System in Vibe
+-- This demonstrates the Haskell-style type class system (called "protocols")
+
+-- Define a Num protocol for numeric types
+protocol Num a where
+  plus : a -> a -> a
+  minus : a -> a -> a
+  times : a -> a -> a
+  negate : a -> a
+
+-- Define a Show protocol for types that can be converted to strings
+protocol Show a where
+  show : a -> String
+
+-- Define an Eq protocol for equality comparison
+protocol Eq a where
+  equal : a -> a -> Bool
+  notEqual : a -> a -> Bool
+
+-- Implementation: Num for Int
+implement Num Int where
+  plus = intPlus
+  minus = intMinus
+  times = intTimes
+  negate = intNegate
+
+-- Implementation: Num for Float
+implement Num Float where
+  plus = floatPlus
+  minus = floatMinus
+  times = floatTimes
+  negate = floatNegate
+
+-- Implementation: Show for Int
+implement Show Int where
+  show = intToString
+
+-- Implementation: Show for Float
+implement Show Float where
+  show = floatToString
+
+-- Implementation: Show for Bool
+implement Show Bool where
+  show = boolToString
+
+-- Implementation: Eq for Int
+implement Eq Int where
+  equal = intEqual
+  notEqual = intNotEqual
+
+-- Function with a single constraint
+add : Num a => a -> a -> a
+add x y = plus x y
+
+-- Function with multiple constraints
+showSum : (Num a, Show a) => a -> a -> String
+showSum x y = show (plus x y)
+
+-- Function that uses protocol methods
+addAndDouble : Num a => a -> a -> a
+addAndDouble x y = 
+  let sum = plus x y
+  in times sum sum
+
+-- Implementation with constraints: Show for pairs
+-- (requires both elements to be showable)
+implement (Show a, Show b) => Show (Pair a b) where
+  show = showPair
+
+-- Implementation with constraints: Show for lists
+-- (requires elements to be showable)
+implement Show a => Show (List a) where
+  show = showList
+
+-- Generic numeric functions that work with any Num instance
+square : Num a => a -> a
+square x = times x x
+
+sumThree : Num a => a -> a -> a -> a
+sumThree x y z = 
+  plus x (plus y z)
+
+-- Function combining multiple protocols
+displayResult : (Num a, Show a, Eq a) => a -> a -> String
+displayResult x y =
+  if equal x y
+    then "Equal: " ++ show x
+    else "Sum: " ++ show (plus x y)
+
+-- These functions can now be used with Int, Float, or any other type
+-- that implements the required protocols:
+--
+-- add 1 2           -- returns 3 (Int)
+-- add 1.5 2.5       -- returns 4.0 (Float)
+-- showSum 10 20     -- returns "30" (String)
+-- square 5          -- returns 25 (Int or Float depending on context)

@@ -31,6 +31,13 @@ import {
   type TypeDeclaration,
   type TypeAliasDeclaration,
   type ConstructorVariant,
+  type ProtocolDeclaration,
+  type ImplementationDeclaration,
+  type Constraint,
+  type MethodImplementation,
+  type InfixDeclaration,
+  type OperatorInfo,
+  type OperatorRegistry,
 } from "@vibe/syntax";
 
 /**
@@ -48,17 +55,158 @@ export class ParseError extends Error {
  * Grammar: Program = [ModuleDeclaration], {ImportDeclaration}, {Declaration}
  *
  * @param source - Vibe source code as a string
+ * @param operatorRegistry - Optional registry of custom operator declarations
  * @returns Abstract Syntax Tree representing the program
  */
-export function parse(source: string): Program {
+export function parse(
+  source: string,
+  operatorRegistry?: OperatorRegistry
+): Program {
   // Step 1: Tokenize the source code
   const tokens = lex(source);
 
-  // Step 2: Create parser instance with token stream
-  const parser = new Parser(tokens);
+  // Step 2: Create parser instance with token stream and operator registry
+  const parser = new Parser(tokens, operatorRegistry);
 
   // Step 3: Parse tokens into AST
   return parser.parseProgram();
+}
+
+/**
+ * Pre-process source to extract infix declarations.
+ * This is used to build an operator registry before the main parsing pass,
+ * enabling correct precedence and associativity for custom operators.
+ *
+ * @param source - Vibe source code as a string
+ * @returns Registry of operator precedence/associativity declarations
+ */
+export function collectInfixDeclarations(source: string): {
+  registry: OperatorRegistry;
+  declarations: InfixDeclaration[];
+  errors: ParseError[];
+} {
+  const tokens = lex(source);
+  const registry: OperatorRegistry = new Map();
+  const declarations: InfixDeclaration[] = [];
+  const errors: ParseError[] = [];
+
+  let i = 0;
+
+  while (i < tokens.length && tokens[i]!.kind !== TokenKind.Eof) {
+    const tok = tokens[i]!;
+
+    // Look for infix/infixl/infixr keywords
+    if (
+      tok.kind === TokenKind.Keyword &&
+      (tok.lexeme === "infix" ||
+        tok.lexeme === "infixl" ||
+        tok.lexeme === "infixr")
+    ) {
+      const start = tok.span.start;
+      const fixity = tok.lexeme as "infix" | "infixl" | "infixr";
+      i++;
+
+      // Parse precedence number
+      if (i >= tokens.length || tokens[i]!.kind !== TokenKind.Number) {
+        errors.push(
+          new ParseError(
+            "Expected precedence number after infix keyword",
+            tokens[i - 1]!.span
+          )
+        );
+        continue;
+      }
+      const precedence = parseInt(tokens[i]!.lexeme, 10);
+      i++;
+
+      // Parse operator (optional parens)
+      let operator: string;
+      let end: Span["end"];
+
+      if (i < tokens.length && tokens[i]!.kind === TokenKind.LParen) {
+        i++; // consume (
+        if (i >= tokens.length || tokens[i]!.kind !== TokenKind.Operator) {
+          errors.push(
+            new ParseError(
+              "Expected operator inside parentheses",
+              tokens[i - 1]!.span
+            )
+          );
+          continue;
+        }
+        operator = tokens[i]!.lexeme;
+        i++; // consume operator
+        if (i >= tokens.length || tokens[i]!.kind !== TokenKind.RParen) {
+          errors.push(
+            new ParseError(
+              "Expected closing parenthesis after operator",
+              tokens[i - 1]!.span
+            )
+          );
+          continue;
+        }
+        end = tokens[i]!.span.end;
+        i++; // consume )
+      } else if (i < tokens.length && tokens[i]!.kind === TokenKind.Operator) {
+        operator = tokens[i]!.lexeme;
+        end = tokens[i]!.span.end;
+        i++;
+      } else {
+        errors.push(
+          new ParseError(
+            "Expected operator after precedence in infix declaration",
+            tokens[i - 1]!.span
+          )
+        );
+        continue;
+      }
+
+      // Convert fixity to associativity
+      const associativity: "left" | "right" | "none" =
+        fixity === "infixl" ? "left" : fixity === "infixr" ? "right" : "none";
+
+      // Check for duplicate declarations
+      if (registry.has(operator)) {
+        errors.push(
+          new ParseError(
+            `Duplicate infix declaration for operator '${operator}'`,
+            { start, end }
+          )
+        );
+        continue;
+      }
+
+      registry.set(operator, { precedence, associativity });
+      declarations.push({
+        kind: "InfixDeclaration",
+        fixity,
+        precedence,
+        operator,
+        span: { start, end },
+      });
+    } else {
+      i++;
+    }
+  }
+
+  return { registry, declarations, errors };
+}
+
+/**
+ * Parse source with automatic infix declaration pre-processing.
+ * This is a convenience function that combines collectInfixDeclarations and parse.
+ *
+ * @param source - Vibe source code as a string
+ * @returns Program AST with infix declarations properly handled
+ */
+export function parseWithInfix(source: string): {
+  program: Program;
+  operatorRegistry: OperatorRegistry;
+  infixErrors: ParseError[];
+} {
+  const { registry, errors } = collectInfixDeclarations(source);
+  const program = parse(source, registry);
+  return { program, operatorRegistry: registry, infixErrors: errors };
 }
 
 /**
@@ -72,7 +220,42 @@ class Parser {
   /** Stack tracking indentation levels for layout-sensitive constructs */
   private layoutStack: number[] = [];
 
-  constructor(private readonly tokens: Token[]) {}
+  /** Custom operator registry for user-defined precedence/associativity */
+  private operatorRegistry: OperatorRegistry;
+
+  constructor(
+    private readonly tokens: Token[],
+    operatorRegistry?: OperatorRegistry
+  ) {
+    this.operatorRegistry = operatorRegistry ?? new Map();
+  }
+
+  /**
+   * Get operator precedence and associativity.
+   * Checks custom registry first, then falls back to built-in operators.
+   */
+  private getOperatorInfo(op: string): {
+    precedence: number;
+    associativity: "left" | "right" | "none";
+  } {
+    // Check custom registry first
+    const custom = this.operatorRegistry.get(op);
+    if (custom) {
+      return custom;
+    }
+
+    // Fall back to built-in operators
+    const builtin = BUILTIN_OP_INFO[op];
+    if (builtin) {
+      return {
+        ...builtin,
+        associativity: builtin.associativity as "left" | "right" | "none",
+      };
+    }
+
+    // Default for unknown operators
+    return DEFAULT_OP_INFO;
+  }
 
   /**
    * Parse complete program: optional module header, imports, and declarations
@@ -230,6 +413,25 @@ class Parser {
     // Check for type declaration or type alias (type ...)
     if (this.peekKeyword("type")) {
       return this.parseTypeOrAliasDeclaration();
+    }
+
+    // Check for protocol declaration (protocol ...)
+    if (this.peekKeyword("protocol")) {
+      return this.parseProtocolDeclaration();
+    }
+
+    // Check for instance declaration (implement ...)
+    if (this.peekKeyword("implement")) {
+      return this.parseImplementationDeclaration();
+    }
+
+    // Check for infix declaration (infix, infixl, infixr)
+    if (
+      this.peekKeyword("infix") ||
+      this.peekKeyword("infixl") ||
+      this.peekKeyword("infixr")
+    ) {
+      return this.parseInfixDeclaration();
     }
 
     // Parse declaration name (identifier or operator in parens)
@@ -421,12 +623,463 @@ class Parser {
   }
 
   /**
+   * Parse protocol declaration
+   *
+   * Grammar: protocol UpperIdentifier {LowerIdentifier} where {LowerIdentifier : TypeExpr}
+   *
+   * Example:
+   *   protocol Num a where
+   *     plus : a -> a -> a
+   *     minus : a -> a -> a
+   *     times : a -> a -> a
+   */
+  private parseProtocolDeclaration(): ProtocolDeclaration {
+    // Consume "protocol" keyword
+    const protocolToken = this.expectKeyword("protocol");
+
+    // Parse protocol name (must be uppercase)
+    const nameToken = this.expect(TokenKind.UpperIdentifier, "protocol name");
+    const name = nameToken.lexeme;
+
+    // Parse type parameters (typically one, but support multiple)
+    const params: string[] = [];
+    while (this.peek(TokenKind.LowerIdentifier)) {
+      const param = this.expect(TokenKind.LowerIdentifier, "type parameter");
+      params.push(param.lexeme);
+    }
+
+    // Consume "where" keyword
+    this.expectKeyword("where");
+
+    // Parse method signatures (indented block)
+    const methods: Array<{ name: string; type: TypeExpr; span: Span }> = [];
+
+    // Get base indentation from first method
+    // Methods can be either LowerIdentifier or (Operator)
+    if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
+      throw new ParseError(
+        "Expected at least one method signature in protocol",
+        this.currentSpan()
+      );
+    }
+
+    const firstMethodStart = this.current().span.start;
+    const baseIndent = firstMethodStart.column;
+
+    // Parse all method signatures
+    while (
+      this.peek(TokenKind.LowerIdentifier) ||
+      this.peek(TokenKind.LParen)
+    ) {
+      const methodToken = this.current();
+
+      // Check indentation
+      if (methodToken.span.start.column < baseIndent) {
+        break;
+      }
+
+      // Parse method name - either identifier or operator in parens
+      let methodName: string;
+      const methodStart = methodToken.span.start;
+
+      if (this.match(TokenKind.LParen)) {
+        // Operator method: (==), (+), etc.
+        const opToken = this.expect(
+          TokenKind.Operator,
+          "operator in protocol method"
+        );
+        methodName = opToken.lexeme;
+        this.expect(TokenKind.RParen, "close paren after operator");
+      } else {
+        // Regular method name
+        this.advance();
+        methodName = methodToken.lexeme;
+      }
+
+      // Expect colon
+      this.expect(TokenKind.Colon, "':' after method name");
+
+      // Parse method type
+      const methodType = this.parseTypeExpression();
+
+      methods.push({
+        name: methodName,
+        type: methodType,
+        span: { start: methodStart, end: methodType.span.end },
+      });
+    }
+
+    const lastMethod = methods[methods.length - 1]!;
+    const span: Span = {
+      start: protocolToken.span.start,
+      end: lastMethod.span.end,
+    };
+
+    return {
+      kind: "ProtocolDeclaration",
+      name,
+      params,
+      methods,
+      span,
+    } satisfies ProtocolDeclaration;
+  }
+
+  /**
+   * Parse instance declaration
+   *
+   * Grammar: instance [Constraints =>] UpperIdentifier TypeExpr {TypeExpr} where {LowerIdentifier = Expr}
+   *
+   * Examples:
+   *   instance Num Int where
+   *     plus = intPlusImpl
+   *     minus = intMinusImpl
+   *
+   *   implement Show a => Show (List a) where
+   *     show = showListImpl
+   */
+  private parseImplementationDeclaration(): ImplementationDeclaration {
+    // Consume "implement" keyword
+    const implementToken = this.expectKeyword("implement");
+
+    // Try to parse constraints (optional context)
+    const constraints: Constraint[] = [];
+
+    // Check if we have constraints (look ahead for =>)
+    const hasConstraints = this.peekConstraintContext();
+
+    if (hasConstraints) {
+      // Parse constraint(s) before =>
+      if (this.match(TokenKind.LParen)) {
+        // Multiple constraints: (Num a, Show a) =>
+        do {
+          constraints.push(this.parseConstraint());
+        } while (this.match(TokenKind.Comma));
+
+        this.expect(TokenKind.RParen, "close constraint list");
+      } else {
+        // Single constraint: Num a =>
+        constraints.push(this.parseConstraint());
+      }
+
+      // Consume =>
+      this.expectOperator("=>");
+    }
+
+    // Parse protocol name
+    const protocolNameToken = this.expect(
+      TokenKind.UpperIdentifier,
+      "protocol name in implementation"
+    );
+    const protocolName = protocolNameToken.lexeme;
+
+    // Parse type arguments (the concrete type(s) for this implementation)
+    const typeArgs: TypeExpr[] = [];
+    while (this.isTypeStart(this.current())) {
+      typeArgs.push(this.parseTypeTerm());
+    }
+
+    if (typeArgs.length === 0) {
+      throw new ParseError(
+        "Expected at least one type argument for implementation",
+        this.currentSpan()
+      );
+    }
+
+    // Consume "where" keyword
+    this.expectKeyword("where");
+
+    // Parse method implementations (indented block)
+    const methods: MethodImplementation[] = [];
+
+    // Methods can be either LowerIdentifier or (Operator)
+    if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
+      throw new ParseError(
+        "Expected at least one method implementation in implementation",
+        this.currentSpan()
+      );
+    }
+
+    const firstMethodStart = this.current().span.start;
+    const baseIndent = firstMethodStart.column;
+
+    // Parse all method implementations
+    while (
+      this.peek(TokenKind.LowerIdentifier) ||
+      this.peek(TokenKind.LParen)
+    ) {
+      const methodToken = this.current();
+
+      // Check indentation
+      if (methodToken.span.start.column < baseIndent) {
+        break;
+      }
+
+      // Parse method name - either identifier or operator in parens
+      let methodName: string;
+      const methodStart = methodToken.span.start;
+
+      if (this.match(TokenKind.LParen)) {
+        // Operator method: (==), (+), etc.
+        const opToken = this.expect(
+          TokenKind.Operator,
+          "operator in implementation method"
+        );
+        methodName = opToken.lexeme;
+        this.expect(TokenKind.RParen, "close paren after operator");
+      } else {
+        // Regular method name
+        this.advance();
+        methodName = methodToken.lexeme;
+      }
+
+      // Expect equals
+      this.expect(TokenKind.Equals, "'=' after method name");
+
+      // Parse implementation expression
+      const implementation = this.parseExpression();
+
+      methods.push({
+        name: methodName,
+        implementation,
+        span: { start: methodStart, end: implementation.span.end },
+      });
+    }
+
+    const lastMethod = methods[methods.length - 1]!;
+    const span: Span = {
+      start: implementToken.span.start,
+      end: lastMethod.span.end,
+    };
+
+    return {
+      kind: "ImplementationDeclaration",
+      constraints,
+      protocolName,
+      typeArgs,
+      methods,
+      span,
+    } satisfies ImplementationDeclaration;
+  }
+
+  /**
+   * Parse infix declaration (operator precedence and associativity)
+   *
+   * Grammar: InfixDeclaration = ("infix" | "infixl" | "infixr"), Number, Operator
+   *
+   * Examples:
+   *   infixl 6 +     -- left-associative, precedence 6
+   *   infixr 5 ++    -- right-associative, precedence 5
+   *   infix 4 ==     -- non-associative, precedence 4
+   */
+  private parseInfixDeclaration(): InfixDeclaration {
+    const start = this.currentSpan().start;
+
+    // Parse fixity keyword (infix, infixl, or infixr)
+    const fixityToken = this.current();
+    if (
+      fixityToken.kind !== TokenKind.Keyword ||
+      (fixityToken.lexeme !== "infix" &&
+        fixityToken.lexeme !== "infixl" &&
+        fixityToken.lexeme !== "infixr")
+    ) {
+      throw new ParseError(
+        "Expected 'infix', 'infixl', or 'infixr'",
+        this.currentSpan()
+      );
+    }
+    const fixity = fixityToken.lexeme as "infix" | "infixl" | "infixr";
+    this.advance();
+
+    // Parse precedence number (1-9)
+    const precedenceToken = this.expect(TokenKind.Number, "precedence number");
+    const precedence = parseInt(precedenceToken.lexeme, 10);
+
+    if (precedence < 0 || precedence > 9) {
+      throw new ParseError(
+        `Precedence must be between 0 and 9, got ${precedence}`,
+        precedenceToken.span
+      );
+    }
+
+    // Parse operator - either as bare operator or in parentheses
+    let operator: string;
+    let end: Span["end"];
+
+    if (this.match(TokenKind.LParen)) {
+      // Operator in parens: infixl 6 (+)
+      const opToken = this.expect(TokenKind.Operator, "operator");
+      operator = opToken.lexeme;
+      end = this.expect(TokenKind.RParen, "close paren after operator").span
+        .end;
+    } else if (this.peek(TokenKind.Operator)) {
+      // Bare operator: infixl 6 +
+      const opToken = this.expect(TokenKind.Operator, "operator");
+      operator = opToken.lexeme;
+      end = opToken.span.end;
+    } else {
+      throw new ParseError(
+        "Expected operator after precedence in infix declaration",
+        this.currentSpan()
+      );
+    }
+
+    return {
+      kind: "InfixDeclaration",
+      fixity,
+      precedence,
+      operator,
+      span: { start, end },
+    } satisfies InfixDeclaration;
+  }
+
+  /**
+   * Parse a single constraint (e.g., "Num a" or "Show (List a)")
+   */
+  private parseConstraint(): Constraint {
+    const start = this.currentSpan().start;
+
+    // Parse protocol name
+    const protocolToken = this.expect(
+      TokenKind.UpperIdentifier,
+      "protocol name in constraint"
+    );
+    const protocolName = protocolToken.lexeme;
+
+    // Parse type arguments
+    const typeArgs: TypeExpr[] = [];
+    while (this.isTypeStart(this.current())) {
+      typeArgs.push(this.parseTypeTerm());
+    }
+
+    if (typeArgs.length === 0) {
+      throw new ParseError(
+        "Expected at least one type argument in constraint",
+        this.currentSpan()
+      );
+    }
+
+    const end = typeArgs[typeArgs.length - 1]!.span.end;
+
+    return {
+      protocolName,
+      typeArgs,
+      span: { start, end },
+    };
+  }
+
+  /**
+   * Check if we have a constraint context (looks ahead for =>)
+   */
+  private peekConstraintContext(): boolean {
+    // Look ahead to find => operator
+    let i = 0;
+    while (this.peekAhead(i)) {
+      const tok = this.peekAhead(i);
+      if (!tok) break;
+
+      // Found => - we have constraints
+      if (tok.kind === TokenKind.Operator && tok.lexeme === "=>") {
+        return true;
+      }
+
+      // Stop looking if we hit 'where' - no constraints
+      if (tok.kind === TokenKind.Keyword && tok.lexeme === "where") {
+        return false;
+      }
+
+      i++;
+
+      // Don't look too far ahead
+      if (i > 20) break;
+    }
+
+    return false;
+  }
+
+  /**
    * Parse type expression (entry point)
    *
-   * Grammar: TypeExpr = TypeTerm, ["->", TypeExpr]
+   * Grammar: TypeExpr = [Constraints =>] TypeArrow
+   *
+   * Supports qualified types like: Num a => a -> a -> a
    */
   private parseTypeExpression(): TypeExpr {
+    const start = this.currentSpan().start;
+
+    // Check if we have constraints (look ahead for =>)
+    const hasConstraints = this.peekConstraintContextInType();
+
+    if (hasConstraints) {
+      const constraints: Constraint[] = [];
+
+      // Parse constraint(s) before =>
+      if (this.match(TokenKind.LParen)) {
+        // Multiple constraints: (Num a, Show a) => Type
+        do {
+          constraints.push(this.parseConstraint());
+        } while (this.match(TokenKind.Comma));
+
+        this.expect(TokenKind.RParen, "close constraint list");
+      } else {
+        // Single constraint: Num a => Type
+        constraints.push(this.parseConstraint());
+      }
+
+      // Consume =>
+      this.expectOperator("=>");
+
+      // Parse the underlying type
+      const type = this.parseTypeArrow();
+
+      return {
+        kind: "QualifiedType",
+        constraints,
+        type,
+        span: { start, end: type.span.end },
+      };
+    }
+
     return this.parseTypeArrow();
+  }
+
+  /**
+   * Check if we have a constraint context in a type signature (looks ahead for =>)
+   */
+  private peekConstraintContextInType(): boolean {
+    // Look ahead to find => operator
+    let i = 0;
+    let parenDepth = 0;
+
+    while (this.peekAhead(i)) {
+      const tok = this.peekAhead(i);
+      if (!tok) break;
+
+      // Track parentheses depth
+      if (tok.kind === TokenKind.LParen) parenDepth++;
+      if (tok.kind === TokenKind.RParen) parenDepth--;
+
+      // Found => at top level - we have constraints
+      if (
+        parenDepth === 0 &&
+        tok.kind === TokenKind.Operator &&
+        tok.lexeme === "=>"
+      ) {
+        return true;
+      }
+
+      // Stop looking if we hit certain tokens that indicate no constraints
+      if (parenDepth === 0) {
+        if (tok.kind === TokenKind.Equals) return false;
+        if (tok.kind === TokenKind.Keyword) return false;
+      }
+
+      i++;
+
+      // Don't look too far ahead
+      if (i > 30) break;
+    }
+
+    return false;
   }
 
   /**
@@ -692,7 +1345,7 @@ class Parser {
       if (operatorToken.kind !== TokenKind.Operator) break;
 
       // Get precedence and associativity for this operator
-      const { precedence, associativity } = getOperatorInfo(
+      const { precedence, associativity } = this.getOperatorInfo(
         operatorToken.lexeme
       );
 
@@ -705,7 +1358,8 @@ class Parser {
       // Calculate minimum precedence for right side
       // Left-associative: increase precedence (left binds tighter)
       // Right-associative: keep same precedence (right binds tighter)
-      const nextMin = associativity === "left" ? precedence + 1 : precedence;
+      // Non-associative: increase precedence (disallow chaining)
+      const nextMin = associativity === "right" ? precedence : precedence + 1;
 
       // Parse right operand
       const right = this.parseBinaryExpression(nextMin, baseIndentFloor);
@@ -1531,66 +2185,37 @@ class Parser {
       token.span
     );
   }
-  /**
-   * Operator precedence and associativity information
-   * Matches the precedence table in docs/grammar.ebnf
-   */
 }
 
 type Associativity = "left" | "right";
 
 /**
- * Operator precedence table
- * Higher precedence binds tighter
+ * Built-in operator precedence table is now EMPTY.
  *
- * Precedence levels (as documented in grammar.ebnf):
- * 1: |>, <|              (application operators)
- * 2: ||                  (logical or)
- * 3: &&                  (logical and)
- * 4: ==, /=, <, <=, >, >= (comparison)
- * 5: ::, ++              (cons, append) - right associative
- * 6: +, -                (addition, subtraction)
- * 7: *, /, //, %         (multiplication, division, modulo)
- * 8: ^                   (exponentiation) - right associative
- * 9: <<, >>              (composition) - right associative
+ * All operators must be declared via infix/infixl/infixr declarations
+ * in user code or the prelude. This enables a clean separation where
+ * the compiler handles syntax/semantics while the prelude provides
+ * standard operators.
+ *
+ * The prelude should declare operators like:
+ *   infixl 1 |>
+ *   infixr 1 <|
+ *   infixl 2 ||
+ *   infixl 3 &&
+ *   infixl 4 == /= < <= > >=
+ *   infixr 5 :: ++
+ *   infixl 6 + -
+ *   infixl 7 * / // %
+ *   infixr 8 ^
+ *   infixr 9 << >>
  */
-const OP_INFO: Record<
+const BUILTIN_OP_INFO: Record<
   string,
   { precedence: number; associativity: Associativity }
-> = {
-  "||": { precedence: 2, associativity: "left" },
-  "&&": { precedence: 3, associativity: "left" },
-  "==": { precedence: 4, associativity: "left" },
-  "/=": { precedence: 4, associativity: "left" },
-  "<": { precedence: 4, associativity: "left" },
-  "<=": { precedence: 4, associativity: "left" },
-  ">": { precedence: 4, associativity: "left" },
-  ">=": { precedence: 4, associativity: "left" },
-  "::": { precedence: 5, associativity: "right" },
-  "++": { precedence: 5, associativity: "right" },
-  "|>": { precedence: 1, associativity: "left" },
-  "<|": { precedence: 1, associativity: "right" },
-  "<<": { precedence: 9, associativity: "right" },
-  ">>": { precedence: 9, associativity: "right" },
-  "+": { precedence: 6, associativity: "left" },
-  "-": { precedence: 6, associativity: "left" },
-  "*": { precedence: 7, associativity: "left" },
-  "/": { precedence: 7, associativity: "left" },
-  "//": { precedence: 7, associativity: "left" },
-  "%": { precedence: 7, associativity: "left" },
-  "^": { precedence: 8, associativity: "right" },
-};
+> = {};
 
 // Default precedence for custom operators: 5, left-associative
-const DEFAULT_OP_INFO = { precedence: 5, associativity: "left" as const };
-
-/**
- * Get operator precedence and associativity
- * Returns default for custom operators not in table
- */
-function getOperatorInfo(op: string): {
-  precedence: number;
-  associativity: Associativity;
-} {
-  return OP_INFO[op] ?? DEFAULT_OP_INFO;
-}
+const DEFAULT_OP_INFO: OperatorInfo = {
+  precedence: 5,
+  associativity: "left",
+};

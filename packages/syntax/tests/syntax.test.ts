@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import {
-  IDENTIFIER_OPERATOR_MAPPINGS,
   KEYWORDS,
   TokenKind,
   isKeyword,
@@ -9,7 +8,17 @@ import {
 
 describe("keywords", () => {
   test("detect known keywords", () => {
-    for (const word of ["if", "then", "case", "module", "port", "exposing"]) {
+    for (const word of [
+      "if",
+      "then",
+      "case",
+      "module",
+      "port",
+      "exposing",
+      "infix",
+      "infixl",
+      "infixr",
+    ]) {
       expect(isKeyword(word)).toBe(true);
     }
   });
@@ -23,14 +32,28 @@ describe("keywords", () => {
 
 describe("operator sanitization", () => {
   test("maps known operators", () => {
-    expect(sanitizeOperator("->")).toBe("_ARROW");
-    expect(sanitizeOperator("|>")).toBe("_PIPE_FORWARD");
-    expect(sanitizeOperator("??")).toBe("??");
+    // Test composable naming convention from single characters
+    expect(sanitizeOperator("->")).toBe("_MINUS_GT");
+    expect(sanitizeOperator("|>")).toBe("_PIPE_GT");
+    expect(sanitizeOperator("<|")).toBe("_LT_PIPE");
+    expect(sanitizeOperator("==")).toBe("_EQ_EQ");
+    expect(sanitizeOperator("::")).toBe("_COLON_COLON");
+    expect(sanitizeOperator("++")).toBe("_PLUS_PLUS");
+    expect(sanitizeOperator("+")).toBe("_PLUS");
+    expect(sanitizeOperator("??")).toBe("_QUESTION_QUESTION");
+    expect(sanitizeOperator("xyz")).toBe("xyz"); // Unmapped chars pass through
   });
 
-  test("produces unique sanitized names", () => {
-    const values = Object.values(IDENTIFIER_OPERATOR_MAPPINGS);
-    expect(new Set(values).size).toBe(values.length);
+  test("single character operators", () => {
+    expect(sanitizeOperator(".")).toBe("_DOT");
+    expect(sanitizeOperator(":")).toBe("_COLON");
+    expect(sanitizeOperator("|")).toBe("_PIPE");
+  });
+
+  test("multi-character composition", () => {
+    expect(sanitizeOperator("...")).toBe("_DOT_DOT_DOT");
+    expect(sanitizeOperator("<=>")).toBe("_LT_EQ_GT");
+    expect(sanitizeOperator("&&")).toBe("_AMP_AMP");
   });
 
   test("token kinds enumerate punctuation", () => {

@@ -60,6 +60,9 @@ export const KEYWORDS = [
   "infix",
   "infixl",
   "infixr",
+  "protocol",
+  "implement",
+  "where",
 ] as const;
 
 export type Keyword = (typeof KEYWORDS)[number];
@@ -70,27 +73,57 @@ export function isKeyword(value: string): value is Keyword {
   return KEYWORD_SET.has(value as Keyword);
 }
 
-export const IDENTIFIER_OPERATOR_MAPPINGS = {
+/**
+ * Mappings from single operator characters to valid identifier components.
+ * Multi-character operators are built by concatenating single-character mappings.
+ *
+ * Examples:
+ * - `==` → `_EQ` + `_EQ` → `_EQ_EQ`
+ * - `|>` → `_PIPE` + `_GT` → `_PIPE_GT`
+ * - `->` → `_MINUS` + `_GT` → `_MINUS_GT`
+ */
+const CHAR_TO_IDENTIFIER: Record<string, string> = {
   ".": "_DOT",
-  "..": "_RANGE",
-  "::": "_CONS",
-  "|>": "_PIPE_FORWARD",
-  "<|": "_PIPE_BACKWARD",
-  "++": "_CONCAT",
-  "==": "_EQ",
-  "/=": "_NE",
-  "<=": "_LTE",
-  ">=": "_GTE",
-  "->": "_ARROW",
-  "<-": "_LARROW",
-} as const;
+  "+": "_PLUS",
+  "-": "_MINUS",
+  "*": "_STAR",
+  "/": "_SLASH",
+  "%": "_PERCENT",
+  "^": "_CARET",
+  "<": "_LT",
+  ">": "_GT",
+  "=": "_EQ",
+  "|": "_PIPE",
+  "&": "_AMP",
+  "!": "_BANG",
+  ":": "_COLON",
+  "~": "_TILDE",
+  $: "_DOLLAR",
+  "#": "_HASH",
+  "@": "_AT",
+  "?": "_QUESTION",
+};
 
-export type OperatorLexeme = keyof typeof IDENTIFIER_OPERATOR_MAPPINGS;
-
+/**
+ * Convert an operator to a valid identifier by composing character mappings.
+ * Unknown characters pass through unchanged.
+ */
 export function sanitizeOperator(lexeme: string): string {
-  return (
-    (IDENTIFIER_OPERATOR_MAPPINGS as Record<string, string>)[lexeme] ?? lexeme
-  );
+  if (lexeme.length === 0) return lexeme;
+
+  // Try to build from character mappings
+  const parts: string[] = [];
+  for (const char of lexeme) {
+    const mapping = CHAR_TO_IDENTIFIER[char];
+    if (mapping) {
+      parts.push(mapping);
+    } else {
+      // If any character is unmapped, return the original lexeme unchanged
+      return lexeme;
+    }
+  }
+
+  return parts.join("");
 }
 
 export type Exposing =
@@ -105,6 +138,39 @@ export type Pattern =
 
 export type RecordField = { name: string; value: Expr; span: Span };
 
+/**
+ * A constraint in a qualified type.
+ *
+ * Example: In `Num a => a -> a -> a`, the constraint is `Num a`
+ * - protocolName: "Num"
+ * - typeArgs: [TypeRef "a"]
+ */
+export type Constraint = {
+  /** The protocol name (e.g., "Num", "Show") */
+  protocolName: string;
+  /** Type arguments to the protocol (typically type variables) */
+  typeArgs: TypeExpr[];
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
+ * A qualified type with constraints.
+ *
+ * Example: `(Num a, Show a) => a -> a -> String`
+ * - constraints: [Constraint(Num a), Constraint(Show a)]
+ * - type: FunctionType(a -> FunctionType(a -> String))
+ */
+export type QualifiedType = {
+  kind: "QualifiedType";
+  /** List of constraints on type variables */
+  constraints: Constraint[];
+  /** The underlying type */
+  type: TypeExpr;
+  /** Source location span for error reporting */
+  span: Span;
+};
+
 export type TypeExpr =
   | { kind: "TypeRef"; name: string; args: TypeExpr[]; span: Span }
   | { kind: "FunctionType"; from: TypeExpr; to: TypeExpr; span: Span }
@@ -113,7 +179,8 @@ export type TypeExpr =
       kind: "RecordType";
       fields: Array<{ name: string; type: TypeExpr }>;
       span: Span;
-    };
+    }
+  | QualifiedType;
 
 // ===== Algebraic Data Type (ADT) Declarations =====
 // ADTs allow defining custom sum types like: type Maybe a = Just a | Nothing
@@ -246,12 +313,125 @@ export type ExternalDeclaration = {
   span: Span;
 };
 
+/**
+ * A protocol declaration defining a type class interface.
+ *
+ * Syntax: protocol Name param1 param2 ... where
+ *           method1 : Type1
+ *           method2 : Type2
+ *
+ * Example:
+ * protocol Num a where
+ *   plus : a -> a -> a
+ *   minus : a -> a -> a
+ *   times : a -> a -> a
+ */
+export type ProtocolDeclaration = {
+  kind: "ProtocolDeclaration";
+  /** The protocol name (must be uppercase, e.g., "Num", "Show") */
+  name: string;
+  /** Type parameters (lowercase identifiers, typically just one) */
+  params: string[];
+  /** Method signatures: name -> type */
+  methods: Array<{ name: string; type: TypeExpr; span: Span }>;
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
+ * Method implementation in an implementation declaration.
+ */
+export type MethodImplementation = {
+  /** Method name */
+  name: string;
+  /** Implementation expression (usually a variable referencing an implementation function) */
+  implementation: Expr;
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
+ * An implementation declaration providing a protocol implementation for a specific type.
+ *
+ * Syntax: implement (Constraint1, Constraint2, ...) => ProtocolName Type1 Type2 ... where
+ *           method1 = impl1
+ *           method2 = impl2
+ *
+ * Example:
+ * implement Num Int where
+ *   plus = intPlusImpl
+ *   minus = intMinusImpl
+ *   times = intTimesImpl
+ *
+ * Or with constraints:
+ * implement Show a => Show (List a) where
+ *   show = showListImpl
+ */
+export type ImplementationDeclaration = {
+  kind: "ImplementationDeclaration";
+  /** Context constraints (e.g., "Show a" in "Show a => Show (List a)") */
+  constraints: Constraint[];
+  /** The protocol name being implemented */
+  protocolName: string;
+  /** Type arguments (the concrete types satisfying this implementation) */
+  typeArgs: TypeExpr[];
+  /** Method implementations */
+  methods: MethodImplementation[];
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
+ * Fixity declaration for operators.
+ *
+ * Elm-style syntax:
+ *   infixl 6 +    -- left-associative, precedence 6
+ *   infixr 5 ++   -- right-associative, precedence 5
+ *   infix 4 ==    -- non-associative, precedence 4
+ *
+ * Fixity:
+ *   infixl = left-associative
+ *   infixr = right-associative
+ *   infix  = non-associative
+ *
+ * Precedence: Higher numbers bind tighter (e.g., * at 7 binds tighter than + at 6)
+ */
+export type InfixDeclaration = {
+  kind: "InfixDeclaration";
+  /** The fixity: "infix" (non-assoc), "infixl" (left), "infixr" (right) */
+  fixity: "infix" | "infixl" | "infixr";
+  /** Precedence level (1-9, higher binds tighter) */
+  precedence: number;
+  /** The operator being declared (e.g., "+", "==", "|>") */
+  operator: string;
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
+ * Operator precedence and associativity info.
+ * Used by parser for expression parsing.
+ */
+export type OperatorInfo = {
+  precedence: number;
+  associativity: "left" | "right" | "none";
+};
+
+/**
+ * Registry of operator fixity declarations.
+ * Built during pre-processing pass before main parsing.
+ */
+export type OperatorRegistry = Map<string, OperatorInfo>;
+
 export type Declaration =
   | ValueDeclaration
   | TypeAnnotationDeclaration
   | ExternalDeclaration
   | TypeDeclaration
-  | TypeAliasDeclaration;
+  | TypeAliasDeclaration
+  | ProtocolDeclaration
+  | ImplementationDeclaration
+  | InfixDeclaration;
 
 export type ImportDeclaration = {
   moduleName: string;

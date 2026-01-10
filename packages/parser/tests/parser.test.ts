@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { parse } from "../src/index.ts";
+import {
+  parse,
+  collectInfixDeclarations,
+  parseWithInfix,
+} from "../src/index.ts";
 import type { ValueDeclaration } from "@vibe/syntax";
 
 describe("parser", () => {
@@ -79,10 +83,25 @@ y = rec.b`);
   });
 
   test("honors operator precedence and associativity", () => {
-    const program = parse("result = 1 + 2 * 3 ^ 2 |> f <| g << h");
-    const decl = program.declarations[0] as ValueDeclaration;
+    // With infix declarations, operators have explicit precedence.
+    // Without declarations, all operators use default precedence (5, left-assoc).
+    const source = `
+infixl 1 |>
+infixr 1 <|
+infixl 6 +
+infixl 7 *
+infixr 8 ^
+infixr 9 <<
+
+result = 1 + 2 * 3 ^ 2 |> f <| g << h`;
+    const { program } = parseWithInfix(source);
+    const decl = program.declarations.find(
+      (d) => d.kind === "ValueDeclaration" && d.name === "result"
+    ) as ValueDeclaration;
+    expect(decl).toBeDefined();
     expect(decl.body.kind).toBe("Infix");
     if (decl.body.kind === "Infix") {
+      // <| has lowest precedence (1), so it's the outermost operator
       expect(decl.body.operator).toBe("<|");
     }
   });
@@ -629,6 +648,234 @@ value = 42`);
         expect(decl.value.fields[1]?.name).toBe("next");
         expect(decl.value.fields[2]?.name).toBe("value");
       }
+    }
+  });
+});
+
+describe("infix declarations", () => {
+  test("parses infixl declaration with bare operator", () => {
+    const program = parse("infixl 6 +");
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("InfixDeclaration");
+    if (decl?.kind === "InfixDeclaration") {
+      expect(decl.fixity).toBe("infixl");
+      expect(decl.precedence).toBe(6);
+      expect(decl.operator).toBe("+");
+    }
+  });
+
+  test("parses infixr declaration with parenthesized operator", () => {
+    const program = parse("infixr 5 (++)");
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("InfixDeclaration");
+    if (decl?.kind === "InfixDeclaration") {
+      expect(decl.fixity).toBe("infixr");
+      expect(decl.precedence).toBe(5);
+      expect(decl.operator).toBe("++");
+    }
+  });
+
+  test("parses infix (non-associative) declaration", () => {
+    const program = parse("infix 4 ==");
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("InfixDeclaration");
+    if (decl?.kind === "InfixDeclaration") {
+      expect(decl.fixity).toBe("infix");
+      expect(decl.precedence).toBe(4);
+      expect(decl.operator).toBe("==");
+    }
+  });
+
+  test("parses multiple infix declarations", () => {
+    const source = `infixl 6 +
+infixl 6 -
+infixl 7 *
+infixr 5 ++`;
+    const program = parse(source);
+    expect(program.declarations.length).toBe(4);
+
+    const ops = program.declarations.map((d) =>
+      d.kind === "InfixDeclaration" ? d.operator : null
+    );
+    expect(ops).toEqual(["+", "-", "*", "++"]);
+  });
+
+  test("parses infix declarations mixed with value declarations", () => {
+    const source = `infixl 6 +
+
+add : number -> number -> number
+add x y = x + y`;
+    const program = parse(source);
+    expect(program.declarations.length).toBe(3);
+    expect(program.declarations[0]?.kind).toBe("InfixDeclaration");
+    expect(program.declarations[1]?.kind).toBe("TypeAnnotationDeclaration");
+    expect(program.declarations[2]?.kind).toBe("ValueDeclaration");
+  });
+
+  test("parses custom operator declarations", () => {
+    const source = `infixl 1 |>
+
+(|>) : a -> (a -> b) -> b
+(|>) x f = f x`;
+    const program = parse(source);
+    expect(program.declarations.length).toBe(3);
+
+    const infixDecl = program.declarations[0];
+    expect(infixDecl?.kind).toBe("InfixDeclaration");
+    if (infixDecl?.kind === "InfixDeclaration") {
+      expect(infixDecl.operator).toBe("|>");
+    }
+
+    const typeDecl = program.declarations[1];
+    expect(typeDecl?.kind).toBe("TypeAnnotationDeclaration");
+    if (typeDecl?.kind === "TypeAnnotationDeclaration") {
+      expect(typeDecl.name).toBe("|>");
+    }
+
+    const valueDecl = program.declarations[2];
+    expect(valueDecl?.kind).toBe("ValueDeclaration");
+    if (valueDecl?.kind === "ValueDeclaration") {
+      expect(valueDecl.name).toBe("|>");
+    }
+  });
+});
+
+describe("collectInfixDeclarations", () => {
+  test("collects infix declarations from source", () => {
+    const source = `infixl 6 +
+infixr 5 ++
+infix 4 ==`;
+    const { registry, declarations, errors } = collectInfixDeclarations(source);
+
+    expect(errors.length).toBe(0);
+    expect(declarations.length).toBe(3);
+    expect(registry.size).toBe(3);
+
+    expect(registry.get("+")).toEqual({ precedence: 6, associativity: "left" });
+    expect(registry.get("++")).toEqual({
+      precedence: 5,
+      associativity: "right",
+    });
+    expect(registry.get("==")).toEqual({
+      precedence: 4,
+      associativity: "none",
+    });
+  });
+
+  test("reports duplicate infix declarations", () => {
+    const source = `infixl 6 +
+infixl 7 +`;
+    const { errors } = collectInfixDeclarations(source);
+
+    expect(errors.length).toBe(1);
+    expect(errors[0]?.message).toContain("Duplicate");
+  });
+
+  test("ignores non-infix content", () => {
+    const source = `infixl 6 +
+foo : number -> number
+foo x = x + 1`;
+    const { registry, errors } = collectInfixDeclarations(source);
+
+    expect(errors.length).toBe(0);
+    expect(registry.size).toBe(1);
+    expect(registry.has("+")).toBe(true);
+  });
+});
+
+describe("parseWithInfix", () => {
+  test("parses with custom operator precedence", () => {
+    const source = `infixl 7 <*>
+infixl 6 <+>
+
+result = a <+> b <*> c`;
+
+    const { program, operatorRegistry, infixErrors } = parseWithInfix(source);
+
+    expect(infixErrors.length).toBe(0);
+    expect(operatorRegistry.get("<*>")).toEqual({
+      precedence: 7,
+      associativity: "left",
+    });
+    expect(operatorRegistry.get("<+>")).toEqual({
+      precedence: 6,
+      associativity: "left",
+    });
+
+    // With <*> at precedence 7 and <+> at 6, expression parses as: a <+> (b <*> c)
+    const valueDecl = program.declarations.find(
+      (d) => d.kind === "ValueDeclaration"
+    );
+    expect(valueDecl?.kind).toBe("ValueDeclaration");
+    if (valueDecl?.kind === "ValueDeclaration") {
+      const expr = valueDecl.body;
+      expect(expr.kind).toBe("Infix");
+      if (expr.kind === "Infix") {
+        expect(expr.operator).toBe("<+>");
+        expect(expr.right.kind).toBe("Infix");
+        if (expr.right.kind === "Infix") {
+          expect(expr.right.operator).toBe("<*>");
+        }
+      }
+    }
+  });
+});
+
+describe("operator protocol methods", () => {
+  test("parses protocol with operator methods", () => {
+    const source = `protocol Eq a where
+  (==) : a -> a -> bool
+  (/=) : a -> a -> bool`;
+
+    const program = parse(source);
+    expect(program.declarations.length).toBe(1);
+
+    const protocol = program.declarations[0];
+    expect(protocol?.kind).toBe("ProtocolDeclaration");
+    if (protocol?.kind === "ProtocolDeclaration") {
+      expect(protocol.name).toBe("Eq");
+      expect(protocol.params).toEqual(["a"]);
+      expect(protocol.methods.length).toBe(2);
+      expect(protocol.methods[0]?.name).toBe("==");
+      expect(protocol.methods[1]?.name).toBe("/=");
+    }
+  });
+
+  test("parses protocol with mixed identifier and operator methods", () => {
+    const source = `protocol Num a where
+  (+) : a -> a -> a
+  (-) : a -> a -> a
+  negate : a -> a`;
+
+    const program = parse(source);
+    const protocol = program.declarations[0];
+    expect(protocol?.kind).toBe("ProtocolDeclaration");
+    if (protocol?.kind === "ProtocolDeclaration") {
+      expect(protocol.methods.length).toBe(3);
+      expect(protocol.methods[0]?.name).toBe("+");
+      expect(protocol.methods[1]?.name).toBe("-");
+      expect(protocol.methods[2]?.name).toBe("negate");
+    }
+  });
+
+  test("parses implementation with operator methods", () => {
+    const source = `implement Eq Int where
+  (==) = intEq
+  (/=) = intNeq`;
+
+    const program = parse(source);
+    expect(program.declarations.length).toBe(1);
+
+    const impl = program.declarations[0];
+    expect(impl?.kind).toBe("ImplementationDeclaration");
+    if (impl?.kind === "ImplementationDeclaration") {
+      expect(impl.protocolName).toBe("Eq");
+      expect(impl.methods.length).toBe(2);
+      expect(impl.methods[0]?.name).toBe("==");
+      expect(impl.methods[1]?.name).toBe("/=");
     }
   });
 });

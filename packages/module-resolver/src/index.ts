@@ -177,7 +177,8 @@ export function discoverModuleGraph(
   config: ResolvedVibeConfig,
   entryModuleName: string,
   parseFunction: (source: string) => Program,
-  preferDist = false
+  preferDist = false,
+  injectPrelude = true
 ): ModuleGraph {
   const modules = new Map<string, ModuleNode>();
   const visiting = new Set<string>(); // For cycle detection
@@ -211,6 +212,16 @@ export function discoverModuleGraph(
     const dependencies = new Set<string>();
     for (const imp of ast.imports) {
       dependencies.add(imp.moduleName);
+    }
+
+    // Auto-inject Prelude dependency if enabled and this is not Prelude itself
+    const isPreludeModule = moduleName === "Prelude";
+    const hasExplicitPreludeImport = ast.imports?.some(
+      (imp) => imp.moduleName === "Prelude"
+    );
+
+    if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
+      dependencies.add("Prelude");
     }
 
     // Recursively discover dependencies BEFORE storing this module

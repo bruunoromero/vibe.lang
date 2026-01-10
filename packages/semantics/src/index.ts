@@ -12,6 +12,12 @@ import type {
   ModuleDeclaration,
   Expr,
   Pattern,
+  ProtocolDeclaration,
+  ImplementationDeclaration,
+  Constraint as ASTConstraint,
+  InfixDeclaration,
+  OperatorInfo,
+  OperatorRegistry,
 } from "@vibe/syntax";
 
 export class SemanticError extends Error {
@@ -32,15 +38,33 @@ type TypeList = { kind: "list"; element: Type };
 type Type = TypeVar | TypeCon | TypeFun | TypeTuple | TypeRecord | TypeList;
 
 /**
- * TypeScheme represents a polymorphic type with universally quantified type variables.
- * Example: `forall a. a -> a` is represented as { vars: Set([0]), type: { kind: "fun", from: TypeVar(0), to: TypeVar(0) } }
+ * Constraint represents a protocol requirement on a type.
+ * Example: Constraint("Num", [TypeVar(0)]) means "type variable 0 must implement Num protocol"
+ */
+type Constraint = {
+  protocolName: string;
+  typeArgs: Type[];
+};
+
+/**
+ * TypeScheme represents a polymorphic type with universally quantified type variables
+ * and optional constraints.
+ *
+ * Example: `forall a. Num a => a -> a` is represented as:
+ * {
+ *   vars: Set([0]),
+ *   constraints: [{ protocolName: "Num", typeArgs: [TypeVar(0)] }],
+ *   type: { kind: "fun", from: TypeVar(0), to: TypeVar(0) }
+ * }
  *
  * In Elm/ML terminology:
  * - A monomorphic type has no quantified variables (empty Set)
  * - A polymorphic type has one or more quantified variables
+ * - A constrained type has protocol requirements on type variables
  */
 type TypeScheme = {
   vars: Set<number>; // Set of type variable IDs that are quantified (polymorphic)
+  constraints: Constraint[]; // Protocol constraints on type variables
   type: Type; // The underlying type structure
 };
 
@@ -58,11 +82,13 @@ type Scope = {
 
 let nextTypeVarId = 0;
 
-const tNumber: TypeCon = { kind: "con", name: "number", args: [] };
-const tString: TypeCon = { kind: "con", name: "string", args: [] };
-const tBool: TypeCon = { kind: "con", name: "bool", args: [] };
-const tChar: TypeCon = { kind: "con", name: "char", args: [] };
-const tUnit: TypeTuple = { kind: "tuple", elements: [] };
+/**
+ * Primitive type constants are no longer defined here.
+ * All types including Int, Float, String, Char, Bool, Unit come from the prelude as ADTs.
+ *
+ * The semantics phase resolves these types by looking them up in the ADT registry
+ * which is populated from the prelude.
+ */
 
 // ===== Algebraic Data Type (ADT) Registry =====
 // The ADT registry tracks user-defined types and their constructors.
@@ -131,30 +157,83 @@ export type TypeAliasInfo = {
   span: Span;
 };
 
-// Legacy built-in constructors for backwards compatibility.
-// These will be replaced by proper ADT definitions in the prelude.
-const BUILTIN_CONSTRUCTORS: Record<string, number> = {
-  True: 0,
-  False: 0,
-  Nothing: 0,
-  Just: 1,
-  Ok: 1,
-  Err: 1,
+/**
+ * Information about a protocol (type class).
+ *
+ * For example, `protocol Num a where plus : a -> a -> a` becomes:
+ * {
+ *   name: "Num",
+ *   params: ["a"],
+ *   methods: Map { "plus" => { type: ..., span: ... } }
+ * }
+ */
+export type ProtocolInfo = {
+  /** The protocol name (e.g., "Num", "Show") */
+  name: string;
+  /** Type parameters (typically just one, e.g., ["a"]) */
+  params: string[];
+  /** Method signatures: name -> { type, span } */
+  methods: Map<string, { type: Type; span: Span }>;
+  /** Source span for error messages */
+  span: Span;
 };
 
-const INFIX_TYPES: Record<string, Type> = {
-  "+": fn(tNumber, tNumber, tNumber),
-  "-": fn(tNumber, tNumber, tNumber),
-  "*": fn(tNumber, tNumber, tNumber),
-  "/": fn(tNumber, tNumber, tNumber),
-  "++": fn(tString, tString, tString),
-  "==": fn(tNumber, tNumber, tBool),
-  "/=": fn(tNumber, tNumber, tBool),
-  "<": fn(tNumber, tNumber, tBool),
-  "<=": fn(tNumber, tNumber, tBool),
-  ">": fn(tNumber, tNumber, tBool),
-  ">=": fn(tNumber, tNumber, tBool),
+/**
+ * Information about an instance implementation.
+ *
+ * For example, `instance Num Int where plus = intPlusImpl` becomes:
+ * {
+ *   protocolName: "Num",
+ *   typeArgs: [TypeCon("Int")],
+ *   constraints: [],
+ *   methods: Map { "plus" => <implementation expr> },
+ *   span: ...
+ * }
+ */
+export type InstanceInfo = {
+  /** The protocol name being implemented */
+  protocolName: string;
+  /** Concrete type(s) for this instance */
+  typeArgs: Type[];
+  /** Context constraints (e.g., "Show a" in "Show a => Show (List a)") */
+  constraints: Constraint[];
+  /** Method implementations: name -> implementation expression */
+  methods: Map<string, Expr>;
+  /** Source span for error messages */
+  span: Span;
 };
+
+/**
+ * Built-in constructors registry is now EMPTY.
+ *
+ * All ADTs including Bool must be defined in user code or the prelude.
+ * The prelude defines Bool for use in if-then-else expressions.
+ *
+ * Note: Constructor arity validation still happens via the ADT registry,
+ * not through this constant.
+ */
+const BUILTIN_CONSTRUCTORS: Record<string, number> = {};
+
+/**
+ * Built-in operator type signatures are now EMPTY.
+ *
+ * All operators must be defined via protocols and implementations
+ * in user code or the prelude. This enables a clean separation where
+ * the compiler handles syntax/semantics while the prelude provides
+ * standard operators.
+ *
+ * Example prelude definitions:
+ *   protocol Num a where
+ *     (+) : a -> a -> a
+ *     (-) : a -> a -> a
+ *     (*) : a -> a -> a
+ *
+ *   implement Num Int where
+ *     (+) = intAdd
+ *     (-) = intSub
+ *     (*) = intMul
+ */
+const INFIX_TYPES: Record<string, Type> = {};
 
 export type ValueInfo = {
   declaration: ValueDeclaration | ExternalDeclaration;
@@ -173,6 +252,8 @@ export type ValueInfo = {
  * - adts: User-defined algebraic data types
  * - constructors: Map from constructor names to their info
  * - typeAliases: Type alias definitions
+ * - protocols: Protocol (type class) definitions
+ * - instances: Instance implementations
  * - module: Module declaration (if any)
  * - imports: Import declarations
  */
@@ -188,11 +269,25 @@ export type SemanticModule = {
   constructors: Record<string, ConstructorInfo>;
   /** Registry of type aliases */
   typeAliases: Record<string, TypeAliasInfo>;
+  /** Registry of protocols (type classes) */
+  protocols: Record<string, ProtocolInfo>;
+  /** List of instance implementations */
+  instances: InstanceInfo[];
+  /** Registry of custom operator precedence/associativity */
+  operators: OperatorRegistry;
+  /** Infix declarations for operators */
+  infixDeclarations: InfixDeclaration[];
 };
 
 export interface AnalyzeOptions {
   /** Pre-analyzed dependency modules to merge into scope */
   dependencies?: Map<string, SemanticModule>;
+  /**
+   * Whether to automatically inject `import Prelude exposing (..)`.
+   * Defaults to true. Set to false for the Prelude module itself
+   * or when testing without prelude.
+   */
+  injectPrelude?: boolean;
 }
 
 export function analyze(
@@ -201,7 +296,6 @@ export function analyze(
 ): SemanticModule {
   const values: Record<string, ValueInfo> = {};
   const annotations: Record<string, TypeAnnotationDeclaration> = {};
-  const imports: ImportDeclaration[] = program.imports ?? [];
   const types: Record<string, Type> = {};
   const substitution: Substitution = new Map();
 
@@ -211,20 +305,63 @@ export function analyze(
   const constructors: Record<string, ConstructorInfo> = {};
   const typeAliases: Record<string, TypeAliasInfo> = {};
 
+  // ===== Protocol and Instance Registries =====
+  // These track type class definitions and their implementations.
+  const protocols: Record<string, ProtocolInfo> = {};
+  const instances: InstanceInfo[] = [];
+
+  // ===== Operator Registries =====
+  // These track custom operator precedence and associativity declarations.
+  const operators: OperatorRegistry = new Map();
+  const infixDeclarations: InfixDeclaration[] = [];
+
+  // ===== Auto-inject Prelude =====
+  // By default, inject `import Prelude exposing (..)` unless:
+  // 1. injectPrelude is explicitly false
+  // 2. This is the Prelude module itself
+  // 3. There's already an explicit Prelude import
+  const { dependencies = new Map(), injectPrelude = true } = options;
+  const isPreludeModule = program.module?.name === "Prelude";
+  const hasExplicitPreludeImport = program.imports?.some(
+    (imp) => imp.moduleName === "Prelude"
+  );
+
+  // Build the effective imports list
+  let imports: ImportDeclaration[] = program.imports ?? [];
+
+  if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
+    // Create a synthetic import for Prelude
+    const syntheticPreludeImport: ImportDeclaration = {
+      moduleName: "Prelude",
+      exposing: {
+        kind: "All",
+        span: {
+          start: { offset: 0, line: 0, column: 0 },
+          end: { offset: 0, line: 0, column: 0 },
+        },
+      },
+      span: {
+        start: { offset: 0, line: 0, column: 0 },
+        end: { offset: 0, line: 0, column: 0 },
+      },
+    };
+    imports = [syntheticPreludeImport, ...imports];
+  }
+
   validateImports(imports);
 
   const globalScope: Scope = { symbols: new Map() };
 
   // Seed built-in operators as functions for prefix/infix symmetry.
   // Built-in operators are monomorphic (not polymorphic).
+  // Note: INFIX_TYPES is now empty; operators come from Prelude.
   for (const [op, ty] of Object.entries(INFIX_TYPES)) {
-    globalScope.symbols.set(op, { vars: new Set(), type: ty });
+    globalScope.symbols.set(op, { vars: new Set(), constraints: [], type: ty });
   }
 
   // Merge types from imported dependency modules
   // This replaces the previous approach of seeding placeholder types for imports.
   // Now we use actual types from pre-analyzed dependency modules.
-  const { dependencies = new Map() } = options;
   for (const imp of imports) {
     const depModule = dependencies.get(imp.moduleName);
     if (!depModule) {
@@ -232,10 +369,25 @@ export function analyze(
       if (imp.alias) {
         globalScope.symbols.set(imp.alias, {
           vars: new Set(),
+          constraints: [],
           type: freshType(),
         });
       }
       continue;
+    }
+
+    // IMPORTANT: Always import protocols and instances from dependencies
+    // Protocols and instances are "global" - they don't respect exposing clauses
+    // This matches Haskell's behavior where type class instances are always visible
+    for (const [name, protocol] of Object.entries(depModule.protocols) as [
+      string,
+      ProtocolInfo
+    ][]) {
+      protocols[name] = protocol;
+    }
+
+    for (const instance of depModule.instances) {
+      instances.push(instance);
     }
 
     // Handle import alias (e.g., `import Html as H`)
@@ -245,6 +397,7 @@ export function analyze(
       // support qualified name access (e.g., H.div)
       globalScope.symbols.set(imp.alias, {
         vars: new Set(),
+        constraints: [],
         type: freshType(), // TODO: Implement proper module namespace types
       });
     }
@@ -325,10 +478,38 @@ export function analyze(
       ][]) {
         typeAliases[name] = alias;
       }
+
+      // Import all protocols
+      for (const [name, protocol] of Object.entries(depModule.protocols) as [
+        string,
+        ProtocolInfo
+      ][]) {
+        protocols[name] = protocol;
+      }
+
+      // Import all instances
+      for (const instance of depModule.instances) {
+        instances.push(instance);
+      }
+
+      // Import operator declarations
+      for (const [op, info] of depModule.operators) {
+        operators.set(op, info);
+      }
     }
   }
 
-  // ===== PASS 1: Register type declarations (ADTs and aliases) =====
+  // ===== PASS 0: Register infix declarations =====
+  // We process infix declarations first so operator precedence is known during parsing.
+  // Note: This pass validates declarations but the parser pre-processing handles actual precedence.
+  for (const decl of program.declarations) {
+    if (decl.kind === "InfixDeclaration") {
+      registerInfixDeclaration(decl, operators, infixDeclarations);
+      continue;
+    }
+  }
+
+  // ===== PASS 1: Register type declarations (ADTs, aliases, and protocols) =====
   // We register types before values so constructors can be used in value expressions.
   for (const decl of program.declarations) {
     if (decl.kind === "TypeDeclaration") {
@@ -338,6 +519,21 @@ export function analyze(
 
     if (decl.kind === "TypeAliasDeclaration") {
       registerTypeAlias(decl, typeAliases);
+      continue;
+    }
+
+    if (decl.kind === "ProtocolDeclaration") {
+      registerProtocol(decl, protocols, adts, typeAliases);
+      continue;
+    }
+  }
+
+  // ===== PASS 1.5: Register implementation declarations =====
+  // Implementations are registered after protocols but before value inference
+  // so that we can resolve constraints during type checking.
+  for (const decl of program.declarations) {
+    if (decl.kind === "ImplementationDeclaration") {
+      registerImplementation(decl, instances, protocols, adts, typeAliases);
       continue;
     }
   }
@@ -409,7 +605,7 @@ export function analyze(
     declareSymbol(
       globalScope,
       name,
-      { vars: new Set(), type: seeded },
+      { vars: new Set(), constraints: [], type: seeded },
       info.declaration.span
     );
     types[name] = seeded;
@@ -432,6 +628,7 @@ export function analyze(
       // External declarations are monomorphic
       globalScope.symbols.set(info.declaration.name, {
         vars: new Set(),
+        constraints: [],
         type: info.type,
       });
       continue;
@@ -481,6 +678,10 @@ export function analyze(
     adts,
     constructors,
     typeAliases,
+    protocols,
+    instances,
+    operators,
+    infixDeclarations,
   };
 }
 
@@ -621,6 +822,7 @@ function registerTypeDeclaration(
     // Register constructor as a polymorphic value in global scope
     globalScope.symbols.set(ctor.name, {
       vars: quantifiedVars,
+      constraints: [],
       type: ctorType,
     });
   }
@@ -723,6 +925,14 @@ function constructorArgToType(
         fields,
       };
     }
+    case "QualifiedType": {
+      // For constructor arguments, we don't support qualified types
+      // (constraints only make sense at the top level of function signatures)
+      throw new SemanticError(
+        "Constructor arguments cannot have constraints",
+        expr.span
+      );
+    }
   }
 }
 
@@ -763,6 +973,293 @@ function registerTypeAlias(
     value: decl.value,
     span: decl.span,
   };
+}
+
+/**
+ * Register an infix declaration in the operator registry.
+ * Validates that there are no duplicate declarations for the same operator.
+ */
+function registerInfixDeclaration(
+  decl: InfixDeclaration,
+  operators: OperatorRegistry,
+  infixDeclarations: InfixDeclaration[]
+) {
+  // Check for duplicate operator declaration
+  if (operators.has(decl.operator)) {
+    throw new SemanticError(
+      `Duplicate infix declaration for operator '${decl.operator}'`,
+      decl.span
+    );
+  }
+
+  // Convert fixity to associativity
+  const associativity: "left" | "right" | "none" =
+    decl.fixity === "infixl"
+      ? "left"
+      : decl.fixity === "infixr"
+      ? "right"
+      : "none";
+
+  // Validate precedence range (0-9)
+  if (decl.precedence < 0 || decl.precedence > 9) {
+    throw new SemanticError(
+      `Precedence must be between 0 and 9, got ${decl.precedence}`,
+      decl.span
+    );
+  }
+
+  // Register the operator
+  operators.set(decl.operator, {
+    precedence: decl.precedence,
+    associativity,
+  });
+
+  // Store the declaration for later reference
+  infixDeclarations.push(decl);
+}
+
+/**
+ * Register a protocol declaration in the protocol registry.
+ */
+function registerProtocol(
+  decl: ProtocolDeclaration,
+  protocols: Record<string, ProtocolInfo>,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>
+) {
+  // Check for duplicate protocol name
+  if (protocols[decl.name]) {
+    throw new SemanticError(`Duplicate protocol '${decl.name}'`, decl.span);
+  }
+
+  // Validate type parameters are unique
+  const paramSet = new Set<string>();
+  for (const param of decl.params) {
+    if (paramSet.has(param)) {
+      throw new SemanticError(
+        `Duplicate type parameter '${param}' in protocol '${decl.name}'`,
+        decl.span
+      );
+    }
+    paramSet.add(param);
+  }
+
+  // Validate at least one method
+  if (decl.methods.length === 0) {
+    throw new SemanticError(
+      `Protocol '${decl.name}' must have at least one method`,
+      decl.span
+    );
+  }
+
+  // Convert method type expressions to internal types
+  const methods = new Map<string, { type: Type; span: Span }>();
+  const methodNames = new Set<string>();
+
+  for (const method of decl.methods) {
+    // Check for duplicate method names
+    if (methodNames.has(method.name)) {
+      throw new SemanticError(
+        `Duplicate method '${method.name}' in protocol '${decl.name}'`,
+        method.span
+      );
+    }
+    methodNames.add(method.name);
+
+    // Create type variable context for protocol parameters
+    const typeVarCtx = new Map<string, TypeVar>();
+    for (const param of decl.params) {
+      typeVarCtx.set(param, freshType());
+    }
+
+    // Convert method type from AST to internal representation
+    const methodType = typeFromAnnotation(
+      method.type,
+      typeVarCtx,
+      adts,
+      typeAliases
+    );
+
+    methods.set(method.name, { type: methodType, span: method.span });
+  }
+
+  // Register the protocol
+  protocols[decl.name] = {
+    name: decl.name,
+    params: decl.params,
+    methods,
+    span: decl.span,
+  };
+}
+
+/**
+ * Register an implementation declaration in the instance registry.
+ */
+function registerImplementation(
+  decl: ImplementationDeclaration,
+  instances: InstanceInfo[],
+  protocols: Record<string, ProtocolInfo>,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>
+) {
+  // Check that the protocol exists
+  const protocol = protocols[decl.protocolName];
+  if (!protocol) {
+    throw new SemanticError(
+      `Unknown protocol '${decl.protocolName}'`,
+      decl.span
+    );
+  }
+
+  // Validate number of type arguments matches protocol parameters
+  if (decl.typeArgs.length !== protocol.params.length) {
+    throw new SemanticError(
+      `Protocol '${decl.protocolName}' expects ${protocol.params.length} type argument(s), but got ${decl.typeArgs.length}`,
+      decl.span
+    );
+  }
+
+  // Create a type variable context for converting type expressions
+  const typeVarCtx = new Map<string, TypeVar>();
+
+  // Convert type arguments from AST to internal representation
+  const typeArgs: Type[] = [];
+  for (const typeArg of decl.typeArgs) {
+    typeArgs.push(typeFromAnnotation(typeArg, typeVarCtx, adts, typeAliases));
+  }
+
+  // Convert constraints
+  const constraints: Constraint[] = [];
+  for (const astConstraint of decl.constraints) {
+    const constraintTypeArgs: Type[] = [];
+    for (const typeArg of astConstraint.typeArgs) {
+      constraintTypeArgs.push(
+        typeFromAnnotation(typeArg, typeVarCtx, adts, typeAliases)
+      );
+    }
+    constraints.push({
+      protocolName: astConstraint.protocolName,
+      typeArgs: constraintTypeArgs,
+    });
+  }
+
+  // Validate that all required methods are implemented
+  const implementedMethods = new Set(decl.methods.map((m) => m.name));
+  const requiredMethods = new Set(protocol.methods.keys());
+
+  for (const required of requiredMethods) {
+    if (!implementedMethods.has(required)) {
+      throw new SemanticError(
+        `Instance is missing implementation for method '${required}'`,
+        decl.span
+      );
+    }
+  }
+
+  // Check for extra methods that aren't in the protocol
+  for (const implemented of implementedMethods) {
+    if (!requiredMethods.has(implemented)) {
+      throw new SemanticError(
+        `Method '${implemented}' is not part of protocol '${decl.protocolName}'`,
+        decl.span
+      );
+    }
+  }
+
+  // Check for overlapping instances
+  // An implementation overlaps if another implementation exists for the same protocol and type
+  for (const existing of instances) {
+    if (existing.protocolName !== decl.protocolName) continue;
+
+    // Check if type arguments match (simple structural equality check)
+    if (typesOverlap(existing.typeArgs, typeArgs)) {
+      throw new SemanticError(
+        `Overlapping implementation for protocol '${decl.protocolName}'`,
+        decl.span
+      );
+    }
+  }
+
+  // Convert method implementations to a map
+  const methods = new Map<string, Expr>();
+  for (const method of decl.methods) {
+    methods.set(method.name, method.implementation);
+  }
+
+  // Register the instance
+  instances.push({
+    protocolName: decl.protocolName,
+    typeArgs,
+    constraints,
+    methods,
+    span: decl.span,
+  });
+}
+
+/**
+ * Check if two lists of types overlap (for instance overlap detection).
+ * Returns true if the types could potentially unify.
+ */
+function typesOverlap(types1: Type[], types2: Type[]): boolean {
+  if (types1.length !== types2.length) return false;
+
+  for (let i = 0; i < types1.length; i++) {
+    if (!typeOverlaps(types1[i]!, types2[i]!)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Check if two types overlap (could potentially unify).
+ * This is a conservative check - we reject if they're definitely the same.
+ */
+function typeOverlaps(type1: Type, type2: Type): boolean {
+  // Type variables can unify with anything
+  if (type1.kind === "var" || type2.kind === "var") return true;
+
+  // Type constructors overlap if they have the same name
+  if (type1.kind === "con" && type2.kind === "con") {
+    if (type1.name !== type2.name) return false;
+    return typesOverlap(type1.args, type2.args);
+  }
+
+  // Functions overlap if both domain and codomain overlap
+  if (type1.kind === "fun" && type2.kind === "fun") {
+    return (
+      typeOverlaps(type1.from, type2.from) && typeOverlaps(type1.to, type2.to)
+    );
+  }
+
+  // Tuples overlap if all elements overlap
+  if (type1.kind === "tuple" && type2.kind === "tuple") {
+    return typesOverlap(type1.elements, type2.elements);
+  }
+
+  // Records overlap if all fields overlap (simplified check)
+  if (type1.kind === "record" && type2.kind === "record") {
+    const fields1 = Object.keys(type1.fields);
+    const fields2 = Object.keys(type2.fields);
+    if (fields1.length !== fields2.length) return false;
+
+    for (const field of fields1) {
+      if (!type2.fields[field]) return false;
+      if (!typeOverlaps(type1.fields[field]!, type2.fields[field]!)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Lists overlap if element types overlap
+  if (type1.kind === "list" && type2.kind === "list") {
+    return typeOverlaps(type1.element, type2.element);
+  }
+
+  // Different kinds don't overlap
+  return false;
 }
 
 function validateModuleExposing(
@@ -867,14 +1364,50 @@ function analyzeExpr(
       const resolved = lookupSymbol(scope, expr.name, expr.span, substitution);
       return applySubstitution(resolved, substitution);
     }
-    case "Number":
-      return tNumber;
-    case "String":
-      return tString;
-    case "Char":
-      return tChar;
-    case "Unit":
-      return tUnit;
+    case "Number": {
+      // Number literals are treated as Int or Float based on decimal point
+      const hasDecimal = expr.value.includes(".");
+      const typeName = hasDecimal ? "Float" : "Int";
+      const adt = adts[typeName];
+      if (!adt) {
+        throw new SemanticError(
+          `Type '${typeName}' not found. Make sure the prelude is imported.`,
+          expr.span
+        );
+      }
+      return { kind: "con", name: typeName, args: [] };
+    }
+    case "String": {
+      const adt = adts["String"];
+      if (!adt) {
+        throw new SemanticError(
+          "Type 'String' not found. Make sure the prelude is imported.",
+          expr.span
+        );
+      }
+      return { kind: "con", name: "String", args: [] };
+    }
+    case "Char": {
+      const adt = adts["Char"];
+      if (!adt) {
+        throw new SemanticError(
+          "Type 'Char' not found. Make sure the prelude is imported.",
+          expr.span
+        );
+      }
+      return { kind: "con", name: "Char", args: [] };
+    }
+    case "Unit": {
+      // () is syntax sugar for the Unit constructor from the prelude
+      const adt = adts["Unit"];
+      if (!adt) {
+        throw new SemanticError(
+          "Type 'Unit' not found. Make sure the prelude is imported.",
+          expr.span
+        );
+      }
+      return { kind: "con", name: "Unit", args: [] };
+    }
     case "Tuple": {
       const elements = expr.elements.map((el) =>
         analyzeExpr(
@@ -1080,6 +1613,15 @@ function analyzeExpr(
         adts,
         typeAliases
       );
+      // Bool type must be defined in the prelude
+      const boolAdt = adts["Bool"];
+      if (!boolAdt) {
+        throw new SemanticError(
+          "Type 'Bool' not found. Make sure the prelude is imported.",
+          expr.condition.span
+        );
+      }
+      const tBool: Type = { kind: "con", name: "Bool", args: [] };
       unify(condType, tBool, expr.condition.span, substitution);
       const thenType = analyzeExpr(
         expr.thenBranch,
@@ -1118,7 +1660,7 @@ function analyzeExpr(
         declareSymbol(
           letScope,
           binding.name,
-          { vars: new Set(), type: seeded },
+          { vars: new Set(), constraints: [], type: seeded },
           binding.span
         );
       }
@@ -1445,7 +1987,11 @@ function bindPatterns(
     );
     if (pattern.kind === "VarPattern") {
       // Pattern variables are monomorphic
-      scope.symbols.set(pattern.name, { vars: new Set(), type: paramType });
+      scope.symbols.set(pattern.name, {
+        vars: new Set(),
+        constraints: [],
+        type: paramType,
+      });
     }
   });
 }
@@ -1485,7 +2031,7 @@ function bindPattern(
       declareSymbol(
         scope,
         pattern.name,
-        { vars: new Set(), type: expected },
+        { vars: new Set(), constraints: [], type: expected },
         pattern.span
       );
       return expected;
@@ -1819,7 +2365,9 @@ function generalize(
     }
   }
 
-  return { vars: quantified, type };
+  // TODO: Collect constraints during type inference
+  // For now, we use empty constraints
+  return { vars: quantified, constraints: [], type };
 }
 
 /**
@@ -2126,9 +2674,9 @@ function typeFromAnnotation(
         }
       }
 
-      // Concrete type constructor (Number, String, List, Maybe, etc.)
-      const normalized = annotation.name.toLowerCase();
-      if (normalized === "list" && annotation.args.length === 1) {
+      // Concrete type constructor (Int, String, List, Maybe, etc.)
+      // Check for List type constructor specially
+      if (annotation.name === "List" && annotation.args.length === 1) {
         const elementAnn = annotation.args[0];
         if (elementAnn) {
           return {
@@ -2139,7 +2687,7 @@ function typeFromAnnotation(
       }
       return {
         kind: "con",
-        name: normalized,
+        name: annotation.name,
         args: annotation.args.map((arg) =>
           typeFromAnnotation(arg, context, adts, typeAliases)
         ),
@@ -2182,6 +2730,11 @@ function typeFromAnnotation(
         kind: "record",
         fields,
       };
+    }
+    case "QualifiedType": {
+      // For now, we extract just the underlying type from qualified types
+      // TODO: When implementing constraint checking, parse and store the constraints
+      return typeFromAnnotation(annotation.type, context, adts, typeAliases);
     }
   }
 }

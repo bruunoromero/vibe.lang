@@ -281,6 +281,11 @@ function readPunctuationOrOperator(
   }
 
   if (current === "=") {
+    if (state.peek(1) === ">") {
+      state.advance();
+      state.advance();
+      return makeToken(state, start, TokenKind.Operator, startIndex);
+    }
     if (state.peek(1) === "=") {
       state.advance();
       state.advance();

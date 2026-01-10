@@ -1,0 +1,558 @@
+module Prelude exposing (..)
+
+{- =============================================================================
+   Prelude - The Standard Library for Vibe
+   =============================================================================
+
+   This module provides fundamental types, operators, and functions that are
+   automatically imported into every Vibe program.
+
+   Contents:
+   - Operator fixity declarations
+   - Core ADTs (Maybe, Result, List)
+   - Numeric protocols and implementations
+   - Comparison and equality protocols
+   - Logical operators
+   - Function composition and application operators
+   - Basic utility functions
+-}
+
+-- =============================================================================
+-- Operator Fixity Declarations
+-- =============================================================================
+-- These establish precedence and associativity for all standard operators.
+-- Higher numbers bind tighter. Range: 1-9.
+
+-- Application operators (lowest precedence)
+infixl 1 |>
+infixr 1 <|
+
+-- Logical operators
+infixr 2 ||
+infixr 3 &&
+
+-- Comparison operators (non-associative would be ideal, but we use left)
+infixl 4 ==
+infixl 4 /=
+infixl 4 <
+infixl 4 <=
+infixl 4 >
+infixl 4 >=
+
+-- List operators
+infixr 5 ::
+infixr 5 ++
+
+-- Arithmetic operators
+infixl 6 +
+infixl 6 -
+infixl 7 *
+infixl 7 /
+infixl 7 //
+infixl 7 %
+infixr 8 ^
+
+-- Function composition (highest precedence)
+infixr 9 <<
+infixr 9 >>
+
+
+-- =============================================================================
+-- Core ADTs
+-- =============================================================================
+
+{-| Boolean type representing logical truth values.
+
+    True  -- Logical true
+    False -- Logical false
+
+    Used in conditional expressions (if-then-else) and logical operations.
+-}
+type Bool
+    = True
+    | False
+
+
+{-| Unit type representing a value with no information.
+
+    Unit -- The only value of type Unit
+
+    Used for functions with side effects that return no meaningful value.
+-}
+type Unit
+    = Unit
+
+
+{-| Integer type for whole numbers.
+    
+    Int values are represented as JavaScript numbers truncated to integers.
+-}
+type Int
+    = Int
+
+
+{-| Floating-point number type for decimal numbers.
+    
+    Float values are represented as JavaScript numbers.
+-}
+type Float
+    = Float
+
+
+{-| String type for text values.
+    
+    String values are sequences of characters.
+-}
+type String
+    = String
+
+
+{-| Character type for single text characters.
+    
+    Char values represent individual Unicode characters.
+-}
+type Char
+    = Char
+
+
+{-| Represents an optional value. Used when a value may or may not exist.
+
+    Just x  -- Contains a value x
+    Nothing -- No value present
+
+    Example:
+        head : List a -> Maybe a
+        head list =
+            case list of
+                x :: _ -> Just x
+                [] -> Nothing
+-}
+type Maybe a
+    = Just a
+    | Nothing
+
+
+{-| Represents a computation that can succeed or fail.
+
+    Ok value  -- Success with a value
+    Err error -- Failure with an error
+
+    Example:
+        divide : Int -> Int -> Result String Int
+        divide x y =
+            if y == 0 then
+                Err "Division by zero"
+            else
+                Ok (x / y)
+-}
+type Result error value
+    = Ok value
+    | Err error
+
+
+{-| Represents an ordered pair of values.
+
+    Example:
+        point : Pair Int Int
+        point = Pair 3 4
+-}
+type Pair a b
+    = Pair a b
+
+
+-- =============================================================================
+-- Numeric Protocol
+-- =============================================================================
+
+{-| Protocol for numeric types supporting basic arithmetic operations.
+
+    Implementing types must provide:
+    - (+)  : Addition
+    - (-)  : Subtraction
+    - (*)  : Multiplication
+    - negate : Negation (unary minus)
+-}
+protocol Num a where
+    (+) : a -> a -> a
+    (-) : a -> a -> a
+    (*) : a -> a -> a
+    negate : a -> a
+
+
+{-| Protocol for types supporting division operations. -}
+protocol Fractional a where
+    (/) : a -> a -> a
+
+
+{-| Protocol for types supporting integer division and modulo. -}
+protocol Integral a where
+    (//) : a -> a -> a
+    (%) : a -> a -> a
+
+
+-- =============================================================================
+-- Comparison Protocols
+-- =============================================================================
+
+{-| Protocol for types supporting equality comparison.
+
+    Implementing types must provide:
+    - (==) : Equality test
+    - (/=) : Inequality test (default implementation provided if == is defined)
+-}
+protocol Eq a where
+    (==) : a -> a -> Bool
+    (/=) : a -> a -> Bool
+
+
+{-| Protocol for types supporting ordering comparison.
+
+    Implementing types must provide all comparison operators.
+    Typically, implementing `compare` is sufficient, but we expose
+    individual operators for flexibility.
+-}
+protocol Ord a where
+    (<) : a -> a -> Bool
+    (<=) : a -> a -> Bool
+    (>) : a -> a -> Bool
+    (>=) : a -> a -> Bool
+
+
+-- =============================================================================
+-- Logical Operations (External FFI)
+-- =============================================================================
+
+{-| Logical AND. Returns True only if both arguments are True.
+
+    True && True   == True
+    True && False  == False
+    False && _     == False  (short-circuits)
+-}
+@external "@vibe/runtime" "and"
+(&&) : Bool -> Bool -> Bool
+
+
+{-| Logical OR. Returns True if either argument is True.
+
+    True || _      == True  (short-circuits)
+    False || True  == True
+    False || False == False
+-}
+@external "@vibe/runtime" "or"
+(||) : Bool -> Bool -> Bool
+
+
+{-| Logical NOT. Inverts a boolean value.
+
+    not True  == False
+    not False == True
+-}
+@external "@vibe/runtime" "not"
+not : Bool -> Bool
+
+
+-- =============================================================================
+-- Function Composition and Application
+-- =============================================================================
+
+{-| Forward function application (pipe operator).
+    Passes the left argument to the function on the right.
+
+    x |> f  ==  f x
+
+    Example:
+        [1, 2, 3]
+            |> map ((+) 1)
+            |> filter isEven
+-}
+@external "@vibe/runtime" "pipeForward"
+(|>) : a -> (a -> b) -> b
+
+
+{-| Backward function application.
+    Applies the function on the left to the argument on the right.
+
+    f <| x  ==  f x
+
+    Example:
+        println <| "Hello, " ++ name
+-}
+@external "@vibe/runtime" "pipeBackward"
+(<|) : (a -> b) -> a -> b
+
+
+{-| Forward function composition.
+    Composes two functions, applying the first then the second.
+
+    (f >> g) x  ==  g (f x)
+
+    Example:
+        addOne >> double  -- first adds 1, then doubles
+-}
+@external "@vibe/runtime" "composeForward"
+(>>) : (a -> b) -> (b -> c) -> (a -> c)
+
+
+{-| Backward function composition.
+    Composes two functions, applying the second then the first.
+
+    (g << f) x  ==  g (f x)
+
+    Example:
+        double << addOne  -- first adds 1, then doubles
+-}
+@external "@vibe/runtime" "composeBackward"
+(<<) : (b -> c) -> (a -> b) -> (a -> c)
+
+
+-- =============================================================================
+-- List Operations
+-- =============================================================================
+
+{-| Cons operator. Prepends an element to a list.
+
+    1 :: [2, 3]  ==  [1, 2, 3]
+-}
+@external "@vibe/runtime" "cons"
+(::) : a -> List a -> List a
+
+
+{-| Append operator. Concatenates two lists.
+
+    [1, 2] ++ [3, 4]  ==  [1, 2, 3, 4]
+-}
+@external "@vibe/runtime" "append"
+(++) : List a -> List a -> List a
+
+
+-- =============================================================================
+-- String Operations
+-- =============================================================================
+
+{-| String concatenation. Joins two strings together.
+
+    "Hello, " ++ "World!"  ==  "Hello, World!"
+
+    Note: This is overloaded with list append. The runtime handles
+    both cases based on the argument types.
+-}
+
+
+-- =============================================================================
+-- Numeric Implementations (External FFI)
+-- =============================================================================
+
+-- Int implementations
+@external "@vibe/runtime" "intAdd"
+intAdd : Int -> Int -> Int
+
+@external "@vibe/runtime" "intSub"
+intSub : Int -> Int -> Int
+
+@external "@vibe/runtime" "intMul"
+intMul : Int -> Int -> Int
+
+@external "@vibe/runtime" "intDiv"
+intDiv : Int -> Int -> Int
+
+@external "@vibe/runtime" "intMod"
+intMod : Int -> Int -> Int
+
+@external "@vibe/runtime" "intNegate"
+intNegate : Int -> Int
+
+@external "@vibe/runtime" "intEq"
+intEq : Int -> Int -> Bool
+
+@external "@vibe/runtime" "intNeq"
+intNeq : Int -> Int -> Bool
+
+@external "@vibe/runtime" "intLt"
+intLt : Int -> Int -> Bool
+
+@external "@vibe/runtime" "intLte"
+intLte : Int -> Int -> Bool
+
+@external "@vibe/runtime" "intGt"
+intGt : Int -> Int -> Bool
+
+@external "@vibe/runtime" "intGte"
+intGte : Int -> Int -> Bool
+
+
+-- Float implementations
+@external "@vibe/runtime" "floatAdd"
+floatAdd : Float -> Float -> Float
+
+@external "@vibe/runtime" "floatSub"
+floatSub : Float -> Float -> Float
+
+@external "@vibe/runtime" "floatMul"
+floatMul : Float -> Float -> Float
+
+@external "@vibe/runtime" "floatDiv"
+floatDiv : Float -> Float -> Float
+
+@external "@vibe/runtime" "floatNegate"
+floatNegate : Float -> Float
+
+@external "@vibe/runtime" "floatEq"
+floatEq : Float -> Float -> Bool
+
+@external "@vibe/runtime" "floatNeq"
+floatNeq : Float -> Float -> Bool
+
+@external "@vibe/runtime" "floatLt"
+floatLt : Float -> Float -> Bool
+
+@external "@vibe/runtime" "floatLte"
+floatLte : Float -> Float -> Bool
+
+@external "@vibe/runtime" "floatGt"
+floatGt : Float -> Float -> Bool
+
+@external "@vibe/runtime" "floatGte"
+floatGte : Float -> Float -> Bool
+
+
+-- Exponentiation
+@external "@vibe/runtime" "intPow"
+intPow : Int -> Int -> Int
+
+@external "@vibe/runtime" "floatPow"
+floatPow : Float -> Float -> Float
+
+
+-- =============================================================================
+-- Protocol Implementations
+-- =============================================================================
+
+implement Num Int where
+    (+) = intAdd
+    (-) = intSub
+    (*) = intMul
+    negate = intNegate
+
+implement Num Float where
+    (+) = floatAdd
+    (-) = floatSub
+    (*) = floatMul
+    negate = floatNegate
+
+implement Fractional Float where
+    (/) = floatDiv
+
+implement Integral Int where
+    (//) = intDiv
+    (%) = intMod
+
+implement Eq Int where
+    (==) = intEq
+    (/=) = intNeq
+
+implement Eq Float where
+    (==) = floatEq
+    (/=) = floatNeq
+
+implement Ord Int where
+    (<) = intLt
+    (<=) = intLte
+    (>) = intGt
+    (>=) = intGte
+
+implement Ord Float where
+    (<) = floatLt
+    (<=) = floatLte
+    (>) = floatGt
+    (>=) = floatGte
+
+
+-- =============================================================================
+-- Utility Functions
+-- =============================================================================
+
+{-| Identity function. Returns its argument unchanged.
+
+    identity x  ==  x
+-}
+identity : a -> a
+identity x = x
+
+
+{-| Constant function. Always returns the first argument.
+
+    always x y  ==  x
+-}
+always : a -> b -> a
+always x _ = x
+
+
+{-| Flip the arguments of a binary function.
+
+    flip f x y  ==  f y x
+-}
+flip : (a -> b -> c) -> b -> a -> c
+flip f x y = f y x
+
+
+{-| Function application. Useful for avoiding parentheses.
+
+    apply f x  ==  f x
+-}
+apply : (a -> b) -> a -> b
+apply f x = f x
+
+
+-- =============================================================================
+-- Maybe Functions
+-- =============================================================================
+
+{-| Apply a function to a Maybe value if it exists.
+
+    map f (Just x)  ==  Just (f x)
+    map f Nothing   ==  Nothing
+-}
+mapMaybe : (a -> b) -> Maybe a -> Maybe b
+mapMaybe f maybe =
+    case maybe of
+        Just x -> Just (f x)
+        Nothing -> Nothing
+
+
+{-| Provide a default value for a Maybe.
+
+    withDefault 0 (Just 5)  ==  5
+    withDefault 0 Nothing   ==  0
+-}
+withDefault : a -> Maybe a -> a
+withDefault default maybe =
+    case maybe of
+        Just x -> x
+        Nothing -> default
+
+
+-- =============================================================================
+-- Result Functions
+-- =============================================================================
+
+{-| Apply a function to a Result value if it's Ok.
+
+    mapResult f (Ok x)    ==  Ok (f x)
+    mapResult f (Err e)   ==  Err e
+-}
+mapResult : (a -> b) -> Result e a -> Result e b
+mapResult f result =
+    case result of
+        Ok x -> Ok (f x)
+        Err e -> Err e
+
+
+{-| Handle both cases of a Result.
+
+    fromResult onErr onOk result
+-}
+fromResult : (e -> b) -> (a -> b) -> Result e a -> b
+fromResult onErr onOk result =
+    case result of
+        Ok x -> onOk x
+        Err e -> onErr e

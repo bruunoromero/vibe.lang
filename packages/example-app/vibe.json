@@ -2,5 +2,5 @@
   "name": "ExampleApp",
   "src": "src",
   "dist": "dist",
-  "packages": []
+  "packages": ["@vibe/prelude"]
 }

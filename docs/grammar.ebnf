@@ -21,7 +21,12 @@ ModuleName = UpperIdentifier, {".", UpperIdentifier} ;
 
 Declaration = ExternalDeclaration
             | TypeAnnotationDeclaration
-            | ValueDeclaration ;
+            | ValueDeclaration
+            | TypeDeclaration
+            | TypeAliasDeclaration
+            | ProtocolDeclaration
+            | ImplementationDeclaration
+            | InfixDeclaration ;
 
 ExternalDeclaration = "@", "external", String, String, DeclarationName, ":", TypeExpr ;
 
@@ -32,10 +37,45 @@ ValueDeclaration = DeclarationName, {Pattern}, "=", Expr ;
 DeclarationName = LowerIdentifier
                 | "(", Operator, ")" ;
 
+(* Infix operator declarations - Elm-style *)
+(* infixl = left-associative, infixr = right-associative, infix = non-associative *)
+(* Precedence 0-9: higher binds tighter *)
+InfixDeclaration = ("infix" | "infixl" | "infixr"), Number, Operator
+                 | ("infix" | "infixl" | "infixr"), Number, "(", Operator, ")" ;
+
+(* Algebraic Data Type declarations *)
+TypeDeclaration = "type", UpperIdentifier, {LowerIdentifier}, "=", ConstructorDef, {"|", ConstructorDef} ;
+
+ConstructorDef = UpperIdentifier, {TypeTerm} ;
+
+(* Type alias declarations *)
+TypeAliasDeclaration = "type", "alias", UpperIdentifier, {LowerIdentifier}, "=", TypeExpr ;
+
+(* Protocol (type class) declarations *)
+(* Methods can be regular identifiers or operators in parentheses *)
+ProtocolDeclaration = "protocol", UpperIdentifier, {LowerIdentifier}, "where", {MethodSignature} ;
+
+MethodSignature = LowerIdentifier, ":", TypeExpr
+                | "(", Operator, ")", ":", TypeExpr ;
+
+(* Implementation (instance) declarations *)
+ImplementationDeclaration = "implement", [Constraints, "=>"], UpperIdentifier, TypeTerm, {TypeTerm}, "where", {MethodImpl} ;
+
+MethodImpl = LowerIdentifier, "=", Expr
+           | "(", Operator, ")", "=", Expr ;
+
+Constraints = Constraint
+            | "(", Constraint, {",", Constraint}, ")" ;
+
+Constraint = UpperIdentifier, TypeTerm, {TypeTerm} ;
+
 
 (* ===== Type Expressions ===== *)
 
-TypeExpr = TypeTerm, ["->", TypeExpr] ;
+(* Type expressions can have optional constraints *)
+TypeExpr = [Constraints, "=>"], TypeExprSimple ;
+
+TypeExprSimple = TypeTerm, ["->", TypeExprSimple] ;
 
 TypeTerm = TypeRef
          | "(", TypeExpr, ")"                (* parenthesized type *)
@@ -158,7 +198,7 @@ Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
 (* ===== Operator Precedence ===== *)
 
 (* 
-  Precedence levels (1-9, higher binds tighter):
+  Built-in operator precedence levels (0-9, higher binds tighter):
   
   1: |>, <|              (application operators)
   2: ||                  (logical or)
@@ -170,7 +210,21 @@ Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
   8: ^                   (exponentiation) - right associative
   9: <<, >>              (composition) - right associative
   
-  Default for custom operators: 5, left associative
+  Default for unknown operators: 5, left associative
+  
+  Custom operator precedence can be declared using infix declarations:
+    infixl 6 +     -- left-associative at precedence 6
+    infixr 5 ++    -- right-associative at precedence 5
+    infix 4 ==     -- non-associative at precedence 4
+    
+  Operators can be defined as regular functions:
+    (|>) : a -> (a -> b) -> b
+    (|>) x f = f x
+    
+  Operators can also be protocol methods:
+    protocol Eq a where
+      (==) : a -> a -> bool
+      (/=) : a -> a -> bool
 *)
 
 

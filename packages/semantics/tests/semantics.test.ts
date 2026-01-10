@@ -2,15 +2,123 @@ import { describe, expect, test } from "bun:test";
 import { parse } from "@vibe/parser";
 import { analyze, SemanticError } from "../src/index.ts";
 
+/**
+ * Helper to expect an error during analysis.
+ * Tests run with injectPrelude: false since we don't provide prelude as a dependency.
+ * Adds OPERATOR_PREAMBLE (which includes types and operators) so literals and operators work.
+ * For sources starting with 'module' or 'import', inserts OPERATOR_PREAMBLE after those declarations.
+ */
 const expectError = (source: string, message: string) => {
-  expect(() => analyze(parse(source))).toThrow(message);
+  let fullSource = source;
+  const trimmed = source.trim();
+  if (trimmed.startsWith("module") || trimmed.startsWith("import")) {
+    // Insert OPERATOR_PREAMBLE after imports/module declarations
+    const lines = source.split("\n");
+    let insertIndex = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!.trim();
+      if (line.startsWith("module") || line.startsWith("import")) {
+        insertIndex = i + 1;
+      } else if (line) {
+        // First non-import/module line
+        break;
+      }
+    }
+    fullSource =
+      lines.slice(0, insertIndex).join("\n") +
+      "\n" +
+      OPERATOR_PREAMBLE +
+      "\n" +
+      lines.slice(insertIndex).join("\n");
+  } else {
+    fullSource = OPERATOR_PREAMBLE + "\n" + source;
+  }
+  expect(() => analyze(parse(fullSource), { injectPrelude: false })).toThrow(
+    message
+  );
 };
+
+/**
+ * Helper to analyze without prelude injection.
+ * Adds TYPE_PREAMBLE automatically so literals work. For sources starting with 'module' or 'import',
+ * inserts TYPE_PREAMBLE after those declarations.
+ */
+const analyzeNoPrelude = (source: string) => {
+  let fullSource = source;
+  const trimmed = source.trim();
+  if (trimmed.startsWith("module") || trimmed.startsWith("import")) {
+    // Insert TYPE_PREAMBLE after imports/module declarations
+    const lines = source.split("\n");
+    let insertIndex = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!.trim();
+      if (line.startsWith("module") || line.startsWith("import")) {
+        insertIndex = i + 1;
+      } else if (line) {
+        // First non-import/module line
+        break;
+      }
+    }
+    fullSource =
+      lines.slice(0, insertIndex).join("\n") +
+      "\n" +
+      TYPE_PREAMBLE +
+      "\n" +
+      lines.slice(insertIndex).join("\n");
+  } else {
+    fullSource = TYPE_PREAMBLE + "\n" + source;
+  }
+  return analyze(parse(fullSource), { injectPrelude: false });
+};
+
+/**
+ * Type definitions preamble for tests.
+ * Since tests run with injectPrelude: false, we need to define the core types
+ * that the compiler now expects from the prelude.
+ */
+const TYPE_PREAMBLE = `
+type Bool = True | False
+type Unit = Unit
+type Int = Int
+type Float = Float
+type String = String
+type Char = Char
+type Maybe a = Just a | Nothing
+`;
+
+/**
+ * Operator preamble for tests that need arithmetic/comparison operators.
+ * This defines the operators locally since we don't inject prelude.
+ */
+const OPERATOR_PREAMBLE = `
+${TYPE_PREAMBLE}
+
+infixl 6 +
+infixl 6 -
+infixl 7 *
+infixl 7 /
+infixr 5 ++
+
+@external "@vibe/runtime" "intAdd"
+(+) : Int -> Int -> Int
+
+@external "@vibe/runtime" "intSub"
+(-) : Int -> Int -> Int
+
+@external "@vibe/runtime" "intMul"
+(*) : Int -> Int -> Int
+
+@external "@vibe/runtime" "intDiv"
+(/) : Int -> Int -> Int
+
+@external "@vibe/runtime" "append"
+(++) : String -> String -> String
+`;
 
 describe("semantics", () => {
   test("attaches annotations to definitions", () => {
-    const program = parse(`value : number
+    const result = analyzeNoPrelude(`value : Int
 value = 1`);
-    const result = analyze(program);
     expect(result.values.value).toBeDefined();
     expect(result.values.value?.annotation).toBeDefined();
   });
@@ -24,25 +132,27 @@ a = 2`,
   });
 
   test("rejects orphan annotations", () => {
-    expectError(`a : number`, "has no matching definition");
+    expectError(`a : Int`, "has no matching definition");
   });
 
   test("registers external declarations with annotations", () => {
-    const program = parse(`@external "./lib.js" "compute"
-ffiCompute : number -> number`);
-    const result = analyze(program);
-    const info = result.values.ffiCompute;
-    expect(info).toBeDefined();
-    expect(info?.externalTarget?.modulePath).toBe("./lib.js");
-    expect(info?.externalTarget?.exportName).toBe("compute");
-    expect(info?.annotation?.kind).toBe("FunctionType");
+    const result = analyzeNoPrelude(`@external "./lib.js" "compute"
+ffiCompute : Int -> Int`);
+    expect(result.values.ffiCompute).toBeDefined();
+    expect(result.values.ffiCompute?.externalTarget?.modulePath).toBe(
+      "./lib.js"
+    );
+    expect(result.values.ffiCompute?.externalTarget?.exportName).toBe(
+      "compute"
+    );
+    expect(result.values.ffiCompute?.annotation?.kind).toBe("FunctionType");
   });
 
   test("rejects extra annotations for externals", () => {
     expectError(
       `@external "./lib.js" "compute"
-ffiCompute : number -> number
-ffiCompute : number -> number`,
+ffiCompute : Int -> Int
+ffiCompute : Int -> Int`,
       "already includes a type annotation"
     );
   });
@@ -56,9 +166,8 @@ bar = 1`,
   });
 
   test("accepts module exposing existing value", () => {
-    const program = parse(`module Main exposing (bar)
+    const result = analyzeNoPrelude(`module Main exposing (bar)
 bar = 1`);
-    const result = analyze(program);
     expect(result.module?.name).toBe("Main");
   });
 
@@ -88,7 +197,7 @@ import Bar as A`,
 
   test("rejects annotation arity mismatches", () => {
     expectError(
-      `f : number
+      `f : Int
 f x = x`,
       "does not match its argument count"
     );
@@ -143,8 +252,9 @@ f x = x`,
   });
 
   test("infers simple identity function", () => {
-    const program = parse(`id x = x`);
-    const result = analyze(program);
+    const program = parse(`${TYPE_PREAMBLE}
+id x = x`);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.id).toBeDefined();
   });
 
@@ -155,10 +265,11 @@ f x = x`,
   test("polymorphic identity function can be used at multiple types", () => {
     // The identity function 'id x = x' should be inferred as polymorphic: forall a. a -> a
     // This allows it to be used at both number and string types
-    const program = parse(`id x = x
+    const program = parse(`${TYPE_PREAMBLE}
+id x = x
 useAtNumber = id 42
 useAtString = id "hello"`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     // All three bindings should infer successfully
     expect(result.types.id).toBeDefined();
@@ -166,23 +277,25 @@ useAtString = id "hello"`);
     expect(result.types.useAtString).toBeDefined();
 
     // The uses should not interfere with each other
-    // (without polymorphism, the first use would fix 'id' to number -> number)
+    // (without polymorphism, the first use would fix 'id' to number -> Int)
   });
 
   test("polymorphic function in let-binding", () => {
     // Let-bound polymorphic functions should be instantiated freshly at each use
-    const program = parse(`f =
+    const program = parse(`${TYPE_PREAMBLE}
+f =
   let
     id x = x
   in
     (id 1, id "hi")`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.f).toBeDefined();
   });
 
   test("nested let-polymorphism", () => {
     // Test that nested let-bindings properly generalize
-    const program = parse(`f =
+    const program = parse(`${TYPE_PREAMBLE}
+f =
   let
     id x = x
     const y x = y
@@ -193,17 +306,18 @@ useAtString = id "hello"`);
       c = const 1 "ignored"
     in
       (a, b, c)`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.f).toBeDefined();
   });
 
   test("polymorphic const function", () => {
     // const : forall a b. a -> b -> a
     // Returns first argument, ignoring second
-    const program = parse(`const x y = x
+    const program = parse(`${TYPE_PREAMBLE}
+const x y = x
 n = const 1 "ignored"
 s = const "hi" 42`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.const).toBeDefined();
     expect(result.types.n).toBeDefined();
     expect(result.types.s).toBeDefined();
@@ -211,11 +325,12 @@ s = const "hi" 42`);
 
   test("polymorphic compose function", () => {
     // compose : forall a b c. (b -> c) -> (a -> b) -> a -> c
-    const program = parse(`compose f g x = f (g x)
+    const program = parse(`${OPERATOR_PREAMBLE}
+compose f g x = f (g x)
 addOne n = n + 1
 double n = n * 2
 addThree = compose addOne double`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.compose).toBeDefined();
     expect(result.types.addThree).toBeDefined();
   });
@@ -223,7 +338,8 @@ addThree = compose addOne double`);
   test("polymorphic pair constructor and accessors", () => {
     // Note: Tuple pattern matching works because tuples are built-in syntax
     // This is different from user-defined ADTs which we'll need later
-    const program = parse(`pair x y = (x, y)
+    const program = parse(`${TYPE_PREAMBLE}
+pair x y = (x, y)
 fst p =
   case p of
     (x, y) -> x
@@ -235,7 +351,7 @@ p1 = pair 1 "hi"
 p2 = pair 2 ()
 n = fst p1
 s = snd p1`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.pair).toBeDefined();
     expect(result.types.fst).toBeDefined();
     expect(result.types.snd).toBeDefined();
@@ -245,10 +361,11 @@ s = snd p1`);
 
   test("polymorphic list functions", () => {
     // Test polymorphism with list types
-    const program = parse(`singleton x = [x]
+    const program = parse(`${TYPE_PREAMBLE}
+singleton x = [x]
 nums = singleton 42
 strs = singleton "hi"`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.singleton).toBeDefined();
     expect(result.types.nums).toBeDefined();
     expect(result.types.strs).toBeDefined();
@@ -256,16 +373,17 @@ strs = singleton "hi"`);
 
   test.skip("polymorphic recursion - length function", () => {
     // TODO: This requires list pattern matching ([] and ::) which parser doesn't support yet
-    // length : forall a. [a] -> number
+    // length : forall a. [a] -> Int
     // Polymorphic recursive functions should work
-    const program = parse(`length xs =
+    const program = parse(`${TYPE_PREAMBLE}
+length xs =
   case xs of
     [] -> 0
     (x :: rest) -> 1 + length rest
 
 n = length [1, 2, 3]
 m = length ["a", "b"]`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.length).toBeDefined();
   });
 
@@ -284,12 +402,13 @@ m = length ["a", "b"]`);
   test("polymorphic function with type annotation", () => {
     // Type variables in annotations: lowercase identifiers like 'a', 'b'
     // should be recognized as polymorphic type variables
-    const program = parse(`apply : (a -> b) -> a -> b
+    const program = parse(`${OPERATOR_PREAMBLE}
+apply : (a -> b) -> a -> b
 apply f x = f x
 
 n = apply (\\x -> x + 1) 42
 s = apply (\\x -> x ++ "!") "hi"`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.apply).toBeDefined();
     expect(result.types.n).toBeDefined();
     expect(result.types.s).toBeDefined();
@@ -297,7 +416,8 @@ s = apply (\\x -> x ++ "!") "hi"`);
 
   test("type annotations with single-letter type variables", () => {
     // Single lowercase letters (a, b, c, etc.) are type variables
-    const program = parse(`id : a -> a
+    const program = parse(`${TYPE_PREAMBLE}
+id : a -> a
 id x = x
 
 const : a -> b -> a
@@ -305,7 +425,7 @@ const x y = x
 
 flip : (a -> b -> c) -> b -> a -> c
 flip f y x = f x y`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.id).toBeDefined();
     expect(result.types.const).toBeDefined();
     expect(result.types.flip).toBeDefined();
@@ -313,44 +433,47 @@ flip f y x = f x y`);
 
   test("type annotations distinguish type variables from concrete types", () => {
     // Single letters = type variables, known words = concrete types
-    const program = parse(`toNumber : a -> number
-toNumber x = 42
+    const program = parse(`${TYPE_PREAMBLE}
+toInt : a -> Int
+toInt x = 42
 
-toStr : a -> string
+toStr : a -> String
 toStr x = "hi"`);
-    const result = analyze(program);
-    expect(result.types.toNumber).toBeDefined();
+    const result = analyze(program, { injectPrelude: false });
+    expect(result.types.toInt).toBeDefined();
     expect(result.types.toStr).toBeDefined();
   });
 
   test("type annotations with List type constructor", () => {
     // List is a type constructor that takes a type argument
-    const program = parse(`head : List a -> a
+    const program = parse(`${TYPE_PREAMBLE}
+head : List a -> a
 head xs = 42
 
-length : List a -> number
+length : List a -> Int
 length xs = 0`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.head).toBeDefined();
     expect(result.types.length).toBeDefined();
   });
 
   test("complex nested type annotations", () => {
     // Test deeply nested function types with type variables
-    const program = parse(`compose : (b -> c) -> (a -> b) -> a -> c
+    const program = parse(`${TYPE_PREAMBLE}
+compose : (b -> c) -> (a -> b) -> a -> c
 compose f g x = f (g x)
 
 twice : (a -> a) -> a -> a
 twice f x = f (f x)`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.compose).toBeDefined();
     expect(result.types.twice).toBeDefined();
   });
 
   test("type annotation must match implementation", () => {
-    // If annotation says number -> number, using it polymorphically should fail
+    // If annotation says number -> Int, using it polymorphically should fail
     expectError(
-      `f : number -> number
+      `f : Int -> Int
 f x = x
 n = f 42
 s = f "hi"`,
@@ -360,21 +483,23 @@ s = f "hi"`,
 
   test("generalization respects scope", () => {
     // Variables free in the outer scope should not be generalized
-    const program = parse(`outer =
+    const program = parse(`${OPERATOR_PREAMBLE}
+outer =
   let
     x = 42
     f y = x + y
   in
     f 1`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.outer).toBeDefined();
   });
 
   // ===== Algebraic Data Type (ADT) Tests =====
 
   test("registers ADT declaration", () => {
-    const program = parse(`type MyBool = MyTrue | MyFalse`);
-    const result = analyze(program);
+    const program = parse(`${TYPE_PREAMBLE}
+type MyBool = MyTrue | MyFalse`);
+    const result = analyze(program, { injectPrelude: false });
 
     // Check ADT is registered
     expect(result.adts.MyBool).toBeDefined();
@@ -391,8 +516,9 @@ s = f "hi"`,
   });
 
   test("registers parameterized ADT", () => {
-    const program = parse(`type Option a = Some a | None`);
-    const result = analyze(program);
+    const program = parse(`${TYPE_PREAMBLE}
+type Option a = Some a | None`);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.adts.Option).toBeDefined();
     expect(result.adts.Option?.params).toEqual(["a"]);
@@ -404,38 +530,41 @@ s = f "hi"`,
 
   test("uses ADT constructors as values", () => {
     // Constructors should be usable as values with proper types
-    const program = parse(`type Option a = Some a | None
+    const program = parse(`${TYPE_PREAMBLE}
+type Option a = Some a | None
 
 wrapped = Some 42
 nothing = None`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.types.wrapped).toBeDefined();
     expect(result.types.nothing).toBeDefined();
   });
 
   test("pattern matches on user-defined ADT", () => {
-    const program = parse(`type Option a = Some a | None
+    const program = parse(`${TYPE_PREAMBLE}
+type Option a = Some a | None
 
 unwrap opt default =
   case opt of
     Some x -> x
     None -> default`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.types.unwrap).toBeDefined();
   });
 
   test("ADT exhaustiveness checking - complete", () => {
     // Should pass - all constructors covered
-    const program = parse(`type Color = Red | Green | Blue
+    const program = parse(`${TYPE_PREAMBLE}
+type Color = Red | Green | Blue
 
 describe color =
   case color of
     Red -> "red"
     Green -> "green"
     Blue -> "blue"`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.describe).toBeDefined();
   });
 
@@ -456,12 +585,14 @@ describe color =
     // The error message should include the missing constructor
     expect(() =>
       analyze(
-        parse(`type Status = Pending | Running | Completed | Failed
+        parse(`${TYPE_PREAMBLE}
+type Status = Pending | Running | Completed | Failed
 
 process status =
   case status of
     Pending -> "waiting"
-    Completed -> "done"`)
+    Completed -> "done"`),
+        { injectPrelude: false }
       )
     ).toThrow(/missing.*Running.*Failed|Non-exhaustive/);
   });
@@ -511,12 +642,13 @@ f opt =
   });
 
   test("recursive ADT - List", () => {
-    const program = parse(`type List a = Cons a (List a) | Nil
+    const program = parse(`${TYPE_PREAMBLE}
+type List a = Cons a (List a) | Nil
 
 empty = Nil
 single = Cons 1 Nil
 double = Cons 1 (Cons 2 Nil)`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.adts.List).toBeDefined();
     expect(result.constructors.Cons?.arity).toBe(2);
@@ -527,19 +659,21 @@ double = Cons 1 (Cons 2 Nil)`);
   });
 
   test("recursive ADT pattern matching", () => {
-    const program = parse(`type List a = Cons a (List a) | Nil
+    const program = parse(`${OPERATOR_PREAMBLE}
+type List a = Cons a (List a) | Nil
 
 length xs =
   case xs of
     Nil -> 0
     Cons _ tail -> 1 + length tail`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.length).toBeDefined();
   });
 
   test("polymorphic ADT map function", () => {
     // This is the test that was previously skipped
-    const program = parse(`type Option a = Some a | None
+    const program = parse(`${OPERATOR_PREAMBLE}
+type Option a = Some a | None
 
 map f opt =
   case opt of
@@ -548,13 +682,14 @@ map f opt =
 
 addOne n = n + 1
 result = map addOne (Some 42)`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.map).toBeDefined();
     expect(result.types.result).toBeDefined();
   });
 
   test("ADT with multiple type parameters", () => {
-    const program = parse(`type Either a b = Left a | Right b
+    const program = parse(`${TYPE_PREAMBLE}
+type Either a b = Left a | Right b
 
 example1 = Left 42
 example2 = Right "hello"
@@ -563,7 +698,7 @@ getRight e default =
   case e of
     Left _ -> default
     Right x -> x`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.adts.Either?.params).toEqual(["a", "b"]);
     expect(result.types.example1).toBeDefined();
     expect(result.types.example2).toBeDefined();
@@ -573,16 +708,18 @@ getRight e default =
   // ===== Type Alias Tests =====
 
   test("registers type alias", () => {
-    const program = parse(`type alias UserId = number`);
-    const result = analyze(program);
+    const program = parse(`${TYPE_PREAMBLE}
+type alias UserId = number`);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.UserId).toBeDefined();
     expect(result.typeAliases.UserId?.params).toEqual([]);
   });
 
   test("registers parameterized type alias", () => {
-    const program = parse(`type alias Pair a b = (a, b)`);
-    const result = analyze(program);
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Pair a b = (a, b)`);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Pair).toBeDefined();
     expect(result.typeAliases.Pair?.params).toEqual(["a", "b"]);
@@ -603,8 +740,9 @@ type alias UserId = string`,
   // ===== Record Type Annotation Tests =====
 
   test("type alias with record type", () => {
-    const program = parse(`type alias Point = { x : number, y : number }`);
-    const result = analyze(program);
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Point = { x : Int, y : Int }`);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Point).toBeDefined();
     expect(result.typeAliases.Point?.params).toEqual([]);
@@ -612,31 +750,34 @@ type alias UserId = string`,
   });
 
   test("function with record type annotation", () => {
-    const program = parse(`distance : { x : number, y : number } -> number
+    const program = parse(`${OPERATOR_PREAMBLE}
+distance : { x : Int, y : Int } -> Int
 distance point = point.x + point.y`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.types.distance).toBeDefined();
     expect(result.values.distance?.annotation?.kind).toBe("FunctionType");
   });
 
   test("record type fields are type-checked correctly", () => {
-    const program = parse(`type alias Point = { x : number, y : number }
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Point = { x : Int, y : Int }
 
 origin : Point
 origin = { x = 0, y = 0 }`);
 
     // Should not throw - record literal matches type
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
     expect(result.types.origin).toBeDefined();
   });
 
   test("empty record type", () => {
-    const program = parse(`type alias Empty = {}
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Empty = {}
 
 empty : Empty
 empty = {}`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Empty).toBeDefined();
     expect(result.types.empty).toBeDefined();
@@ -644,12 +785,13 @@ empty = {}`);
 
   test("parameterized record type", () => {
     const program = parse(
-      `type alias Container a = { value : a, count : number }
+      `${TYPE_PREAMBLE}
+type alias Container a = { value : a, count : Int }
 
-intContainer : Container number
+intContainer : Container Int
 intContainer = { value = 42, count = 1 }`
     );
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Container).toBeDefined();
     expect(result.typeAliases.Container?.params).toEqual(["a"]);
@@ -658,12 +800,13 @@ intContainer = { value = 42, count = 1 }`
 
   test("record type with function fields", () => {
     const program = parse(
-      `type alias Model = { count : number, increment : number -> number }
+      `${OPERATOR_PREAMBLE}
+type alias Model = { count : Int, increment : Int -> Int }
 
 model : Model
 model = { count = 0, increment = \\x -> x + 1 }`
     );
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Model).toBeDefined();
     expect(result.types.model).toBeDefined();
@@ -671,24 +814,26 @@ model = { count = 0, increment = \\x -> x + 1 }`
 
   test("nested record types", () => {
     const program = parse(
-      `type alias Outer = { inner : { value : number } }
+      `${TYPE_PREAMBLE}
+type alias Outer = { inner : { value : Int } }
 
 nested : Outer
 nested = { inner = { value = 5 } }`
     );
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Outer).toBeDefined();
     expect(result.types.nested).toBeDefined();
   });
 
   test("record type alias with multiple type parameters", () => {
-    const program = parse(`type alias Pair a b = { first : a, second : b }
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Pair a b = { first : a, second : b }
 
 pair : Pair string number
 pair = { first = "hello", second = 42 }`);
 
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Pair).toBeDefined();
     expect(result.typeAliases.Pair?.params).toEqual(["a", "b"]);
@@ -696,13 +841,13 @@ pair = { first = "hello", second = 42 }`);
   });
 
   test("record type alias with parameterized field type", () => {
-    const program =
-      parse(`type alias ListBox a = { items : List a, count : number }
+    const program = parse(`${TYPE_PREAMBLE}
+type alias ListBox a = { items : List a, count : Int }
 
-stringBox : ListBox string
+stringBox : ListBox String
 stringBox = { items = ["a", "b"], count = 2 }`);
 
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.ListBox).toBeDefined();
     expect(result.typeAliases.ListBox?.params).toEqual(["a"]);
@@ -710,13 +855,13 @@ stringBox = { items = ["a", "b"], count = 2 }`);
   });
 
   test("record type with nested record type parameter", () => {
-    const program =
-      parse(`type alias Response a = { data : a, metadata : { code : number, message : string } }
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Response a = { data : a, metadata : { code : Int, message : String } }
 
-response : Response string
+response : Response String
 response = { data = "ok", metadata = { code = 200, message = "Success" } }`);
 
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Response).toBeDefined();
     expect(result.typeAliases.Response?.params).toEqual(["a"]);
@@ -724,13 +869,13 @@ response = { data = "ok", metadata = { code = 200, message = "Success" } }`);
   });
 
   test("record type with function field using type parameter", () => {
-    const program =
-      parse(`type alias Handler a = { process : a -> string, callback : string -> a }
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Handler a = { process : a -> String, callback : String -> a }
 
-handler : Handler number
+handler : Handler Int
 handler = { process = \\n -> "result", callback = \\s -> 0 }`);
 
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Handler).toBeDefined();
     expect(result.typeAliases.Handler?.params).toEqual(["a"]);
@@ -738,8 +883,8 @@ handler = { process = \\n -> "result", callback = \\s -> 0 }`);
   });
 
   test("multiple parameterized record type aliases coexist", () => {
-    const program =
-      parse(`type alias Container a = { value : a, count : number }
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Container a = { value : a, count : Int }
 type alias Pair a b = { first : a, second : b }
 type alias Wrapper a = { wrapped : a }
 
@@ -752,7 +897,7 @@ p = { first = 5, second = 3 }
 w : Wrapper (List number)
 w = { wrapped = [1, 2, 3] }`);
 
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Container).toBeDefined();
     expect(result.typeAliases.Pair).toBeDefined();
@@ -763,13 +908,14 @@ w = { wrapped = [1, 2, 3] }`);
   });
 
   test("parameterized record alias in record field", () => {
-    const program = parse(`type alias Box a = { contents : a }
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Box a = { contents : a }
 type alias Pair a b = { left : a, right : b }
 
 nested : Pair (Box string) (Box number)
 nested = { left = { contents = "text" }, right = { contents = 42 } }`);
 
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.Box).toBeDefined();
     expect(result.typeAliases.Pair).toBeDefined();
@@ -779,11 +925,12 @@ nested = { left = { contents = "text" }, right = { contents = 42 } }`);
   // ===== Combined ADT and Type Alias Tests =====
 
   test("type alias and ADT can coexist", () => {
-    const program = parse(`type Option a = Some a | None
+    const program = parse(`${TYPE_PREAMBLE}
+type Option a = Some a | None
 type alias MaybeInt = Option number
 
 wrapped = Some 42`);
-    const result = analyze(program);
+    const result = analyze(program, { injectPrelude: false });
 
     expect(result.adts.Option).toBeDefined();
     expect(result.typeAliases.MaybeInt).toBeDefined();

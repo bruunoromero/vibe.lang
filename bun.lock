@@ -85,6 +85,10 @@
         "@types/bun": "latest",
       },
     },
+    "packages/prelude": {
+      "name": "@vibe/prelude",
+      "version": "0.0.0",
+    },
     "packages/runtime": {
       "name": "@vibe/runtime",
       "version": "0.0.0",
@@ -130,6 +134,8 @@
     "@vibe/module-resolver": ["@vibe/module-resolver@workspace:packages/module-resolver"],
 
     "@vibe/parser": ["@vibe/parser@workspace:packages/parser"],
+
+    "@vibe/prelude": ["@vibe/prelude@workspace:packages/prelude"],
 
     "@vibe/runtime": ["@vibe/runtime@workspace:packages/runtime"],
 

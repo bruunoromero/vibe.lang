@@ -17,7 +17,7 @@ function createWorkspace(): string {
         name: "Main",
         src: "src",
         dist: "dist",
-        packages: [],
+        packages: ["@vibe/prelude"],
       },
       null,
       2
@@ -32,7 +32,7 @@ function createWorkspace(): string {
   return root;
 }
 
-function createCollector() {
+function createCollector(): NodeJS.WritableStream {
   let buffer = "";
   return {
     write(chunk: unknown) {
@@ -42,7 +42,7 @@ function createCollector() {
     toString() {
       return buffer;
     },
-  };
+  } as unknown as NodeJS.WritableStream;
 }
 
 describe("cli", () => {
