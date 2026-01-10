@@ -1,4 +1,22 @@
 module ExampleApp exposing (..)
 
+-- Record type alias example
+type alias Point =
+  { x : number
+  , y : number
+  }
+
+-- Create a point
+origin : Point
+origin =
+  { x = 0
+  , y = 0
+  }
+
+-- Function using record type
+distance : Point -> number
+distance point =
+  point.x * point.x + point.y * point.y
+
 main =
   "Hello, Vibe!"

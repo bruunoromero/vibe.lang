@@ -709,6 +709,20 @@ function constructorArgToType(
         ),
       };
     }
+    case "RecordType": {
+      // Convert record type annotation to internal record type
+      const sortedFields = [...expr.fields].sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+      const fields: Record<string, Type> = {};
+      for (const field of sortedFields) {
+        fields[field.name] = constructorArgToType(field.type, paramTypeVars);
+      }
+      return {
+        kind: "record",
+        fields,
+      };
+    }
   }
 }
 
@@ -2147,6 +2161,26 @@ function typeFromAnnotation(
         elements: annotation.elements.map((el) =>
           typeFromAnnotation(el, context, adts, typeAliases)
         ),
+      };
+    }
+    case "RecordType": {
+      // Convert record type annotation to internal record type
+      // Sort fields alphabetically for consistent comparison
+      const sortedFields = [...annotation.fields].sort((a, b) =>
+        a.name.localeCompare(b.name)
+      );
+      const fields: Record<string, Type> = {};
+      for (const field of sortedFields) {
+        fields[field.name] = typeFromAnnotation(
+          field.type,
+          context,
+          adts,
+          typeAliases
+        );
+      }
+      return {
+        kind: "record",
+        fields,
       };
     }
   }

@@ -483,10 +483,7 @@ type B = Ctor | Another`,
   });
 
   test("rejects duplicate type parameter", () => {
-    expectError(
-      `type Bad a a = Ctor a`,
-      "Duplicate type parameter 'a'"
-    );
+    expectError(`type Bad a a = Ctor a`, "Duplicate type parameter 'a'");
   });
 
   test("validates constructor arity in patterns", () => {
@@ -600,10 +597,183 @@ type alias UserId = string`,
   });
 
   test("rejects duplicate type parameter in alias", () => {
-    expectError(
-      `type alias Bad a a = (a, a)`,
-      "Duplicate type parameter 'a'"
+    expectError(`type alias Bad a a = (a, a)`, "Duplicate type parameter 'a'");
+  });
+
+  // ===== Record Type Annotation Tests =====
+
+  test("type alias with record type", () => {
+    const program = parse(`type alias Point = { x : number, y : number }`);
+    const result = analyze(program);
+
+    expect(result.typeAliases.Point).toBeDefined();
+    expect(result.typeAliases.Point?.params).toEqual([]);
+    expect(result.typeAliases.Point?.value.kind).toBe("RecordType");
+  });
+
+  test("function with record type annotation", () => {
+    const program = parse(`distance : { x : number, y : number } -> number
+distance point = point.x + point.y`);
+    const result = analyze(program);
+
+    expect(result.types.distance).toBeDefined();
+    expect(result.values.distance?.annotation?.kind).toBe("FunctionType");
+  });
+
+  test("record type fields are type-checked correctly", () => {
+    const program = parse(`type alias Point = { x : number, y : number }
+
+origin : Point
+origin = { x = 0, y = 0 }`);
+
+    // Should not throw - record literal matches type
+    const result = analyze(program);
+    expect(result.types.origin).toBeDefined();
+  });
+
+  test("empty record type", () => {
+    const program = parse(`type alias Empty = {}
+
+empty : Empty
+empty = {}`);
+    const result = analyze(program);
+
+    expect(result.typeAliases.Empty).toBeDefined();
+    expect(result.types.empty).toBeDefined();
+  });
+
+  test("parameterized record type", () => {
+    const program = parse(
+      `type alias Container a = { value : a, count : number }
+
+intContainer : Container number
+intContainer = { value = 42, count = 1 }`
     );
+    const result = analyze(program);
+
+    expect(result.typeAliases.Container).toBeDefined();
+    expect(result.typeAliases.Container?.params).toEqual(["a"]);
+    expect(result.types.intContainer).toBeDefined();
+  });
+
+  test("record type with function fields", () => {
+    const program = parse(
+      `type alias Model = { count : number, increment : number -> number }
+
+model : Model
+model = { count = 0, increment = \\x -> x + 1 }`
+    );
+    const result = analyze(program);
+
+    expect(result.typeAliases.Model).toBeDefined();
+    expect(result.types.model).toBeDefined();
+  });
+
+  test("nested record types", () => {
+    const program = parse(
+      `type alias Outer = { inner : { value : number } }
+
+nested : Outer
+nested = { inner = { value = 5 } }`
+    );
+    const result = analyze(program);
+
+    expect(result.typeAliases.Outer).toBeDefined();
+    expect(result.types.nested).toBeDefined();
+  });
+
+  test("record type alias with multiple type parameters", () => {
+    const program = parse(`type alias Pair a b = { first : a, second : b }
+
+pair : Pair string number
+pair = { first = "hello", second = 42 }`);
+
+    const result = analyze(program);
+
+    expect(result.typeAliases.Pair).toBeDefined();
+    expect(result.typeAliases.Pair?.params).toEqual(["a", "b"]);
+    expect(result.types.pair).toBeDefined();
+  });
+
+  test("record type alias with parameterized field type", () => {
+    const program =
+      parse(`type alias ListBox a = { items : List a, count : number }
+
+stringBox : ListBox string
+stringBox = { items = ["a", "b"], count = 2 }`);
+
+    const result = analyze(program);
+
+    expect(result.typeAliases.ListBox).toBeDefined();
+    expect(result.typeAliases.ListBox?.params).toEqual(["a"]);
+    expect(result.types.stringBox).toBeDefined();
+  });
+
+  test("record type with nested record type parameter", () => {
+    const program =
+      parse(`type alias Response a = { data : a, metadata : { code : number, message : string } }
+
+response : Response string
+response = { data = "ok", metadata = { code = 200, message = "Success" } }`);
+
+    const result = analyze(program);
+
+    expect(result.typeAliases.Response).toBeDefined();
+    expect(result.typeAliases.Response?.params).toEqual(["a"]);
+    expect(result.types.response).toBeDefined();
+  });
+
+  test("record type with function field using type parameter", () => {
+    const program =
+      parse(`type alias Handler a = { process : a -> string, callback : string -> a }
+
+handler : Handler number
+handler = { process = \\n -> "result", callback = \\s -> 0 }`);
+
+    const result = analyze(program);
+
+    expect(result.typeAliases.Handler).toBeDefined();
+    expect(result.typeAliases.Handler?.params).toEqual(["a"]);
+    expect(result.types.handler).toBeDefined();
+  });
+
+  test("multiple parameterized record type aliases coexist", () => {
+    const program =
+      parse(`type alias Container a = { value : a, count : number }
+type alias Pair a b = { first : a, second : b }
+type alias Wrapper a = { wrapped : a }
+
+c : Container string
+c = { value = "data", count = 1 }
+
+p : Pair number number
+p = { first = 5, second = 3 }
+
+w : Wrapper (List number)
+w = { wrapped = [1, 2, 3] }`);
+
+    const result = analyze(program);
+
+    expect(result.typeAliases.Container).toBeDefined();
+    expect(result.typeAliases.Pair).toBeDefined();
+    expect(result.typeAliases.Wrapper).toBeDefined();
+    expect(result.types.c).toBeDefined();
+    expect(result.types.p).toBeDefined();
+    expect(result.types.w).toBeDefined();
+  });
+
+  test("parameterized record alias in record field", () => {
+    const program = parse(`type alias Box a = { contents : a }
+type alias Pair a b = { left : a, right : b }
+
+nested : Pair (Box string) (Box number)
+nested = { left = { contents = "text" }, right = { contents = 42 } }`);
+
+    const result = analyze(program);
+
+    expect(result.typeAliases.Box).toBeDefined();
+    expect(result.typeAliases.Pair).toBeDefined();
+    expect(result.types.nested).toBeDefined();
   });
 
   // ===== Combined ADT and Type Alias Tests =====

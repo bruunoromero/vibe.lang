@@ -383,4 +383,252 @@ value = 42`);
     expect(program.declarations[1]?.kind).toBe("TypeDeclaration");
     expect(program.declarations[2]?.kind).toBe("TypeAliasDeclaration");
     expect(program.declarations[3]?.kind).toBe("ValueDeclaration");
-  });});
+  });
+
+  // ===== Record Type Annotation Tests =====
+
+  test("parses type alias with record type", () => {
+    const program = parse(`type alias Point = { x : number, y : number }`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.name).toBe("Point");
+      expect(decl.params).toEqual([]);
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(2);
+        // Fields should be sorted alphabetically
+        expect(decl.value.fields[0]?.name).toBe("x");
+        expect(decl.value.fields[0]?.type.kind).toBe("TypeRef");
+        expect(decl.value.fields[1]?.name).toBe("y");
+        expect(decl.value.fields[1]?.type.kind).toBe("TypeRef");
+      }
+    }
+  });
+
+  test("parses empty record type", () => {
+    const program = parse(`type alias Empty = {}`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(0);
+      }
+    }
+  });
+
+  test("parses record type with function fields", () => {
+    const program = parse(
+      `type alias Model = { count : number, increment : number -> number }`
+    );
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(2);
+        // Fields sorted: count, increment
+        expect(decl.value.fields[0]?.name).toBe("count");
+        expect(decl.value.fields[1]?.name).toBe("increment");
+        expect(decl.value.fields[1]?.type.kind).toBe("FunctionType");
+      }
+    }
+  });
+
+  test("parses multiline record type", () => {
+    const program = parse(`type alias Person =
+  { name : string
+  , age : number
+  , email : string
+  }`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(3);
+        // Fields sorted: age, email, name
+        expect(decl.value.fields[0]?.name).toBe("age");
+        expect(decl.value.fields[1]?.name).toBe("email");
+        expect(decl.value.fields[2]?.name).toBe("name");
+      }
+    }
+  });
+
+  test("parses parameterized record type", () => {
+    const program = parse(
+      `type alias Container a = { value : a, count : number }`
+    );
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.name).toBe("Container");
+      expect(decl.params).toEqual(["a"]);
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(2);
+        expect(decl.value.fields[0]?.name).toBe("count");
+        expect(decl.value.fields[1]?.name).toBe("value");
+        if (decl.value.fields[1]?.type.kind === "TypeRef") {
+          expect(decl.value.fields[1].type.name).toBe("a");
+        }
+      }
+    }
+  });
+
+  test("parses record type in function signature", () => {
+    const program = parse(`distance : { x : number, y : number } -> number`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAnnotationDeclaration");
+    if (decl?.kind === "TypeAnnotationDeclaration") {
+      expect(decl.annotation.kind).toBe("FunctionType");
+      if (decl.annotation.kind === "FunctionType") {
+        expect(decl.annotation.from.kind).toBe("RecordType");
+        if (decl.annotation.from.kind === "RecordType") {
+          expect(decl.annotation.from.fields.length).toBe(2);
+        }
+      }
+    }
+  });
+
+  test("parses nested record types", () => {
+    const program = parse(`type alias Nested = { outer : { inner : number } }`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(1);
+        expect(decl.value.fields[0]?.name).toBe("outer");
+        expect(decl.value.fields[0]?.type.kind).toBe("RecordType");
+      }
+    }
+  });
+
+  test("parses record type alias with multiple type parameters", () => {
+    const program = parse(`type alias Pair a b = { first : a, second : b }`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.name).toBe("Pair");
+      expect(decl.params).toEqual(["a", "b"]);
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(2);
+        // Fields sorted: first, second
+        expect(decl.value.fields[0]?.name).toBe("first");
+        expect(decl.value.fields[0]?.type.kind).toBe("TypeRef");
+        if (decl.value.fields[0]?.type.kind === "TypeRef") {
+          expect(decl.value.fields[0].type.name).toBe("a");
+        }
+        expect(decl.value.fields[1]?.name).toBe("second");
+        expect(decl.value.fields[1]?.type.kind).toBe("TypeRef");
+        if (decl.value.fields[1]?.type.kind === "TypeRef") {
+          expect(decl.value.fields[1].type.name).toBe("b");
+        }
+      }
+    }
+  });
+
+  test("parses record type with parameterized field types", () => {
+    const program = parse(
+      `type alias ListContainer a = { items : List a, size : number }`
+    );
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.name).toBe("ListContainer");
+      expect(decl.params).toEqual(["a"]);
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(2);
+        // Fields sorted: items, size
+        expect(decl.value.fields[0]?.name).toBe("items");
+        expect(decl.value.fields[0]?.type.kind).toBe("TypeRef");
+        if (decl.value.fields[0]?.type.kind === "TypeRef") {
+          expect(decl.value.fields[0].type.name).toBe("List");
+          expect(decl.value.fields[0].type.args.length).toBe(1);
+        }
+      }
+    }
+  });
+
+  test("parses record type with nested record type parameter", () => {
+    const program = parse(
+      `type alias Response a = { data : a, metadata : { code : number, message : string } }`
+    );
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.name).toBe("Response");
+      expect(decl.params).toEqual(["a"]);
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(2);
+        // Fields sorted: data, metadata
+        expect(decl.value.fields[0]?.name).toBe("data");
+        expect(decl.value.fields[1]?.name).toBe("metadata");
+        expect(decl.value.fields[1]?.type.kind).toBe("RecordType");
+        if (decl.value.fields[1]?.type.kind === "RecordType") {
+          expect(decl.value.fields[1].type.fields.length).toBe(2);
+        }
+      }
+    }
+  });
+
+  test("parses record type with function type field using parameters", () => {
+    const program = parse(
+      `type alias Handler a = { process : a -> string, callback : string -> a }`
+    );
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.name).toBe("Handler");
+      expect(decl.params).toEqual(["a"]);
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(2);
+        // Fields sorted: callback, process
+        expect(decl.value.fields[0]?.name).toBe("callback");
+        expect(decl.value.fields[0]?.type.kind).toBe("FunctionType");
+        expect(decl.value.fields[1]?.name).toBe("process");
+        expect(decl.value.fields[1]?.type.kind).toBe("FunctionType");
+      }
+    }
+  });
+
+  test("parses multiline record type with multiple parameters", () => {
+    const program = parse(`type alias State a b =
+  { value : a
+  , next : b
+  , count : number
+  }`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeAliasDeclaration");
+    if (decl?.kind === "TypeAliasDeclaration") {
+      expect(decl.name).toBe("State");
+      expect(decl.params).toEqual(["a", "b"]);
+      expect(decl.value.kind).toBe("RecordType");
+      if (decl.value.kind === "RecordType") {
+        expect(decl.value.fields.length).toBe(3);
+        // Fields sorted: count, next, value
+        expect(decl.value.fields[0]?.name).toBe("count");
+        expect(decl.value.fields[1]?.name).toBe("next");
+        expect(decl.value.fields[2]?.name).toBe("value");
+      }
+    }
+  });
+});

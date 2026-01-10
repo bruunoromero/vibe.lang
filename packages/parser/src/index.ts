@@ -284,7 +284,9 @@ class Parser {
    *   type alias UserId = number
    *   type alias Pair a b = (a, b)
    */
-  private parseTypeOrAliasDeclaration(): TypeDeclaration | TypeAliasDeclaration {
+  private parseTypeOrAliasDeclaration():
+    | TypeDeclaration
+    | TypeAliasDeclaration {
     // Consume "type" keyword
     const typeToken = this.expectKeyword("type");
 
@@ -318,7 +320,10 @@ class Parser {
 
     // Calculate span from "type" to end of last constructor
     const lastConstructor = constructors[constructors.length - 1]!;
-    const span: Span = { start: typeToken.span.start, end: lastConstructor.span.end };
+    const span: Span = {
+      start: typeToken.span.start,
+      end: lastConstructor.span.end,
+    };
 
     return {
       kind: "TypeDeclaration",
@@ -341,7 +346,10 @@ class Parser {
    */
   private parseConstructorVariant(): ConstructorVariant {
     // Parse constructor name (must be uppercase)
-    const nameToken = this.expect(TokenKind.UpperIdentifier, "constructor name");
+    const nameToken = this.expect(
+      TokenKind.UpperIdentifier,
+      "constructor name"
+    );
     const name = nameToken.lexeme;
 
     // Parse constructor arguments (zero or more type terms)
@@ -360,7 +368,8 @@ class Parser {
     }
 
     // Calculate span from constructor name to end of last argument (or just name if no args)
-    const endSpan = args.length > 0 ? args[args.length - 1]!.span.end : nameToken.span.end;
+    const endSpan =
+      args.length > 0 ? args[args.length - 1]!.span.end : nameToken.span.end;
     const span: Span = { start: nameToken.span.start, end: endSpan };
 
     return { name, args, span };
@@ -448,6 +457,60 @@ class Parser {
   }
 
   private parseTypeTerm(): TypeExpr {
+    // Parse record type { field1 : Type1, field2 : Type2, ... }
+    if (this.match(TokenKind.LBrace)) {
+      const start = this.previousSpan().start;
+      const fields: Array<{ name: string; type: TypeExpr }> = [];
+
+      // Check for empty record {}
+      if (this.match(TokenKind.RBrace)) {
+        return {
+          kind: "RecordType",
+          fields: [],
+          span: { start, end: this.previousSpan().end },
+        };
+      }
+
+      // Parse first field
+      const firstName = this.expect(
+        TokenKind.LowerIdentifier,
+        "record field name"
+      );
+      this.expect(TokenKind.Colon, "':' after field name");
+      const firstType = this.parseTypeExpression();
+      fields.push({ name: firstName.lexeme, type: firstType });
+
+      const baseIndent = firstName.span.start.column;
+      let lastEnd = firstType.span.end;
+
+      // Parse subsequent fields
+      while (this.peek(TokenKind.Comma)) {
+        const next = this.peekAhead(1);
+        if (!next || !this.continuesLayout(baseIndent, lastEnd, next)) break;
+        this.advance(); // consume comma
+
+        const fieldName = this.expect(
+          TokenKind.LowerIdentifier,
+          "record field name"
+        );
+        this.expect(TokenKind.Colon, "':' after field name");
+        const fieldType = this.parseTypeExpression();
+        fields.push({ name: fieldName.lexeme, type: fieldType });
+        lastEnd = fieldType.span.end;
+      }
+
+      this.expect(TokenKind.RBrace, "close record type");
+
+      // Sort fields alphabetically for consistency
+      fields.sort((a, b) => a.name.localeCompare(b.name));
+
+      return {
+        kind: "RecordType",
+        fields,
+        span: { start, end: this.previousSpan().end },
+      };
+    }
+
     if (this.match(TokenKind.LParen)) {
       const start = this.previousSpan().start;
       const first = this.parseTypeExpression();
@@ -1319,7 +1382,8 @@ class Parser {
     return (
       token.kind === TokenKind.LowerIdentifier ||
       token.kind === TokenKind.UpperIdentifier ||
-      token.kind === TokenKind.LParen
+      token.kind === TokenKind.LParen ||
+      token.kind === TokenKind.LBrace
     );
   }
 

@@ -108,7 +108,12 @@ export type RecordField = { name: string; value: Expr; span: Span };
 export type TypeExpr =
   | { kind: "TypeRef"; name: string; args: TypeExpr[]; span: Span }
   | { kind: "FunctionType"; from: TypeExpr; to: TypeExpr; span: Span }
-  | { kind: "TupleType"; elements: TypeExpr[]; span: Span };
+  | { kind: "TupleType"; elements: TypeExpr[]; span: Span }
+  | {
+      kind: "RecordType";
+      fields: Array<{ name: string; type: TypeExpr }>;
+      span: Span;
+    };
 
 // ===== Algebraic Data Type (ADT) Declarations =====
 // ADTs allow defining custom sum types like: type Maybe a = Just a | Nothing
