@@ -1207,7 +1207,7 @@ class Parser {
       this.isTypeStart(this.current()) &&
       this.onSameLine(lastSpan, this.current())
     ) {
-      const arg = this.parseTypeTerm();
+      const arg = this.parseTypeAtom();
       args.push(arg);
       lastSpan = arg.span;
     }
@@ -1220,6 +1220,108 @@ class Parser {
         start: ident.span.start,
         end: args.at(-1)?.span.end ?? ident.span.end,
       },
+    };
+  }
+
+  /**
+   * Parse atomic type expression (identifier, parenthesized type, record, or tuple)
+   * Used for type application arguments to avoid requiring parentheses.
+   *
+   * This allows writing: Pair Int Int
+   * Instead of requiring: Pair (Int) (Int)
+   */
+  private parseTypeAtom(): TypeExpr {
+    // Parse record type { field1 : Type1, field2 : Type2, ... }
+    if (this.match(TokenKind.LBrace)) {
+      const start = this.previousSpan().start;
+      const fields: Array<{ name: string; type: TypeExpr }> = [];
+
+      // Check for empty record {}
+      if (this.match(TokenKind.RBrace)) {
+        return {
+          kind: "RecordType",
+          fields: [],
+          span: { start, end: this.previousSpan().end },
+        };
+      }
+
+      // Parse first field
+      const firstName = this.expect(
+        TokenKind.LowerIdentifier,
+        "record field name"
+      );
+      this.expect(TokenKind.Colon, "':' after field name");
+      const firstType = this.parseTypeExpression();
+      fields.push({ name: firstName.lexeme, type: firstType });
+
+      const baseIndent = firstName.span.start.column;
+      let lastEnd = firstType.span.end;
+
+      // Parse subsequent fields
+      while (this.peek(TokenKind.Comma)) {
+        const next = this.peekAhead(1);
+        if (!next || !this.continuesLayout(baseIndent, lastEnd, next)) break;
+        this.advance(); // consume comma
+
+        const fieldName = this.expect(
+          TokenKind.LowerIdentifier,
+          "record field name"
+        );
+        this.expect(TokenKind.Colon, "':' after field name");
+        const fieldType = this.parseTypeExpression();
+        fields.push({ name: fieldName.lexeme, type: fieldType });
+        lastEnd = fieldType.span.end;
+      }
+
+      this.expect(TokenKind.RBrace, "close record type");
+
+      // Sort fields alphabetically for consistency
+      fields.sort((a, b) => a.name.localeCompare(b.name));
+
+      return {
+        kind: "RecordType",
+        fields,
+        span: { start, end: this.previousSpan().end },
+      };
+    }
+
+    if (this.match(TokenKind.LParen)) {
+      const start = this.previousSpan().start;
+      const first = this.parseTypeExpression();
+      const elements: TypeExpr[] = [first];
+      const baseIndent = first.span.start.column;
+      let lastEnd = first.span.end;
+
+      while (this.peek(TokenKind.Comma)) {
+        const next = this.peekAhead(1);
+        if (!next || !this.continuesLayout(baseIndent, lastEnd, next)) break;
+        this.advance();
+        const expr = this.parseTypeExpression();
+        elements.push(expr);
+        lastEnd = expr.span.end;
+      }
+
+      this.expect(TokenKind.RParen, "close type group");
+
+      if (elements.length === 1) {
+        return { ...first, span: { start, end: this.previousSpan().end } };
+      }
+
+      return {
+        kind: "TupleType",
+        elements,
+        span: { start, end: this.previousSpan().end },
+      };
+    }
+
+    // Parse simple type reference (no type application at this level)
+    const ident = this.expectIdentifier("type reference");
+
+    return {
+      kind: "TypeRef",
+      name: ident.lexeme,
+      args: [],
+      span: ident.span,
     };
   }
 

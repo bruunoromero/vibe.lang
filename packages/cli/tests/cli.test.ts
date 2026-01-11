@@ -17,7 +17,7 @@ function createWorkspace(): string {
         name: "Main",
         src: "src",
         dist: "dist",
-        packages: ["@vibe/prelude"],
+        packages: [],
       },
       null,
       2

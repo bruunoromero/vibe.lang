@@ -128,6 +128,8 @@ export type ConstructorInfo = {
 export type ADTInfo = {
   /** The type name (e.g., "Maybe", "Result") */
   name: string;
+  /** The module that defines this type (e.g., "Vibe", "MyModule") */
+  moduleName?: string;
   /** Type parameters (e.g., ["a"] for Maybe a) */
   params: string[];
   /** Names of all constructors in this type */
@@ -149,6 +151,8 @@ export type ADTInfo = {
 export type TypeAliasInfo = {
   /** The alias name (e.g., "UserId") */
   name: string;
+  /** The module that defines this alias (e.g., "MyModule") */
+  moduleName?: string;
   /** Type parameters (e.g., ["a", "b"] for Pair a b) */
   params: string[];
   /** The type expression this alias expands to */
@@ -170,6 +174,8 @@ export type TypeAliasInfo = {
 export type ProtocolInfo = {
   /** The protocol name (e.g., "Num", "Show") */
   name: string;
+  /** The module that defines this protocol (e.g., "Vibe") */
+  moduleName?: string;
   /** Type parameters (typically just one, e.g., ["a"]) */
   params: string[];
   /** Method signatures: name -> { type, span } */
@@ -193,6 +199,8 @@ export type ProtocolInfo = {
 export type InstanceInfo = {
   /** The protocol name being implemented */
   protocolName: string;
+  /** The module that defines this instance */
+  moduleName?: string;
   /** Concrete type(s) for this instance */
   typeArgs: Type[];
   /** Context constraints (e.g., "Show a" in "Show a => Show (List a)") */
@@ -204,15 +212,72 @@ export type InstanceInfo = {
 };
 
 /**
- * Built-in constructors registry is now EMPTY.
- *
- * All ADTs including Bool must be defined in user code or the prelude.
- * The prelude defines Bool for use in if-then-else expressions.
- *
- * Note: Constructor arity validation still happens via the ADT registry,
- * not through this constant.
+ * Helper to create a qualified name for display in error messages.
+ * Returns "ModuleName::SymbolName" or just "SymbolName" if no module.
  */
-const BUILTIN_CONSTRUCTORS: Record<string, number> = {};
+function qualifiedName(name: string, moduleName?: string): string {
+  return moduleName ? `${moduleName}::${name}` : name;
+}
+
+/**
+ * Check for type name collision when importing.
+ * Returns true if there's a conflict (same name, different module).
+ */
+function checkTypeCollision(
+  name: string,
+  importingFrom: string,
+  existing: { moduleName?: string } | undefined,
+  span: Span,
+  kind: "type" | "type alias" | "protocol"
+): void {
+  if (!existing) return;
+
+  // If the existing definition is from a different module, that's a conflict
+  // (unless it's a builtin which has no module)
+  if (
+    existing.moduleName !== undefined &&
+    existing.moduleName !== importingFrom
+  ) {
+    throw new SemanticError(
+      `${
+        kind === "type"
+          ? "Type"
+          : kind === "type alias"
+          ? "Type alias"
+          : "Protocol"
+      } '${name}' conflicts with ${kind} from module '${
+        existing.moduleName
+      }'. ` + `Consider using qualified imports or aliasing one of them.`,
+      span
+    );
+  }
+}
+
+/**
+ * Built-in constructors registry.
+ *
+ * These are the primitive types that are built into the compiler.
+ * They are automatically available in all modules.
+ *
+ * - Bool: True | False (used in if-then-else expressions)
+ * - Unit: Unit (used for functions with no meaningful return value)
+ * - Int: Integer numbers
+ * - Float: Floating-point numbers
+ * - String: Text values
+ * - Char: Single characters
+ */
+const BUILTIN_CONSTRUCTORS: Record<string, number> = {
+  // Bool constructors
+  True: 0,
+  False: 0,
+  // Unit constructor
+  Unit: 0,
+  // Primitive type constructors (zero-arity, but exist for type system)
+  Int: 0,
+  Float: 0,
+  String: 0,
+  Char: 0,
+};
 
 /**
  * Built-in operator type signatures are now EMPTY.
@@ -283,8 +348,8 @@ export interface AnalyzeOptions {
   /** Pre-analyzed dependency modules to merge into scope */
   dependencies?: Map<string, SemanticModule>;
   /**
-   * Whether to automatically inject `import Prelude exposing (..)`.
-   * Defaults to true. Set to false for the Prelude module itself
+   * Whether to automatically inject `import Vibe exposing (..)`.
+   * Defaults to true. Set to false for the Vibe module itself
    * or when testing without prelude.
    */
   injectPrelude?: boolean;
@@ -298,6 +363,9 @@ export function analyze(
   const annotations: Record<string, TypeAnnotationDeclaration> = {};
   const types: Record<string, Type> = {};
   const substitution: Substitution = new Map();
+
+  // Extract the current module name for qualified naming
+  const currentModuleName = program.module?.name;
 
   // ===== ADT and Type Alias Registries =====
   // These track user-defined types for constructor validation and exhaustiveness checking.
@@ -315,24 +383,137 @@ export function analyze(
   const operators: OperatorRegistry = new Map();
   const infixDeclarations: InfixDeclaration[] = [];
 
+  // ===== Initialize Builtin Types =====
+  // These primitive types are built into the compiler and automatically available.
+  const builtinSpan: Span = {
+    start: { offset: 0, line: 0, column: 0 },
+    end: { offset: 0, line: 0, column: 0 },
+  };
+
+  // Bool ADT: True | False
+  adts["Bool"] = {
+    name: "Bool",
+    params: [],
+    constructors: ["True", "False"],
+    span: builtinSpan,
+  };
+  constructors["True"] = {
+    arity: 0,
+    argTypes: [],
+    parentType: "Bool",
+    parentParams: [],
+    span: builtinSpan,
+  };
+  constructors["False"] = {
+    arity: 0,
+    argTypes: [],
+    parentType: "Bool",
+    parentParams: [],
+    span: builtinSpan,
+  };
+
+  // Unit ADT: Unit
+  adts["Unit"] = {
+    name: "Unit",
+    params: [],
+    constructors: ["Unit"],
+    span: builtinSpan,
+  };
+  constructors["Unit"] = {
+    arity: 0,
+    argTypes: [],
+    parentType: "Unit",
+    parentParams: [],
+    span: builtinSpan,
+  };
+
+  // Int ADT: Int (opaque primitive)
+  adts["Int"] = {
+    name: "Int",
+    params: [],
+    constructors: ["Int"],
+    span: builtinSpan,
+  };
+  constructors["Int"] = {
+    arity: 0,
+    argTypes: [],
+    parentType: "Int",
+    parentParams: [],
+    span: builtinSpan,
+  };
+
+  // Float ADT: Float (opaque primitive)
+  adts["Float"] = {
+    name: "Float",
+    params: [],
+    constructors: ["Float"],
+    span: builtinSpan,
+  };
+  constructors["Float"] = {
+    arity: 0,
+    argTypes: [],
+    parentType: "Float",
+    parentParams: [],
+    span: builtinSpan,
+  };
+
+  // String ADT: String (opaque primitive)
+  adts["String"] = {
+    name: "String",
+    params: [],
+    constructors: ["String"],
+    span: builtinSpan,
+  };
+  constructors["String"] = {
+    arity: 0,
+    argTypes: [],
+    parentType: "String",
+    parentParams: [],
+    span: builtinSpan,
+  };
+
+  // Char ADT: Char (opaque primitive)
+  adts["Char"] = {
+    name: "Char",
+    params: [],
+    constructors: ["Char"],
+    span: builtinSpan,
+  };
+  constructors["Char"] = {
+    arity: 0,
+    argTypes: [],
+    parentType: "Char",
+    parentParams: [],
+    span: builtinSpan,
+  };
+
+  // List ADT: List a (builtin parameterized type for lists)
+  // Note: List uses the internal "list" type representation but is exposed as "List" ADT
+  adts["List"] = {
+    name: "List",
+    params: ["a"],
+    constructors: [], // List constructors are handled specially (via list literals)
+    span: builtinSpan,
+  };
+
   // ===== Auto-inject Prelude =====
-  // By default, inject `import Prelude exposing (..)` unless:
+  // By default, inject `import Vibe exposing (..)` unless:
   // 1. injectPrelude is explicitly false
-  // 2. This is the Prelude module itself
-  // 3. There's already an explicit Prelude import
+  // 2. This is the Vibe module itself
+  // 3. There's already an explicit Vibe import
   const { dependencies = new Map(), injectPrelude = true } = options;
-  const isPreludeModule = program.module?.name === "Prelude";
+  const isPreludeModule = program.module?.name === "Vibe";
   const hasExplicitPreludeImport = program.imports?.some(
-    (imp) => imp.moduleName === "Prelude"
+    (imp) => imp.moduleName === "Vibe"
   );
 
   // Build the effective imports list
   let imports: ImportDeclaration[] = program.imports ?? [];
 
   if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
-    // Create a synthetic import for Prelude
+    // Create a synthetic import for Vibe
     const syntheticPreludeImport: ImportDeclaration = {
-      moduleName: "Prelude",
+      moduleName: "Vibe",
       exposing: {
         kind: "All",
         span: {
@@ -354,7 +535,7 @@ export function analyze(
 
   // Seed built-in operators as functions for prefix/infix symmetry.
   // Built-in operators are monomorphic (not polymorphic).
-  // Note: INFIX_TYPES is now empty; operators come from Prelude.
+  // Note: INFIX_TYPES is now empty; operators come from Vibe.
   for (const [op, ty] of Object.entries(INFIX_TYPES)) {
     globalScope.symbols.set(op, { vars: new Set(), constraints: [], type: ty });
   }
@@ -384,6 +565,10 @@ export function analyze(
       ProtocolInfo
     ][]) {
       protocols[name] = protocol;
+
+      // Also add protocol methods to global scope
+      // Protocol methods are polymorphic functions with constraints
+      addProtocolMethodsToScope(protocol, globalScope);
     }
 
     for (const instance of depModule.instances) {
@@ -423,6 +608,14 @@ export function analyze(
         // Check for ADTs
         const depADT = depModule.adts[exposedName];
         if (depADT) {
+          // Check for collision with existing ADT from different module
+          checkTypeCollision(
+            exposedName,
+            imp.moduleName,
+            adts[exposedName],
+            imp.span,
+            "type"
+          );
           adts[exposedName] = depADT;
           // When importing an ADT, also import all its constructors
           for (const ctorName of depADT.constructors) {
@@ -436,6 +629,14 @@ export function analyze(
         // Check for type aliases
         const depTypeAlias = depModule.typeAliases[exposedName];
         if (depTypeAlias) {
+          // Check for collision with existing type alias from different module
+          checkTypeCollision(
+            exposedName,
+            imp.moduleName,
+            typeAliases[exposedName],
+            imp.span,
+            "type alias"
+          );
           typeAliases[exposedName] = depTypeAlias;
         }
       }
@@ -468,6 +669,8 @@ export function analyze(
         string,
         ADTInfo
       ][]) {
+        // Check for collision with existing ADT from different module
+        checkTypeCollision(name, imp.moduleName, adts[name], imp.span, "type");
         adts[name] = adt;
       }
 
@@ -476,6 +679,14 @@ export function analyze(
         string,
         TypeAliasInfo
       ][]) {
+        // Check for collision with existing type alias from different module
+        checkTypeCollision(
+          name,
+          imp.moduleName,
+          typeAliases[name],
+          imp.span,
+          "type alias"
+        );
         typeAliases[name] = alias;
       }
 
@@ -484,6 +695,14 @@ export function analyze(
         string,
         ProtocolInfo
       ][]) {
+        // Check for collision with existing protocol from different module
+        checkTypeCollision(
+          name,
+          imp.moduleName,
+          protocols[name],
+          imp.span,
+          "protocol"
+        );
         protocols[name] = protocol;
       }
 
@@ -509,21 +728,50 @@ export function analyze(
     }
   }
 
-  // ===== PASS 1: Register type declarations (ADTs, aliases, and protocols) =====
-  // We register types before values so constructors can be used in value expressions.
+  // ===== PASS 1a: Register type declarations (ADTs only) =====
+  // We register ADTs first so type aliases can reference them.
   for (const decl of program.declarations) {
     if (decl.kind === "TypeDeclaration") {
-      registerTypeDeclaration(decl, adts, constructors, globalScope);
+      registerTypeDeclaration(
+        decl,
+        adts,
+        constructors,
+        globalScope,
+        currentModuleName
+      );
       continue;
     }
+  }
 
+  // ===== PASS 1b: Register type aliases =====
+  // Type aliases are registered after ADTs so they can reference them.
+  // Aliases are also registered without validation first so they can reference each other.
+  const typeAliasDecls: TypeAliasDeclaration[] = [];
+  for (const decl of program.declarations) {
     if (decl.kind === "TypeAliasDeclaration") {
-      registerTypeAlias(decl, typeAliases);
+      registerTypeAliasWithoutValidation(decl, typeAliases, currentModuleName);
+      typeAliasDecls.push(decl);
       continue;
     }
+  }
 
+  // ===== PASS 1c: Validate type alias references =====
+  // Now that all ADTs and aliases are registered, validate that type references exist.
+  for (const decl of typeAliasDecls) {
+    validateTypeAliasReferences(decl, adts, typeAliases);
+  }
+
+  // ===== PASS 1d: Register protocols =====
+  for (const decl of program.declarations) {
     if (decl.kind === "ProtocolDeclaration") {
-      registerProtocol(decl, protocols, adts, typeAliases);
+      registerProtocol(
+        decl,
+        protocols,
+        adts,
+        typeAliases,
+        globalScope,
+        currentModuleName
+      );
       continue;
     }
   }
@@ -533,7 +781,14 @@ export function analyze(
   // so that we can resolve constraints during type checking.
   for (const decl of program.declarations) {
     if (decl.kind === "ImplementationDeclaration") {
-      registerImplementation(decl, instances, protocols, adts, typeAliases);
+      registerImplementation(
+        decl,
+        instances,
+        protocols,
+        adts,
+        typeAliases,
+        currentModuleName
+      );
       continue;
     }
   }
@@ -727,10 +982,20 @@ function registerTypeDeclaration(
   decl: TypeDeclaration,
   adts: Record<string, ADTInfo>,
   constructors: Record<string, ConstructorInfo>,
-  globalScope: Scope
+  globalScope: Scope,
+  moduleName?: string
 ) {
   // Check for duplicate type name
-  if (adts[decl.name]) {
+  const existingADT = adts[decl.name];
+  if (existingADT) {
+    // If it's from a different module, provide a more helpful error message
+    if (existingADT.moduleName && existingADT.moduleName !== moduleName) {
+      throw new SemanticError(
+        `Type '${decl.name}' conflicts with type from module '${existingADT.moduleName}'. ` +
+          `Consider using a different name or qualified imports.`,
+        decl.span
+      );
+    }
     throw new SemanticError(
       `Duplicate type declaration for '${decl.name}'`,
       decl.span
@@ -761,6 +1026,7 @@ function registerTypeDeclaration(
   const constructorNames = decl.constructors.map((c) => c.name);
   adts[decl.name] = {
     name: decl.name,
+    moduleName,
     params: decl.params,
     constructors: constructorNames,
     span: decl.span,
@@ -774,10 +1040,10 @@ function registerTypeDeclaration(
   }
 
   // Build the result type: TypeName param1 param2 ...
-  // For Maybe a, this is: { kind: "con", name: "maybe", args: [TypeVar(a)] }
+  // For Maybe a, this is: { kind: "con", name: "Maybe", args: [TypeVar(a)] }
   const resultType: TypeCon = {
     kind: "con",
-    name: decl.name.toLowerCase(),
+    name: decl.name,
     args: decl.params.map((p) => paramTypeVars.get(p)!),
   };
 
@@ -892,7 +1158,7 @@ function constructorArgToType(
       );
       return {
         kind: "con",
-        name: expr.name.toLowerCase(),
+        name: expr.name,
         args,
       };
     }
@@ -937,20 +1203,182 @@ function constructorArgToType(
 }
 
 /**
- * Register a type alias declaration.
- *
- * Type aliases don't introduce new constructors, they just create
- * a new name for an existing type expression.
- *
- * For example, `type alias UserId = number` allows using "UserId"
- * anywhere "number" is expected.
+ * Error thrown when a type reference cannot be resolved.
+ * Contains helpful information for generating suggestions.
  */
-function registerTypeAlias(
+type TypeValidationError = {
+  message: string;
+  span: Span;
+  suggestion?: string;
+};
+
+/**
+ * Validate that all type references in a type expression are defined.
+ * Returns an array of validation errors found.
+ *
+ * @param expr - The type expression to validate
+ * @param definedParams - Set of type parameters that are in scope (e.g., from the alias declaration)
+ * @param adts - Registry of defined ADT types
+ * @param typeAliases - Registry of defined type aliases
+ * @param parentSpan - Span to use for error reporting if the expression has no span
+ */
+function validateTypeExpr(
+  expr: TypeExpr,
+  definedParams: Set<string>,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  parentSpan: Span
+): TypeValidationError[] {
+  const errors: TypeValidationError[] = [];
+
+  function findCaseSuggestion(name: string): string | undefined {
+    const nameLower = name.toLowerCase();
+    // Check ADTs - look for case-insensitive match to suggest correct casing
+    for (const adtName of Object.keys(adts)) {
+      if (adtName.toLowerCase() === nameLower && adtName !== name) {
+        return adtName;
+      }
+    }
+    // Check type aliases
+    for (const aliasName of Object.keys(typeAliases)) {
+      if (aliasName.toLowerCase() === nameLower && aliasName !== name) {
+        return aliasName;
+      }
+    }
+    return undefined;
+  }
+
+  function validate(e: TypeExpr): void {
+    switch (e.kind) {
+      case "TypeRef": {
+        const name = e.name;
+        const isLowercase = name.charAt(0) === name.charAt(0).toLowerCase();
+
+        // Check if it's a defined type parameter
+        if (definedParams.has(name)) {
+          // Valid type parameter reference
+          // But validate any type arguments (type params shouldn't have args)
+          if (e.args.length > 0) {
+            errors.push({
+              message: `Type parameter '${name}' cannot take type arguments`,
+              span: e.span ?? parentSpan,
+            });
+          }
+          return;
+        }
+
+        // Check if it's a defined ADT (exact match required)
+        const adtByName = adts[name];
+        if (adtByName) {
+          // Valid ADT reference - validate args
+          for (const arg of e.args) {
+            validate(arg);
+          }
+          return;
+        }
+
+        // Check if it's "List" which is handled specially by the compiler
+        if (name === "List") {
+          // List is a built-in type constructor, validate its argument
+          for (const arg of e.args) {
+            validate(arg);
+          }
+          return;
+        }
+
+        // Check if it's a type alias
+        if (typeAliases[name]) {
+          // Valid type alias reference - validate args
+          for (const arg of e.args) {
+            validate(arg);
+          }
+          return;
+        }
+
+        // Not found - check for case mismatch suggestions
+        const suggestion = findCaseSuggestion(name);
+
+        // Check if this could be a type variable (single lowercase letter)
+        if (isLowercase && name.length === 1) {
+          // Single lowercase letter that's not in definedParams
+          // This is an undefined type variable
+          errors.push({
+            message: `Type variable '${name}' is not defined in this context`,
+            span: e.span ?? parentSpan,
+            suggestion: `Add '${name}' as a type parameter to the type alias`,
+          });
+          return;
+        }
+
+        // Multi-character lowercase or unknown uppercase - undefined type
+        if (suggestion) {
+          errors.push({
+            message: `Type '${name}' is not defined`,
+            span: e.span ?? parentSpan,
+            suggestion: `Did you mean '${suggestion}'?`,
+          });
+        } else {
+          errors.push({
+            message: `Type '${name}' is not defined`,
+            span: e.span ?? parentSpan,
+          });
+        }
+
+        // Still validate args to catch any nested errors
+        for (const arg of e.args) {
+          validate(arg);
+        }
+        break;
+      }
+      case "FunctionType": {
+        validate(e.from);
+        validate(e.to);
+        break;
+      }
+      case "TupleType": {
+        for (const el of e.elements) {
+          validate(el);
+        }
+        break;
+      }
+      case "RecordType": {
+        for (const field of e.fields) {
+          validate(field.type);
+        }
+        break;
+      }
+      case "QualifiedType": {
+        validate(e.type);
+        break;
+      }
+    }
+  }
+
+  validate(expr);
+  return errors;
+}
+
+/**
+ * Register a type alias declaration without validating type references.
+ * This allows aliases to be registered before validation, enabling
+ * mutual references between aliases.
+ */
+function registerTypeAliasWithoutValidation(
   decl: TypeAliasDeclaration,
-  typeAliases: Record<string, TypeAliasInfo>
+  typeAliases: Record<string, TypeAliasInfo>,
+  moduleName?: string
 ) {
   // Check for duplicate alias name
-  if (typeAliases[decl.name]) {
+  const existingAlias = typeAliases[decl.name];
+  if (existingAlias) {
+    // If it's from a different module, provide a more helpful error message
+    if (existingAlias.moduleName && existingAlias.moduleName !== moduleName) {
+      throw new SemanticError(
+        `Type alias '${decl.name}' conflicts with type alias from module '${existingAlias.moduleName}'. ` +
+          `Consider using a different name or qualified imports.`,
+        decl.span
+      );
+    }
     throw new SemanticError(`Duplicate type alias '${decl.name}'`, decl.span);
   }
 
@@ -966,13 +1394,64 @@ function registerTypeAlias(
     paramSet.add(param);
   }
 
-  // Register the alias
+  // Register the alias (validation happens later)
   typeAliases[decl.name] = {
     name: decl.name,
+    moduleName,
     params: decl.params,
     value: decl.value,
     span: decl.span,
   };
+}
+
+/**
+ * Validate that all type references in a type alias are defined.
+ * Called after all ADTs and aliases are registered.
+ */
+function validateTypeAliasReferences(
+  decl: TypeAliasDeclaration,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>
+) {
+  const paramSet = new Set<string>(decl.params);
+
+  const validationErrors = validateTypeExpr(
+    decl.value,
+    paramSet,
+    adts,
+    typeAliases,
+    decl.span
+  );
+
+  if (validationErrors.length > 0) {
+    // Report the first error (could be extended to report all)
+    const err = validationErrors[0]!;
+    const message = err.suggestion
+      ? `${err.message}. ${err.suggestion}`
+      : err.message;
+    throw new SemanticError(message, err.span);
+  }
+}
+
+/**
+ * Register a type alias declaration.
+ *
+ * Type aliases don't introduce new constructors, they just create
+ * a new name for an existing type expression.
+ *
+ * For example, `type alias UserId = number` allows using "UserId"
+ * anywhere "number" is expected.
+ *
+ * @deprecated Use registerTypeAliasWithoutValidation and validateTypeAliasReferences instead
+ */
+function registerTypeAlias(
+  decl: TypeAliasDeclaration,
+  typeAliases: Record<string, TypeAliasInfo>,
+  adts: Record<string, ADTInfo>,
+  moduleName?: string
+) {
+  registerTypeAliasWithoutValidation(decl, typeAliases, moduleName);
+  validateTypeAliasReferences(decl, adts, typeAliases);
 }
 
 /**
@@ -1019,16 +1498,182 @@ function registerInfixDeclaration(
 }
 
 /**
+ * Add protocol methods to a scope as polymorphic functions with constraints.
+ * This is called when:
+ * 1. Registering a new protocol
+ * 2. Importing protocols from a dependency module
+ */
+function addProtocolMethodsToScope(protocol: ProtocolInfo, scope: Scope) {
+  // Create SHARED type variable context for ALL protocol parameters
+  const sharedTypeVarCtx = new Map<string, TypeVar>();
+  for (const param of protocol.params) {
+    sharedTypeVarCtx.set(param, freshType());
+  }
+
+  // Create the constraint for this protocol
+  const protocolConstraint: Constraint = {
+    protocolName: protocol.name,
+    typeArgs: protocol.params.map((p) => sharedTypeVarCtx.get(p)!),
+  };
+
+  // Get the set of quantified variable IDs
+  const quantifiedVars = new Set<number>();
+  for (const tv of sharedTypeVarCtx.values()) {
+    quantifiedVars.add(tv.id);
+  }
+
+  // Add each method to scope
+  for (const [methodName, methodInfo] of protocol.methods) {
+    // Only add if not already defined (don't override explicit definitions)
+    if (!scope.symbols.has(methodName)) {
+      // Refresh the type with new consistent type variable IDs
+      const refreshedType = refreshType(methodInfo.type, sharedTypeVarCtx);
+
+      const scheme: TypeScheme = {
+        vars: new Set(quantifiedVars),
+        constraints: [protocolConstraint],
+        type: refreshedType,
+      };
+      scope.symbols.set(methodName, scheme);
+    }
+  }
+}
+
+/**
+ * Refresh type variables in a type using a name-to-TypeVar mapping.
+ * This replaces type variables whose ID matches any in the original context
+ * with new fresh variables from the provided mapping.
+ *
+ * Since we don't have the original names, we need to track which var IDs
+ * correspond to which parameter names based on the order they appear in the type.
+ */
+function refreshType(type: Type, newVarMap: Map<string, TypeVar>): Type {
+  // Build a mapping from old var IDs to new var IDs
+  // The types in protocol methods were created with their own fresh vars,
+  // but we need to map them to our consistent vars.
+  // We do this by collecting all var IDs in the type and mapping them
+  // to the new vars in order of the protocol params.
+
+  const oldVarIds = collectTypeVarIds(type);
+  const newVars = Array.from(newVarMap.values());
+
+  // Create substitution from old IDs to new TypeVars
+  const varSubst = new Map<number, Type>();
+  const oldVarArray = Array.from(oldVarIds);
+  for (let i = 0; i < Math.min(oldVarArray.length, newVars.length); i++) {
+    varSubst.set(oldVarArray[i]!, newVars[i]!);
+  }
+
+  return applyVarSubstitution(type, varSubst);
+}
+
+/**
+ * Collect all type variable IDs in a type, in order of first appearance.
+ */
+function collectTypeVarIds(type: Type): Set<number> {
+  const ids = new Set<number>();
+  collectTypeVarIdsHelper(type, ids);
+  return ids;
+}
+
+function collectTypeVarIdsHelper(type: Type, ids: Set<number>): void {
+  switch (type.kind) {
+    case "var":
+      ids.add(type.id);
+      break;
+    case "fun":
+      collectTypeVarIdsHelper(type.from, ids);
+      collectTypeVarIdsHelper(type.to, ids);
+      break;
+    case "tuple":
+      for (const el of type.elements) {
+        collectTypeVarIdsHelper(el, ids);
+      }
+      break;
+    case "list":
+      collectTypeVarIdsHelper(type.element, ids);
+      break;
+    case "con":
+      for (const arg of type.args) {
+        collectTypeVarIdsHelper(arg, ids);
+      }
+      break;
+    case "record":
+      for (const v of Object.values(type.fields)) {
+        collectTypeVarIdsHelper(v, ids);
+      }
+      break;
+  }
+}
+
+/**
+ * Apply a type variable substitution (mapping var IDs to new types).
+ */
+function applyVarSubstitution(type: Type, subst: Map<number, Type>): Type {
+  switch (type.kind) {
+    case "var": {
+      const replacement = subst.get(type.id);
+      return replacement ?? type;
+    }
+    case "fun":
+      return {
+        kind: "fun",
+        from: applyVarSubstitution(type.from, subst),
+        to: applyVarSubstitution(type.to, subst),
+      };
+    case "tuple":
+      return {
+        kind: "tuple",
+        elements: type.elements.map((el) => applyVarSubstitution(el, subst)),
+      };
+    case "list":
+      return {
+        kind: "list",
+        element: applyVarSubstitution(type.element, subst),
+      };
+    case "con":
+      return {
+        kind: "con",
+        name: type.name,
+        args: type.args.map((arg) => applyVarSubstitution(arg, subst)),
+      };
+    case "record":
+      const fields: Record<string, Type> = {};
+      for (const [k, v] of Object.entries(type.fields)) {
+        fields[k] = applyVarSubstitution(v, subst);
+      }
+      return { kind: "record", fields };
+    default:
+      return type;
+  }
+}
+
+/**
  * Register a protocol declaration in the protocol registry.
+ * Also adds protocol methods to the global scope as polymorphic functions with constraints.
  */
 function registerProtocol(
   decl: ProtocolDeclaration,
   protocols: Record<string, ProtocolInfo>,
   adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>
+  typeAliases: Record<string, TypeAliasInfo>,
+  globalScope: Scope,
+  moduleName?: string
 ) {
   // Check for duplicate protocol name
-  if (protocols[decl.name]) {
+  const existingProtocol = protocols[decl.name];
+  if (existingProtocol) {
+    // If it's from a different module, provide a more helpful error message
+    if (
+      existingProtocol.moduleName &&
+      existingProtocol.moduleName !== moduleName
+    ) {
+      throw new SemanticError(
+        `Protocol '${decl.name}' conflicts with protocol from module '${existingProtocol.moduleName}'. ` +
+          `Consider using a different name or qualified imports.`,
+        decl.span
+      );
+    }
     throw new SemanticError(`Duplicate protocol '${decl.name}'`, decl.span);
   }
 
@@ -1052,6 +1697,25 @@ function registerProtocol(
     );
   }
 
+  // Create SHARED type variable context for ALL protocol parameters
+  // This ensures all methods use the same type variable IDs for protocol params
+  const sharedTypeVarCtx = new Map<string, TypeVar>();
+  for (const param of decl.params) {
+    sharedTypeVarCtx.set(param, freshType());
+  }
+
+  // Create the constraint for this protocol
+  const protocolConstraint: Constraint = {
+    protocolName: decl.name,
+    typeArgs: decl.params.map((p) => sharedTypeVarCtx.get(p)!),
+  };
+
+  // Get the set of quantified variable IDs
+  const quantifiedVars = new Set<number>();
+  for (const tv of sharedTypeVarCtx.values()) {
+    quantifiedVars.add(tv.id);
+  }
+
   // Convert method type expressions to internal types
   const methods = new Map<string, { type: Type; span: Span }>();
   const methodNames = new Set<string>();
@@ -1066,26 +1730,33 @@ function registerProtocol(
     }
     methodNames.add(method.name);
 
-    // Create type variable context for protocol parameters
-    const typeVarCtx = new Map<string, TypeVar>();
-    for (const param of decl.params) {
-      typeVarCtx.set(param, freshType());
-    }
-
     // Convert method type from AST to internal representation
+    // Use the shared type variable context so all methods use same var IDs
     const methodType = typeFromAnnotation(
       method.type,
-      typeVarCtx,
+      sharedTypeVarCtx,
       adts,
       typeAliases
     );
 
     methods.set(method.name, { type: methodType, span: method.span });
+
+    // Add method to global scope as a polymorphic function with constraint
+    // Only add if not already defined (don't override explicit definitions)
+    if (!globalScope.symbols.has(method.name)) {
+      const scheme: TypeScheme = {
+        vars: new Set(quantifiedVars), // Copy to avoid sharing
+        constraints: [protocolConstraint],
+        type: methodType,
+      };
+      globalScope.symbols.set(method.name, scheme);
+    }
   }
 
   // Register the protocol
   protocols[decl.name] = {
     name: decl.name,
+    moduleName,
     params: decl.params,
     methods,
     span: decl.span,
@@ -1100,7 +1771,8 @@ function registerImplementation(
   instances: InstanceInfo[],
   protocols: Record<string, ProtocolInfo>,
   adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>
+  typeAliases: Record<string, TypeAliasInfo>,
+  moduleName?: string
 ) {
   // Check that the protocol exists
   const protocol = protocols[decl.protocolName];
@@ -1189,6 +1861,7 @@ function registerImplementation(
   // Register the instance
   instances.push({
     protocolName: decl.protocolName,
+    moduleName,
     typeArgs,
     constraints,
     methods,
@@ -1614,14 +2287,14 @@ function analyzeExpr(
         typeAliases
       );
       // Bool type must be defined in the prelude
-      const boolAdt = adts["Bool"];
+      const boolAdt = adts["bool"];
       if (!boolAdt) {
         throw new SemanticError(
           "Type 'Bool' not found. Make sure the prelude is imported.",
           expr.condition.span
         );
       }
-      const tBool: Type = { kind: "con", name: "Bool", args: [] };
+      const tBool: Type = { kind: "con", name: "bool", args: [] };
       unify(condType, tBool, expr.condition.span, substitution);
       const thenType = analyzeExpr(
         expr.thenBranch,
@@ -1916,17 +2589,10 @@ function constructorCoverage(
   // Try to determine ADT from the discriminant type
   const concreteType = applySubstitution(discriminantType, substitution);
   if (concreteType.kind === "con") {
-    // Look up ADT by normalized type name
-    for (const [name, adt] of Object.entries(adts)) {
-      if (
-        name.toLowerCase() === concreteType.name ||
-        concreteType.name === name.toLowerCase()
-      ) {
-        if (!adtName) {
-          adtName = name;
-        }
-        break;
-      }
+    // Look up ADT by exact type name
+    const adt = adts[concreteType.name];
+    if (adt && !adtName) {
+      adtName = concreteType.name;
     }
   }
 
@@ -2080,7 +2746,7 @@ function bindPattern(
         // Build the result type: ParentType param1 param2 ...
         const resultType: TypeCon = {
           kind: "con",
-          name: ctorInfo.parentType.toLowerCase(),
+          name: ctorInfo.parentType,
           args: ctorInfo.parentParams.map((p) => paramTypeVars.get(p)!),
         };
 
@@ -2556,40 +3222,22 @@ type TypeVarContext = Map<string, TypeVar>;
  * - Lowercase identifiers (first character is lowercase)
  * - Typically single letters (a, b, c) but can be longer (result, error)
  *
+ * In Vibe, ALL lowercase type names are treated as type variables.
+ * Concrete types must be capitalized (Int, String, Bool, etc.).
+ * This matches Elm/Haskell convention for type system consistency.
+ *
  * Examples:
  * - "a", "b", "c" -> type variables
- * - "number", "string", "bool" -> concrete types (but also lowercase!)
- *
- * To distinguish, we use a heuristic: single lowercase letters are type variables,
- * longer lowercase names are concrete types. This matches Elm/Haskell convention.
+ * - "error", "value", "result" -> type variables
+ * - "Int", "String", "Bool" -> concrete types (capitalized)
  */
 function isTypeVariable(name: string): boolean {
-  // Type variables are lowercase AND either:
-  // - Single character (a, b, c)
-  // - Multiple characters but not a known concrete type
   if (name.length === 0) return false;
 
   const firstChar = name[0]!; // Safe because length > 0
-  if (firstChar !== firstChar.toLowerCase()) return false; // Not lowercase
-
-  // Single letter lowercase = type variable
-  if (name.length === 1) return true;
-
-  // Multi-letter: check against known concrete types
-  // This allows "number", "string", "bool" to remain concrete
-  // while "result", "error" can be type variables
-  const knownConcreteTypes = new Set([
-    "number",
-    "string",
-    "bool",
-    "char",
-    "list",
-  ]);
-  if (knownConcreteTypes.has(name.toLowerCase())) return false;
-
-  // Default: multi-letter lowercase names are type variables
-  // This allows descriptive type variables like "error", "value", etc.
-  return true;
+  // Lowercase first character = type variable
+  // Uppercase first character = concrete type
+  return firstChar === firstChar.toLowerCase();
 }
 
 /**
@@ -2638,39 +3286,43 @@ function typeFromAnnotation(
       const aliasInfo = typeAliases[annotation.name];
       if (aliasInfo) {
         // Expand the type alias
-        // Create a context mapping alias params to the provided type arguments
-        const aliasContext: TypeVarContext = new Map(context);
-
         if (annotation.args.length !== aliasInfo.params.length) {
           // Mismatch in type arguments - just fall through to treat as type constructor
         } else {
-          // Map each alias parameter to the corresponding argument type
+          // Convert all argument types first
+          const argTypes: Type[] = [];
           for (let i = 0; i < aliasInfo.params.length; i++) {
-            const paramName = aliasInfo.params[i]!;
             const argType = typeFromAnnotation(
               annotation.args[i]!,
               context,
               adts,
               typeAliases
             );
-            // Convert the Type back to a TypeVar for the context (if it's a var)
-            if (argType.kind === "var") {
-              aliasContext.set(paramName, argType);
-            } else {
-              // For non-variable types, we need a different approach
-              // Create a fresh var and immediately substitute it
-              const fresh = freshType();
-              aliasContext.set(paramName, fresh);
-            }
+            argTypes.push(argType);
           }
 
-          // Recursively convert the alias's value with the new context
-          return typeFromAnnotation(
+          // Create fresh type variables for each alias parameter
+          // and build a substitution map to replace them with actual argument types
+          const aliasContext: TypeVarContext = new Map(context);
+          const substitutionMap = new Map<number, Type>();
+
+          for (let i = 0; i < aliasInfo.params.length; i++) {
+            const paramName = aliasInfo.params[i]!;
+            const fresh = freshType();
+            aliasContext.set(paramName, fresh);
+            substitutionMap.set(fresh.id, argTypes[i]!);
+          }
+
+          // Convert the alias value with fresh type variables
+          const expandedType = typeFromAnnotation(
             aliasInfo.value,
             aliasContext,
             adts,
             typeAliases
           );
+
+          // Apply substitution to replace fresh vars with actual argument types
+          return applySubstitution(expandedType, substitutionMap);
         }
       }
 
@@ -2825,7 +3477,12 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
 
   if (left.kind === "con" && right.kind === "con") {
     if (left.name !== right.name || left.args.length !== right.args.length) {
-      throw new SemanticError("Type mismatch", span);
+      throw new SemanticError(
+        `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
+          right
+        )}'`,
+        span
+      );
     }
     left.args.forEach((arg, idx) =>
       unify(arg, right.args[idx]!, span, substitution)
@@ -2865,7 +3522,12 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
     return;
   }
 
-  throw new SemanticError("Type mismatch", span);
+  throw new SemanticError(
+    `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
+      right
+    )}'`,
+    span
+  );
 }
 
 function typesEqual(a: Type, b: Type): boolean {
@@ -2903,5 +3565,35 @@ function typesEqual(a: Type, b: Type): boolean {
       );
     case "list":
       return typesEqual(a.element, (b as TypeList).element);
+  }
+}
+
+/**
+ * Format a type for display in error messages.
+ */
+function formatType(type: Type): string {
+  switch (type.kind) {
+    case "var":
+      return `t${type.id}`;
+    case "con":
+      if (type.args.length === 0) {
+        return type.name;
+      }
+      return `${type.name} ${type.args.map(formatType).join(" ")}`;
+    case "fun":
+      const from =
+        type.from.kind === "fun"
+          ? `(${formatType(type.from)})`
+          : formatType(type.from);
+      return `${from} -> ${formatType(type.to)}`;
+    case "tuple":
+      return `(${type.elements.map(formatType).join(", ")})`;
+    case "record":
+      const fields = Object.entries(type.fields)
+        .map(([k, v]) => `${k}: ${formatType(v)}`)
+        .join(", ");
+      return `{ ${fields} }`;
+    case "list":
+      return `List ${formatType(type.element)}`;
   }
 }

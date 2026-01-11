@@ -214,14 +214,22 @@ export function discoverModuleGraph(
       dependencies.add(imp.moduleName);
     }
 
-    // Auto-inject Prelude dependency if enabled and this is not Prelude itself
-    const isPreludeModule = moduleName === "Prelude";
+    // Auto-inject Vibe dependency if enabled and this is not Vibe itself
+    const isPreludeModule = moduleName === "Vibe";
     const hasExplicitPreludeImport = ast.imports?.some(
-      (imp) => imp.moduleName === "Prelude"
+      (imp) => imp.moduleName === "Vibe"
     );
 
     if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
-      dependencies.add("Prelude");
+      // Try to add Vibe, but don't fail if it can't be found
+      // This allows using builtin types without requiring Vibe to be available
+      try {
+        resolveModule({ config, moduleName: "Vibe", preferDist });
+        dependencies.add("Vibe");
+      } catch (error) {
+        // Vibe not found - this is OK, builtin types are available without it
+        // Silently skip adding Prelude to dependencies
+      }
     }
 
     // Recursively discover dependencies BEFORE storing this module

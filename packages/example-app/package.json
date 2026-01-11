@@ -6,8 +6,11 @@
   "module": "src/ExampleApp.vibe",
   "scripts": {
     "tokenize": "bun ../cli/src/index.ts tokenize",
-    "parse": "bun ../cli/src/index.ts parse"
+    "parse": "bun ../cli/src/index.ts parse",
+    "analyze": "bun ../cli/src/index.ts analyze"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@vibe/prelude": "workspace:*"
+  },
   "devDependencies": {}
 }

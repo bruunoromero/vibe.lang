@@ -1,7 +1,7 @@
-module Prelude exposing (..)
+module Vibe exposing (..)
 
 {- =============================================================================
-   Prelude - The Standard Library for Vibe
+   Vibe - The Standard Library for Vibe
    =============================================================================
 
    This module provides fundamental types, operators, and functions that are
@@ -60,60 +60,6 @@ infixr 9 >>
 -- =============================================================================
 -- Core ADTs
 -- =============================================================================
-
-{-| Boolean type representing logical truth values.
-
-    True  -- Logical true
-    False -- Logical false
-
-    Used in conditional expressions (if-then-else) and logical operations.
--}
-type Bool
-    = True
-    | False
-
-
-{-| Unit type representing a value with no information.
-
-    Unit -- The only value of type Unit
-
-    Used for functions with side effects that return no meaningful value.
--}
-type Unit
-    = Unit
-
-
-{-| Integer type for whole numbers.
-    
-    Int values are represented as JavaScript numbers truncated to integers.
--}
-type Int
-    = Int
-
-
-{-| Floating-point number type for decimal numbers.
-    
-    Float values are represented as JavaScript numbers.
--}
-type Float
-    = Float
-
-
-{-| String type for text values.
-    
-    String values are sequences of characters.
--}
-type String
-    = String
-
-
-{-| Character type for single text characters.
-    
-    Char values represent individual Unicode characters.
--}
-type Char
-    = Char
-
 
 {-| Represents an optional value. Used when a value may or may not exist.
 

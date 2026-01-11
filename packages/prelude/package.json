@@ -2,11 +2,6 @@
   "name": "@vibe/prelude",
   "version": "0.0.0",
   "type": "module",
-  "vibe": {
-    "src": "src",
-    "out": "dist",
-    "entry": "Prelude"
-  },
   "scripts": {
     "build": "echo 'Prelude is built by the Vibe compiler'",
     "test": "bun test"

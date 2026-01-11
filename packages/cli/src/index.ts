@@ -191,8 +191,10 @@ function executeCommand(
         }
 
         // Analyze with pre-analyzed dependencies
+        // Don't inject Vibe for the Vibe module itself
         const semantic = analyze(moduleNode.ast, {
           dependencies: analyzedModules,
+          injectPrelude: currentModuleName !== "Vibe",
         });
 
         analyzedModules.set(currentModuleName, semantic);

@@ -73,16 +73,11 @@ const analyzeNoPrelude = (source: string) => {
 
 /**
  * Type definitions preamble for tests.
- * Since tests run with injectPrelude: false, we need to define the core types
- * that the compiler now expects from the prelude.
+ * Since tests run with injectPrelude: false, we only need to define
+ * the ADTs that are not builtin (Maybe in this case).
+ * Bool, Unit, Int, Float, String, and Char are now builtin to the compiler.
  */
 const TYPE_PREAMBLE = `
-type Bool = True | False
-type Unit = Unit
-type Int = Int
-type Float = Float
-type String = String
-type Char = Char
 type Maybe a = Just a | Nothing
 `;
 
@@ -457,6 +452,37 @@ length xs = 0`);
     expect(result.types.length).toBeDefined();
   });
 
+  test("List type in various contexts", () => {
+    // Test List as builtin ADT in type annotations, type aliases, and literals
+    const program = parse(`${TYPE_PREAMBLE}
+-- Direct List type annotation
+nums : List Int
+nums = [1, 2, 3]
+
+-- List in type alias
+type alias IntList = List Int
+
+myList : IntList
+myList = [42]
+
+-- List with type parameter in type alias
+type alias Container a = List a
+
+container : Container String
+container = ["hello", "world"]
+
+-- Nested List
+nested : List (List Int)
+nested = [[1, 2], [3, 4]]`);
+    const result = analyze(program, { injectPrelude: false });
+    expect(result.types.nums).toBeDefined();
+    expect(result.types.myList).toBeDefined();
+    expect(result.types.container).toBeDefined();
+    expect(result.types.nested).toBeDefined();
+    expect(result.typeAliases.IntList).toBeDefined();
+    expect(result.typeAliases.Container).toBeDefined();
+  });
+
   test("complex nested type annotations", () => {
     // Test deeply nested function types with type variables
     const program = parse(`${TYPE_PREAMBLE}
@@ -641,16 +667,16 @@ f opt =
     );
   });
 
-  test("recursive ADT - List", () => {
+  test("recursive ADT - MyList", () => {
     const program = parse(`${TYPE_PREAMBLE}
-type List a = Cons a (List a) | Nil
+type MyList a = Cons a (MyList a) | Nil
 
 empty = Nil
 single = Cons 1 Nil
 double = Cons 1 (Cons 2 Nil)`);
     const result = analyze(program, { injectPrelude: false });
 
-    expect(result.adts.List).toBeDefined();
+    expect(result.adts.MyList).toBeDefined();
     expect(result.constructors.Cons?.arity).toBe(2);
     expect(result.constructors.Nil?.arity).toBe(0);
     expect(result.types.empty).toBeDefined();
@@ -660,7 +686,7 @@ double = Cons 1 (Cons 2 Nil)`);
 
   test("recursive ADT pattern matching", () => {
     const program = parse(`${OPERATOR_PREAMBLE}
-type List a = Cons a (List a) | Nil
+type MyList a = Cons a (MyList a) | Nil
 
 length xs =
   case xs of
@@ -709,7 +735,7 @@ getRight e default =
 
   test("registers type alias", () => {
     const program = parse(`${TYPE_PREAMBLE}
-type alias UserId = number`);
+type alias UserId = Int`);
     const result = analyze(program, { injectPrelude: false });
 
     expect(result.typeAliases.UserId).toBeDefined();
@@ -727,8 +753,8 @@ type alias Pair a b = (a, b)`);
 
   test("rejects duplicate type alias", () => {
     expectError(
-      `type alias UserId = number
-type alias UserId = string`,
+      `type alias UserId = Int
+type alias UserId = String`,
       "Duplicate type alias"
     );
   });
@@ -888,13 +914,13 @@ type alias Container a = { value : a, count : Int }
 type alias Pair a b = { first : a, second : b }
 type alias Wrapper a = { wrapped : a }
 
-c : Container string
+c : Container String
 c = { value = "data", count = 1 }
 
-p : Pair number number
+p : Pair Int Int
 p = { first = 5, second = 3 }
 
-w : Wrapper (List number)
+w : Wrapper (List Int)
 w = { wrapped = [1, 2, 3] }`);
 
     const result = analyze(program, { injectPrelude: false });
@@ -912,7 +938,7 @@ w = { wrapped = [1, 2, 3] }`);
 type alias Box a = { contents : a }
 type alias Pair a b = { left : a, right : b }
 
-nested : Pair (Box string) (Box number)
+nested : Pair (Box String) (Box Int)
 nested = { left = { contents = "text" }, right = { contents = 42 } }`);
 
     const result = analyze(program, { injectPrelude: false });
@@ -927,7 +953,7 @@ nested = { left = { contents = "text" }, right = { contents = 42 } }`);
   test("type alias and ADT can coexist", () => {
     const program = parse(`${TYPE_PREAMBLE}
 type Option a = Some a | None
-type alias MaybeInt = Option number
+type alias MaybeInt = Option Int
 
 wrapped = Some 42`);
     const result = analyze(program, { injectPrelude: false });
@@ -935,5 +961,75 @@ wrapped = Some 42`);
     expect(result.adts.Option).toBeDefined();
     expect(result.typeAliases.MaybeInt).toBeDefined();
     expect(result.types.wrapped).toBeDefined();
+  });
+
+  // ===== Type Validation Tests (negative cases) =====
+
+  test("rejects lowercase type name in type alias (suggests capitalization)", () => {
+    expectError(
+      `type alias Point = { x : Int, y : int }`,
+      "Type 'int' is not defined. Did you mean 'Int'?"
+    );
+  });
+
+  test("rejects undefined type in type alias", () => {
+    expectError(
+      `type alias Point = { x : Int, y : Foo }`,
+      "Type 'Foo' is not defined"
+    );
+  });
+
+  test("rejects undefined type variable in type alias", () => {
+    expectError(
+      `type alias Container = { value : a }`,
+      "Type variable 'a' is not defined in this context"
+    );
+  });
+
+  test("accepts valid type parameter in type alias", () => {
+    const program = parse(`${TYPE_PREAMBLE}
+type alias Container a = { value : a }`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.typeAliases.Container).toBeDefined();
+    expect(result.typeAliases.Container?.params).toEqual(["a"]);
+  });
+
+  test("rejects nested undefined type in type alias", () => {
+    expectError(
+      `type alias Nested = { inner : { value : foo } }`,
+      "Type 'foo' is not defined"
+    );
+  });
+
+  test("rejects undefined type in function type alias", () => {
+    expectError(`type alias Handler = foo -> Int`, "Type 'foo' is not defined");
+  });
+
+  test("rejects undefined type in tuple type alias", () => {
+    expectError(
+      `type alias MyTuple = (Int, foo, String)`,
+      "Type 'foo' is not defined"
+    );
+  });
+
+  test("validates type alias stores module name", () => {
+    const program = parse(`module TestModule exposing (..)
+${TYPE_PREAMBLE}
+type alias Point = { x : Int, y : Int }`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.typeAliases.Point).toBeDefined();
+    expect(result.typeAliases.Point?.moduleName).toBe("TestModule");
+  });
+
+  test("validates ADT stores module name", () => {
+    const program = parse(`module TestModule exposing (..)
+${TYPE_PREAMBLE}
+type MyOption a = MySome a | MyNone`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.adts.MyOption).toBeDefined();
+    expect(result.adts.MyOption?.moduleName).toBe("TestModule");
   });
 });
