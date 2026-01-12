@@ -127,9 +127,47 @@ export function sanitizeOperator(lexeme: string): string {
   return parts.join("");
 }
 
+/**
+ * Export specification for a single item in an exposing clause.
+ *
+ * Supports several forms:
+ * - `name` - Simple export of a value, function, type (opaque), or protocol (without methods)
+ * - `TypeName(..)` - Export type with all constructors, or protocol with all methods
+ * - `TypeName(Con1, Con2)` - Export type with specific constructors
+ * - `ProtocolName(method1, method2)` - Export protocol with specific methods
+ * - `(++)` - Export an operator
+ */
+export type ExportSpec =
+  | {
+      /** Export a simple name (value, function, opaque type, or protocol without methods) */
+      kind: "ExportValue";
+      name: string;
+      span: Span;
+    }
+  | {
+      /** Export an operator (e.g., `(++)`, `(<$>)`) */
+      kind: "ExportOperator";
+      operator: string;
+      span: Span;
+    }
+  | {
+      /** Export a type/protocol with all constructors/methods (`TypeName(..)`) */
+      kind: "ExportTypeAll";
+      name: string;
+      span: Span;
+    }
+  | {
+      /** Export a type/protocol with specific constructors/methods (`TypeName(Con1, Con2)`) */
+      kind: "ExportTypeSome";
+      name: string;
+      /** Names of constructors or methods to export */
+      members: string[];
+      span: Span;
+    };
+
 export type Exposing =
   | { kind: "All"; span: Span }
-  | { kind: "Explicit"; names: string[]; span: Span };
+  | { kind: "Explicit"; exports: ExportSpec[]; span: Span };
 
 export type Pattern =
   | { kind: "VarPattern"; name: string; span: Span }

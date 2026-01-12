@@ -1,0 +1,9 @@
+module Vibe.Maybe exposing
+    ( withDefault 
+    )
+
+withDefault : a -> Maybe a -> a
+withDefault defaultValue maybeValue =
+    case maybeValue of
+        Just value -> value
+        Nothing -> defaultValue

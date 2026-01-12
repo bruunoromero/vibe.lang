@@ -1,14 +1,12 @@
 module ExampleApp exposing (..)
 
+import Vibe.Maybe exposing (withDefault)
+
 -- Record type example
 type alias Point =
   { x : Int
   , y : Int
   }
-
-type CustomMaybe x
-  = Just x
-  | Nothing
 
 -- Create a point
 origin : Point
@@ -23,4 +21,5 @@ distance point =
   point.x * point.x + point.y * point.y
 
 main =
-  "Hello, Vibe!"
+  let x = Just 10 in
+  withDefault 0 x

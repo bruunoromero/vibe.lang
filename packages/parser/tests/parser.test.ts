@@ -927,3 +927,182 @@ describe("operator protocol methods", () => {
     }
   });
 });
+
+describe("module export syntax", () => {
+  test("parses exposing all (..)", () => {
+    const source = `module Main exposing (..)`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("All");
+  });
+
+  test("parses simple value exports", () => {
+    const source = `module Main exposing (foo, bar, baz)`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("Explicit");
+    if (program.module?.exposing?.kind === "Explicit") {
+      expect(program.module.exposing.exports.length).toBe(3);
+      expect(program.module.exposing.exports[0]?.kind).toBe("ExportValue");
+      expect(
+        program.module.exposing.exports[0]?.kind === "ExportValue" &&
+          program.module.exposing.exports[0].name
+      ).toBe("foo");
+    }
+  });
+
+  test("parses operator exports", () => {
+    const source = `module Main exposing ((++), (<$>), (|>))`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("Explicit");
+    if (program.module?.exposing?.kind === "Explicit") {
+      const exports = program.module.exposing.exports;
+      expect(exports.length).toBe(3);
+      expect(exports[0]?.kind).toBe("ExportOperator");
+      if (exports[0]?.kind === "ExportOperator") {
+        expect(exports[0].operator).toBe("++");
+      }
+      if (exports[1]?.kind === "ExportOperator") {
+        expect(exports[1].operator).toBe("<$>");
+      }
+      if (exports[2]?.kind === "ExportOperator") {
+        expect(exports[2].operator).toBe("|>");
+      }
+    }
+  });
+
+  test("parses type export with all constructors", () => {
+    const source = `module Main exposing (Maybe(..), Result(..))`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("Explicit");
+    if (program.module?.exposing?.kind === "Explicit") {
+      const exports = program.module.exposing.exports;
+      expect(exports.length).toBe(2);
+      expect(exports[0]?.kind).toBe("ExportTypeAll");
+      if (exports[0]?.kind === "ExportTypeAll") {
+        expect(exports[0].name).toBe("Maybe");
+      }
+      if (exports[1]?.kind === "ExportTypeAll") {
+        expect(exports[1].name).toBe("Result");
+      }
+    }
+  });
+
+  test("parses type export with specific constructors", () => {
+    const source = `module Main exposing (Result(Ok, Err), Bool(True, False))`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("Explicit");
+    if (program.module?.exposing?.kind === "Explicit") {
+      const exports = program.module.exposing.exports;
+      expect(exports.length).toBe(2);
+      expect(exports[0]?.kind).toBe("ExportTypeSome");
+      if (exports[0]?.kind === "ExportTypeSome") {
+        expect(exports[0].name).toBe("Result");
+        expect(exports[0].members).toEqual(["Ok", "Err"]);
+      }
+      if (exports[1]?.kind === "ExportTypeSome") {
+        expect(exports[1].name).toBe("Bool");
+        expect(exports[1].members).toEqual(["True", "False"]);
+      }
+    }
+  });
+
+  test("parses protocol export with all methods", () => {
+    const source = `module Main exposing (Num(..), Eq(..))`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("Explicit");
+    if (program.module?.exposing?.kind === "Explicit") {
+      const exports = program.module.exposing.exports;
+      expect(exports.length).toBe(2);
+      // Note: Parser doesn't distinguish between types and protocols
+      // Both use ExportTypeAll syntax - semantics differentiates
+      expect(exports[0]?.kind).toBe("ExportTypeAll");
+    }
+  });
+
+  test("parses protocol export with specific methods", () => {
+    const source = `module Main exposing (Num((+), (-)), Eq(eq, neq))`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("Explicit");
+    if (program.module?.exposing?.kind === "Explicit") {
+      const exports = program.module.exposing.exports;
+      expect(exports.length).toBe(2);
+      expect(exports[0]?.kind).toBe("ExportTypeSome");
+      if (exports[0]?.kind === "ExportTypeSome") {
+        expect(exports[0].name).toBe("Num");
+        expect(exports[0].members).toEqual(["+", "-"]);
+      }
+      if (exports[1]?.kind === "ExportTypeSome") {
+        expect(exports[1].name).toBe("Eq");
+        expect(exports[1].members).toEqual(["eq", "neq"]);
+      }
+    }
+  });
+
+  test("parses mixed exports", () => {
+    const source = `module Collections exposing 
+      ( List(..)
+      , Maybe(Just, Nothing)
+      , Unit
+      , map, filter
+      , (++), (<|)
+      , Functor(..)
+      )`;
+    const program = parse(source);
+    expect(program.module?.exposing?.kind).toBe("Explicit");
+    if (program.module?.exposing?.kind === "Explicit") {
+      const exports = program.module.exposing.exports;
+      expect(exports.length).toBe(8);
+
+      // List(..)
+      expect(exports[0]?.kind).toBe("ExportTypeAll");
+
+      // Maybe(Just, Nothing)
+      expect(exports[1]?.kind).toBe("ExportTypeSome");
+      if (exports[1]?.kind === "ExportTypeSome") {
+        expect(exports[1].name).toBe("Maybe");
+        expect(exports[1].members).toEqual(["Just", "Nothing"]);
+      }
+
+      // Unit (just the type name)
+      expect(exports[2]?.kind).toBe("ExportValue");
+      if (exports[2]?.kind === "ExportValue") {
+        expect(exports[2].name).toBe("Unit");
+      }
+
+      // map, filter
+      expect(exports[3]?.kind).toBe("ExportValue");
+      expect(exports[4]?.kind).toBe("ExportValue");
+
+      // (++), (<|)
+      expect(exports[5]?.kind).toBe("ExportOperator");
+      expect(exports[6]?.kind).toBe("ExportOperator");
+
+      // Functor(..)
+      expect(exports[7]?.kind).toBe("ExportTypeAll");
+    }
+  });
+
+  test("parses import with explicit export specs", () => {
+    const source = `import Html exposing (div, span, text)`;
+    const program = parse(source);
+    expect(program.imports[0]?.exposing?.kind).toBe("Explicit");
+    if (program.imports[0]?.exposing?.kind === "Explicit") {
+      const exports = program.imports[0].exposing.exports;
+      expect(exports.length).toBe(3);
+      expect(exports[0]?.kind).toBe("ExportValue");
+    }
+  });
+
+  test("parses import with type and constructor specs", () => {
+    const source = `import Data.Maybe exposing (Maybe(..))`;
+    const program = parse(source);
+    expect(program.imports[0]?.exposing?.kind).toBe("Explicit");
+    if (program.imports[0]?.exposing?.kind === "Explicit") {
+      const exports = program.imports[0].exposing.exports;
+      expect(exports.length).toBe(1);
+      expect(exports[0]?.kind).toBe("ExportTypeAll");
+      if (exports[0]?.kind === "ExportTypeAll") {
+        expect(exports[0].name).toBe("Maybe");
+      }
+    }
+  });
+});

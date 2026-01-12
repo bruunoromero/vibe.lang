@@ -9,10 +9,32 @@ ModuleDeclaration = "module", ModuleName, "exposing", Exposing ;
 
 ImportDeclaration = "import", ModuleName, ["as", UpperIdentifier], ["exposing", Exposing] ;
 
-Exposing = "(", "..", ")"                    (* expose all *)
-         | "(", IdentifierList, ")" ;        (* expose specific *)
+(* Exposing clauses support detailed export specifications for types and protocols *)
+(* 
+  Examples:
+    exposing (..)                           -- expose all
+    exposing (foo, bar)                     -- expose specific values
+    exposing (Maybe(..), Result(Ok, Err))   -- expose types with constructors
+    exposing (Num(..), Eq(==, /=))          -- expose protocols with methods
+    exposing ((++), (<|>))                  -- expose operators
+    exposing (map, List(..), (>>))          -- mixed exports
+*)
+Exposing = "(", "..", ")"                   (* expose all *)
+         | "(", ExportSpecList, ")" ;       (* expose specific items *)
 
-IdentifierList = Identifier, {",", Identifier} ;
+ExportSpecList = ExportSpec, {",", ExportSpec} ;
+
+ExportSpec = LowerIdentifier                (* value or function *)
+           | UpperIdentifier                (* opaque type or protocol without members *)
+           | "(", Operator, ")"             (* operator *)
+           | UpperIdentifier, "(", "..", ")"  (* type or protocol with all constructors/methods *)
+           | UpperIdentifier, "(", MemberList, ")" ; (* type or protocol with specific members *)
+
+MemberList = Member, {",", Member} ;
+
+Member = UpperIdentifier                    (* constructor or method name *)
+       | LowerIdentifier                    (* method name *)
+       | "(", Operator, ")" ;               (* operator method *)
 
 ModuleName = UpperIdentifier, {".", UpperIdentifier} ;
 

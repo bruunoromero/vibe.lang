@@ -262,6 +262,7 @@ export function lower(
     sourceModule: semantics,
     sourceProgram: program,
     packageName: options.packageName,
+    exports: semantics.exports,
   };
 }
 

@@ -408,6 +408,9 @@ export type IRProgram = {
 
   /** Original AST program for additional source info */
   sourceProgram: Program;
+
+  /** Export information from the module's exposing clause */
+  exports: ExportInfo;
 };
 
 // ============================================================================
@@ -435,4 +438,9 @@ export type {
   TypeExpr,
   RecordField,
 } from "@vibe/syntax";
-export type { SemanticModule, ConstructorInfo, ADTInfo } from "@vibe/semantics";
+export type {
+  SemanticModule,
+  ConstructorInfo,
+  ADTInfo,
+  ExportInfo,
+} from "@vibe/semantics";

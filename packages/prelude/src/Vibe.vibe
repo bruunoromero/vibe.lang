@@ -1,4 +1,26 @@
-module Vibe exposing (..)
+module Vibe exposing 
+    ( (|>)
+    , (<|)
+    , (>>)
+    , (<<)
+    , (&&)
+    , (||)
+    , (::)
+    , (++)
+    , not
+    , Maybe(..)
+    , Result(..)
+    , Pair(..)
+    , Num(..)
+    , Fractional(..)
+    , Integral(..)
+    , Eq(..)
+    , Ord(..)
+    , identity
+    , always
+    , flip
+    , apply
+    )
 
 {- =============================================================================
    Vibe - The Standard Library for Vibe
@@ -447,63 +469,3 @@ flip f x y = f y x
 -}
 apply : (a -> b) -> a -> b
 apply f x = f x
-
-
--- =============================================================================
--- Maybe Functions
--- =============================================================================
-
-{-| Apply a function to a Maybe value if it exists.
-
-    map f (Just x)  ==  Just (f x)
-    map f Nothing   ==  Nothing
--}
-mapMaybe : (a -> b) -> Maybe a -> Maybe b
-mapMaybe f maybe =
-    case maybe of
-        Just x -> Just (f x)
-        Nothing -> Nothing
-
-
-{-| Provide a default value for a Maybe.
-
-    withDefault 0 (Just 5)  ==  5
-    withDefault 0 Nothing   ==  0
--}
-withDefault : a -> Maybe a -> a
-withDefault default maybe =
-    case maybe of
-        Just x -> x
-        Nothing -> default
-
--- =============================================================================
--- Result Functions
--- =============================================================================
-
-{-| Apply a function to a Result value if it's Ok.
-
-    mapResult f (Ok x)    ==  Ok (f x)
-    mapResult f (Err e)   ==  Err e
--}
-mapResult : (a -> b) -> Result e a -> Result e b
-mapResult f result =
-    case result of
-        Ok x -> Ok (f x)
-        Err e -> Err e
-
-
-{-| Handle both cases of a Result.
-
-    fromResult onErr onOk result
--}
-fromResult : (e -> b) -> (a -> b) -> Result e a -> b
-fromResult onErr onOk result =
-    case result of
-        Ok x -> onOk x
-        Err e -> onErr e
-
-first : List a -> Maybe a
-first xs =
-    case xs of
-        x :: _ -> Just x
-        _ -> Nothing

@@ -112,6 +112,40 @@ Always run a rebuild after completing code changes to validate the workspace dep
 
 5. **Zero tolerance policy**: A task with TypeScript errors is fundamentally incomplete and may cause issues for subsequent work.
 
+## Grammar File Updates
+
+**CRITICAL:** Whenever you modify the language's parsing or syntax, you **MUST** update the grammar file at [docs/grammar.ebnf](docs/grammar.ebnf):
+
+1. **Every syntax change requires grammar updates**:
+
+   - Adding new expression types
+   - Modifying operator precedence
+   - Introducing new keywords
+   - Changing import/export syntax
+   - Adding new declaration types
+   - Modifying pattern syntax
+   - Updating type expression rules
+
+2. **Grammar file is the source of truth** for the language syntax:
+
+   - It serves as documentation for language users and developers
+   - It helps catch ambiguities and inconsistencies in the parser
+   - Parser implementation should strictly follow the grammar
+   - Keep grammar EBNF notation accurate and clear
+
+3. **Update process**:
+
+   - Make changes to parser/lexer/syntax
+   - Update grammar.ebnf to reflect the changes
+   - Include clear comments and examples in the grammar
+   - Run `bun test` to ensure parser tests pass
+   - Review grammar for clarity and correctness
+
+4. **Example**: When adding module export specifications:
+   - Grammar shows the full syntax: `ExportSpec = LowerIdentifier | UpperIdentifier | "(", Operator, ")" | ...`
+   - Comments explain each variant with examples
+   - Parser implementation follows this grammar exactly
+
 ## Identifier Sanitizers
 
 - When adding or renaming operator-like identifiers (e.g., `.` → `_DOT`), update the shared map in `packages/syntax/index.ts` (`IDENTIFIER_OPERATOR_MAPPINGS`).

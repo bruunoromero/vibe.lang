@@ -20,6 +20,7 @@ import {
   type ModuleDeclaration,
   type ImportDeclaration,
   type Exposing,
+  type ExportSpec,
   type Declaration,
   type TypeAnnotationDeclaration,
   type TypeExpr,
@@ -355,29 +356,39 @@ class Parser {
   /**
    * Parse exposing clause
    *
-   * Grammar: Exposing = "(", "..", ")" | "(", IdentifierList, ")"
+   * Grammar:
+   *   Exposing = "(", "..", ")" | "(", ExportSpecList, ")"
+   *   ExportSpec = LowerIdentifier                        -- value/function
+   *              | "(", Operator, ")"                     -- operator
+   *              | UpperIdentifier                        -- opaque type/protocol
+   *              | UpperIdentifier, "(", "..", ")"        -- type/protocol with all constructors/methods
+   *              | UpperIdentifier, "(", IdentList, ")"   -- type/protocol with specific members
+   *
    * Examples:
-   *   (..)              - expose all
-   *   (foo, bar, Baz)   - expose specific names
+   *   (..)                              - expose all
+   *   (foo, bar)                        - expose values foo and bar
+   *   (Maybe(..), Result(Ok, Err))      - expose Maybe with all ctors, Result with Ok/Err
+   *   (Num(..), Eq(==))                 - expose Num with all methods, Eq with == only
+   *   ((++), (<$>))                     - expose operators
    */
   private parseExposing(): Exposing {
     // Consume opening parenthesis
-    this.expect(TokenKind.LParen, "exposing list start");
+    const openParen = this.expect(TokenKind.LParen, "exposing list start");
+    const start = openParen.span.start;
 
     // Check if exposing all (..)
     if (this.match(TokenKind.Range)) {
       const end = this.expect(TokenKind.RParen, "close exposing (..)").span.end;
-      return { kind: "All", span: { start: this.previousSpan().start, end } };
+      return { kind: "All", span: { start, end } };
     }
 
-    // Parse explicit list of names
-    const names: string[] = [];
-    const start = this.currentSpan().start;
+    // Parse explicit list of export specs
+    const exports: ExportSpec[] = [];
 
-    // Parse comma-separated identifier list
+    // Parse comma-separated export spec list
     while (true) {
-      const nameToken = this.expectAnyIdentifier("exposed value");
-      names.push(nameToken.lexeme);
+      const spec = this.parseExportSpec();
+      exports.push(spec);
 
       // Continue if comma found, otherwise break
       if (this.match(TokenKind.Comma)) {
@@ -388,7 +399,123 @@ class Parser {
 
     // Consume closing parenthesis
     const end = this.expect(TokenKind.RParen, "close exposing list").span.end;
-    return { kind: "Explicit", names, span: { start, end } };
+    return { kind: "Explicit", exports, span: { start, end } };
+  }
+
+  /**
+   * Parse a single export specification
+   *
+   * Examples:
+   *   foo                 -> ExportValue "foo"
+   *   (++)                -> ExportOperator "++"
+   *   Maybe               -> ExportValue "Maybe"
+   *   Maybe(..)           -> ExportTypeAll "Maybe"
+   *   Maybe(Just,Nothing) -> ExportTypeSome "Maybe" ["Just", "Nothing"]
+   *   Num(..)             -> ExportTypeAll "Num"
+   *   Num(+, -)           -> ExportTypeSome "Num" ["+", "-"]
+   */
+  private parseExportSpec(): ExportSpec {
+    const current = this.current();
+
+    // Check for operator export: (++)
+    if (current.kind === TokenKind.LParen) {
+      const start = current.span.start;
+      this.advance(); // consume (
+
+      // Expect an operator inside
+      const opToken = this.expect(TokenKind.Operator, "operator in export");
+      const operator = opToken.lexeme;
+
+      const end = this.expect(
+        TokenKind.RParen,
+        "closing paren for operator export"
+      ).span.end;
+
+      return { kind: "ExportOperator", operator, span: { start, end } };
+    }
+
+    // Check for lower identifier (simple value export)
+    if (current.kind === TokenKind.LowerIdentifier) {
+      this.advance();
+      return {
+        kind: "ExportValue",
+        name: current.lexeme,
+        span: current.span,
+      };
+    }
+
+    // Check for upper identifier (type, protocol, or constructor)
+    if (current.kind === TokenKind.UpperIdentifier) {
+      const nameToken = this.advance();
+      const name = nameToken.lexeme;
+      const start = nameToken.span.start;
+
+      // Check if followed by (..) or (Con1, Con2)
+      if (this.peek(TokenKind.LParen)) {
+        this.advance(); // consume (
+
+        // Check for (..)
+        if (this.match(TokenKind.Range)) {
+          const end = this.expect(
+            TokenKind.RParen,
+            "closing paren for type/protocol export"
+          ).span.end;
+          return { kind: "ExportTypeAll", name, span: { start, end } };
+        }
+
+        // Parse list of constructor/method names
+        const members: string[] = [];
+        while (true) {
+          const memberCurrent = this.current();
+
+          // Members can be:
+          // - Upper identifiers (constructors like Just, Nothing)
+          // - Lower identifiers (methods like map, filter)
+          // - Operators in parens (methods like (+), (==))
+          if (memberCurrent.kind === TokenKind.LParen) {
+            this.advance(); // consume (
+            const opToken = this.expect(
+              TokenKind.Operator,
+              "operator in member list"
+            );
+            members.push(opToken.lexeme);
+            this.expect(TokenKind.RParen, "closing paren for operator member");
+          } else if (
+            memberCurrent.kind === TokenKind.UpperIdentifier ||
+            memberCurrent.kind === TokenKind.LowerIdentifier
+          ) {
+            members.push(memberCurrent.lexeme);
+            this.advance();
+          } else {
+            throw new ParseError(
+              `Expected constructor name, method name, or operator in export list, got ${memberCurrent.kind}`,
+              memberCurrent.span
+            );
+          }
+
+          // Continue if comma found
+          if (this.match(TokenKind.Comma)) {
+            continue;
+          }
+          break;
+        }
+
+        const end = this.expect(
+          TokenKind.RParen,
+          "closing paren for type/protocol export"
+        ).span.end;
+        return { kind: "ExportTypeSome", name, members, span: { start, end } };
+      }
+
+      // Just the type/protocol name without members - treated as ExportValue
+      // (opaque type export or protocol without methods)
+      return { kind: "ExportValue", name, span: nameToken.span };
+    }
+
+    throw new ParseError(
+      `Expected export specification, got ${current.kind}`,
+      current.span
+    );
   }
 
   /**

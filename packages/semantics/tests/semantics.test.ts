@@ -1060,3 +1060,170 @@ type MyOption a = MySome a | MyNone`);
     expect(result.adts.MyOption?.moduleName).toBe("TestModule");
   });
 });
+
+describe("module exports", () => {
+  test("computes exports for exposing all", () => {
+    const program = parse(`module TestModule exposing (..)
+${TYPE_PREAMBLE}
+type MyOption a = MySome a | MyNone
+foo x = x
+bar y = y`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.exportsAll).toBe(true);
+    expect(result.exports.values.has("foo")).toBe(true);
+    expect(result.exports.values.has("bar")).toBe(true);
+    expect(result.exports.types.has("MyOption")).toBe(true);
+    expect(result.exports.types.get("MyOption")?.allConstructors).toBe(true);
+  });
+
+  test("computes exports for explicit value exports", () => {
+    const program = parse(`module TestModule exposing (foo)
+${TYPE_PREAMBLE}
+foo x = x
+bar y = y`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.exportsAll).toBe(false);
+    expect(result.exports.values.has("foo")).toBe(true);
+    expect(result.exports.values.has("bar")).toBe(false);
+  });
+
+  test("computes exports for type with all constructors", () => {
+    const program = parse(`module TestModule exposing (MyOption(..))
+${TYPE_PREAMBLE}
+type MyOption a = MySome a | MyNone`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.types.has("MyOption")).toBe(true);
+    const typeExport = result.exports.types.get("MyOption");
+    expect(typeExport?.allConstructors).toBe(true);
+    expect(typeExport?.constructors?.has("MySome")).toBe(true);
+    expect(typeExport?.constructors?.has("MyNone")).toBe(true);
+  });
+
+  test("computes exports for type with specific constructors", () => {
+    const program = parse(`module TestModule exposing (MyOption(MySome))
+${TYPE_PREAMBLE}
+type MyOption a = MySome a | MyNone`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.types.has("MyOption")).toBe(true);
+    const typeExport = result.exports.types.get("MyOption");
+    expect(typeExport?.allConstructors).toBe(false);
+    expect(typeExport?.constructors?.has("MySome")).toBe(true);
+    expect(typeExport?.constructors?.has("MyNone")).toBe(false);
+  });
+
+  test("computes exports for opaque type", () => {
+    const program = parse(`module TestModule exposing (Opaque)
+${TYPE_PREAMBLE}
+type Opaque a`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.types.has("Opaque")).toBe(true);
+    expect(result.exports.types.get("Opaque")?.allConstructors).toBe(false);
+  });
+
+  test("computes exports for protocol with all methods", () => {
+    const program = parse(`module TestModule exposing (MyProtocol(..))
+${TYPE_PREAMBLE}
+protocol MyProtocol a where
+  foo : a -> a
+  bar : a -> Int`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.protocols.has("MyProtocol")).toBe(true);
+    const protocolExport = result.exports.protocols.get("MyProtocol");
+    expect(protocolExport?.allMethods).toBe(true);
+    expect(protocolExport?.methods?.has("foo")).toBe(true);
+    expect(protocolExport?.methods?.has("bar")).toBe(true);
+  });
+
+  test("computes exports for protocol with specific methods", () => {
+    const program = parse(`module TestModule exposing (MyProtocol(foo))
+${TYPE_PREAMBLE}
+protocol MyProtocol a where
+  foo : a -> a
+  bar : a -> Int`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.protocols.has("MyProtocol")).toBe(true);
+    const protocolExport = result.exports.protocols.get("MyProtocol");
+    expect(protocolExport?.allMethods).toBe(false);
+    expect(protocolExport?.methods?.has("foo")).toBe(true);
+    expect(protocolExport?.methods?.has("bar")).toBe(false);
+  });
+
+  test("rejects exporting undefined value", () => {
+    expectError(
+      `module TestModule exposing (undefined)
+foo x = x`,
+      "Module exposes 'undefined' which is not defined"
+    );
+  });
+
+  test("rejects exporting undefined type with constructors", () => {
+    expectError(
+      `module TestModule exposing (UndefinedType(..))
+foo x = x`,
+      "Module exposes 'UndefinedType(..)' but 'UndefinedType' is not a type or protocol"
+    );
+  });
+
+  test("rejects exporting type alias with (..) syntax", () => {
+    expectError(
+      `module TestModule exposing (MyAlias(..))
+type alias MyAlias = Int`,
+      "Type alias 'MyAlias' cannot use (..) syntax - type aliases have no constructors"
+    );
+  });
+
+  test("rejects exporting invalid constructor for type", () => {
+    expectError(
+      `module TestModule exposing (MyOption(Invalid))
+type MyOption a = MySome a | MyNone`,
+      "Constructor 'Invalid' is not defined in type 'MyOption'"
+    );
+  });
+
+  test("rejects exporting invalid method for protocol", () => {
+    expectError(
+      `module TestModule exposing (MyProtocol(invalid))
+protocol MyProtocol a where
+  foo : a -> a`,
+      "Method 'invalid' is not defined in protocol 'MyProtocol'"
+    );
+  });
+
+  test("handles mixed exports correctly", () => {
+    const program =
+      parse(`module TestModule exposing (foo, MyOption(..), bar, MyProtocol(methodA))
+${TYPE_PREAMBLE}
+type MyOption a = MySome a | MyNone
+
+protocol MyProtocol a where
+  methodA : a -> a
+  methodB : a -> Int
+
+foo x = x
+bar y = y
+baz z = z`);
+    const result = analyze(program, { injectPrelude: false });
+
+    expect(result.exports.exportsAll).toBe(false);
+    expect(result.exports.values.has("foo")).toBe(true);
+    expect(result.exports.values.has("bar")).toBe(true);
+    expect(result.exports.values.has("baz")).toBe(false);
+    expect(result.exports.types.has("MyOption")).toBe(true);
+    expect(result.exports.types.get("MyOption")?.allConstructors).toBe(true);
+    expect(result.exports.protocols.has("MyProtocol")).toBe(true);
+    expect(result.exports.protocols.get("MyProtocol")?.allMethods).toBe(false);
+    expect(
+      result.exports.protocols.get("MyProtocol")?.methods?.has("methodA")
+    ).toBe(true);
+    expect(
+      result.exports.protocols.get("MyProtocol")?.methods?.has("methodB")
+    ).toBe(false);
+  });
+});

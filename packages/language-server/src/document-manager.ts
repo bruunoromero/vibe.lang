@@ -58,6 +58,15 @@ export class DocumentManager {
   /** Flag to indicate prelude loading has been attempted */
   private preludeLoadAttempted = false;
 
+  /** Cached loaded modules by name */
+  private loadedModules = new Map<string, SemanticModule>();
+
+  /** Project config for resolving modules */
+  private projectConfig: ResolvedVibeConfig | null = null;
+
+  /** Flag to indicate project config loading has been attempted */
+  private projectConfigAttempted = false;
+
   /**
    * Update a document and trigger reanalysis.
    */
@@ -168,6 +177,9 @@ export class DocumentManager {
         return;
       }
 
+      // Save the config for later use in loading dependencies
+      this.projectConfig = config;
+
       // Try to resolve the Vibe module
       const resolved = resolveModule({
         config,
@@ -184,10 +196,88 @@ export class DocumentManager {
       this.preludeModule = analyze(preludeAst, {
         injectPrelude: false,
       });
+
+      // Cache the prelude module
+      this.loadedModules.set("Vibe", this.preludeModule);
     } catch {
       // Silently fail - prelude is optional for LSP
       // Errors will show up as "symbol not found" diagnostics
     }
+  }
+
+  /**
+   * Load a module from disk and analyze it.
+   * Returns null if the module cannot be loaded.
+   */
+  private loadModule(moduleName: string): SemanticModule | null {
+    // Check if already cached
+    if (this.loadedModules.has(moduleName)) {
+      return this.loadedModules.get(moduleName) || null;
+    }
+
+    if (!this.projectConfig) {
+      return null;
+    }
+
+    try {
+      // Resolve the module
+      const resolved = resolveModule({
+        config: this.projectConfig,
+        moduleName,
+        preferDist: false,
+      });
+
+      const source = fs.readFileSync(resolved.filePath, "utf8");
+      const { program } = parseWithInfix(source);
+
+      // Check if this is the Vibe module itself
+      const isVibe = moduleName === "Vibe";
+
+      // Analyze with already-loaded dependencies
+      const analyzed = analyze(program, {
+        dependencies: this.loadedModules,
+        injectPrelude: !isVibe && this.preludeModule !== null,
+      });
+
+      // Cache it
+      this.loadedModules.set(moduleName, analyzed);
+      return analyzed;
+    } catch {
+      // Module could not be loaded, return null
+      return null;
+    }
+  }
+
+  /**
+   * Recursively load all dependencies from an AST.
+   */
+  private loadDependencies(ast: Program): Map<string, SemanticModule> {
+    const dependencies = new Map<string, SemanticModule>();
+
+    // Add already-loaded modules
+    for (const [name, module] of this.loadedModules) {
+      dependencies.set(name, module);
+    }
+
+    // Extract imports from AST and load them
+    if (ast.imports) {
+      const toLoad: string[] = [];
+      for (const imp of ast.imports) {
+        if (!dependencies.has(imp.moduleName)) {
+          toLoad.push(imp.moduleName);
+        }
+      }
+
+      // Load modules (non-recursively for LSP to avoid performance issues)
+      for (const moduleName of toLoad) {
+        const loaded = this.loadModule(moduleName);
+        if (loaded) {
+          dependencies.set(moduleName, loaded);
+        }
+      }
+    }
+
+    return dependencies;
   }
 
   /**
@@ -248,11 +338,8 @@ export class DocumentManager {
         // Check if this is the Vibe prelude itself
         const isPreludeModule = cache.parseResult.ast.module?.name === "Vibe";
 
-        // Build dependencies map with prelude if available
-        const dependencies = new Map<string, SemanticModule>();
-        if (this.preludeModule && !isPreludeModule) {
-          dependencies.set("Vibe", this.preludeModule);
-        }
+        // Load all dependencies for this module
+        const dependencies = this.loadDependencies(cache.parseResult.ast);
 
         // Build analysis options
         const analyzeOptions: AnalyzeOptions = {

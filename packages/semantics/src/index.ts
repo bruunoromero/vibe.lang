@@ -11,6 +11,8 @@ import type {
   Span,
   ImportDeclaration,
   ModuleDeclaration,
+  Exposing,
+  ExportSpec,
   Expr,
   Pattern,
   ProtocolDeclaration,
@@ -738,6 +740,39 @@ export type ValueInfo = {
 };
 
 /**
+ * Information about what a module exports.
+ * This is computed from the module's exposing clause and what's defined in the module.
+ */
+export type ExportInfo = {
+  /** Exported values and functions (by name) */
+  values: Set<string>;
+  /** Exported operators */
+  operators: Set<string>;
+  /** Exported types (by name) */
+  types: Map<
+    string,
+    {
+      /** If true, all constructors are exported; if false, only listed ones */
+      allConstructors: boolean;
+      /** If allConstructors is false, the specific constructors exported */
+      constructors?: Set<string>;
+    }
+  >;
+  /** Exported protocols (by name) */
+  protocols: Map<
+    string,
+    {
+      /** If true, all methods are exported; if false, only listed ones */
+      allMethods: boolean;
+      /** If allMethods is false, the specific methods exported */
+      methods?: Set<string>;
+    }
+  >;
+  /** Whether this module exports everything (exposing (..)) */
+  exportsAll: boolean;
+};
+
+/**
  * The result of semantic analysis for a module.
  *
  * Contains all the analyzed information needed for code generation:
@@ -752,6 +787,7 @@ export type ValueInfo = {
  * - instances: Instance implementations
  * - module: Module declaration (if any)
  * - imports: Import declarations
+ * - exports: Computed export information
  */
 export type SemanticModule = {
   values: Record<string, ValueInfo>;
@@ -779,6 +815,8 @@ export type SemanticModule = {
   operators: OperatorRegistry;
   /** Infix declarations for operators */
   infixDeclarations: InfixDeclaration[];
+  /** Computed export information for this module */
+  exports: ExportInfo;
 };
 
 export interface AnalyzeOptions {
@@ -790,6 +828,338 @@ export interface AnalyzeOptions {
    * or when testing without prelude.
    */
   injectPrelude?: boolean;
+}
+
+/**
+ * Helper function to check if an item is exported from a module.
+ * Returns true if the item is exported, false otherwise.
+ */
+function isExportedFromModule(
+  depModule: SemanticModule,
+  itemName: string,
+  itemKind:
+    | "value"
+    | "operator"
+    | "type"
+    | "constructor"
+    | "protocol"
+    | "method"
+): boolean {
+  const exports = depModule.exports;
+
+  // If module exports everything, all items are available
+  if (exports.exportsAll) {
+    return true;
+  }
+
+  switch (itemKind) {
+    case "value":
+      return exports.values.has(itemName);
+    case "operator":
+      return exports.operators.has(itemName) || exports.values.has(itemName);
+    case "type":
+      return exports.types.has(itemName);
+    case "constructor": {
+      // Check if any type exports this constructor
+      for (const [, typeExport] of exports.types) {
+        if (typeExport.constructors?.has(itemName)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    case "protocol":
+      return exports.protocols.has(itemName);
+    case "method": {
+      // Check if any protocol exports this method
+      for (const [, protocolExport] of exports.protocols) {
+        if (protocolExport.methods?.has(itemName)) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
+}
+
+/**
+ * Import a single export specification from a dependency module.
+ */
+function importExportSpec(
+  spec: ExportSpec,
+  depModule: SemanticModule,
+  imp: ImportDeclaration,
+  globalScope: Scope,
+  substitution: Substitution,
+  constructors: Record<string, ConstructorInfo>,
+  constructorTypes: Record<string, TypeScheme>,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
+  protocols: Record<string, ProtocolInfo>,
+  operators: OperatorRegistry
+): void {
+  switch (spec.kind) {
+    case "ExportValue": {
+      const name = spec.name;
+
+      // First check if it's actually exported
+      if (!isExportedFromModule(depModule, name, "value")) {
+        // Check if it's a type, type alias, opaque type, or protocol
+        if (
+          isExportedFromModule(depModule, name, "type") &&
+          depModule.adts[name]
+        ) {
+          // Import the ADT without constructors
+          const depADT = depModule.adts[name]!;
+          checkTypeCollision(
+            name,
+            imp.moduleName,
+            adts[name],
+            imp.span,
+            "type"
+          );
+          adts[name] = depADT;
+          return;
+        }
+        if (depModule.typeAliases[name]) {
+          checkTypeCollision(
+            name,
+            imp.moduleName,
+            typeAliases[name],
+            imp.span,
+            "type alias"
+          );
+          typeAliases[name] = depModule.typeAliases[name]!;
+          return;
+        }
+        if (depModule.opaqueTypes[name]) {
+          opaqueTypes[name] = depModule.opaqueTypes[name]!;
+          return;
+        }
+        if (
+          isExportedFromModule(depModule, name, "protocol") &&
+          depModule.protocols[name]
+        ) {
+          // Import the protocol without methods
+          checkTypeCollision(
+            name,
+            imp.moduleName,
+            protocols[name],
+            imp.span,
+            "protocol"
+          );
+          protocols[name] = depModule.protocols[name]!;
+          return;
+        }
+        // If nothing matched, the item is not exported
+        throw new SemanticError(
+          `Cannot import '${name}' from module '${imp.moduleName}' - it is not exported`,
+          spec.span
+        );
+      }
+
+      // Import value
+      const depValue = depModule.values[name];
+      if (depValue && depValue.type) {
+        const importedType = depValue.type;
+        const scheme = generalize(importedType, globalScope, substitution);
+        globalScope.symbols.set(name, scheme);
+      }
+
+      // Also check for constructors (might be re-exported)
+      if (isExportedFromModule(depModule, name, "constructor")) {
+        const depConstructor = depModule.constructors[name];
+        if (depConstructor) {
+          constructors[name] = depConstructor;
+          const ctorScheme = depModule.constructorTypes[name];
+          if (ctorScheme) {
+            globalScope.symbols.set(name, ctorScheme);
+            constructorTypes[name] = ctorScheme;
+          }
+        }
+      }
+      break;
+    }
+
+    case "ExportOperator": {
+      const op = spec.operator;
+
+      // Check if operator is exported
+      if (!isExportedFromModule(depModule, op, "operator")) {
+        throw new SemanticError(
+          `Cannot import operator '${op}' from module '${imp.moduleName}' - it is not exported`,
+          spec.span
+        );
+      }
+
+      // Import operator value if it exists
+      const depValue = depModule.values[op];
+      if (depValue && depValue.type) {
+        const importedType = depValue.type;
+        const scheme = generalize(importedType, globalScope, substitution);
+        globalScope.symbols.set(op, scheme);
+      }
+
+      // Import operator info if it exists
+      const opInfo = depModule.operators.get(op);
+      if (opInfo) {
+        operators.set(op, opInfo);
+      }
+      break;
+    }
+
+    case "ExportTypeAll": {
+      const name = spec.name;
+
+      // Check if it's an ADT
+      const depADT = depModule.adts[name];
+      if (depADT) {
+        if (!isExportedFromModule(depModule, name, "type")) {
+          throw new SemanticError(
+            `Cannot import type '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
+            spec.span
+          );
+        }
+
+        checkTypeCollision(name, imp.moduleName, adts[name], imp.span, "type");
+        adts[name] = depADT;
+
+        // Import all constructors
+        for (const ctorName of depADT.constructors) {
+          const ctor = depModule.constructors[ctorName];
+          if (ctor) {
+            constructors[ctorName] = ctor;
+            const ctorScheme = depModule.constructorTypes[ctorName];
+            if (ctorScheme) {
+              globalScope.symbols.set(ctorName, ctorScheme);
+              constructorTypes[ctorName] = ctorScheme;
+            }
+          }
+        }
+        return;
+      }
+
+      // Check if it's a protocol
+      const depProtocol = depModule.protocols[name];
+      if (depProtocol) {
+        if (!isExportedFromModule(depModule, name, "protocol")) {
+          throw new SemanticError(
+            `Cannot import protocol '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
+            spec.span
+          );
+        }
+
+        checkTypeCollision(
+          name,
+          imp.moduleName,
+          protocols[name],
+          imp.span,
+          "protocol"
+        );
+        protocols[name] = depProtocol;
+
+        // Add all protocol methods to scope
+        addProtocolMethodsToScope(depProtocol, globalScope);
+        return;
+      }
+
+      throw new SemanticError(
+        `Cannot import '${name}(..)' from module '${imp.moduleName}' - it is not a type or protocol`,
+        spec.span
+      );
+    }
+
+    case "ExportTypeSome": {
+      const name = spec.name;
+      const members = spec.members;
+
+      // Check if it's an ADT with specific constructors
+      const depADT = depModule.adts[name];
+      if (depADT) {
+        if (!isExportedFromModule(depModule, name, "type")) {
+          throw new SemanticError(
+            `Cannot import type '${name}' from module '${imp.moduleName}' - it is not exported`,
+            spec.span
+          );
+        }
+
+        checkTypeCollision(name, imp.moduleName, adts[name], imp.span, "type");
+        adts[name] = depADT;
+
+        // Import specific constructors
+        for (const ctorName of members) {
+          if (!depADT.constructors.includes(ctorName)) {
+            throw new SemanticError(
+              `Constructor '${ctorName}' is not defined in type '${name}'`,
+              spec.span
+            );
+          }
+          const ctor = depModule.constructors[ctorName];
+          if (ctor) {
+            constructors[ctorName] = ctor;
+            const ctorScheme = depModule.constructorTypes[ctorName];
+            if (ctorScheme) {
+              globalScope.symbols.set(ctorName, ctorScheme);
+              constructorTypes[ctorName] = ctorScheme;
+            }
+          }
+        }
+        return;
+      }
+
+      // Check if it's a protocol with specific methods
+      const depProtocol = depModule.protocols[name];
+      if (depProtocol) {
+        if (!isExportedFromModule(depModule, name, "protocol")) {
+          throw new SemanticError(
+            `Cannot import protocol '${name}' from module '${imp.moduleName}' - it is not exported`,
+            spec.span
+          );
+        }
+
+        checkTypeCollision(
+          name,
+          imp.moduleName,
+          protocols[name],
+          imp.span,
+          "protocol"
+        );
+        protocols[name] = depProtocol;
+
+        // Add specific protocol methods to scope
+        for (const methodName of members) {
+          const methodInfo = depProtocol.methods.get(methodName);
+          if (!methodInfo) {
+            throw new SemanticError(
+              `Method '${methodName}' is not defined in protocol '${name}'`,
+              spec.span
+            );
+          }
+
+          // Create constrained type scheme for the method
+          const constraintTypeVar: Type = { kind: "var", id: nextTypeVarId++ };
+          const methodType = methodInfo.type;
+          const scheme: TypeScheme = {
+            vars: new Set([
+              constraintTypeVar.kind === "var" ? constraintTypeVar.id : -1,
+            ]),
+            constraints: [
+              { protocolName: name, typeArgs: [constraintTypeVar] },
+            ],
+            type: methodType,
+          };
+          globalScope.symbols.set(methodName, scheme);
+        }
+        return;
+      }
+
+      throw new SemanticError(
+        `Cannot import '${name}(...)' from module '${imp.moduleName}' - it is not a type or protocol`,
+        spec.span
+      );
+    }
+  }
 }
 
 export function analyze(
@@ -1007,173 +1377,144 @@ export function analyze(
       });
     }
 
-    // Handle explicit exposing (e.g., `import Html exposing (div, span)`)
+    // Handle explicit exposing with new ExportSpec format
     if (imp.exposing?.kind === "Explicit") {
-      for (const exposedName of imp.exposing.names) {
-        const depValue = depModule.values[exposedName];
-        if (depValue && depValue.type) {
-          // Import the type from the dependency
-          // Create a fresh type scheme to avoid sharing type variable IDs
-          const importedType = depValue.type;
-          const scheme = generalize(importedType, globalScope, substitution);
-          globalScope.symbols.set(exposedName, scheme);
-        }
-
-        // Also check for constructors
-        const depConstructor = depModule.constructors[exposedName];
-        if (depConstructor) {
-          constructors[exposedName] = depConstructor;
-          // Also import the type scheme so the constructor can be used as a value
-          const ctorScheme = depModule.constructorTypes[exposedName];
-          if (ctorScheme) {
-            globalScope.symbols.set(exposedName, ctorScheme);
-            constructorTypes[exposedName] = ctorScheme;
-          }
-        }
-
-        // Check for ADTs
-        const depADT = depModule.adts[exposedName];
-        if (depADT) {
-          // Check for collision with existing ADT from different module
-          checkTypeCollision(
-            exposedName,
-            imp.moduleName,
-            adts[exposedName],
-            imp.span,
-            "type"
-          );
-          adts[exposedName] = depADT;
-          // When importing an ADT, also import all its constructors
-          for (const ctorName of depADT.constructors) {
-            const ctor = depModule.constructors[ctorName];
-            if (ctor) {
-              constructors[ctorName] = ctor;
-              // Also import the type scheme
-              const ctorScheme = depModule.constructorTypes[ctorName];
-              if (ctorScheme) {
-                globalScope.symbols.set(ctorName, ctorScheme);
-                constructorTypes[ctorName] = ctorScheme;
-              }
-            }
-          }
-        }
-
-        // Check for type aliases
-        const depTypeAlias = depModule.typeAliases[exposedName];
-        if (depTypeAlias) {
-          // Check for collision with existing type alias from different module
-          checkTypeCollision(
-            exposedName,
-            imp.moduleName,
-            typeAliases[exposedName],
-            imp.span,
-            "type alias"
-          );
-          typeAliases[exposedName] = depTypeAlias;
-        }
+      for (const spec of imp.exposing.exports) {
+        importExportSpec(
+          spec,
+          depModule,
+          imp,
+          globalScope,
+          substitution,
+          constructors,
+          constructorTypes,
+          adts,
+          typeAliases,
+          opaqueTypes,
+          protocols,
+          operators
+        );
       }
     }
 
     // Handle exposing all (e.g., `import Html exposing (..)`)
     if (imp.exposing?.kind === "All") {
-      // Import all values
+      // Import all exported values
       for (const [name, depValue] of Object.entries(depModule.values) as [
         string,
         ValueInfo
       ][]) {
-        if (depValue.type) {
+        if (depValue.type && isExportedFromModule(depModule, name, "value")) {
           const importedType = depValue.type;
           const scheme = generalize(importedType, globalScope, substitution);
           globalScope.symbols.set(name, scheme);
         }
       }
 
-      // Import all constructors
+      // Import all exported constructors
       for (const [name, ctor] of Object.entries(depModule.constructors) as [
         string,
         ConstructorInfo
       ][]) {
-        constructors[name] = ctor;
-        // Also import the type scheme so the constructor can be used as a value
-        const ctorScheme = depModule.constructorTypes[name];
-        if (ctorScheme) {
-          globalScope.symbols.set(name, ctorScheme);
-          constructorTypes[name] = ctorScheme;
+        if (isExportedFromModule(depModule, name, "constructor")) {
+          constructors[name] = ctor;
+          // Also import the type scheme so the constructor can be used as a value
+          const ctorScheme = depModule.constructorTypes[name];
+          if (ctorScheme) {
+            globalScope.symbols.set(name, ctorScheme);
+            constructorTypes[name] = ctorScheme;
+          }
         }
       }
 
-      // Import all ADTs
+      // Import all exported ADTs
       for (const [name, adt] of Object.entries(depModule.adts) as [
         string,
         ADTInfo
       ][]) {
-        // Check for collision with existing ADT from different module
-        checkTypeCollision(name, imp.moduleName, adts[name], imp.span, "type");
-        adts[name] = adt;
+        if (isExportedFromModule(depModule, name, "type")) {
+          // Check for collision with existing ADT from different module
+          checkTypeCollision(
+            name,
+            imp.moduleName,
+            adts[name],
+            imp.span,
+            "type"
+          );
+          adts[name] = adt;
+        }
       }
 
-      // Import all type aliases
+      // Import all exported type aliases
       for (const [name, alias] of Object.entries(depModule.typeAliases) as [
         string,
         TypeAliasInfo
       ][]) {
-        // Check for collision with existing type alias from different module
-        checkTypeCollision(
-          name,
-          imp.moduleName,
-          typeAliases[name],
-          imp.span,
-          "type alias"
-        );
-        typeAliases[name] = alias;
+        if (isExportedFromModule(depModule, name, "type")) {
+          // Check for collision with existing type alias from different module
+          checkTypeCollision(
+            name,
+            imp.moduleName,
+            typeAliases[name],
+            imp.span,
+            "type alias"
+          );
+          typeAliases[name] = alias;
+        }
       }
 
-      // Import all opaque types
+      // Import all exported opaque types
       for (const [name, opaque] of Object.entries(depModule.opaqueTypes) as [
         string,
         OpaqueTypeInfo
       ][]) {
-        // Check for collision with existing opaque type from different module
-        // Allow builtin types to be shadowed by imports (e.g., prelude can re-export Int)
-        const existing = opaqueTypes[name];
-        if (
-          existing &&
-          existing.moduleName !== "__builtin__" &&
-          existing.moduleName !== imp.moduleName
-        ) {
-          throw new SemanticError(
-            `Opaque type '${name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
-              `Consider using a different name or qualified imports.`,
-            imp.span
-          );
+        if (isExportedFromModule(depModule, name, "type")) {
+          // Check for collision with existing opaque type from different module
+          // Allow builtin types to be shadowed by imports (e.g., prelude can re-export Int)
+          const existing = opaqueTypes[name];
+          if (
+            existing &&
+            existing.moduleName !== "__builtin__" &&
+            existing.moduleName !== imp.moduleName
+          ) {
+            throw new SemanticError(
+              `Opaque type '${name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
+                `Consider using a different name or qualified imports.`,
+              imp.span
+            );
+          }
+          opaqueTypes[name] = opaque;
         }
-        opaqueTypes[name] = opaque;
       }
 
-      // Import all protocols
+      // Import all exported protocols
       for (const [name, protocol] of Object.entries(depModule.protocols) as [
         string,
         ProtocolInfo
       ][]) {
-        // Check for collision with existing protocol from different module
-        checkTypeCollision(
-          name,
-          imp.moduleName,
-          protocols[name],
-          imp.span,
-          "protocol"
-        );
-        protocols[name] = protocol;
+        if (isExportedFromModule(depModule, name, "protocol")) {
+          // Check for collision with existing protocol from different module
+          checkTypeCollision(
+            name,
+            imp.moduleName,
+            protocols[name],
+            imp.span,
+            "protocol"
+          );
+          protocols[name] = protocol;
+        }
       }
 
-      // Import all instances
+      // Import all instances (always imported regardless of exports)
       for (const instance of depModule.instances) {
         instances.push(instance);
       }
 
-      // Import operator declarations
+      // Import exported operator declarations
       for (const [op, info] of depModule.operators) {
-        operators.set(op, info);
+        if (isExportedFromModule(depModule, op, "operator")) {
+          operators.set(op, info);
+        }
       }
     }
   }
@@ -1478,9 +1819,17 @@ export function analyze(
     }
   }
 
-  if (program.module) {
-    validateModuleExposing(program.module, values);
-  }
+  // Compute export information for this module
+  const exports = computeModuleExports(
+    program.module,
+    values,
+    adts,
+    constructors,
+    typeAliases,
+    opaqueTypes,
+    protocols,
+    operators
+  );
 
   return {
     values,
@@ -1498,6 +1847,7 @@ export function analyze(
     instances,
     operators,
     infixDeclarations,
+    exports,
   };
 }
 
@@ -2755,21 +3105,248 @@ function typeOverlaps(type1: Type, type2: Type): boolean {
   return false;
 }
 
-function validateModuleExposing(
-  moduleDecl: ModuleDeclaration,
-  values: Record<string, ValueInfo>
-) {
-  if (moduleDecl.exposing?.kind !== "Explicit") {
-    return;
+/**
+ * Compute export information for a module based on its exposing clause.
+ * This validates that all exported items exist and builds the ExportInfo structure.
+ */
+function computeModuleExports(
+  moduleDecl: ModuleDeclaration | undefined,
+  values: Record<string, ValueInfo>,
+  adts: Record<string, ADTInfo>,
+  constructors: Record<string, ConstructorInfo>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
+  protocols: Record<string, ProtocolInfo>,
+  operators: OperatorRegistry
+): ExportInfo {
+  // Default: empty exports
+  const exports: ExportInfo = {
+    values: new Set(),
+    operators: new Set(),
+    types: new Map(),
+    protocols: new Map(),
+    exportsAll: false,
+  };
+
+  if (!moduleDecl || !moduleDecl.exposing) {
+    // No exposing clause means export nothing by default
+    return exports;
   }
-  for (const name of moduleDecl.exposing.names) {
-    if (!values[name]) {
-      throw new SemanticError(
-        `Module exposes '${name}' which is not defined`,
-        moduleDecl.exposing.span
-      );
+
+  const exposing = moduleDecl.exposing;
+
+  // Handle "exposing (..)" - export everything
+  if (exposing.kind === "All") {
+    exports.exportsAll = true;
+
+    // Export all values
+    for (const name of Object.keys(values)) {
+      exports.values.add(name);
+    }
+
+    // Export all operators
+    for (const op of operators.keys()) {
+      exports.operators.add(op);
+    }
+
+    // Export all ADTs with all constructors
+    for (const [name, adt] of Object.entries(adts)) {
+      exports.types.set(name, {
+        allConstructors: true,
+        constructors: new Set(adt.constructors),
+      });
+    }
+
+    // Export all type aliases
+    for (const name of Object.keys(typeAliases)) {
+      exports.types.set(name, { allConstructors: false });
+    }
+
+    // Export all opaque types
+    for (const name of Object.keys(opaqueTypes)) {
+      exports.types.set(name, { allConstructors: false });
+    }
+
+    // Export all protocols with all methods
+    for (const [name, protocol] of Object.entries(protocols)) {
+      exports.protocols.set(name, {
+        allMethods: true,
+        methods: new Set(protocol.methods.keys()),
+      });
+    }
+
+    return exports;
+  }
+
+  // Handle explicit exports
+  for (const spec of exposing.exports) {
+    switch (spec.kind) {
+      case "ExportValue": {
+        const name = spec.name;
+
+        // Check if it's a value/function
+        if (values[name]) {
+          exports.values.add(name);
+          continue;
+        }
+
+        // Check if it's a type (ADT, alias, or opaque) exported without constructors
+        if (adts[name]) {
+          exports.types.set(name, {
+            allConstructors: false,
+            constructors: new Set(),
+          });
+          continue;
+        }
+        if (typeAliases[name]) {
+          exports.types.set(name, { allConstructors: false });
+          continue;
+        }
+        if (opaqueTypes[name]) {
+          exports.types.set(name, { allConstructors: false });
+          continue;
+        }
+
+        // Check if it's a protocol exported without methods
+        if (protocols[name]) {
+          exports.protocols.set(name, {
+            allMethods: false,
+            methods: new Set(),
+          });
+          continue;
+        }
+
+        throw new SemanticError(
+          `Module exposes '${name}' which is not defined`,
+          spec.span
+        );
+      }
+
+      case "ExportOperator": {
+        const op = spec.operator;
+
+        // Check if operator is defined (either as a value or in operator registry)
+        if (!values[op] && !operators.has(op)) {
+          throw new SemanticError(
+            `Module exposes operator '${op}' which is not defined`,
+            spec.span
+          );
+        }
+
+        exports.operators.add(op);
+        // Also add to values since operators are functions
+        if (values[op]) {
+          exports.values.add(op);
+        }
+        break;
+      }
+
+      case "ExportTypeAll": {
+        const name = spec.name;
+
+        // Check if it's an ADT
+        if (adts[name]) {
+          const adt = adts[name]!;
+          exports.types.set(name, {
+            allConstructors: true,
+            constructors: new Set(adt.constructors),
+          });
+          continue;
+        }
+
+        // Check if it's a protocol
+        if (protocols[name]) {
+          const protocol = protocols[name]!;
+          exports.protocols.set(name, {
+            allMethods: true,
+            methods: new Set(protocol.methods.keys()),
+          });
+          // Also export all protocol method names as values
+          for (const methodName of protocol.methods.keys()) {
+            exports.values.add(methodName);
+          }
+          continue;
+        }
+
+        // Type alias or opaque type with (..) is an error
+        if (typeAliases[name]) {
+          throw new SemanticError(
+            `Type alias '${name}' cannot use (..) syntax - type aliases have no constructors`,
+            spec.span
+          );
+        }
+        if (opaqueTypes[name]) {
+          throw new SemanticError(
+            `Opaque type '${name}' cannot use (..) syntax - opaque types have no constructors`,
+            spec.span
+          );
+        }
+
+        throw new SemanticError(
+          `Module exposes '${name}(..)' but '${name}' is not a type or protocol`,
+          spec.span
+        );
+      }
+
+      case "ExportTypeSome": {
+        const name = spec.name;
+        const members = spec.members;
+
+        // Check if it's an ADT with specific constructors
+        if (adts[name]) {
+          const adt = adts[name]!;
+          const exportedCtors = new Set<string>();
+
+          for (const memberName of members) {
+            if (!adt.constructors.includes(memberName)) {
+              throw new SemanticError(
+                `Constructor '${memberName}' is not defined in type '${name}'`,
+                spec.span
+              );
+            }
+            exportedCtors.add(memberName);
+          }
+
+          exports.types.set(name, {
+            allConstructors: false,
+            constructors: exportedCtors,
+          });
+          continue;
+        }
+
+        // Check if it's a protocol with specific methods
+        if (protocols[name]) {
+          const protocol = protocols[name]!;
+          const exportedMethods = new Set<string>();
+
+          for (const memberName of members) {
+            if (!protocol.methods.has(memberName)) {
+              throw new SemanticError(
+                `Method '${memberName}' is not defined in protocol '${name}'`,
+                spec.span
+              );
+            }
+            exportedMethods.add(memberName);
+            // Also export the method name as a value
+            exports.values.add(memberName);
+          }
+
+          exports.protocols.set(name, {
+            allMethods: false,
+            methods: exportedMethods,
+          });
+          continue;
+        }
+
+        throw new SemanticError(
+          `Module exposes '${name}(...)' but '${name}' is not a type or protocol`,
+          spec.span
+        );
+      }
     }
   }
+
+  return exports;
 }
 
 function validateImports(imports: ImportDeclaration[]) {

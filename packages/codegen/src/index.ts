@@ -30,6 +30,7 @@ import type {
   IRConstructorInfo,
   SCC,
 } from "@vibe/ir";
+import { sanitizeOperator } from "@vibe/syntax";
 
 // ============================================================================
 // Code Generation Context
@@ -321,13 +322,33 @@ function generateDependencyImports(
       // Use just the base module name (last segment) as the alias
       const alias = moduleName.split(".").pop() || moduleName;
       lines.push(`import * as ${alias} from "${importPath}";`);
-    } else if (
-      imp.exposing?.kind === "Explicit" &&
-      imp.exposing.names.length > 0
-    ) {
-      // import { specific, names } from "..."
-      const names = imp.exposing.names.map((name) => sanitizeIdentifier(name));
-      lines.push(`import { ${names.join(", ")} } from "${importPath}";`);
+    } else if (imp.exposing?.kind === "Explicit") {
+      // Extract names from the export specs
+      const names = imp.exposing.exports
+        .map((spec) => {
+          switch (spec.kind) {
+            case "ExportValue":
+            case "ExportTypeAll":
+              return sanitizeIdentifier(spec.name);
+            case "ExportOperator":
+              return sanitizeOperator(spec.operator);
+            case "ExportTypeSome":
+              // For ExportTypeSome, we import the type constructor and the specific members
+              return sanitizeIdentifier(spec.name);
+            default:
+              return null;
+          }
+        })
+        .filter((name): name is string => name !== null);
+
+      if (names.length > 0) {
+        // import { specific, names } from "..."
+        lines.push(`import { ${names.join(", ")} } from "${importPath}";`);
+      } else {
+        // No explicit imports, import everything (exposing all)
+        const alias = moduleName.split(".").pop() || moduleName;
+        lines.push(`import * as ${alias} from "${importPath}";`);
+      }
     } else {
       // Default: import everything (exposing all)
       const alias = moduleName.split(".").pop() || moduleName;
@@ -1316,51 +1337,110 @@ function generatePattern(pattern: IRPattern, ctx: CodegenContext): string {
 
 /**
  * Generate export statements for module values.
+ * Respects the module's exposing clause from semantic analysis.
  */
 function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
   const lines: string[] = [];
   const currentModule = program.moduleName;
+  const moduleExports = program.exports;
 
   // Collect all exportable names
   const exports: string[] = [];
 
-  // Export values (non-internal)
+  // If module exports everything, use the old behavior
+  if (moduleExports.exportsAll) {
+    // Export all values (non-internal)
+    for (const [name, value] of Object.entries(program.values)) {
+      // Skip internal names
+      if (name.startsWith("$")) continue;
 
-  // Export values (non-internal)
-  for (const [name, value] of Object.entries(program.values)) {
-    // Skip internal names
-    if (name.startsWith("$")) continue;
-
-    // For external declarations, export the external name
-    if (value.isExternal && value.externalTarget) {
-      exports.push(sanitizeIdentifier(value.externalTarget.exportName));
-    } else {
-      exports.push(sanitizeIdentifier(name));
-    }
-  }
-
-  // Export constructors that belong to this module
-  for (const [ctorName, ctor] of Object.entries(program.constructors)) {
-    // Skip built-in Bool and Unit
-    if (ctor.parentType === "Bool" || ctor.parentType === "Unit") continue;
-
-    // Check if this constructor belongs to the current module
-    const adtInfo = program.adts[ctor.parentType];
-    if (
-      adtInfo?.moduleName &&
-      adtInfo.moduleName !== currentModule &&
-      adtInfo.moduleName !== "__builtin__"
-    ) {
-      continue;
+      // For external declarations, export the external name
+      if (value.isExternal && value.externalTarget) {
+        exports.push(sanitizeIdentifier(value.externalTarget.exportName));
+      } else {
+        exports.push(sanitizeIdentifier(name));
+      }
     }
 
-    exports.push(sanitizeIdentifier(ctorName));
-  }
+    // Export all constructors that belong to this module
+    for (const [ctorName, ctor] of Object.entries(program.constructors)) {
+      // Skip built-in Bool and Unit
+      if (ctor.parentType === "Bool" || ctor.parentType === "Unit") continue;
 
-  // Export instance dictionaries that were generated in this module
-  // These are needed for dictionary passing at call sites
-  for (const dictName of ctx.generatedDictNames) {
-    exports.push(dictName);
+      // Check if this constructor belongs to the current module
+      const adtInfo = program.adts[ctor.parentType];
+      if (
+        adtInfo?.moduleName &&
+        adtInfo.moduleName !== currentModule &&
+        adtInfo.moduleName !== "__builtin__"
+      ) {
+        continue;
+      }
+
+      exports.push(sanitizeIdentifier(ctorName));
+    }
+
+    // Export all instance dictionaries that were generated in this module
+    for (const dictName of ctx.generatedDictNames) {
+      exports.push(dictName);
+    }
+  } else {
+    // Respect the explicit export specifications
+
+    // Export specified values
+    for (const valueName of moduleExports.values) {
+      const value = program.values[valueName];
+      if (value) {
+        if (value.isExternal && value.externalTarget) {
+          exports.push(sanitizeIdentifier(value.externalTarget.exportName));
+        } else {
+          exports.push(sanitizeIdentifier(valueName));
+        }
+      }
+    }
+
+    // Export specified operators
+    for (const opName of moduleExports.operators) {
+      const value = program.values[opName];
+      if (value) {
+        if (value.isExternal && value.externalTarget) {
+          exports.push(sanitizeIdentifier(value.externalTarget.exportName));
+        } else {
+          exports.push(sanitizeIdentifier(opName));
+        }
+      }
+    }
+
+    // Export constructors for specified types
+    for (const [typeName, typeExport] of moduleExports.types) {
+      if (typeExport.allConstructors) {
+        // Export all constructors for this type
+        for (const [ctorName, ctor] of Object.entries(program.constructors)) {
+          if (ctor.parentType === typeName) {
+            exports.push(sanitizeIdentifier(ctorName));
+          }
+        }
+      } else if (typeExport.constructors) {
+        // Export only specified constructors
+        for (const ctorName of typeExport.constructors) {
+          if (program.constructors[ctorName]) {
+            exports.push(sanitizeIdentifier(ctorName));
+          }
+        }
+      }
+      // If no constructors specified, type is exported opaquely (no constructors)
+    }
+
+    // Export instance dictionaries for specified protocols
+    for (const [protocolName, protocolExport] of moduleExports.protocols) {
+      // Export dictionaries for instances of this protocol defined in this module
+      for (const dictName of ctx.generatedDictNames) {
+        // Dictionary names are like $dict_Num_Int, $dict_Eq_Float
+        if (dictName.startsWith(`$dict_${protocolName}_`)) {
+          exports.push(dictName);
+        }
+      }
+    }
   }
 
   // Remove duplicates and sort
