@@ -1,0 +1,85 @@
+{
+  "name": "vibe-vscode",
+  "displayName": "Vibe Language",
+  "description": "Language support for the Vibe programming language",
+  "version": "0.1.0",
+  "publisher": "vibe-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "vibe",
+    "functional",
+    "elm-like"
+  ],
+  "activationEvents": [
+    "onLanguage:vibe"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "vibe",
+        "aliases": [
+          "Vibe",
+          "vibe"
+        ],
+        "extensions": [
+          ".vibe"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vibe",
+        "scopeName": "source.vibe",
+        "path": "./syntaxes/vibe.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Vibe",
+      "properties": {
+        "vibe.languageServer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the Vibe language server"
+        },
+        "vibe.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable diagnostics (errors and warnings)"
+        },
+        "vibe.semanticTokens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable semantic token highlighting"
+        },
+        "vibe.diagnostics.maxProblems": {
+          "type": "number",
+          "default": 100,
+          "description": "Maximum number of problems to report per file"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "bun run build",
+    "build": "bun build ./src/extension.ts --outdir ./dist --target node --format cjs --external vscode --external vscode-languageclient",
+    "watch": "bun build ./src/extension.ts --outdir ./dist --target node --format cjs --external vscode --external vscode-languageclient --watch",
+    "package": "vsce package",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

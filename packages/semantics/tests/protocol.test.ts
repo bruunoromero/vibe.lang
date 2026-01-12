@@ -694,3 +694,164 @@ isEqual x y = eq x y
     expect(Array.isArray(result.typeSchemes.isEqual?.constraints)).toBe(true);
   });
 });
+
+describe("Qualified Type Annotation Constraint Enforcement", () => {
+  test("extracts constraints from qualified type annotations", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+add : Num a => a -> a -> a
+add x y = plus x y
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // The constraint from the annotation should be included in the type scheme
+    expect(result.typeSchemes.add).toBeDefined();
+    expect(result.typeSchemes.add?.constraints.length).toBeGreaterThan(0);
+    expect(
+      result.typeSchemes.add?.constraints.some((c) => c.protocolName === "Num")
+    ).toBe(true);
+  });
+
+  test("extracts multiple constraints from qualified type annotations", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+protocol Eq a where
+  eq : a -> a -> Bool
+
+addIfEq : (Num a, Eq a) => a -> a -> a -> a
+addIfEq x y z = plus x y
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    expect(result.typeSchemes.addIfEq).toBeDefined();
+    const constraints = result.typeSchemes.addIfEq?.constraints ?? [];
+    expect(constraints.some((c) => c.protocolName === "Num")).toBe(true);
+    expect(constraints.some((c) => c.protocolName === "Eq")).toBe(true);
+  });
+
+  test("rejects constraints referencing unknown protocols", () => {
+    const source = `
+foo : Unknown a => a -> a
+foo x = x
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow("Unknown protocol 'Unknown'");
+  });
+
+  test("rejects constraints with wrong number of type arguments", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+foo : Num a b => a -> a
+foo x = x
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow("expects 1 type argument");
+  });
+
+  test("rejects constraints on concrete types in annotations", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+foo : Num Int => Int -> Int
+foo x = x
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow("must be applied to type variables");
+  });
+
+  test("stores annotated constraints in value info", () => {
+    const source = `
+protocol Show a where
+  show : a -> String
+
+display : Show a => a -> String
+display x = show x
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // Check that annotated constraints are stored
+    expect(result.values.display).toBeDefined();
+    expect(result.values.display?.annotatedConstraints).toBeDefined();
+    expect(result.values.display?.annotatedConstraints?.length).toBe(1);
+    expect(result.values.display?.annotatedConstraints?.[0]?.protocolName).toBe(
+      "Show"
+    );
+  });
+
+  test("merges annotated constraints with inferred constraints", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+protocol Eq a where
+  eq : a -> a -> Bool
+
+-- Annotation declares Eq constraint, body uses plus which needs Num
+compute : (Num a, Eq a) => a -> a -> a
+compute x y = plus x y
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // Both Num (from inference) and Eq (from annotation) should be in the scheme
+    const constraints = result.typeSchemes.compute?.constraints ?? [];
+    expect(constraints.some((c) => c.protocolName === "Num")).toBe(true);
+    expect(constraints.some((c) => c.protocolName === "Eq")).toBe(true);
+  });
+
+  test("handles external declarations with qualified types", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+@external "math" "jsAdd"
+jsAdd : Num a => a -> a -> a
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // External declaration should have the constraint from annotation
+    expect(result.values.jsAdd).toBeDefined();
+    expect(result.values.jsAdd?.annotatedConstraints).toBeDefined();
+    expect(result.values.jsAdd?.annotatedConstraints?.length).toBe(1);
+    expect(result.values.jsAdd?.annotatedConstraints?.[0]?.protocolName).toBe(
+      "Num"
+    );
+  });
+
+  test("deduplicates constraints when annotated and inferred overlap", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+-- Both annotation and inference produce Num constraint
+add : Num a => a -> a -> a
+add x y = plus x y
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // Should only have one Num constraint, not duplicates
+    const numConstraints =
+      result.typeSchemes.add?.constraints.filter(
+        (c) => c.protocolName === "Num"
+      ) ?? [];
+    expect(numConstraints.length).toBe(1);
+  });
+});

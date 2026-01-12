@@ -65,14 +65,32 @@ export type TypeCon = { kind: "con"; name: string; args: Type[] };
 export type TypeFun = { kind: "fun"; from: Type; to: Type };
 export type TypeTuple = { kind: "tuple"; elements: Type[] };
 export type TypeRecord = { kind: "record"; fields: Record<string, Type> };
-export type TypeList = { kind: "list"; element: Type };
-export type Type =
-  | TypeVar
-  | TypeCon
-  | TypeFun
-  | TypeTuple
-  | TypeRecord
-  | TypeList;
+export type Type = TypeVar | TypeCon | TypeFun | TypeTuple | TypeRecord;
+
+/**
+ * Helper to create a List type using TypeCon.
+ * List is represented as TypeCon with name "List" and one type argument.
+ */
+function listType(element: Type): TypeCon {
+  return { kind: "con", name: "List", args: [element] };
+}
+
+/**
+ * Check if a type is a List type.
+ */
+function isListType(type: Type): type is TypeCon {
+  return type.kind === "con" && type.name === "List" && type.args.length === 1;
+}
+
+/**
+ * Get the element type of a List type. Returns undefined if not a list.
+ */
+function getListElement(type: Type): Type | undefined {
+  if (isListType(type)) {
+    return type.args[0];
+  }
+  return undefined;
+}
 
 /**
  * Constraint represents a protocol requirement on a type.
@@ -157,8 +175,6 @@ function typesEqual(t1: Type, t2: Type): boolean {
         )
       );
     }
-    case "list":
-      return typesEqual(t1.element, (t2 as TypeList).element);
   }
 }
 
@@ -717,6 +733,8 @@ export type ValueInfo = {
   annotation?: TypeExpr;
   externalTarget?: ExternalDeclaration["target"];
   type?: Type;
+  /** User-annotated protocol constraints from qualified type annotations */
+  annotatedConstraints?: Constraint[];
 };
 
 /**
@@ -1321,9 +1339,27 @@ export function analyze(
       );
     }
 
-    const annotationType = annotationExpr
-      ? typeFromAnnotation(annotationExpr, new Map(), adts, typeAliases)
-      : undefined;
+    // Use typeFromAnnotationWithConstraints to extract both type and constraints
+    let annotationType: Type | undefined;
+    let annotatedConstraints: Constraint[] | undefined;
+
+    if (annotationExpr) {
+      const result = typeFromAnnotationWithConstraints(
+        annotationExpr,
+        new Map(),
+        adts,
+        typeAliases,
+        protocols
+      );
+      annotationType = result.type;
+      annotatedConstraints =
+        result.constraints.length > 0 ? result.constraints : undefined;
+
+      // Store annotated constraints in the value info for later merging
+      if (annotatedConstraints) {
+        info.annotatedConstraints = annotatedConstraints;
+      }
+    }
 
     const seeded =
       annotationType ?? seedValueType(info.declaration, adts, typeAliases);
@@ -1363,16 +1399,25 @@ export function analyze(
     for (const name of externals) {
       const info = values[name]!;
       if (info.declaration.kind === "ExternalDeclaration") {
-        info.type = typeFromAnnotation(
+        // Use typeFromAnnotationWithConstraints for external declarations too
+        const result = typeFromAnnotationWithConstraints(
           info.declaration.annotation,
           new Map(),
           adts,
-          typeAliases
+          typeAliases,
+          protocols
         );
-        // External declarations are monomorphic
+        info.type = result.type;
+
+        // Store annotated constraints if any
+        if (result.constraints.length > 0) {
+          info.annotatedConstraints = result.constraints;
+        }
+
+        // External declarations use their annotated constraints directly
         globalScope.symbols.set(info.declaration.name, {
           vars: new Set(),
-          constraints: [],
+          constraints: result.constraints,
           type: info.type,
         });
       }
@@ -1392,6 +1437,7 @@ export function analyze(
         if (info.declaration.kind !== "ValueDeclaration") continue;
 
         const declaredType = types[name]!;
+        // Use the pre-computed annotated type (already extracted with constraints during seeding)
         const annotationType = info.annotation
           ? typeFromAnnotation(info.annotation, new Map(), adts, typeAliases)
           : undefined;
@@ -1416,11 +1462,14 @@ export function analyze(
       // After inferring all in the SCC, generalize all together
       // This ensures mutually recursive functions get proper polymorphic types
       for (const name of valueDecls) {
+        const info = values[name]!;
         const inferred = inferredTypes.get(name)!;
-        const generalizedScheme = generalize(
+        const generalizedScheme = generalizeWithAnnotatedConstraints(
           inferred,
           { symbols: new Map(), parent: globalScope.parent },
-          substitution
+          substitution,
+          info.annotatedConstraints,
+          info.declaration.span
         );
         globalScope.symbols.set(name, generalizedScheme);
         // Store the type scheme with constraints for dictionary-passing
@@ -2176,9 +2225,6 @@ function collectTypeVarIdsHelper(type: Type, ids: Set<number>): void {
         collectTypeVarIdsHelper(el, ids);
       }
       break;
-    case "list":
-      collectTypeVarIdsHelper(type.element, ids);
-      break;
     case "con":
       for (const arg of type.args) {
         collectTypeVarIdsHelper(arg, ids);
@@ -2211,11 +2257,6 @@ function applyVarSubstitution(type: Type, subst: Map<number, Type>): Type {
       return {
         kind: "tuple",
         elements: type.elements.map((el) => applyVarSubstitution(el, subst)),
-      };
-    case "list":
-      return {
-        kind: "list",
-        element: applyVarSubstitution(type.element, subst),
       };
     case "con":
       return {
@@ -2710,11 +2751,6 @@ function typeOverlaps(type1: Type, type2: Type): boolean {
     return true;
   }
 
-  // Lists overlap if element types overlap
-  if (type1.kind === "list" && type2.kind === "list") {
-    return typeOverlaps(type1.element, type2.element);
-  }
-
   // Different kinds don't overlap
   return false;
 }
@@ -2895,7 +2931,7 @@ function analyzeExpr(
     }
     case "List": {
       if (expr.elements.length === 0) {
-        return { kind: "list", element: freshType() };
+        return listType(freshType());
       }
       const first = analyzeExpr(
         expr.elements[0]!,
@@ -2920,7 +2956,7 @@ function analyzeExpr(
         );
         unify(first, elType, el.span, substitution);
       }
-      return { kind: "list", element: applySubstitution(first, substitution) };
+      return listType(applySubstitution(first, substitution));
     }
     case "ListRange": {
       const startType = analyzeExpr(
@@ -2944,10 +2980,7 @@ function analyzeExpr(
         opaqueTypes
       );
       unify(startType, endType, expr.span, substitution);
-      return {
-        kind: "list",
-        element: applySubstitution(startType, substitution),
-      };
+      return listType(applySubstitution(startType, substitution));
     }
     case "Record": {
       const fields: Record<string, Type> = {};
@@ -3623,8 +3656,8 @@ function bindPattern(
       // List pattern: [] or [x, y, z]
       // Expected type should be List a for some a
       const elemType = freshType();
-      const listType: TypeCon = { kind: "con", name: "List", args: [elemType] };
-      unify(listType, expected, pattern.span, substitution);
+      const lt = listType(elemType);
+      unify(lt, expected, pattern.span, substitution);
 
       // Bind each element pattern to the element type
       pattern.elements.forEach((el) =>
@@ -3638,14 +3671,14 @@ function bindPattern(
           adts
         )
       );
-      return applySubstitution(listType, substitution);
+      return applySubstitution(lt, substitution);
     }
     case "ConsPattern": {
       // Cons pattern: head :: tail
       // Expected type should be List a for some a
       const elemType = freshType();
-      const listType: TypeCon = { kind: "con", name: "List", args: [elemType] };
-      unify(listType, expected, pattern.span, substitution);
+      const lt = listType(elemType);
+      unify(lt, expected, pattern.span, substitution);
 
       // Head pattern binds to element type
       bindPattern(
@@ -3664,12 +3697,12 @@ function bindPattern(
         scope,
         substitution,
         seen,
-        applySubstitution(listType, substitution),
+        applySubstitution(lt, substitution),
         constructors,
         adts
       );
 
-      return applySubstitution(listType, substitution);
+      return applySubstitution(lt, substitution);
     }
     default:
       return expected;
@@ -3860,10 +3893,6 @@ function getFreeTypeVars(type: Type, substitution: Substitution): Set<number> {
     return result;
   }
 
-  if (concrete.kind === "list") {
-    return getFreeTypeVars(concrete.element, substitution);
-  }
-
   return new Set();
 }
 
@@ -3960,6 +3989,120 @@ function generalize(
   // Deduplicate constraints
   const uniqueConstraints: Constraint[] = [];
   for (const c of relevantConstraints) {
+    const isDuplicate = uniqueConstraints.some(
+      (uc) =>
+        uc.protocolName === c.protocolName &&
+        uc.typeArgs.length === c.typeArgs.length &&
+        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!))
+    );
+    if (!isDuplicate) {
+      uniqueConstraints.push(c);
+    }
+  }
+
+  return { vars: quantified, constraints: uniqueConstraints, type };
+}
+
+/**
+ * Generalize a type into a type scheme, merging user-annotated constraints with inferred ones.
+ * This extends the basic generalize() function to support qualified type annotations.
+ *
+ * The merge strategy is "satisfiable": user-annotated constraints are included in the
+ * final type scheme, and we verify they are consistent with what was inferred.
+ *
+ * Validation rules:
+ * 1. All user-annotated constraints must reference only quantified type variables
+ * 2. User-annotated constraints are merged with inferred constraints
+ * 3. If a constraint is both annotated and inferred, that's fine (no conflict)
+ *
+ * @param type - The inferred type to generalize
+ * @param scope - The current scope (for determining quantifiable variables)
+ * @param substitution - Current type substitution
+ * @param annotatedConstraints - User-annotated constraints from type annotation
+ * @param span - Source location for error reporting
+ */
+function generalizeWithAnnotatedConstraints(
+  type: Type,
+  scope: Scope,
+  substitution: Substitution,
+  annotatedConstraints: Constraint[] | undefined,
+  span: Span
+): TypeScheme {
+  const typeFreeVars = getFreeTypeVars(type, substitution);
+  const scopeFreeVars = getFreeTypeVarsInScope(scope, substitution);
+
+  // Quantify over type variables that appear in the type but not in the scope
+  const quantified = new Set<number>();
+  for (const v of typeFreeVars) {
+    if (!scopeFreeVars.has(v)) {
+      quantified.add(v);
+    }
+  }
+
+  // Get collected (inferred) constraints and apply substitution
+  const rawConstraints = getCollectedConstraints();
+  const resolvedConstraints = applySubstitutionToConstraints(
+    rawConstraints,
+    substitution
+  );
+
+  // Filter inferred constraints to only those involving quantified type variables
+  const inferredRelevantConstraints = resolvedConstraints.filter((c) => {
+    return c.typeArgs.some((t) => {
+      const freeVars = getFreeTypeVars(t, substitution);
+      for (const v of freeVars) {
+        if (quantified.has(v)) return true;
+      }
+      return false;
+    });
+  });
+
+  // Process user-annotated constraints
+  let allConstraints = [...inferredRelevantConstraints];
+
+  if (annotatedConstraints && annotatedConstraints.length > 0) {
+    // Apply substitution to annotated constraints
+    const resolvedAnnotated = applySubstitutionToConstraints(
+      annotatedConstraints,
+      substitution
+    );
+
+    // Validate each annotated constraint
+    for (const c of resolvedAnnotated) {
+      // Check that all type args in the constraint reference quantified variables
+      for (const typeArg of c.typeArgs) {
+        const freeVars = getFreeTypeVars(typeArg, substitution);
+        let hasQuantifiedVar = false;
+        for (const v of freeVars) {
+          if (quantified.has(v)) {
+            hasQuantifiedVar = true;
+          }
+        }
+        // If the constraint is on a concrete type (no free vars), it's meaningless
+        if (freeVars.size === 0) {
+          throw new SemanticError(
+            `Constraint '${c.protocolName}' is on a concrete type, which is not allowed in type annotations`,
+            span
+          );
+        }
+        // If the constraint references a type variable not in the function's type,
+        // that's likely an error
+        if (!hasQuantifiedVar) {
+          throw new SemanticError(
+            `Constraint '${c.protocolName}' references type variables not used in the function type`,
+            span
+          );
+        }
+      }
+
+      // Add to the constraint list (will be deduplicated below)
+      allConstraints.push(c);
+    }
+  }
+
+  // Deduplicate constraints
+  const uniqueConstraints: Constraint[] = [];
+  for (const c of allConstraints) {
     const isDuplicate = uniqueConstraints.some(
       (uc) =>
         uc.protocolName === c.protocolName &&
@@ -4104,17 +4247,6 @@ function instantiateType(
     return { kind: "record", fields };
   }
 
-  if (concrete.kind === "list") {
-    return {
-      kind: "list",
-      element: instantiateType(
-        concrete.element,
-        instantiationMap,
-        substitution
-      ),
-    };
-  }
-
   return concrete;
 }
 
@@ -4181,6 +4313,10 @@ function flattenFunctionParams(type: Type): Type[] {
 }
 
 function countAnnotationParams(annotation: TypeExpr): number {
+  // Handle qualified types by unwrapping to the underlying type
+  if (annotation.kind === "QualifiedType") {
+    return countAnnotationParams(annotation.type);
+  }
   if (annotation.kind === "FunctionType") {
     return 1 + countAnnotationParams(annotation.to);
   }
@@ -4197,6 +4333,17 @@ function countAnnotationParams(annotation: TypeExpr): number {
  * that should be treated as universally quantified variables.
  */
 type TypeVarContext = Map<string, TypeVar>;
+
+/**
+ * Result of converting a type annotation to an internal type.
+ * Includes both the type and any protocol constraints from qualified types.
+ */
+type AnnotationResult = {
+  /** The converted internal type */
+  type: Type;
+  /** Protocol constraints extracted from qualified types (e.g., Num a => ...) */
+  constraints: Constraint[];
+};
 
 /**
  * Check if a type name should be treated as a type variable.
@@ -4223,8 +4370,109 @@ function isTypeVariable(name: string): boolean {
 }
 
 /**
+ * Convert a type expression (from source annotation) to an internal type,
+ * including any protocol constraints from qualified types.
+ *
+ * This is the primary function for converting user type annotations.
+ * It extracts and validates constraints from `QualifiedType` annotations.
+ *
+ * Type variables (lowercase identifiers like 'a', 'b') get mapped to fresh TypeVars
+ * consistently within the same annotation. For example:
+ *   a -> a        maps both 'a' to the same TypeVar
+ *   (a -> b) -> a maps 'a' consistently, 'b' to a different TypeVar
+ *
+ * Also handles type aliases by expanding them to their underlying types.
+ *
+ * @param annotation - The source type expression to convert
+ * @param context - Map tracking type variable names to their TypeVar IDs
+ * @param adts - Registry of ADT definitions (for recognizing ADT type names)
+ * @param typeAliases - Registry of type aliases (for expansion)
+ * @param protocols - Registry of protocol definitions (for constraint validation)
+ * @returns Object containing the converted type and extracted constraints
+ */
+function typeFromAnnotationWithConstraints(
+  annotation: TypeExpr,
+  context: TypeVarContext = new Map(),
+  adts: Record<string, ADTInfo> = {},
+  typeAliases: Record<string, TypeAliasInfo> = {},
+  protocols: Record<string, ProtocolInfo> = {}
+): AnnotationResult {
+  // Handle QualifiedType at the top level to extract constraints
+  if (annotation.kind === "QualifiedType") {
+    // Convert AST constraints to internal constraints
+    const constraints: Constraint[] = [];
+
+    for (const astConstraint of annotation.constraints) {
+      // Validate that the protocol exists
+      const protocol = protocols[astConstraint.protocolName];
+      if (!protocol) {
+        throw new SemanticError(
+          `Unknown protocol '${astConstraint.protocolName}' in type constraint`,
+          astConstraint.span
+        );
+      }
+
+      // Validate the number of type arguments matches protocol parameters
+      if (astConstraint.typeArgs.length !== protocol.params.length) {
+        throw new SemanticError(
+          `Protocol '${astConstraint.protocolName}' expects ${protocol.params.length} type argument(s), but constraint has ${astConstraint.typeArgs.length}`,
+          astConstraint.span
+        );
+      }
+
+      // Convert constraint type arguments
+      const constraintTypeArgs: Type[] = [];
+      for (const typeArg of astConstraint.typeArgs) {
+        constraintTypeArgs.push(
+          typeFromAnnotation(typeArg, context, adts, typeAliases)
+        );
+      }
+
+      // Validate that constraint type arguments are type variables
+      // (Constraints on concrete types like `Num Int` don't make sense in annotations)
+      for (let i = 0; i < constraintTypeArgs.length; i++) {
+        const typeArg = constraintTypeArgs[i]!;
+        if (typeArg.kind !== "var") {
+          throw new SemanticError(
+            `Constraint '${astConstraint.protocolName}' must be applied to type variables, not concrete types`,
+            astConstraint.span
+          );
+        }
+      }
+
+      constraints.push({
+        protocolName: astConstraint.protocolName,
+        typeArgs: constraintTypeArgs,
+      });
+    }
+
+    // Convert the underlying type (recursively handling nested QualifiedTypes)
+    const innerResult = typeFromAnnotationWithConstraints(
+      annotation.type,
+      context,
+      adts,
+      typeAliases,
+      protocols
+    );
+
+    // Merge constraints from nested qualified types
+    return {
+      type: innerResult.type,
+      constraints: [...constraints, ...innerResult.constraints],
+    };
+  }
+
+  // For non-qualified types, delegate to the simpler function
+  const type = typeFromAnnotation(annotation, context, adts, typeAliases);
+  return { type, constraints: [] };
+}
+
+/**
  * Convert a type expression (from source annotation) to an internal type.
  * Handles type variables by maintaining a context of variable names to TypeVar IDs.
+ *
+ * NOTE: This function does NOT extract constraints from QualifiedType annotations.
+ * Use typeFromAnnotationWithConstraints() when you need constraint extraction.
  *
  * Type variables (lowercase identifiers like 'a', 'b') get mapped to fresh TypeVars
  * consistently within the same annotation. For example:
@@ -4309,16 +4557,7 @@ function typeFromAnnotation(
       }
 
       // Concrete type constructor (Int, String, List, Maybe, etc.)
-      // Check for List type constructor specially
-      if (annotation.name === "List" && annotation.args.length === 1) {
-        const elementAnn = annotation.args[0];
-        if (elementAnn) {
-          return {
-            kind: "list",
-            element: typeFromAnnotation(elementAnn, context, adts, typeAliases),
-          };
-        }
-      }
+      // List is now represented as TypeCon like other ADTs
       return {
         kind: "con",
         name: annotation.name,
@@ -4366,24 +4605,9 @@ function typeFromAnnotation(
       };
     }
     case "QualifiedType": {
-      // LIMITATION: Qualified type constraints are currently discarded.
-      //
-      // When a type annotation includes constraints like `(Num a) => a -> a -> a`,
-      // we currently extract just the underlying type `a -> a -> a` and ignore
-      // the `Num a` constraint.
-      //
-      // For proper constraint handling, we would need to:
-      // 1. Parse and store the constraints from the annotation
-      // 2. Check that the constraints are satisfied at call sites
-      // 3. Propagate constraints through the type inference process
-      //
-      // This limitation means:
-      // - Type annotations with constraints are accepted but constraints aren't enforced
-      // - Functions with constrained annotations may type-check but could fail at runtime
-      //   if called with types that don't satisfy the constraint
-      //
-      // Protocol methods registered via addProtocolMethodsToScope DO have their
-      // constraints tracked, but user-annotated qualified types do not.
+      // For the simple typeFromAnnotation function, we extract only the underlying type.
+      // Use typeFromAnnotationWithConstraints() to also extract constraints.
+      // This maintains backwards compatibility with call sites that only need the type.
       return typeFromAnnotation(annotation.type, context, adts, typeAliases);
     }
   }
@@ -4413,12 +4637,6 @@ function applySubstitution(type: Type, substitution: Substitution): Type {
     }
     return { kind: "record", fields };
   }
-  if (type.kind === "list") {
-    return {
-      kind: "list",
-      element: applySubstitution(type.element, substitution),
-    };
-  }
   if (type.kind === "con") {
     return {
       kind: "con",
@@ -4446,8 +4664,6 @@ function occursIn(id: number, type: Type, substitution: Substitution): boolean {
       return Object.values(concrete.fields).some((t) =>
         occursIn(id, t, substitution)
       );
-    case "list":
-      return occursIn(id, concrete.element, substitution);
     case "con":
       return concrete.args.some((t) => occursIn(id, t, substitution));
     default:
@@ -4515,11 +4731,6 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
     return;
   }
 
-  if (left.kind === "list" && right.kind === "list") {
-    unify(left.element, right.element, span, substitution);
-    return;
-  }
-
   throw new SemanticError(
     `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
       right
@@ -4553,7 +4764,5 @@ function formatType(type: Type): string {
         .map(([k, v]) => `${k}: ${formatType(v)}`)
         .join(", ");
       return `{ ${fields} }`;
-    case "list":
-      return `List ${formatType(type.element)}`;
   }
 }

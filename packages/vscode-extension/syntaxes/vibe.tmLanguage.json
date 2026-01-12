@@ -1,0 +1,260 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Vibe",
+  "scopeName": "source.vibe",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#module" },
+    { "include": "#imports" },
+    { "include": "#type-declarations" },
+    { "include": "#protocol-declarations" },
+    { "include": "#implementation-declarations" },
+    { "include": "#infix-declarations" },
+    { "include": "#type-annotations" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#operators" },
+    { "include": "#constructors" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-dash.vibe",
+          "match": "--.*$"
+        },
+        {
+          "name": "comment.block.vibe",
+          "begin": "\\{-",
+          "end": "-\\}",
+          "patterns": [{ "include": "#comments" }]
+        }
+      ]
+    },
+    "module": {
+      "match": "^\\s*(module)\\s+([A-Z][A-Za-z0-9_.]*)",
+      "captures": {
+        "1": { "name": "keyword.control.module.vibe" },
+        "2": { "name": "entity.name.namespace.vibe" }
+      }
+    },
+    "imports": {
+      "match": "^\\s*(import)\\s+([A-Z][A-Za-z0-9_.]*)(\\s+(as)\\s+([A-Z][A-Za-z0-9_]*))?",
+      "captures": {
+        "1": { "name": "keyword.control.import.vibe" },
+        "2": { "name": "entity.name.namespace.vibe" },
+        "4": { "name": "keyword.control.as.vibe" },
+        "5": { "name": "entity.name.namespace.vibe" }
+      }
+    },
+    "type-declarations": {
+      "patterns": [
+        {
+          "name": "meta.type-alias.vibe",
+          "begin": "^\\s*(type)\\s+(alias)\\s+([A-Z][A-Za-z0-9_]*)",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.type.vibe" },
+            "2": { "name": "keyword.other.alias.vibe" },
+            "3": { "name": "entity.name.type.vibe" }
+          },
+          "end": "(?=^\\S)",
+          "patterns": [{ "include": "#type-expression" }]
+        },
+        {
+          "name": "meta.type-declaration.vibe",
+          "begin": "^\\s*(type)\\s+([A-Z][A-Za-z0-9_]*)",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.type.vibe" },
+            "2": { "name": "entity.name.type.vibe" }
+          },
+          "end": "(?=^\\S)",
+          "patterns": [
+            { "include": "#type-parameters" },
+            { "include": "#constructors" },
+            { "include": "#operators" },
+            { "include": "#comments" }
+          ]
+        }
+      ]
+    },
+    "protocol-declarations": {
+      "name": "meta.protocol.vibe",
+      "begin": "^\\s*(protocol)\\s+([A-Z][A-Za-z0-9_]*)",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.protocol.vibe" },
+        "2": { "name": "entity.name.type.protocol.vibe" }
+      },
+      "end": "(?=^\\S)",
+      "patterns": [
+        { "include": "#type-annotations" },
+        { "include": "#identifiers" },
+        { "include": "#comments" }
+      ]
+    },
+    "implementation-declarations": {
+      "name": "meta.implementation.vibe",
+      "begin": "^\\s*(implement)\\s+",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.implement.vibe" }
+      },
+      "end": "(?=^\\S)",
+      "patterns": [
+        {
+          "match": "([A-Z][A-Za-z0-9_]*)",
+          "name": "entity.name.type.vibe"
+        },
+        { "include": "#operators" },
+        { "include": "#identifiers" },
+        { "include": "#comments" }
+      ]
+    },
+    "infix-declarations": {
+      "match": "^\\s*(infixl|infixr|infix)\\s+(\\d+)\\s+([+\\-*/<>=!&|^~:@#$%\\.]+)",
+      "captures": {
+        "1": { "name": "keyword.other.infix.vibe" },
+        "2": { "name": "constant.numeric.vibe" },
+        "3": { "name": "entity.name.function.operator.vibe" }
+      }
+    },
+    "type-annotations": {
+      "match": "^\\s*([a-z_][a-zA-Z0-9_']*)\\s*(:)\\s*",
+      "captures": {
+        "1": { "name": "entity.name.function.vibe" },
+        "2": { "name": "keyword.operator.type-annotation.vibe" }
+      }
+    },
+    "type-expression": {
+      "patterns": [
+        {
+          "match": "\\b([A-Z][A-Za-z0-9_]*)\\b",
+          "name": "entity.name.type.vibe"
+        },
+        {
+          "match": "\\b([a-z][a-zA-Z0-9_']*)\\b",
+          "name": "variable.other.type-variable.vibe"
+        },
+        {
+          "match": "->",
+          "name": "keyword.operator.arrow.vibe"
+        },
+        {
+          "match": "=>",
+          "name": "keyword.operator.constraint.vibe"
+        }
+      ]
+    },
+    "type-parameters": {
+      "match": "\\b([a-z][a-zA-Z0-9_']*)\\b",
+      "name": "variable.other.type-variable.vibe"
+    },
+    "strings": {
+      "name": "string.quoted.double.vibe",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.vibe",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "characters": {
+      "name": "string.quoted.single.vibe",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        {
+          "name": "constant.character.escape.vibe",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.vibe",
+          "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.vibe",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.vibe",
+          "match": "\\b(if|then|else|case|of|let|in)\\b"
+        },
+        {
+          "name": "keyword.other.vibe",
+          "match": "\\b(type|alias|module|import|exposing|as|port|protocol|implement|implementing|where|external)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.arrow.vibe",
+          "match": "->"
+        },
+        {
+          "name": "keyword.operator.fat-arrow.vibe",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.pipe.vibe",
+          "match": "\\|>"
+        },
+        {
+          "name": "keyword.operator.compose.vibe",
+          "match": "<<|>>"
+        },
+        {
+          "name": "keyword.operator.comparison.vibe",
+          "match": "==|/=|<=|>=|<|>"
+        },
+        {
+          "name": "keyword.operator.logical.vibe",
+          "match": "&&|\\|\\|"
+        },
+        {
+          "name": "keyword.operator.cons.vibe",
+          "match": "::"
+        },
+        {
+          "name": "keyword.operator.append.vibe",
+          "match": "\\+\\+"
+        },
+        {
+          "name": "keyword.operator.arithmetic.vibe",
+          "match": "[+\\-*/%^]"
+        },
+        {
+          "name": "keyword.operator.assignment.vibe",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.other.vibe",
+          "match": "[!&|~@#$]+"
+        }
+      ]
+    },
+    "constructors": {
+      "match": "\\b([A-Z][A-Za-z0-9_]*)\\b",
+      "name": "entity.name.tag.constructor.vibe"
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "match": "\\b([a-z_][a-zA-Z0-9_']*)\\b",
+          "name": "variable.other.vibe"
+        }
+      ]
+    }
+  }
+}

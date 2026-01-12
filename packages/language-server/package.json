@@ -1,0 +1,29 @@
+{
+  "name": "@vibe/language-server",
+  "version": "0.1.0",
+  "description": "Language Server Protocol implementation for Vibe",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node && bun build ./src/server.ts --outdir ./dist --target node",
+    "dev": "bun run ./src/server.ts --stdio",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@vibe/config": "workspace:*",
+    "@vibe/lexer": "workspace:*",
+    "@vibe/module-resolver": "workspace:*",
+    "@vibe/parser": "workspace:*",
+    "@vibe/semantics": "workspace:*",
+    "@vibe/syntax": "workspace:*",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "files": [
+    "dist"
+  ]
+}

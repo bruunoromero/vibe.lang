@@ -31,13 +31,13 @@ infixr 1 <|
 infixr 2 ||
 infixr 3 &&
 
--- Comparison operators (non-associative would be ideal, but we use left)
-infixl 4 ==
-infixl 4 /=
-infixl 4 <
-infixl 4 <=
-infixl 4 >
-infixl 4 >=
+-- Comparison operators
+infix 4 ==
+infix 4 /=
+infix 4 <
+infix 4 <=
+infix 4 >
+infix 4 >=
 
 -- List operators
 infixr 5 ::
@@ -476,7 +476,6 @@ withDefault default maybe =
         Just x -> x
         Nothing -> default
 
-
 -- =============================================================================
 -- Result Functions
 -- =============================================================================
@@ -502,3 +501,9 @@ fromResult onErr onOk result =
     case result of
         Ok x -> onOk x
         Err e -> onErr e
+
+first : List a -> Maybe a
+first xs =
+    case xs of
+        x :: _ -> Just x
+        _ -> Nothing

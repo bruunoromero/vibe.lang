@@ -26,6 +26,8 @@ The project is organized as a workspace with packages in the `packages/` directo
 - **`packages/prelude`**: The standard library for Vibe.
 - **`packages/syntax`**: Shared AST node definitions and utilities.
 - **`packages/module-resolver`**: Logic for resolving imports and package graphs.
+- **`packages/language-server`**: Language Server Protocol (LSP) implementation for IDE support.
+- **`packages/vscode-extension`**: VS Code extension providing Vibe language support.
 - **`packages/example-app`**: A sample project demonstrating Vibe usage.
 - **`docs/`**: Architecture Decision Records (ADRs) and feature specifications.
 
@@ -168,6 +170,32 @@ const add = ($dict_Num) => (x) => (y) => $dict_Num._PLUS(x)(y);
 add($dict_Num_Int)(1)(2)
 ```
 
+## Qualified Type Constraints
+
+User-annotated qualified type constraints (e.g., `Num a => a -> a -> a`) are now fully supported:
+
+1. **Constraint Extraction**: Constraints from `QualifiedType` annotations are extracted and validated during semantic analysis.
+
+2. **Protocol Validation**: Constraints must reference existing protocols with the correct number of type arguments. Hard errors are thrown for:
+
+   - Unknown protocols in constraints
+   - Wrong number of type arguments for a protocol
+   - Constraints applied to concrete types instead of type variables
+
+3. **Constraint Merging**: User-annotated constraints are merged with inferred constraints (from actual protocol method usage) during type generalization. The "satisfiable" strategy allows user annotations to include additional constraints not used in the function body.
+
+4. **Deduplication**: When the same constraint is both annotated and inferred, it appears only once in the final type scheme.
+
+Example:
+
+```
+-- User annotation declares both Num and Eq constraints
+-- Function body only uses Num (via plus)
+-- Both constraints are included in the type scheme
+compute : (Num a, Eq a) => a -> a -> a
+compute x y = plus x y
+```
+
 ## Known Limitations
 
-1. **Qualified type constraints**: Parsing exists but semantic enforcement of constraints like `Show a => ...` from user annotations is limited.
+Currently no known semantic limitations. See individual package documentation for any package-specific constraints.

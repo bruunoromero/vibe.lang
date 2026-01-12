@@ -1214,15 +1214,24 @@ class Parser {
 
   /**
    * Check if we have a constraint context in a type signature (looks ahead for =>)
+   * The => must be on the same line as the start of the type expression.
    */
   private peekConstraintContextInType(): boolean {
     // Look ahead to find => operator
     let i = 0;
     let parenDepth = 0;
 
+    // Get the current line to ensure we don't cross line boundaries
+    const startLine = this.current().span.start.line;
+
     while (this.peekAhead(i)) {
       const tok = this.peekAhead(i);
       if (!tok) break;
+
+      // Stop looking if we've moved to a different line (constraint must be on same line)
+      if (tok.span.start.line !== startLine) {
+        return false;
+      }
 
       // Track parentheses depth
       if (tok.kind === TokenKind.LParen) parenDepth++;
