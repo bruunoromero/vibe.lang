@@ -1,10 +1,14 @@
 module ExampleApp exposing (..)
 
--- Record type alias example
+-- Record type example
 type alias Point =
   { x : Int
   , y : Int
   }
+
+type CustomMaybe x
+  = Just x
+  | Nothing
 
 -- Create a point
 origin : Point
@@ -13,8 +17,18 @@ origin =
   , y = 0
   }
 
+type MyBool = True | False
+
+@external "@vibe/runtime" "myList"
+myList : Bool -> Bool -> Bool
+
+type MyList a
+
+@external "@vibe/runtime" "myList2"
+myList2 : () -> MyList
+
 -- Function using record type
-distance : Point -> Int
+distance : {x: Int, y:Int} -> Int
 distance point =
   point.x * point.x + point.y * point.y
 

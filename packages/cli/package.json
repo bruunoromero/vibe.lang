@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@vibe/config": "workspace:*",
+    "@vibe/ir": "workspace:*",
     "@vibe/lexer": "workspace:*",
     "@vibe/module-resolver": "workspace:*",
     "@vibe/parser": "workspace:*",

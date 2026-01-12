@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { lex } from "@vibe/lexer";
 import { parse, ParseError } from "@vibe/parser";
 import { analyze, SemanticError, type SemanticModule } from "@vibe/semantics";
+import { lower, printProgram, IRError, type IRProgram } from "@vibe/ir";
 import { loadConfig } from "@vibe/config";
 import { resolveModule, discoverModuleGraph } from "@vibe/module-resolver";
 
@@ -25,6 +26,7 @@ interface ExecuteCommandOptions {
   moduleName: string;
   configPath?: string;
   pretty: number;
+  json?: boolean;
 }
 
 interface ExecuteOptions {
@@ -83,6 +85,21 @@ export async function run(
       handleCommand("analyze", module, { ...opts, cwd, stdout, stderr });
     });
 
+  program
+    .command("ir [module]")
+    .description("Lower to intermediate representation (requires analysis)")
+    .option("-w, --watch", "Watch file for changes and re-run command")
+    .option("--json", "Output IR as JSON instead of pretty-printed format")
+    .action(
+      (
+        module: string | undefined,
+        opts: CommandOptions & { json?: boolean }
+      ) => {
+        isHandled = true;
+        handleCommand("ir", module, { ...opts, cwd, stdout, stderr });
+      }
+    );
+
   try {
     await program.parseAsync(args, { from: "user" });
     return isHandled ? exitCode : 0;
@@ -93,12 +110,13 @@ export async function run(
 }
 
 function handleCommand(
-  command: "tokenize" | "parse" | "analyze",
+  command: "tokenize" | "parse" | "analyze" | "ir",
   module: string | undefined,
   opts: CommandOptions & {
     cwd: string;
     stdout: NodeJS.WritableStream;
     stderr: NodeJS.WritableStream;
+    json?: boolean;
   }
 ): void {
   const {
@@ -108,6 +126,7 @@ function handleCommand(
     config: configPath,
     pretty: prettyStr,
     watch,
+    json,
   } = opts;
 
   let config;
@@ -124,7 +143,13 @@ function handleCommand(
 
   if (watch) {
     watchMode(
-      { command, moduleName: targetModule, configPath, pretty: prettySpaces },
+      {
+        command,
+        moduleName: targetModule,
+        configPath,
+        pretty: prettySpaces,
+        json,
+      },
       { cwd, stdout, stderr }
     );
   } else {
@@ -134,6 +159,7 @@ function handleCommand(
         moduleName: targetModule,
         configPath,
         pretty: prettySpaces,
+        json,
       } as ExecuteCommandOptions,
       { cwd, stdout, stderr }
     );
@@ -144,7 +170,7 @@ function executeCommand(
   opts: ExecuteCommandOptions,
   exec: ExecuteOptions
 ): number {
-  const { command, moduleName, configPath, pretty } = opts;
+  const { command, moduleName, configPath, pretty, json } = opts;
   const { cwd, stdout, stderr } = exec;
 
   let config;
@@ -175,7 +201,7 @@ function executeCommand(
       return 0;
     }
 
-    if (command === "analyze") {
+    if (command === "analyze" || command === "ir") {
       const ast = parse(source);
 
       // Discover all modules and their dependencies, sorted topologically
@@ -206,8 +232,37 @@ function executeCommand(
         throw new Error(`Module "${moduleName}" not found in analyzed modules`);
       }
 
-      stdout.write(`${JSON.stringify(result, null, pretty)}\n`);
-      return 0;
+      if (command === "analyze") {
+        stdout.write(`${JSON.stringify(result, null, pretty)}\n`);
+        return 0;
+      }
+
+      // IR command: lower the analyzed module
+      if (command === "ir") {
+        const moduleNode = moduleGraph.modules.get(moduleName);
+        if (!moduleNode) {
+          throw new Error(`Module "${moduleName}" not found in graph`);
+        }
+
+        const ir = lower(moduleNode.ast, result, {
+          validateDependencies: true,
+        });
+
+        if (json) {
+          // Output as JSON (need to convert Sets and Maps for JSON serialization)
+          const jsonIr = {
+            ...ir,
+            externalImports: Array.from(ir.externalImports),
+            constraintMetadata: Object.fromEntries(ir.constraintMetadata),
+          };
+          stdout.write(`${JSON.stringify(jsonIr, null, pretty)}\n`);
+        } else {
+          // Output as pretty-printed IR
+          const printed = printProgram(ir);
+          stdout.write(`${printed}\n`);
+        }
+        return 0;
+      }
     }
 
     return 0;
@@ -223,7 +278,11 @@ function formatAndWriteError(
   source: string,
   stderr: NodeJS.WritableStream
 ): void {
-  if (error instanceof ParseError || error instanceof SemanticError) {
+  if (
+    error instanceof ParseError ||
+    error instanceof SemanticError ||
+    error instanceof IRError
+  ) {
     const { span, message } = error;
     const lines = source.split("\n");
     const line = lines[span.start.line - 1] || "";

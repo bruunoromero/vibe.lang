@@ -131,6 +131,54 @@ widget : number -> number`);
     }
   });
 
+  test("parses external with empty tuple type annotation", () => {
+    const program = parse(`@external "@vibe/runtime" "myList2"
+myList2 : () -> MyList`);
+
+    expect(program.declarations.length).toBe(1);
+    const external = program.declarations[0];
+
+    expect(external?.kind).toBe("ExternalDeclaration");
+
+    if (external && external.kind === "ExternalDeclaration") {
+      expect(external.name).toBe("myList2");
+      expect(external.target.modulePath).toBe("@vibe/runtime");
+      expect(external.target.exportName).toBe("myList2");
+      expect(external.annotation.kind).toBe("FunctionType");
+
+      if (external.annotation.kind === "FunctionType") {
+        // () should be parsed as Unit
+        expect(external.annotation.from.kind).toBe("TypeRef");
+        expect((external.annotation.from as any).name).toBe("Unit");
+      }
+    }
+  });
+
+  test("parses multiple externals in a module", () => {
+    const program = parse(`@external "@vibe/runtime" "myList"
+myList : Bool -> Bool -> Bool
+
+type MyList a
+
+@external "@vibe/runtime" "myList2"
+myList2 : () -> MyList`);
+
+    // Should have 3 declarations: myList (external), MyList (type), myList2 (external)
+    expect(program.declarations.length).toBe(3);
+
+    const myList = program.declarations[0];
+    expect(myList.kind).toBe("ExternalDeclaration");
+    expect(myList.name).toBe("myList");
+
+    const myListType = program.declarations[1];
+    expect(myListType.kind).toBe("OpaqueTypeDeclaration");
+    expect(myListType.name).toBe("MyList");
+
+    const myList2 = program.declarations[2];
+    expect(myList2.kind).toBe("ExternalDeclaration");
+    expect(myList2.name).toBe("myList2");
+  });
+
   test("respects indentation for multi-line applications", () => {
     const program = parse(`main =
   view model

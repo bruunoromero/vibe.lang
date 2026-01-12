@@ -28,36 +28,6 @@ export class SemanticError extends Error {
   }
 }
 
-/**
- * Error thrown when a type uses 'implementing' with a protocol that has methods without defaults.
- * Provides a clear message listing missing defaults and actionable hints.
- */
-export class ImplementingProtocolError extends SemanticError {
-  constructor(
-    public readonly typeName: string,
-    public readonly protocolName: string,
-    public readonly methodsWithoutDefaults: string[],
-    public readonly methodsWithDefaults: string[],
-    span: Span
-  ) {
-    const missing = methodsWithoutDefaults.join(", ");
-    const hasDefaults =
-      methodsWithDefaults.length > 0
-        ? `\n  Methods with defaults: ${methodsWithDefaults.join(", ")}`
-        : "";
-
-    const message =
-      `Cannot use 'implementing' with protocol '${protocolName}' for type '${typeName}'\n` +
-      `  Protocol '${protocolName}' has methods without default implementations\n` +
-      `  Missing defaults for: ${missing}${hasDefaults}\n\n` +
-      `Hint: Either add default implementations for these methods in the protocol,\n` +
-      `      or write a manual 'implement' block for this type.`;
-
-    super(message, span);
-    this.name = "ImplementingProtocolError";
-  }
-}
-
 // ===== Internal Type Representation =====
 // Simple HM-style types for type inference using Hindley-Milner algorithm.
 
@@ -142,8 +112,6 @@ export type ConstructorInfo = {
   parentType: string;
   /** Type parameters of the parent ADT (e.g., ["a"]) */
   parentParams: string[];
-  /** The module that defines this constructor (e.g., "Vibe", "MyModule") */
-  moduleName?: string;
   /** Source span for error messages */
   span: Span;
 };
@@ -220,36 +188,13 @@ export type OpaqueTypeInfo = {
 };
 
 /**
- * Default implementation for a protocol method.
- * Contains the type-checked parameters and body expression.
- */
-export type DefaultMethodImpl = {
-  /** Parameters for the default implementation (patterns) */
-  args: Pattern[];
-  /** Body expression of the default implementation */
-  body: Expr;
-};
-
-/**
- * Information about a method in a protocol, including optional default implementation.
- */
-export type ProtocolMethodInfo = {
-  /** The method's type signature */
-  type: Type;
-  /** Source span for error messages */
-  span: Span;
-  /** Optional default implementation (if present, method can be omitted in implement blocks) */
-  defaultImpl?: DefaultMethodImpl;
-};
-
-/**
  * Information about a protocol (type class).
  *
  * For example, `protocol Num a where plus : a -> a -> a` becomes:
  * {
  *   name: "Num",
  *   params: ["a"],
- *   methods: Map { "plus" => { type: ..., span: ..., defaultImpl: undefined } }
+ *   methods: Map { "plus" => { type: ..., span: ... } }
  * }
  */
 export type ProtocolInfo = {
@@ -259,8 +204,8 @@ export type ProtocolInfo = {
   moduleName?: string;
   /** Type parameters (typically just one, e.g., ["a"]) */
   params: string[];
-  /** Method signatures with optional default implementations */
-  methods: Map<string, ProtocolMethodInfo>;
+  /** Method signatures: name -> { type, span } */
+  methods: Map<string, { type: Type; span: Span }>;
   /** Source span for error messages */
   span: Span;
 };
@@ -490,7 +435,6 @@ export function analyze(
     argTypes: [],
     parentType: "Bool",
     parentParams: [],
-    moduleName: "__builtin__",
     span: builtinSpan,
   };
   constructors["False"] = {
@@ -498,42 +442,36 @@ export function analyze(
     argTypes: [],
     parentType: "Bool",
     parentParams: [],
-    moduleName: "__builtin__",
     span: builtinSpan,
   };
 
   // Primitive opaque types - no pattern matching allowed
   opaqueTypes["Unit"] = {
     name: "Unit",
-    moduleName: "__builtin__",
     params: [],
     span: builtinSpan,
   };
 
   opaqueTypes["Int"] = {
     name: "Int",
-    moduleName: "__builtin__",
     params: [],
     span: builtinSpan,
   };
 
   opaqueTypes["Float"] = {
     name: "Float",
-    moduleName: "__builtin__",
     params: [],
     span: builtinSpan,
   };
 
   opaqueTypes["String"] = {
     name: "String",
-    moduleName: "__builtin__",
     params: [],
     span: builtinSpan,
   };
 
   opaqueTypes["Char"] = {
     name: "Char",
-    moduleName: "__builtin__",
     params: [],
     span: builtinSpan,
   };
@@ -747,13 +685,8 @@ export function analyze(
         OpaqueTypeInfo
       ][]) {
         // Check for collision with existing opaque type from different module
-        // Allow builtin types to be shadowed by imports (e.g., prelude can re-export Int)
         const existing = opaqueTypes[name];
-        if (
-          existing &&
-          existing.moduleName !== "__builtin__" &&
-          existing.moduleName !== imp.moduleName
-        ) {
+        if (existing && existing.moduleName !== imp.moduleName) {
           throw new SemanticError(
             `Opaque type '${name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
               `Consider using a different name or qualified imports.`,
@@ -837,9 +770,8 @@ export function analyze(
     }
   }
 
-  // ===== PASS 1b2: Register record type declarations (DEPRECATED) =====
-  // Record types are now defined using 'type alias' syntax in the parser.
-  // This section remains for backward compatibility with existing parsed ASTs.
+  // ===== PASS 1b2: Register record type declarations =====
+  // Record types are treated like type aliases internally, but defined with different syntax.
   for (const decl of program.declarations) {
     if (decl.kind === "RecordTypeDeclaration") {
       registerRecordTypeDeclaration(decl, typeAliases, currentModuleName);
@@ -863,28 +795,9 @@ export function analyze(
         adts,
         typeAliases,
         globalScope,
-        constructors,
-        opaqueTypes,
-        substitution,
         currentModuleName
       );
       continue;
-    }
-  }
-
-  // ===== PASS 1e: Process 'implementing' clauses =====
-  // For type declarations with 'implementing', validate all protocols have all defaults
-  // and generate synthetic implement blocks.
-  for (const decl of program.declarations) {
-    if (decl.kind === "TypeDeclaration" && decl.implementing) {
-      processImplementingClause(
-        decl,
-        protocols,
-        instances,
-        adts,
-        typeAliases,
-        currentModuleName
-      );
     }
   }
 
@@ -1014,8 +927,7 @@ export function analyze(
       annotationType,
       constructors,
       adts,
-      typeAliases,
-      opaqueTypes
+      typeAliases
     );
 
     // IMPORTANT: Generalize IMMEDIATELY after inference, before analyzing the next declaration.
@@ -1163,18 +1075,21 @@ function registerTypeDeclaration(
 
   // Register each constructor
   for (const ctor of decl.constructors) {
-    // Check for duplicate constructor name defined within the SAME module
-    // Allow shadowing constructors imported from other modules
-    const existingCtor = constructors[ctor.name];
-    if (existingCtor && existingCtor.moduleName === moduleName) {
+    // Check for duplicate constructor name (must be unique within module)
+    if (constructors[ctor.name]) {
       throw new SemanticError(
         `Duplicate constructor '${ctor.name}' (constructor names must be unique within a module)`,
         ctor.span
       );
     }
 
-    // Note: We allow shadowing built-in constructors (like True/False)
-    // The type checker will disambiguate based on context
+    // Also check it doesn't shadow a built-in constructor
+    if (BUILTIN_CONSTRUCTORS[ctor.name] !== undefined) {
+      throw new SemanticError(
+        `Constructor '${ctor.name}' shadows a built-in constructor`,
+        ctor.span
+      );
+    }
 
     // Register constructor info
     constructors[ctor.name] = {
@@ -1182,7 +1097,6 @@ function registerTypeDeclaration(
       argTypes: ctor.args,
       parentType: decl.name,
       parentParams: decl.params,
-      moduleName,
       span: ctor.span,
     };
 
@@ -1523,6 +1437,14 @@ function registerTypeAliasWithoutValidation(
     paramSet.add(param);
   }
 
+  // Check if the value is a record type - not allowed in type alias
+  if (decl.value.kind === "RecordType") {
+    throw new SemanticError(
+      `Record types must be defined using 'type ${decl.name} = { ... }' syntax, not 'type alias'`,
+      decl.span
+    );
+  }
+
   // Register the alias (validation happens later)
   typeAliases[decl.name] = {
     name: decl.name,
@@ -1616,16 +1538,13 @@ function registerOpaqueType(
 }
 
 /**
- * Register a record type declaration as a type alias (DEPRECATED).
+ * Register a record type declaration as a type alias.
  *
- * Old syntax: type Name = { ... }
- * New syntax: type alias Name = { ... }
+ * Record types use `type Name = { ... }` syntax but are treated
+ * internally like type aliases. This ensures records must be defined
+ * as named types before use.
  *
- * Record types are now defined using 'type alias' syntax in the parser.
- * This function remains for backward compatibility with existing parsed ASTs.
- *
- * Example (old): `type Point = { x : Int, y : Int }` creates a record type.
- * Example (new): `type alias Point = { x : Int, y : Int }` creates a record type.
+ * Example: `type Point = { x : Int, y : Int }` creates a record type.
  */
 function registerRecordTypeDeclaration(
   decl: RecordTypeDeclaration,
@@ -1680,9 +1599,7 @@ function registerRecordTypeDeclaration(
  * Convert a RecordTypeDeclaration to a TypeAliasDeclaration for validation.
  * This allows record types to be validated using the same type reference validation.
  */
-function convertRecordToAlias(
-  decl: RecordTypeDeclaration
-): TypeAliasDeclaration {
+function convertRecordToAlias(decl: RecordTypeDeclaration): TypeAliasDeclaration {
   return {
     kind: "TypeAliasDeclaration",
     name: decl.name,
@@ -1912,22 +1829,6 @@ function applyVarSubstitution(type: Type, subst: Map<number, Type>): Type {
 }
 
 /**
- * Helper function to replace fresh type variables in an inferred type
- * with protocol type parameters where appropriate.
- * This is used when inferring types from default implementations.
- */
-function substituteProtocolVars(
-  type: Type,
-  protocolVarCtx: Map<string, TypeVar>
-): Type {
-  // For now, just return the type as-is
-  // In a more sophisticated implementation, we could try to unify
-  // the inferred type variables with the protocol's type parameters
-  // based on how they're used in the default implementation
-  return type;
-}
-
-/**
  * Register a protocol declaration in the protocol registry.
  * Also adds protocol methods to the global scope as polymorphic functions with constraints.
  */
@@ -1937,9 +1838,6 @@ function registerProtocol(
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
   globalScope: Scope,
-  constructors: Record<string, ConstructorInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  substitution: Substitution,
   moduleName?: string
 ) {
   // Check for duplicate protocol name
@@ -1999,7 +1897,7 @@ function registerProtocol(
   }
 
   // Convert method type expressions to internal types
-  const methods = new Map<string, ProtocolMethodInfo>();
+  const methods = new Map<string, { type: Type; span: Span }>();
   const methodNames = new Set<string>();
 
   for (const method of decl.methods) {
@@ -2012,71 +1910,16 @@ function registerProtocol(
     }
     methodNames.add(method.name);
 
-    let methodType: Type;
+    // Convert method type from AST to internal representation
+    // Use the shared type variable context so all methods use same var IDs
+    const methodType = typeFromAnnotation(
+      method.type,
+      sharedTypeVarCtx,
+      adts,
+      typeAliases
+    );
 
-    if (method.type) {
-      // Has explicit type annotation - convert from AST to internal representation
-      // Use the shared type variable context so all methods use same var IDs
-      methodType = typeFromAnnotation(
-        method.type,
-        sharedTypeVarCtx,
-        adts,
-        typeAliases
-      );
-    } else if (method.defaultImpl) {
-      // No explicit type annotation, but has default implementation
-      // Infer the type from the default implementation by analyzing it as a lambda
-      const lambdaExpr: Expr = {
-        kind: "Lambda",
-        args: method.defaultImpl.args,
-        body: method.defaultImpl.body,
-        span: method.span,
-      };
-
-      // Create a temporary scope for type inference
-      const tempScope: Scope = { parent: globalScope, symbols: new Map() };
-
-      // Infer the type of the lambda
-      const inferredType = analyzeExpr(
-        lambdaExpr,
-        tempScope,
-        substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes
-      );
-
-      // Apply substitutions to get the final type
-      methodType = applySubstitution(inferredType, substitution);
-
-      // Replace any fresh type variables with the protocol's type parameters where appropriate
-      // This ensures the inferred type uses the protocol's type variables
-      methodType = substituteProtocolVars(methodType, sharedTypeVarCtx);
-    } else {
-      // Neither type annotation nor default implementation
-      throw new SemanticError(
-        `Protocol method '${method.name}' must have either a type annotation or a default implementation`,
-        method.span
-      );
-    }
-
-    // Store method info with optional default implementation
-    const methodInfo: ProtocolMethodInfo = {
-      type: methodType,
-      span: method.span,
-    };
-
-    // If there's a default implementation, store it
-    if (method.defaultImpl) {
-      methodInfo.defaultImpl = {
-        args: method.defaultImpl.args,
-        body: method.defaultImpl.body,
-      };
-    }
-
-    methods.set(method.name, methodInfo);
+    methods.set(method.name, { type: methodType, span: method.span });
 
     // Add method to global scope as a polymorphic function with constraint
     // Only add if not already defined (don't override explicit definitions)
@@ -2098,111 +1941,6 @@ function registerProtocol(
     methods,
     span: decl.span,
   };
-}
-
-/**
- * Process an 'implementing' clause on a type declaration.
- * Validates that all referenced protocols have all methods with defaults,
- * and creates synthetic implement blocks.
- */
-function processImplementingClause(
-  decl: TypeDeclaration,
-  protocols: Record<string, ProtocolInfo>,
-  instances: InstanceInfo[],
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  moduleName?: string
-) {
-  if (!decl.implementing) return;
-
-  for (const protocolName of decl.implementing) {
-    const protocol = protocols[protocolName];
-
-    // Check that the protocol exists
-    if (!protocol) {
-      throw new SemanticError(
-        `Unknown protocol '${protocolName}' in 'implementing' clause`,
-        decl.span
-      );
-    }
-
-    // Collect methods with and without defaults
-    const methodsWithoutDefaults: string[] = [];
-    const methodsWithDefaults: string[] = [];
-
-    for (const [methodName, methodInfo] of protocol.methods) {
-      if (methodInfo.defaultImpl) {
-        methodsWithDefaults.push(methodName);
-      } else {
-        methodsWithoutDefaults.push(methodName);
-      }
-    }
-
-    // If any method lacks a default, throw an error
-    if (methodsWithoutDefaults.length > 0) {
-      throw new ImplementingProtocolError(
-        decl.name,
-        protocolName,
-        methodsWithoutDefaults,
-        methodsWithDefaults,
-        decl.span
-      );
-    }
-
-    // All methods have defaults - create a synthetic implement block
-    // Build type arguments for the type being implemented
-    // For a type like `type Pair a b = ...`, the type arg would be `Pair a b`
-    const typeArgs: Type[] = [
-      {
-        kind: "con",
-        name: decl.name,
-        args: decl.params.map(
-          (param): TypeVar => ({
-            kind: "var",
-            id: freshType().id,
-          })
-        ),
-      },
-    ];
-
-    // Create method implementations from defaults
-    const methods = new Map<string, Expr>();
-    for (const [methodName, methodInfo] of protocol.methods) {
-      if (methodInfo.defaultImpl) {
-        // Create a lambda from the default implementation
-        const defaultLambda: Expr = {
-          kind: "Lambda",
-          args: methodInfo.defaultImpl.args,
-          body: methodInfo.defaultImpl.body,
-          span: methodInfo.span,
-        };
-        methods.set(methodName, defaultLambda);
-      }
-    }
-
-    // Check for overlapping instances
-    for (const existing of instances) {
-      if (existing.protocolName !== protocolName) continue;
-
-      // Check if type arguments match (simple structural equality check)
-      if (typesOverlap(existing.typeArgs, typeArgs)) {
-        throw new SemanticError(
-          `Overlapping implementation for protocol '${protocolName}' (from 'implementing' clause)`,
-          decl.span
-        );
-      }
-    }
-
-    // Register the synthetic instance
-    instances.push({
-      protocolName,
-      moduleName,
-      typeArgs,
-      constraints: [], // Synthetic implementations have no extra constraints
-      methods,
-      span: decl.span,
-    });
-  }
 }
 
 /**
@@ -2257,16 +1995,14 @@ function registerImplementation(
     });
   }
 
-  // Validate that all required methods (those without defaults) are implemented
+  // Validate that all required methods are implemented
   const implementedMethods = new Set(decl.methods.map((m) => m.name));
-  const allMethods = new Set(protocol.methods.keys());
+  const requiredMethods = new Set(protocol.methods.keys());
 
-  // Check that methods without defaults are implemented
-  for (const methodName of allMethods) {
-    const methodInfo = protocol.methods.get(methodName)!;
-    if (!implementedMethods.has(methodName) && !methodInfo.defaultImpl) {
+  for (const required of requiredMethods) {
+    if (!implementedMethods.has(required)) {
       throw new SemanticError(
-        `Instance is missing implementation for method '${methodName}'`,
+        `Instance is missing implementation for method '${required}'`,
         decl.span
       );
     }
@@ -2274,7 +2010,7 @@ function registerImplementation(
 
   // Check for extra methods that aren't in the protocol
   for (const implemented of implementedMethods) {
-    if (!allMethods.has(implemented)) {
+    if (!requiredMethods.has(implemented)) {
       throw new SemanticError(
         `Method '${implemented}' is not part of protocol '${decl.protocolName}'`,
         decl.span
@@ -2297,26 +2033,9 @@ function registerImplementation(
   }
 
   // Convert method implementations to a map
-  // For methods not explicitly implemented, use the default implementation from the protocol
   const methods = new Map<string, Expr>();
   for (const method of decl.methods) {
     methods.set(method.name, method.implementation);
-  }
-
-  // For methods with defaults that weren't explicitly implemented,
-  // create a lambda expression from the default implementation
-  for (const [methodName, methodInfo] of protocol.methods) {
-    if (!methods.has(methodName) && methodInfo.defaultImpl) {
-      // Create a lambda from the default implementation
-      // The lambda wraps the args and body from the default
-      const defaultLambda: Expr = {
-        kind: "Lambda",
-        args: methodInfo.defaultImpl.args,
-        body: methodInfo.defaultImpl.body,
-        span: methodInfo.span,
-      };
-      methods.set(methodName, defaultLambda);
-    }
   }
 
   // Register the instance
@@ -2554,8 +2273,7 @@ function analyzeExpr(
           globalScope,
           constructors,
           adts,
-          typeAliases,
-          opaqueTypes
+          typeAliases
         )
       );
       return { kind: "tuple", elements };
@@ -2571,8 +2289,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       for (const el of expr.elements.slice(1)) {
         const elType = analyzeExpr(
@@ -2582,8 +2299,7 @@ function analyzeExpr(
           globalScope,
           constructors,
           adts,
-          typeAliases,
-          opaqueTypes
+          typeAliases
         );
         unify(first, elType, el.span, substitution);
       }
@@ -2597,8 +2313,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       const endType = analyzeExpr(
         expr.end,
@@ -2607,8 +2322,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       unify(startType, endType, expr.span, substitution);
       return {
@@ -2632,8 +2346,7 @@ function analyzeExpr(
           globalScope,
           constructors,
           adts,
-          typeAliases,
-          opaqueTypes
+          typeAliases
         );
       }
       return { kind: "record", fields };
@@ -2662,8 +2375,7 @@ function analyzeExpr(
           globalScope,
           constructors,
           adts,
-          typeAliases,
-          opaqueTypes
+          typeAliases
         );
         unify(updatedFields[field.name]!, fieldType, field.span, substitution);
         updatedFields[field.name] = applySubstitution(
@@ -2681,8 +2393,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       const concrete = applySubstitution(targetType, substitution);
       if (concrete.kind !== "record") {
@@ -2718,8 +2429,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       return fnChain(paramTypes, bodyType);
     }
@@ -2731,8 +2441,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       for (const arg of expr.args) {
         const argType = analyzeExpr(
@@ -2742,8 +2451,7 @@ function analyzeExpr(
           globalScope,
           constructors,
           adts,
-          typeAliases,
-          opaqueTypes
+          typeAliases
         );
         const resultType = freshType();
         unify(calleeType, fn(argType, resultType), expr.span, substitution);
@@ -2759,18 +2467,17 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       // Bool type must be defined in the prelude
-      const boolAdt = adts["Bool"];
+      const boolAdt = adts["bool"];
       if (!boolAdt) {
         throw new SemanticError(
           "Type 'Bool' not found. Make sure the prelude is imported.",
           expr.condition.span
         );
       }
-      const tBool: Type = { kind: "con", name: "Bool", args: [] };
+      const tBool: Type = { kind: "con", name: "bool", args: [] };
       unify(condType, tBool, expr.condition.span, substitution);
       const thenType = analyzeExpr(
         expr.thenBranch,
@@ -2779,8 +2486,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       const elseType = analyzeExpr(
         expr.elseBranch,
@@ -2789,8 +2495,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       unify(thenType, elseType, expr.span, substitution);
       return applySubstitution(thenType, substitution);
@@ -2833,8 +2538,7 @@ function analyzeExpr(
           undefined,
           constructors,
           adts,
-          typeAliases,
-          opaqueTypes
+          typeAliases
         );
         // Generalize the inferred type for polymorphic let-bindings
         // Note: We generalize with respect to the parent scope, not letScope,
@@ -2850,8 +2554,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
     }
     case "Case": {
@@ -2862,8 +2565,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       const branchTypes: Type[] = [];
       let hasWildcard = false;
@@ -2890,8 +2592,7 @@ function analyzeExpr(
           globalScope,
           constructors,
           adts,
-          typeAliases,
-          opaqueTypes
+          typeAliases
         );
         branchTypes.push(bodyType);
 
@@ -2960,8 +2661,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       const rightType = analyzeExpr(
         expr.right,
@@ -2970,8 +2670,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
       const opType = INFIX_TYPES[expr.operator];
 
@@ -3008,8 +2707,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
     }
     case "Paren":
@@ -3020,8 +2718,7 @@ function analyzeExpr(
         globalScope,
         constructors,
         adts,
-        typeAliases,
-        opaqueTypes
+        typeAliases
       );
     default: {
       const _exhaustive: never = expr;

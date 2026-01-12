@@ -1,0 +1,41 @@
+-- Example: Protocol methods with inferred types from default implementations
+
+-- Traditional approach: all methods have explicit type annotations
+protocol Show a where
+  show : a -> String
+  debugShow : a -> String
+  debugShow x = "Debug: " ++ show x
+
+-- New approach: methods without type annotations but with defaults
+protocol Helper a where
+  display : a -> String
+  -- displayWithPrefix infers its type from the default implementation
+  displayWithPrefix prefix x = prefix ++ display x
+
+-- Protocol with all methods having inferred types
+protocol Describable a where
+  describe x = "A value"
+  longDescription x = describe x ++ " with details"
+
+-- Implementation of Show for Int
+implement Show Int where
+  show = intToString
+  -- debugShow automatically gets the default implementation
+
+-- Implementation of Helper for Int  
+implement Helper Int where
+  display = intToString
+  -- displayWithPrefix automatically gets the default implementation
+
+-- Example usage
+exampleShow : String
+exampleShow = show 42
+
+exampleDebug : String  
+exampleDebug = debugShow 42
+
+exampleDisplay : String
+exampleDisplay = display 42
+
+examplePrefix : String
+examplePrefix = displayWithPrefix "Value: " 42

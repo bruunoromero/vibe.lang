@@ -19,6 +19,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@vibe/config": "workspace:*",
+        "@vibe/ir": "workspace:*",
         "@vibe/lexer": "workspace:*",
         "@vibe/module-resolver": "workspace:*",
         "@vibe/parser": "workspace:*",
@@ -55,6 +56,18 @@
       "version": "0.0.0",
       "devDependencies": {
         "@types/bun": "latest",
+      },
+    },
+    "packages/ir": {
+      "name": "@vibe/ir",
+      "version": "0.0.0",
+      "dependencies": {
+        "@vibe/semantics": "workspace:*",
+        "@vibe/syntax": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "@vibe/parser": "workspace:*",
       },
     },
     "packages/lexer": {
@@ -131,6 +144,8 @@
     "@vibe/example-app": ["@vibe/example-app@workspace:packages/example-app"],
 
     "@vibe/formatter": ["@vibe/formatter@workspace:packages/formatter"],
+
+    "@vibe/ir": ["@vibe/ir@workspace:packages/ir"],
 
     "@vibe/lexer": ["@vibe/lexer@workspace:packages/lexer"],
 

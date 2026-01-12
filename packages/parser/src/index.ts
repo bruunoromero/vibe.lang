@@ -30,8 +30,11 @@ import {
   type Span,
   type TypeDeclaration,
   type TypeAliasDeclaration,
+  type RecordTypeDeclaration,
+  type OpaqueTypeDeclaration,
   type ConstructorVariant,
   type ProtocolDeclaration,
+  type ProtocolMethod,
   type ImplementationDeclaration,
   type Constraint,
   type MethodImplementation,
@@ -473,22 +476,24 @@ class Parser {
   }
 
   /**
-   * Parse type declaration or type alias
+   * Parse type declaration, type alias, or opaque type
    *
    * Grammar:
    *   TypeDeclaration = "type", UpperIdentifier, {LowerIdentifier}, "=", ConstructorDef, {"|", ConstructorDef}
+   *   OpaqueTypeDeclaration = "type", UpperIdentifier, {LowerIdentifier}  (no "=")
    *   TypeAliasDeclaration = "type", "alias", UpperIdentifier, {LowerIdentifier}, "=", TypeExpr
    *
    * Examples:
-   *   type Bool = True | False
-   *   type Maybe a = Just a | Nothing
-   *   type Result e v = Ok v | Err e
-   *   type alias UserId = number
-   *   type alias Pair a b = (a, b)
+   *   type Bool = True | False            (ADT)
+   *   type Maybe a = Just a | Nothing     (ADT)
+   *   type Promise a                      (Opaque - for JS interop)
+   *   type alias Point = { x : Int, y : Int } (Record - requires 'alias')
+   *   type alias UserId = Int             (Type alias)
    */
   private parseTypeOrAliasDeclaration():
     | TypeDeclaration
-    | TypeAliasDeclaration {
+    | TypeAliasDeclaration
+    | OpaqueTypeDeclaration {
     // Consume "type" keyword
     const typeToken = this.expectKeyword("type");
 
@@ -508,10 +513,39 @@ class Parser {
       params.push(param.lexeme);
     }
 
+    // Check for opaque type (no equals sign)
+    // Opaque types end when we see something that's not part of the type params
+    if (!this.peek(TokenKind.Equals)) {
+      // This is an opaque type: type Name params
+      const lastToken =
+        params.length > 0 ? this.tokens[this.index - 1]! : nameToken;
+      const span: Span = {
+        start: typeToken.span.start,
+        end: lastToken.span.end,
+      };
+
+      return {
+        kind: "OpaqueTypeDeclaration",
+        name,
+        params,
+        span,
+      } satisfies OpaqueTypeDeclaration;
+    }
+
     // Consume equals sign
     this.expect(TokenKind.Equals, "type definition");
 
-    // Parse constructor variants separated by pipe (|)
+    // Check if this is a record type (= { ... })
+    if (this.peek(TokenKind.LBrace)) {
+      throw new ParseError(
+        "Record types must use 'type alias' syntax: type alias " +
+          name +
+          " = { ... }",
+        { start: typeToken.span.start, end: this.current().span.end }
+      );
+    }
+
+    // Parse ADT - constructor variants separated by pipe (|)
     const constructors: ConstructorVariant[] = [];
     constructors.push(this.parseConstructorVariant());
 
@@ -520,11 +554,37 @@ class Parser {
       constructors.push(this.parseConstructorVariant());
     }
 
-    // Calculate span from "type" to end of last constructor
-    const lastConstructor = constructors[constructors.length - 1]!;
+    // Check for optional 'implementing' clause
+    // Syntax: implementing Protocol1, Protocol2, ...
+    let implementing: string[] | undefined = undefined;
+    let endSpan = constructors[constructors.length - 1]!.span.end;
+
+    if (this.peekKeyword("implementing")) {
+      this.advance(); // consume 'implementing'
+      implementing = [];
+
+      // Parse comma-separated list of protocol names
+      const protocolName = this.expect(
+        TokenKind.UpperIdentifier,
+        "protocol name after 'implementing'"
+      );
+      implementing.push(protocolName.lexeme);
+      endSpan = protocolName.span.end;
+
+      while (this.match(TokenKind.Comma)) {
+        const nextProtocol = this.expect(
+          TokenKind.UpperIdentifier,
+          "protocol name"
+        );
+        implementing.push(nextProtocol.lexeme);
+        endSpan = nextProtocol.span.end;
+      }
+    }
+
+    // Calculate span from "type" to end of last constructor or implementing clause
     const span: Span = {
       start: typeToken.span.start,
-      end: lastConstructor.span.end,
+      end: endSpan,
     };
 
     return {
@@ -532,6 +592,7 @@ class Parser {
       name,
       params,
       constructors,
+      implementing,
       span,
     } satisfies TypeDeclaration;
   }
@@ -582,10 +643,13 @@ class Parser {
    *
    * Grammar: TypeAliasDeclaration = "type", "alias", UpperIdentifier, {LowerIdentifier}, "=", TypeExpr
    *
+   * Note: Record types now require the 'type alias' syntax.
+   *
    * Examples:
-   *   type alias UserId = number
+   *   type alias UserId = Int
    *   type alias Pair a b = (a, b)
    *   type alias Handler msg = msg -> Model -> Model
+   *   type alias Point = { x : Int, y : Int }
    *
    * @param typeToken - The already consumed "type" keyword token
    */
@@ -625,13 +689,22 @@ class Parser {
   /**
    * Parse protocol declaration
    *
-   * Grammar: protocol UpperIdentifier {LowerIdentifier} where {LowerIdentifier : TypeExpr}
+   * Grammar: protocol UpperIdentifier {LowerIdentifier} where {MethodSignature}
+   *
+   * MethodSignature:
+   *   - Required method: name : Type
+   *   - Method with default: name : Type, followed by name args = expr
    *
    * Example:
    *   protocol Num a where
    *     plus : a -> a -> a
    *     minus : a -> a -> a
    *     times : a -> a -> a
+   *
+   *   protocol Eq a where
+   *     eq : a -> a -> Bool
+   *     neq : a -> a -> Bool
+   *     neq x y = not (eq x y)
    */
   private parseProtocolDeclaration(): ProtocolDeclaration {
     // Consume "protocol" keyword
@@ -651,8 +724,8 @@ class Parser {
     // Consume "where" keyword
     this.expectKeyword("where");
 
-    // Parse method signatures (indented block)
-    const methods: Array<{ name: string; type: TypeExpr; span: Span }> = [];
+    // Parse method signatures with optional default implementations (indented block)
+    const methods: ProtocolMethod[] = [];
 
     // Get base indentation from first method
     // Methods can be either LowerIdentifier or (Operator)
@@ -666,7 +739,7 @@ class Parser {
     const firstMethodStart = this.current().span.start;
     const baseIndent = firstMethodStart.column;
 
-    // Parse all method signatures
+    // Parse all method signatures (and optionally their default implementations)
     while (
       this.peek(TokenKind.LowerIdentifier) ||
       this.peek(TokenKind.LParen)
@@ -696,16 +769,116 @@ class Parser {
         methodName = methodToken.lexeme;
       }
 
-      // Expect colon
-      this.expect(TokenKind.Colon, "':' after method name");
+      // Check if there's a type annotation (: Type) or just a default implementation
+      let methodType: TypeExpr | undefined = undefined;
+      let defaultImpl: ProtocolMethod["defaultImpl"] = undefined;
 
-      // Parse method type
-      const methodType = this.parseTypeExpression();
+      if (this.peek(TokenKind.Colon)) {
+        // Has explicit type annotation
+        this.advance(); // consume colon
+
+        // Parse method type
+        methodType = this.parseTypeExpression();
+
+        // Check if this method has a default implementation on the next line
+        // The default implementation has the form: methodName args = expr
+        // and must be at the same indentation level as the method signature
+        if (
+          (this.peek(TokenKind.LowerIdentifier) ||
+            this.peek(TokenKind.LParen)) &&
+          this.current().span.start.column === baseIndent
+        ) {
+          // Save position to potentially backtrack
+          const savedIndex = this.index;
+
+          // Try to parse a default implementation
+          const nextToken = this.current();
+          let nextMethodName: string | null = null;
+
+          if (this.peek(TokenKind.LParen)) {
+            // Operator method: (==) x y = ...
+            this.advance(); // consume (
+            if (this.peek(TokenKind.Operator)) {
+              nextMethodName = this.current().lexeme;
+              this.advance(); // consume operator
+              if (this.peek(TokenKind.RParen)) {
+                this.advance(); // consume )
+              } else {
+                // Not a valid default impl start, backtrack
+                this.index = savedIndex;
+                nextMethodName = null;
+              }
+            } else {
+              this.index = savedIndex;
+            }
+          } else if (this.peek(TokenKind.LowerIdentifier)) {
+            // Check if it's the same method name
+            if (nextToken.lexeme === methodName) {
+              nextMethodName = nextToken.lexeme;
+              this.advance(); // consume method name
+            }
+          }
+
+          // If we matched the method name, check for arguments and =
+          if (nextMethodName === methodName) {
+            // Parse pattern arguments (if any)
+            const args: Pattern[] = [];
+            while (this.isPatternStart(this.current())) {
+              args.push(this.parsePattern());
+            }
+
+            // Check for equals sign
+            if (this.peek(TokenKind.Equals)) {
+              this.advance(); // consume =
+              // Parse the default implementation expression
+              const body = this.parseExpression();
+              defaultImpl = { args, body };
+            } else {
+              // Not a default implementation, backtrack
+              this.index = savedIndex;
+            }
+          } else if (nextMethodName !== null) {
+            // Different method name, backtrack
+            this.index = savedIndex;
+          }
+        }
+      } else if (
+        this.isPatternStart(this.current()) ||
+        this.peek(TokenKind.Equals)
+      ) {
+        // No type annotation, must have default implementation
+        // Parse pattern arguments (if any)
+        const args: Pattern[] = [];
+        while (this.isPatternStart(this.current())) {
+          args.push(this.parsePattern());
+        }
+
+        // Expect equals sign
+        this.expect(TokenKind.Equals, "'=' for default implementation");
+
+        // Parse the default implementation expression
+        const body = this.parseExpression();
+        defaultImpl = { args, body };
+      } else {
+        throw new ParseError(
+          `Protocol method '${methodName}' must have either a type annotation or a default implementation`,
+          this.currentSpan()
+        );
+      }
+
+      const methodSpan: Span = {
+        start: methodStart,
+        end:
+          defaultImpl?.body.span.end ??
+          methodType?.span.end ??
+          this.current().span.end,
+      };
 
       methods.push({
         name: methodName,
         type: methodType,
-        span: { start: methodStart, end: methodType.span.end },
+        defaultImpl,
+        span: methodSpan,
       });
     }
 
@@ -1166,6 +1339,18 @@ class Parser {
 
     if (this.match(TokenKind.LParen)) {
       const start = this.previousSpan().start;
+
+      // Check for empty tuple () which is syntactic sugar for Unit
+      if (this.match(TokenKind.RParen)) {
+        const end = this.previousSpan().end;
+        return {
+          kind: "TypeRef",
+          name: "Unit",
+          args: [],
+          span: { start, end },
+        };
+      }
+
       const first = this.parseTypeExpression();
       const elements: TypeExpr[] = [first];
       const baseIndent = first.span.start.column;
@@ -1287,6 +1472,18 @@ class Parser {
 
     if (this.match(TokenKind.LParen)) {
       const start = this.previousSpan().start;
+
+      // Check for empty tuple () which is syntactic sugar for Unit
+      if (this.match(TokenKind.RParen)) {
+        const end = this.previousSpan().end;
+        return {
+          kind: "TypeRef",
+          name: "Unit",
+          args: [],
+          span: { start, end },
+        };
+      }
+
       const first = this.parseTypeExpression();
       const elements: TypeExpr[] = [first];
       const baseIndent = first.span.start.column;
@@ -1445,6 +1642,10 @@ class Parser {
 
       // Stop if not an operator
       if (operatorToken.kind !== TokenKind.Operator) break;
+
+      // Stop if this is an attribute marker (@) - used for @external, @deprecated, etc.
+      // These are not infix operators and should not be parsed as part of expressions
+      if (operatorToken.lexeme === "@") break;
 
       // Get precedence and associativity for this operator
       const { precedence, associativity } = this.getOperatorInfo(

@@ -62,6 +62,7 @@ export const KEYWORDS = [
   "infixr",
   "protocol",
   "implement",
+  "implementing",
   "where",
 ] as const;
 
@@ -206,12 +207,14 @@ export type ConstructorVariant = {
  * An Algebraic Data Type declaration.
  *
  * Syntax: type Name param1 param2 ... = Constructor1 args | Constructor2 args | ...
+ *         [implementing Protocol1, Protocol2, ...]
  *
  * Examples:
  * - type Bool = True | False
  * - type Maybe a = Just a | Nothing
  * - type Result error value = Ok value | Err error
  * - type List a = Cons a (List a) | Nil  (recursive type)
+ * - type Person = Person String Int implementing Show, Eq
  *
  * Note: Constructor names must be unique within a module (Elm 0.18 style).
  */
@@ -223,6 +226,8 @@ export type TypeDeclaration = {
   params: string[];
   /** Constructor variants (at least one required) */
   constructors: ConstructorVariant[];
+  /** Protocols to automatically implement (requires all methods have defaults) */
+  implementing?: string[];
   /** Source location span for error reporting */
   span: Span;
 };
@@ -232,14 +237,14 @@ export type TypeDeclaration = {
  *
  * Syntax: type alias Name param1 param2 ... = TypeExpr
  *
- * Type aliases create a new name for an existing type expression.
+ * Type aliases create a new name for an existing type expression, including records.
  * Unlike ADTs, they don't introduce new constructors.
  *
  * Examples:
  * - type alias UserId = number
  * - type alias Pair a b = (a, b)
  * - type alias Handler msg = msg -> Model -> Model
- * - type alias Point = { x : number, y : number }
+ * - type alias Point = { x : Int, y : Int }
  */
 export type TypeAliasDeclaration = {
   kind: "TypeAliasDeclaration";
@@ -247,8 +252,59 @@ export type TypeAliasDeclaration = {
   name: string;
   /** Type parameters (lowercase identifiers, e.g., ["a", "b"] for Pair a b) */
   params: string[];
-  /** The type expression this alias refers to */
+  /** The type expression this alias refers to (cannot be a record type) */
   value: TypeExpr;
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
+ * A record type declaration (DEPRECATED - use TypeAliasDeclaration instead).
+ *
+ * Old Syntax: type Name param1 param2 ... = { field1 : Type1, field2 : Type2, ... }
+ * New Syntax: type alias Name param1 param2 ... = { field1 : Type1, field2 : Type2, ... }
+ *
+ * This declaration type is kept for backwards compatibility during the transition.
+ * Record types should now use 'type alias' syntax.
+ *
+ * Examples:
+ * - type alias Point = { x : number, y : number }
+ * - type alias Config a = { value : a, enabled : Bool }
+ */
+export type RecordTypeDeclaration = {
+  kind: "RecordTypeDeclaration";
+  /** The type name (must be uppercase, e.g., "Point", "Config") */
+  name: string;
+  /** Type parameters (lowercase identifiers, e.g., ["a"] for Config a) */
+  params: string[];
+  /** The record fields */
+  fields: Array<{ name: string; type: TypeExpr }>;
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
+ * An opaque type declaration.
+ *
+ * Syntax: type Name param1 param2 ...
+ *
+ * Opaque types are abstract types that hide their implementation.
+ * They are useful for JS interop where the actual type is unknown
+ * or for creating abstract data types.
+ *
+ * No pattern matching or record updates are allowed on opaque types.
+ *
+ * Examples:
+ * - type Promise a           (opaque type for JS Promise)
+ * - type Element             (opaque type for DOM elements)
+ * - type Map k v             (opaque type for JS Map)
+ */
+export type OpaqueTypeDeclaration = {
+  kind: "OpaqueTypeDeclaration";
+  /** The type name (must be uppercase, e.g., "Promise", "Element") */
+  name: string;
+  /** Type parameters (lowercase identifiers, e.g., ["a"] for Promise a) */
+  params: string[];
   /** Source location span for error reporting */
   span: Span;
 };
@@ -314,17 +370,54 @@ export type ExternalDeclaration = {
 };
 
 /**
+ * A method signature in a protocol declaration, optionally with a default implementation.
+ *
+ * Example (required method with explicit type):
+ *   show : a -> String
+ *
+ * Example (method with default and explicit type):
+ *   neq : a -> a -> Bool
+ *   neq x y = not (eq x y)
+ *
+ * Example (method with default and inferred type):
+ *   neq x y = not (eq x y)
+ */
+export type ProtocolMethod = {
+  /** Method name (lowercase identifier or operator) */
+  name: string;
+  /** Method type signature (optional if defaultImpl is provided) */
+  type?: TypeExpr;
+  /** Optional default implementation (if provided, method can be omitted in implement blocks) */
+  defaultImpl?: {
+    /** Parameters for the default implementation */
+    args: Pattern[];
+    /** Body expression for the default implementation */
+    body: Expr;
+  };
+  /** Source location span for error reporting */
+  span: Span;
+};
+
+/**
  * A protocol declaration defining a type class interface.
  *
  * Syntax: protocol Name param1 param2 ... where
  *           method1 : Type1
  *           method2 : Type2
+ *           method3 : Type3
+ *           method3 x y = defaultExpr
  *
  * Example:
  * protocol Num a where
  *   plus : a -> a -> a
  *   minus : a -> a -> a
  *   times : a -> a -> a
+ *
+ * Example with defaults:
+ * protocol Eq a where
+ *   eq : a -> a -> Bool
+ *   neq : a -> a -> Bool
+ *   neq x y = not (eq x y)
  */
 export type ProtocolDeclaration = {
   kind: "ProtocolDeclaration";
@@ -332,8 +425,8 @@ export type ProtocolDeclaration = {
   name: string;
   /** Type parameters (lowercase identifiers, typically just one) */
   params: string[];
-  /** Method signatures: name -> type */
-  methods: Array<{ name: string; type: TypeExpr; span: Span }>;
+  /** Method signatures with optional default implementations */
+  methods: ProtocolMethod[];
   /** Source location span for error reporting */
   span: Span;
 };
@@ -429,6 +522,8 @@ export type Declaration =
   | ExternalDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
+  | RecordTypeDeclaration
+  | OpaqueTypeDeclaration
   | ProtocolDeclaration
   | ImplementationDeclaration
   | InfixDeclaration;

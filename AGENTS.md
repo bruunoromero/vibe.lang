@@ -43,22 +43,6 @@ Install dependencies for all workspaces:
 bun install
 ```
 
-### Running the CLI
-
-You can run the CLI directly via `bun`:
-
-```bash
-# General usage
-bun run packages/cli/index.ts <command> [args]
-
-# Examples
-bun run packages/cli/index.ts tokenize "(println :ok)"
-bun run packages/cli/index.ts parse src/main.lang
-bun run packages/cli/index.ts analyze src/main.lang
-bun run packages/cli/index.ts run src/main.lang
-bun run packages/cli/index.ts compile src/main.lang
-```
-
 ### Running Tests
 
 Run tests across all packages:
