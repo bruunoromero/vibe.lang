@@ -135,9 +135,11 @@ export function lower(
     // Convert type and constraints
     const irType = type ? convertType(type) : { kind: "var" as const, id: -1 };
 
-    // Extract constraints from the value's type scheme if available
-    // (This will be populated once constraint inference is complete)
-    const constraints: IRConstraint[] = [];
+    // Extract constraints from the value's type scheme for dictionary-passing
+    const typeScheme = semantics.typeSchemes[name];
+    const constraints: IRConstraint[] = typeScheme
+      ? convertConstraints(typeScheme.constraints)
+      : [];
 
     const irValue: IRValue = {
       name,

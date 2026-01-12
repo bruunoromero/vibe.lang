@@ -17,16 +17,6 @@ origin =
   , y = 0
   }
 
-type MyBool = True | False
-
-@external "@vibe/runtime" "myList"
-myList : Bool -> Bool -> Bool
-
-type MyList a
-
-@external "@vibe/runtime" "myList2"
-myList2 : () -> MyList
-
 -- Function using record type
 distance : {x: Int, y:Int} -> Int
 distance point =

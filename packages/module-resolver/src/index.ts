@@ -5,7 +5,7 @@ import {
   loadConfig,
   type ResolvedVibeConfig,
 } from "@vibe/config";
-import type { Program } from "@vibe/syntax";
+import type { Program, OperatorRegistry } from "@vibe/syntax";
 
 export interface ResolveModuleInput {
   config: ResolvedVibeConfig;
@@ -31,6 +31,8 @@ export interface ModuleNode {
   ast: Program;
   /** Module names this module imports */
   dependencies: Set<string>;
+  /** Operator precedence/associativity declarations from this module */
+  operatorRegistry: OperatorRegistry;
 }
 
 /**
@@ -164,36 +166,140 @@ function findUpward(
 }
 
 /**
+ * Options for module discovery functions.
+ */
+export interface DiscoverOptions {
+  /**
+   * Function to extract infix declarations from source code.
+   * Used in the first pass to build operator registries.
+   */
+  collectInfixDeclarations: (source: string) => { registry: OperatorRegistry };
+
+  /**
+   * Function to parse source code into an AST.
+   * May optionally accept an operator registry for precedence-aware parsing.
+   */
+  parseFunction: (
+    source: string,
+    operatorRegistry?: OperatorRegistry
+  ) => Program;
+
+  /**
+   * Whether to prefer dist directories over src directories.
+   */
+  preferDist?: boolean;
+
+  /**
+   * Whether to auto-inject the Vibe prelude as a dependency.
+   */
+  injectPrelude?: boolean;
+}
+
+/**
+ * Merge multiple operator registries into one.
+ * Later registries override earlier ones for the same operator.
+ *
+ * @param registries - Registries to merge (in order, later overrides earlier)
+ * @returns Combined registry
+ */
+export function mergeOperatorRegistries(
+  ...registries: OperatorRegistry[]
+): OperatorRegistry {
+  const merged: OperatorRegistry = new Map();
+  for (const registry of registries) {
+    for (const [op, info] of registry) {
+      merged.set(op, info);
+    }
+  }
+  return merged;
+}
+
+/**
  * Discover all modules transitively imported from the entry module,
  * parse them, and return them sorted in topological order.
  *
- * This ensures that dependencies are always analyzed before modules that depend on them.
+ * This implements a two-pass algorithm:
+ * 1. First pass: Collect imports and operator declarations for all modules
+ * 2. Second pass: Parse modules in topological order with merged operator registries
+ *
+ * This ensures that dependencies are always analyzed before modules that depend on them,
+ * and that operator precedence from dependencies is available during parsing.
  *
  * @param config - The resolved Vibe configuration
  * @param entryModuleName - The entry point module to start discovery from
- * @param parseFunction - Function to parse source code into an AST
- * @param preferDist - Whether to prefer dist over src directories
+ * @param options - Discovery options including parse and infix collection functions
  * @returns ModuleGraph with all discovered modules and topological ordering
  * @throws Error if a module cannot be found or if there's a circular dependency
  */
 export function discoverModuleGraph(
   config: ResolvedVibeConfig,
   entryModuleName: string,
+  options: DiscoverOptions
+): ModuleGraph;
+
+/**
+ * @deprecated Use the options object overload instead
+ */
+export function discoverModuleGraph(
+  config: ResolvedVibeConfig,
+  entryModuleName: string,
   parseFunction: (source: string) => Program,
-  preferDist = false,
-  injectPrelude = true
+  preferDist?: boolean,
+  injectPrelude?: boolean
+): ModuleGraph;
+
+export function discoverModuleGraph(
+  config: ResolvedVibeConfig,
+  entryModuleName: string,
+  optionsOrParseFunction: DiscoverOptions | ((source: string) => Program),
+  preferDistArg = false,
+  injectPreludeArg = true
 ): ModuleGraph {
-  const modules = new Map<string, ModuleNode>();
+  // Handle both old and new API signatures
+  let options: DiscoverOptions;
+  if (typeof optionsOrParseFunction === "function") {
+    // Legacy API: wrap parse function and provide a no-op infix collector
+    const parseFunction = optionsOrParseFunction;
+    options = {
+      collectInfixDeclarations: () => ({ registry: new Map() }),
+      parseFunction,
+      preferDist: preferDistArg,
+      injectPrelude: injectPreludeArg,
+    };
+  } else {
+    options = optionsOrParseFunction;
+  }
+
+  const {
+    collectInfixDeclarations,
+    parseFunction,
+    preferDist = false,
+    injectPrelude = true,
+  } = options;
+
+  // ============================================================
+  // PASS 1: Discover modules and collect operator declarations
+  // ============================================================
+  // We use a minimal parse just to extract imports and infix declarations.
+  // This avoids needing operator precedence during import discovery.
+
+  interface PreliminaryModule {
+    moduleName: string;
+    packageName: string;
+    filePath: string;
+    source: string;
+    dependencies: Set<string>;
+    operatorRegistry: OperatorRegistry;
+  }
+
+  const preliminaryModules = new Map<string, PreliminaryModule>();
   const visiting = new Set<string>(); // For cycle detection
 
-  // Recursively discover all dependencies
-  function discoverModule(moduleName: string): void {
-    // Already processed
-    if (modules.has(moduleName)) {
+  function discoverModulePreliminary(moduleName: string): void {
+    if (preliminaryModules.has(moduleName)) {
       return;
     }
 
-    // Cycle detection: if we're currently visiting this module, we have a cycle
     if (visiting.has(moduleName)) {
       throw new Error(
         `Circular dependency detected: ${[...visiting, moduleName].join(
@@ -208,8 +314,12 @@ export function discoverModuleGraph(
     const resolved = resolveModule({ config, moduleName, preferDist });
     const source = fs.readFileSync(resolved.filePath, "utf8");
 
-    // Parse to get imports
-    const ast = parseFunction(source);
+    // Collect infix declarations (quick scan, no full parse needed)
+    const { registry: operatorRegistry } = collectInfixDeclarations(source);
+
+    // Parse minimally to get imports - use the module's own operators only
+    // (imports don't need complex expression parsing with operator precedence)
+    const ast = parseFunction(source, operatorRegistry);
 
     // Extract dependency names
     const dependencies = new Set<string>();
@@ -224,46 +334,115 @@ export function discoverModuleGraph(
     );
 
     if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
-      // Try to add Vibe, but don't fail if it can't be found
-      // This allows using builtin types without requiring Vibe to be available
       try {
         resolveModule({ config, moduleName: "Vibe", preferDist });
         dependencies.add("Vibe");
-      } catch (error) {
-        // Vibe not found - this is OK, builtin types are available without it
-        // Silently skip adding Prelude to dependencies
+      } catch {
+        // Vibe not found - OK, builtin types are available
       }
     }
 
     // Recursively discover dependencies BEFORE storing this module
-    // This ensures we detect cycles properly
     for (const depName of dependencies) {
-      discoverModule(depName);
+      discoverModulePreliminary(depName);
     }
 
-    // Store module node AFTER processing dependencies
-    modules.set(moduleName, {
+    preliminaryModules.set(moduleName, {
       moduleName,
       packageName: resolved.packageName,
       filePath: resolved.filePath,
       source,
-      ast,
       dependencies,
+      operatorRegistry,
     });
 
     visiting.delete(moduleName);
   }
 
   // Start discovery from entry module
-  discoverModule(entryModuleName);
+  discoverModulePreliminary(entryModuleName);
 
   // Perform topological sort
-  const sortedModuleNames = topologicalSort(modules);
+  const sortedModuleNames = topologicalSortPreliminary(preliminaryModules);
+
+  // ============================================================
+  // PASS 2: Re-parse modules with combined operator registries
+  // ============================================================
+  // Process in topological order so dependency registries are available
+
+  const modules = new Map<string, ModuleNode>();
+
+  for (const moduleName of sortedModuleNames) {
+    const preliminary = preliminaryModules.get(moduleName)!;
+
+    // Merge operator registries from all dependencies
+    const dependencyRegistries: OperatorRegistry[] = [];
+    for (const depName of preliminary.dependencies) {
+      const depModule = modules.get(depName);
+      if (depModule) {
+        dependencyRegistries.push(depModule.operatorRegistry);
+      }
+    }
+
+    // Combined registry: dependencies first, then module's own (can override)
+    const combinedRegistry = mergeOperatorRegistries(
+      ...dependencyRegistries,
+      preliminary.operatorRegistry
+    );
+
+    // Re-parse with combined operator registry for correct precedence
+    const ast = parseFunction(preliminary.source, combinedRegistry);
+
+    modules.set(moduleName, {
+      moduleName: preliminary.moduleName,
+      packageName: preliminary.packageName,
+      filePath: preliminary.filePath,
+      source: preliminary.source,
+      ast,
+      dependencies: preliminary.dependencies,
+      operatorRegistry: preliminary.operatorRegistry, // Store module's own declarations
+    });
+  }
 
   return {
     modules,
     sortedModuleNames,
   };
+}
+
+/**
+ * Helper for topological sort on preliminary modules
+ */
+function topologicalSortPreliminary(
+  modules: Map<string, { moduleName: string; dependencies: Set<string> }>
+): string[] {
+  const sorted: string[] = [];
+  const visited = new Set<string>();
+
+  function visit(moduleName: string): void {
+    if (visited.has(moduleName)) {
+      return;
+    }
+
+    visited.add(moduleName);
+
+    const node = modules.get(moduleName);
+    if (!node) {
+      throw new Error(`Module "${moduleName}" not found in graph`);
+    }
+
+    for (const depName of node.dependencies) {
+      visit(depName);
+    }
+
+    sorted.push(moduleName);
+  }
+
+  for (const moduleName of modules.keys()) {
+    visit(moduleName);
+  }
+
+  return sorted;
 }
 
 /**
@@ -305,23 +484,73 @@ export function discoverSourceModules(srcDir: string): string[] {
  * Unlike discoverModuleGraph which starts from a single entry point, this discovers
  * ALL source modules in the package and their transitive dependencies.
  *
+ * This implements a two-pass algorithm:
+ * 1. First pass: Collect imports and operator declarations for all modules
+ * 2. Second pass: Parse modules in topological order with merged operator registries
+ *
  * @param config - The resolved Vibe configuration
- * @param parseFunction - Function to parse source code into an AST
+ * @param options - Discovery options including parse and infix collection functions
  * @returns ModuleGraph with all discovered modules and topological ordering
  */
 export function discoverAllModules(
   config: ResolvedVibeConfig,
+  options: DiscoverOptions
+): ModuleGraph;
+
+/**
+ * @deprecated Use the options object overload instead
+ */
+export function discoverAllModules(
+  config: ResolvedVibeConfig,
   parseFunction: (source: string) => Program
+): ModuleGraph;
+
+export function discoverAllModules(
+  config: ResolvedVibeConfig,
+  optionsOrParseFunction: DiscoverOptions | ((source: string) => Program)
 ): ModuleGraph {
+  // Handle both old and new API signatures
+  let options: DiscoverOptions;
+  if (typeof optionsOrParseFunction === "function") {
+    // Legacy API: wrap parse function and provide a no-op infix collector
+    const parseFunction = optionsOrParseFunction;
+    options = {
+      collectInfixDeclarations: () => ({ registry: new Map() }),
+      parseFunction,
+      preferDist: false,
+      injectPrelude: true,
+    };
+  } else {
+    options = optionsOrParseFunction;
+  }
+
+  const {
+    collectInfixDeclarations,
+    parseFunction,
+    injectPrelude = true,
+  } = options;
+
   // First, discover all source modules in the config's source directory
   const sourceModules = discoverSourceModules(config.srcDir);
 
-  // Now build the graph starting from all source modules
-  const modules = new Map<string, ModuleNode>();
+  // ============================================================
+  // PASS 1: Discover modules and collect operator declarations
+  // ============================================================
+
+  interface PreliminaryModule {
+    moduleName: string;
+    packageName: string;
+    filePath: string;
+    source: string;
+    dependencies: Set<string>;
+    operatorRegistry: OperatorRegistry;
+  }
+
+  const preliminaryModules = new Map<string, PreliminaryModule>();
   const visiting = new Set<string>();
 
-  function discoverModule(moduleName: string): void {
-    if (modules.has(moduleName)) {
+  function discoverModulePreliminary(moduleName: string): void {
+    if (preliminaryModules.has(moduleName)) {
       return;
     }
 
@@ -338,7 +567,12 @@ export function discoverAllModules(
     // Resolve and read module
     const resolved = resolveModule({ config, moduleName });
     const source = fs.readFileSync(resolved.filePath, "utf8");
-    const ast = parseFunction(source);
+
+    // Collect infix declarations
+    const { registry: operatorRegistry } = collectInfixDeclarations(source);
+
+    // Parse minimally to get imports
+    const ast = parseFunction(source, operatorRegistry);
 
     // Extract dependencies
     const dependencies = new Set<string>();
@@ -352,7 +586,7 @@ export function discoverAllModules(
       (imp) => imp.moduleName === "Vibe"
     );
 
-    if (!isPreludeModule && !hasExplicitPreludeImport) {
+    if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
       try {
         resolveModule({ config, moduleName: "Vibe" });
         dependencies.add("Vibe");
@@ -363,17 +597,16 @@ export function discoverAllModules(
 
     // Recursively discover dependencies
     for (const depName of dependencies) {
-      discoverModule(depName);
+      discoverModulePreliminary(depName);
     }
 
-    // Store module node
-    modules.set(moduleName, {
+    preliminaryModules.set(moduleName, {
       moduleName,
       packageName: resolved.packageName,
       filePath: resolved.filePath,
       source,
-      ast,
       dependencies,
+      operatorRegistry,
     });
 
     visiting.delete(moduleName);
@@ -381,11 +614,49 @@ export function discoverAllModules(
 
   // Discover all source modules and their dependencies
   for (const moduleName of sourceModules) {
-    discoverModule(moduleName);
+    discoverModulePreliminary(moduleName);
   }
 
-  // Topologically sort
-  const sortedModuleNames = topologicalSort(modules);
+  // Perform topological sort
+  const sortedModuleNames = topologicalSortPreliminary(preliminaryModules);
+
+  // ============================================================
+  // PASS 2: Re-parse modules with combined operator registries
+  // ============================================================
+
+  const modules = new Map<string, ModuleNode>();
+
+  for (const moduleName of sortedModuleNames) {
+    const preliminary = preliminaryModules.get(moduleName)!;
+
+    // Merge operator registries from all dependencies
+    const dependencyRegistries: OperatorRegistry[] = [];
+    for (const depName of preliminary.dependencies) {
+      const depModule = modules.get(depName);
+      if (depModule) {
+        dependencyRegistries.push(depModule.operatorRegistry);
+      }
+    }
+
+    // Combined registry: dependencies first, then module's own (can override)
+    const combinedRegistry = mergeOperatorRegistries(
+      ...dependencyRegistries,
+      preliminary.operatorRegistry
+    );
+
+    // Re-parse with combined operator registry for correct precedence
+    const ast = parseFunction(preliminary.source, combinedRegistry);
+
+    modules.set(moduleName, {
+      moduleName: preliminary.moduleName,
+      packageName: preliminary.packageName,
+      filePath: preliminary.filePath,
+      source: preliminary.source,
+      ast,
+      dependencies: preliminary.dependencies,
+      operatorRegistry: preliminary.operatorRegistry,
+    });
+  }
 
   return {
     modules,

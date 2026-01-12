@@ -234,29 +234,27 @@ class Parser {
 
   /**
    * Get operator precedence and associativity.
-   * Checks custom registry first, then falls back to built-in operators.
+   * Looks up the operator in the provided registry.
+   *
+   * All standard operators should be declared via infix declarations in Vibe.vibe.
+   * For unknown operators without declarations, we use a default of precedence 9
+   * and left associativity - but this should only occur for operators in modules
+   * that don't properly import their dependencies.
    */
   private getOperatorInfo(op: string): {
     precedence: number;
     associativity: "left" | "right" | "none";
   } {
-    // Check custom registry first
-    const custom = this.operatorRegistry.get(op);
-    if (custom) {
-      return custom;
+    // Check the operator registry (populated from infix declarations)
+    const info = this.operatorRegistry.get(op);
+    if (info) {
+      return info;
     }
 
-    // Fall back to built-in operators
-    const builtin = BUILTIN_OP_INFO[op];
-    if (builtin) {
-      return {
-        ...builtin,
-        associativity: builtin.associativity as "left" | "right" | "none",
-      };
-    }
-
-    // Default for unknown operators
-    return DEFAULT_OP_INFO;
+    // Unknown operator - use default precedence 9 (high) and left associativity.
+    // This is a fallback for operators that haven't been declared via infix.
+    // In a well-formed program with proper imports, all operators should be in the registry.
+    return { precedence: 9, associativity: "left" };
   }
 
   /**
@@ -2571,35 +2569,25 @@ class Parser {
   }
 }
 
-type Associativity = "left" | "right";
-
 /**
- * Built-in operator precedence table is now EMPTY.
+/*
+ * Historical note: Operator precedence was previously hardcoded here.
+ * As of the module-aware parsing update, operator precedence is now
+ * derived entirely from infix declarations in source code.
  *
- * All operators must be declared via infix/infixl/infixr declarations
- * in user code or the prelude. This enables a clean separation where
- * the compiler handles syntax/semantics while the prelude provides
- * standard operators.
- *
- * The prelude should declare operators like:
+ * The standard library (Vibe.vibe) declares these operators:
  *   infixl 1 |>
  *   infixr 1 <|
- *   infixl 2 ||
- *   infixl 3 &&
+ *   infixr 2 ||
+ *   infixr 3 &&
  *   infixl 4 == /= < <= > >=
  *   infixr 5 :: ++
  *   infixl 6 + -
  *   infixl 7 * / // %
  *   infixr 8 ^
  *   infixr 9 << >>
+ *
+ * Modules that import Vibe (or have it auto-injected) will automatically
+ * have access to the correct precedence during parsing via the module
+ * discovery algorithm that merges operator registries from dependencies.
  */
-const BUILTIN_OP_INFO: Record<
-  string,
-  { precedence: number; associativity: Associativity }
-> = {};
-
-// Default precedence for custom operators: 5, left-associative
-const DEFAULT_OP_INFO: OperatorInfo = {
-  precedence: 5,
-  associativity: "left",
-};

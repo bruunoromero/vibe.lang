@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { lex } from "@vibe/lexer";
-import { parse, ParseError } from "@vibe/parser";
+import { parse, ParseError, collectInfixDeclarations } from "@vibe/parser";
 import { analyze, SemanticError, type SemanticModule } from "@vibe/semantics";
 import { lower, printProgram, IRError, type IRProgram } from "@vibe/ir";
 import { loadConfig } from "@vibe/config";
@@ -10,8 +10,26 @@ import {
   resolveModule,
   discoverModuleGraph,
   discoverAllModules,
+  type DiscoverOptions,
 } from "@vibe/module-resolver";
 import { generate, writeModule, type GeneratedModule } from "@vibe/codegen";
+
+/**
+ * Create discovery options for module graph functions.
+ * This provides the parser and infix declaration collector needed
+ * to properly handle operator precedence across modules.
+ */
+function createDiscoverOptions(
+  overrides: Partial<DiscoverOptions> = {}
+): DiscoverOptions {
+  return {
+    collectInfixDeclarations,
+    parseFunction: parse,
+    preferDist: false,
+    injectPrelude: true,
+    ...overrides,
+  };
+}
 
 interface CliOptions {
   cwd?: string;
@@ -210,16 +228,27 @@ function executeCommand(
     }
 
     if (command === "parse") {
-      const ast = parse(source);
-      stdout.write(`${JSON.stringify(ast, null, pretty)}\n`);
+      // Use module discovery to get operator precedence from dependencies (like Vibe)
+      const moduleGraph = discoverModuleGraph(
+        config,
+        moduleName,
+        createDiscoverOptions()
+      );
+      const moduleNode = moduleGraph.modules.get(moduleName);
+      if (!moduleNode) {
+        throw new Error(`Module "${moduleName}" not found in graph`);
+      }
+      stdout.write(`${JSON.stringify(moduleNode.ast, null, pretty)}\n`);
       return 0;
     }
 
     if (command === "analyze" || command === "ir") {
-      const ast = parse(source);
-
       // Discover all modules and their dependencies, sorted topologically
-      const moduleGraph = discoverModuleGraph(config, moduleName, parse);
+      const moduleGraph = discoverModuleGraph(
+        config,
+        moduleName,
+        createDiscoverOptions()
+      );
 
       // Analyze modules in topological order
       const analyzedModules = new Map<string, SemanticModule>();
@@ -282,7 +311,7 @@ function executeCommand(
     // Build command: compile all modules to JavaScript
     if (command === "build") {
       // Discover ALL modules in the source directory and their dependencies
-      const moduleGraph = discoverAllModules(config, parse);
+      const moduleGraph = discoverAllModules(config, createDiscoverOptions());
 
       // Analyze all modules in topological order
       const analyzedModules = new Map<string, SemanticModule>();
@@ -420,7 +449,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
             const moduleGraph = discoverModuleGraph(
               config,
               opts.moduleName,
-              parse
+              createDiscoverOptions()
             );
             const analyzedModules = new Map<string, SemanticModule>();
 
@@ -441,8 +470,16 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
 
             stderr.write(`✅ Type checking passed\n`);
           } else if (opts.command === "parse") {
-            parse(watchSource);
-            stderr.write(`✅ Parsing successful\n`);
+            // Use module discovery for operator precedence
+            const moduleGraph = discoverModuleGraph(
+              config,
+              opts.moduleName,
+              createDiscoverOptions()
+            );
+            const moduleNode = moduleGraph.modules.get(opts.moduleName);
+            if (moduleNode) {
+              stderr.write(`✅ Parsing successful\n`);
+            }
           } else if (opts.command === "tokenize") {
             lex(watchSource);
             stderr.write(`✅ Tokenization successful\n`);
@@ -461,7 +498,11 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
 
       if (opts.command === "analyze") {
         // Use topological analysis for initial run too
-        const moduleGraph = discoverModuleGraph(config, opts.moduleName, parse);
+        const moduleGraph = discoverModuleGraph(
+          config,
+          opts.moduleName,
+          createDiscoverOptions()
+        );
         const analyzedModules = new Map<string, SemanticModule>();
 
         for (const currentModuleName of moduleGraph.sortedModuleNames) {
@@ -479,8 +520,16 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
 
         stderr.write(`✅ Initial type checking passed\n`);
       } else if (opts.command === "parse") {
-        parse(initialSource);
-        stderr.write(`✅ Initial parsing successful\n`);
+        // Use module discovery for operator precedence
+        const moduleGraph = discoverModuleGraph(
+          config,
+          opts.moduleName,
+          createDiscoverOptions()
+        );
+        const moduleNode = moduleGraph.modules.get(opts.moduleName);
+        if (moduleNode) {
+          stderr.write(`✅ Initial parsing successful\n`);
+        }
       } else if (opts.command === "tokenize") {
         lex(initialSource);
         stderr.write(`✅ Initial tokenization successful\n`);

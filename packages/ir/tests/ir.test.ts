@@ -465,6 +465,34 @@ implement Show Int where
     expect(ir.instances[0]?.protocolName).toBe("Show");
     expect(ir.instances[0]?.methods["show"]).toBe("showInt");
   });
+
+  test("constraints are extracted from type schemes", () => {
+    const source = `
+protocol Num a where
+    plus : a -> a -> a
+
+add x y = plus x y
+`;
+    const ir = compileToIR(source);
+
+    // The 'add' function uses 'plus' which requires Num constraint
+    const addValue = ir.values["add"];
+    expect(addValue).toBeDefined();
+    expect(addValue?.constraints).toBeDefined();
+    expect(addValue?.constraints.length).toBeGreaterThan(0);
+    expect(addValue?.constraints[0]?.protocolName).toBe("Num");
+  });
+
+  test("values without protocol usage have no constraints", () => {
+    const source = `
+id x = x
+`;
+    const ir = compileToIR(source);
+
+    const idValue = ir.values["id"];
+    expect(idValue).toBeDefined();
+    expect(idValue?.constraints).toEqual([]);
+  });
 });
 
 // ============================================================================

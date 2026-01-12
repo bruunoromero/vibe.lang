@@ -89,6 +89,8 @@ export type IRVar = {
   name: string;
   /** "value" for lowercase identifiers, "constructor" for uppercase */
   namespace: "value" | "constructor";
+  /** The inferred type of this variable (if available from semantic analysis) */
+  type?: IRType;
   span: Span;
 };
 

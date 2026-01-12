@@ -65,6 +65,18 @@ export interface CodegenContext {
 
   /** Counter for generating unique names */
   uniqueCounter: number;
+
+  /**
+   * Set of dictionary parameter names currently in scope.
+   * e.g., {"$dict_Num", "$dict_Eq"} when inside a polymorphic function.
+   */
+  dictParamsInScope: Set<string>;
+
+  /**
+   * Dictionary names that were actually generated in this module.
+   * Populated during generateInstanceDictionaries(), used for exports.
+   */
+  generatedDictNames: string[];
 }
 
 /**
@@ -81,6 +93,8 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     externalBindings: new Map(),
     instanceDictNames: new Map(),
     uniqueCounter: 0,
+    dictParamsInScope: new Set(),
+    generatedDictNames: [],
   };
 
   // Collect external bindings by module
@@ -219,7 +233,7 @@ export function generate(
   }
 
   // 6. Generate exports
-  const exportLines = generateExports(program);
+  const exportLines = generateExports(program, ctx);
   if (exportLines.length > 0) {
     lines.push("");
     lines.push(...exportLines);
@@ -484,6 +498,9 @@ function generateInstanceDictionaries(ctx: CodegenContext): string[] {
   // Get source instances to check module ownership
   const sourceInstances = ctx.program.sourceModule.instances;
 
+  // Track which dictionaries we actually generate (for exports)
+  const generatedDicts: string[] = [];
+
   for (let i = 0; i < ctx.instances.length; i++) {
     const inst = ctx.instances[i];
     if (!inst || inst.typeArgs.length === 0) continue;
@@ -496,9 +513,8 @@ function generateInstanceDictionaries(ctx: CodegenContext): string[] {
     }
 
     const typeKey = formatTypeKey(inst.typeArgs[0]);
-    const dictName = ctx.instanceDictNames.get(
-      `${inst.protocolName}_${typeKey}`
-    );
+    const key = `${inst.protocolName}_${typeKey}`;
+    const dictName = ctx.instanceDictNames.get(key);
     if (!dictName) continue;
 
     const methodEntries: string[] = [];
@@ -512,8 +528,12 @@ function generateInstanceDictionaries(ctx: CodegenContext): string[] {
       lines.push(`const ${dictName} = {`);
       lines.push(methodEntries.join(",\n"));
       lines.push(`};`);
+      generatedDicts.push(dictName);
     }
   }
+
+  // Store the generated dict names for export (override the full list)
+  ctx.generatedDictNames = generatedDicts;
 
   return lines;
 }
@@ -571,11 +591,27 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
     return `/* external: ${value.externalTarget?.exportName} */`;
   }
 
-  // If value has parameters, wrap body in curried lambdas
-  if (value.params.length > 0) {
+  // Generate dictionary parameter names for each unique constraint
+  // e.g., Num a => [$dict_Num] parameter
+  const dictParams: string[] = [];
+  const seenConstraints = new Set<string>();
+  for (const constraint of value.constraints) {
+    const dictKey = `${constraint.protocolName}`;
+    if (!seenConstraints.has(dictKey)) {
+      seenConstraints.add(dictKey);
+      dictParams.push(`$dict_${constraint.protocolName}`);
+    }
+  }
+
+  // Save previous dictionary params and set new scope
+  const prevDictParams = ctx.dictParamsInScope;
+  ctx.dictParamsInScope = new Set(dictParams);
+
+  // If value has parameters or dictionary params, wrap body in curried lambdas
+  if (value.params.length > 0 || dictParams.length > 0) {
     let body = generateExpr(value.body, ctx);
 
-    // Wrap in curried functions for each parameter
+    // Wrap in curried functions for each regular parameter
     for (let i = value.params.length - 1; i >= 0; i--) {
       const param = value.params[i];
       if (!param) continue;
@@ -583,11 +619,22 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
       body = `(${paramCode}) => ${body}`;
     }
 
+    // Add dictionary parameters at the front (they come before regular params)
+    for (let i = dictParams.length - 1; i >= 0; i--) {
+      body = `(${dictParams[i]}) => ${body}`;
+    }
+
+    // Restore previous scope
+    ctx.dictParamsInScope = prevDictParams;
     return body;
   }
 
   // No parameters: just generate the body
-  return generateExpr(value.body, ctx);
+  const body = generateExpr(value.body, ctx);
+
+  // Restore previous scope
+  ctx.dictParamsInScope = prevDictParams;
+  return body;
 }
 
 // ============================================================================
@@ -645,6 +692,41 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
 }
 
 /**
+ * Mapping from protocol operators to their protocol name.
+ * Used for dictionary-based method lookup.
+ */
+const OPERATOR_PROTOCOLS: Record<string, string> = {
+  "+": "Num",
+  "-": "Num",
+  "*": "Num",
+  negate: "Num",
+  "/": "Fractional",
+  "//": "Integral",
+  "%": "Integral",
+  "==": "Eq",
+  "/=": "Eq",
+  "<": "Ord",
+  "<=": "Ord",
+  ">": "Ord",
+  ">=": "Ord",
+};
+
+/**
+ * Non-protocol operators that have fixed implementations (no dictionary needed).
+ * These are function combinators and list operations, not type class methods.
+ */
+const FIXED_OPERATORS: Record<string, string> = {
+  "&&": "and",
+  "||": "or",
+  "++": "append",
+  "::": "cons",
+  "|>": "pipeForward",
+  "<|": "pipeBackward",
+  ">>": "composeForward",
+  "<<": "composeBackward",
+};
+
+/**
  * Generate a variable reference.
  */
 function generateVar(
@@ -659,30 +741,34 @@ function generateVar(
     return sanitizeIdentifier(value.externalTarget.exportName);
   }
 
-  // Check if this is a protocol operator that needs resolution
-  //
-  // LIMITATION: Currently operators always resolve to their Int/default implementations.
-  // Proper type-directed resolution would require:
-  // 1. Passing inferred types from semantic analysis through IR to codegen
-  // 2. Looking up the appropriate protocol implementation based on operand types
-  // 3. Supporting protocol dictionaries for polymorphic usage
-  //
-  // For now, numeric operators use Int implementations except:
-  // - Division (/) uses floatDiv for consistency with mathematical semantics
-  // - String operations (++) use append
-  //
-  // This works for most code but will give incorrect results for Float arithmetic
-  // operations other than division. Users needing Float arithmetic should use
-  // explicit float operations like floatAdd, floatSub, etc.
-  const operatorImpl = OPERATOR_IMPLEMENTATIONS[expr.name];
-  if (operatorImpl) {
+  // Check if this is a protocol operator that needs dictionary lookup
+  const protocolName = OPERATOR_PROTOCOLS[expr.name];
+  if (protocolName) {
+    const sanitizedOp = sanitizeIdentifier(expr.name);
+    const dictParam = `$dict_${protocolName}`;
+
+    // Check if we have a dictionary parameter in scope (polymorphic context)
+    if (ctx.dictParamsInScope.has(dictParam)) {
+      // Use the dictionary parameter
+      return `${dictParam}.${sanitizedOp}`;
+    }
+
+    // Monomorphic context: we need to resolve to a concrete instance dictionary
+    // For now, look up from Vibe module which has the instance dictionaries
+    // TODO: Determine concrete type and resolve proper instance
+    return `Vibe.${dictParam}_Int.${sanitizedOp}`;
+  }
+
+  // Check if this is a fixed (non-protocol) operator
+  const fixedImpl = FIXED_OPERATORS[expr.name];
+  if (fixedImpl) {
     // Check if this operator's implementation is available in scope
-    const implValue = ctx.program.values[operatorImpl];
+    const implValue = ctx.program.values[fixedImpl];
     if (implValue?.isExternal) {
-      return sanitizeIdentifier(operatorImpl);
+      return sanitizeIdentifier(fixedImpl);
     }
     // Otherwise, reference it from Vibe module
-    return `Vibe.${sanitizeIdentifier(operatorImpl)}`;
+    return `Vibe.${sanitizeIdentifier(fixedImpl)}`;
   }
 
   // Check if this is a constructor from another module
@@ -700,34 +786,6 @@ function generateVar(
   const safeName = sanitizeIdentifier(expr.name);
   return safeName;
 }
-
-/**
- * Default implementations for protocol operators.
- * Maps operator names to their Int/default implementations.
- * This is a temporary solution until proper type-directed resolution.
- */
-const OPERATOR_IMPLEMENTATIONS: Record<string, string> = {
-  "+": "intAdd",
-  "-": "intSub",
-  "*": "intMul",
-  "/": "floatDiv", // Division defaults to Float
-  "//": "intDiv",
-  "%": "intMod",
-  "==": "intEq",
-  "/=": "intNeq",
-  "<": "intLt",
-  "<=": "intLte",
-  ">": "intGt",
-  ">=": "intGte",
-  "&&": "and",
-  "||": "or",
-  "++": "append",
-  "::": "cons",
-  "|>": "pipeForward",
-  "<|": "pipeBackward",
-  ">>": "composeForward",
-  "<<": "composeBackward",
-};
 
 /**
  * Generate a literal value.
@@ -784,6 +842,9 @@ function generateLambda(
  * Generate a function application.
  *
  * Vibe uses curried functions, so f(a, b) becomes f(a)(b).
+ *
+ * For constrained functions (those with protocol constraints), we need to
+ * pass the appropriate instance dictionaries before the regular arguments.
  */
 function generateApply(
   expr: Extract<IRExpr, { kind: "IRApply" }>,
@@ -791,14 +852,80 @@ function generateApply(
 ): string {
   const callee = generateExpr(expr.callee, ctx);
 
-  // Apply arguments one at a time (curried)
+  // Check if the callee is a named function with constraints
+  // If so, we need to pass dictionaries before regular arguments
+  let dictPasses: string[] = [];
+  if (expr.callee.kind === "IRVar") {
+    const calleeValue = ctx.program.values[expr.callee.name];
+    if (calleeValue && calleeValue.constraints.length > 0) {
+      // The callee has constraints - we need to pass dictionaries
+      const seenProtocols = new Set<string>();
+      for (const constraint of calleeValue.constraints) {
+        if (!seenProtocols.has(constraint.protocolName)) {
+          seenProtocols.add(constraint.protocolName);
+
+          // Try to resolve the constraint to a concrete instance
+          // by looking at the type arguments in the constraint
+          const typeArg = constraint.typeArgs[0];
+          const dictName = resolveDictionaryForType(
+            constraint.protocolName,
+            typeArg,
+            ctx
+          );
+          dictPasses.push(dictName);
+        }
+      }
+    }
+  }
+
+  // Build the application: first dictionaries, then regular arguments
   let result = callee;
+
+  // Pass dictionaries first
+  for (const dict of dictPasses) {
+    result = `${result}(${dict})`;
+  }
+
+  // Then pass regular arguments
   for (const arg of expr.args) {
     const argCode = generateExpr(arg, ctx);
     result = `${result}(${argCode})`;
   }
 
   return result;
+}
+
+/**
+ * Resolve a protocol constraint to a dictionary reference.
+ *
+ * If the type is concrete (e.g., Int), we look up the instance dictionary.
+ * If the type is a type variable, we pass through $dict_Protocol (polymorphic).
+ */
+function resolveDictionaryForType(
+  protocolName: string,
+  type: IRType | undefined,
+  ctx: CodegenContext
+): string {
+  if (!type) {
+    // Unknown type - use polymorphic pass-through
+    return `$dict_${protocolName}`;
+  }
+
+  // If it's a concrete type, look up the instance dictionary
+  if (type.kind === "con") {
+    const typeKey = formatTypeKey(type);
+    const key = `${protocolName}_${typeKey}`;
+    const dictName = ctx.instanceDictNames.get(key);
+    if (dictName) {
+      return dictName;
+    }
+    // Fall back to checking if dict is available from another module
+    // For now, just use the naming convention
+    return `$dict_${protocolName}_${typeKey}`;
+  }
+
+  // Type variable - pass through the polymorphic dictionary
+  return `$dict_${protocolName}`;
 }
 
 /**
@@ -1190,12 +1317,14 @@ function generatePattern(pattern: IRPattern, ctx: CodegenContext): string {
 /**
  * Generate export statements for module values.
  */
-function generateExports(program: IRProgram): string[] {
+function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
   const lines: string[] = [];
   const currentModule = program.moduleName;
 
   // Collect all exportable names
   const exports: string[] = [];
+
+  // Export values (non-internal)
 
   // Export values (non-internal)
   for (const [name, value] of Object.entries(program.values)) {
@@ -1226,6 +1355,12 @@ function generateExports(program: IRProgram): string[] {
     }
 
     exports.push(sanitizeIdentifier(ctorName));
+  }
+
+  // Export instance dictionaries that were generated in this module
+  // These are needed for dictionary passing at call sites
+  for (const dictName of ctx.generatedDictNames) {
+    exports.push(dictName);
   }
 
   // Remove duplicates and sort

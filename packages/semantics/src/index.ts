@@ -60,22 +60,120 @@ export class ImplementingProtocolError extends SemanticError {
 // ===== Internal Type Representation =====
 // Simple HM-style types for type inference using Hindley-Milner algorithm.
 
-type TypeVar = { kind: "var"; id: number };
-type TypeCon = { kind: "con"; name: string; args: Type[] };
-type TypeFun = { kind: "fun"; from: Type; to: Type };
-type TypeTuple = { kind: "tuple"; elements: Type[] };
-type TypeRecord = { kind: "record"; fields: Record<string, Type> };
-type TypeList = { kind: "list"; element: Type };
-type Type = TypeVar | TypeCon | TypeFun | TypeTuple | TypeRecord | TypeList;
+export type TypeVar = { kind: "var"; id: number };
+export type TypeCon = { kind: "con"; name: string; args: Type[] };
+export type TypeFun = { kind: "fun"; from: Type; to: Type };
+export type TypeTuple = { kind: "tuple"; elements: Type[] };
+export type TypeRecord = { kind: "record"; fields: Record<string, Type> };
+export type TypeList = { kind: "list"; element: Type };
+export type Type =
+  | TypeVar
+  | TypeCon
+  | TypeFun
+  | TypeTuple
+  | TypeRecord
+  | TypeList;
 
 /**
  * Constraint represents a protocol requirement on a type.
  * Example: Constraint("Num", [TypeVar(0)]) means "type variable 0 must implement Num protocol"
  */
-type Constraint = {
+export type Constraint = {
   protocolName: string;
   typeArgs: Type[];
 };
+
+/**
+ * ConstraintContext collects protocol constraints during type inference.
+ * When a protocol method is accessed (like `+` from `Num`), we record
+ * the constraint with the actual type variables involved.
+ *
+ * This enables dictionary-passing style compilation:
+ * - Functions using protocol methods get dictionary parameters
+ * - Call sites pass appropriate implementation dictionaries
+ */
+type ConstraintContext = {
+  /** Collected constraints during inference */
+  constraints: Constraint[];
+};
+
+/**
+ * Create a fresh constraint context for collecting protocol constraints.
+ */
+function createConstraintContext(): ConstraintContext {
+  return { constraints: [] };
+}
+
+/**
+ * Add a constraint to the context (deduplicating by protocol name and type args).
+ */
+function addConstraint(ctx: ConstraintContext, constraint: Constraint): void {
+  // Check if we already have this constraint
+  const isDuplicate = ctx.constraints.some(
+    (c) =>
+      c.protocolName === constraint.protocolName &&
+      c.typeArgs.length === constraint.typeArgs.length &&
+      c.typeArgs.every((t, i) => typesEqual(t, constraint.typeArgs[i]!))
+  );
+  if (!isDuplicate) {
+    ctx.constraints.push(constraint);
+  }
+}
+
+/**
+ * Check if two types are structurally equal.
+ */
+function typesEqual(t1: Type, t2: Type): boolean {
+  if (t1.kind !== t2.kind) return false;
+  switch (t1.kind) {
+    case "var":
+      return (t2 as TypeVar).id === t1.id;
+    case "con":
+      return (
+        (t2 as TypeCon).name === t1.name &&
+        t1.args.length === (t2 as TypeCon).args.length &&
+        t1.args.every((a, i) => typesEqual(a, (t2 as TypeCon).args[i]!))
+      );
+    case "fun":
+      return (
+        typesEqual(t1.from, (t2 as TypeFun).from) &&
+        typesEqual(t1.to, (t2 as TypeFun).to)
+      );
+    case "tuple":
+      return (
+        t1.elements.length === (t2 as TypeTuple).elements.length &&
+        t1.elements.every((e, i) =>
+          typesEqual(e, (t2 as TypeTuple).elements[i]!)
+        )
+      );
+    case "record": {
+      const r2 = t2 as TypeRecord;
+      const keys1 = Object.keys(t1.fields).sort();
+      const keys2 = Object.keys(r2.fields).sort();
+      return (
+        keys1.length === keys2.length &&
+        keys1.every(
+          (k, i) => k === keys2[i] && typesEqual(t1.fields[k]!, r2.fields[k]!)
+        )
+      );
+    }
+    case "list":
+      return typesEqual(t1.element, (t2 as TypeList).element);
+  }
+}
+
+/**
+ * Apply substitution to constraints, resolving type variables.
+ */
+function applySubstitutionToConstraints(
+  constraints: Constraint[],
+  substitution: Substitution
+): Constraint[] {
+  return constraints.map((c) => ({
+    protocolName: c.protocolName,
+    typeArgs: c.typeArgs.map((t) => applySubstitution(t, substitution)),
+  }));
+}
 
 /**
  * TypeScheme represents a polymorphic type with universally quantified type variables
@@ -93,13 +191,37 @@ type Constraint = {
  * - A polymorphic type has one or more quantified variables
  * - A constrained type has protocol requirements on type variables
  */
-type TypeScheme = {
+export type TypeScheme = {
   vars: Set<number>; // Set of type variable IDs that are quantified (polymorphic)
   constraints: Constraint[]; // Protocol constraints on type variables
   type: Type; // The underlying type structure
 };
 
 type Substitution = Map<number, Type>;
+
+/**
+ * Module-level constraint context for collecting protocol constraints during type inference.
+ * This is reset at the start of analyzing each top-level value declaration,
+ * and the collected constraints are attached during generalization.
+ *
+ * Using a module-level context avoids threading a context parameter through
+ * all the recursive analysis functions.
+ */
+let currentConstraintContext: ConstraintContext = createConstraintContext();
+
+/**
+ * Reset the constraint context for a new value analysis.
+ */
+function resetConstraintContext(): void {
+  currentConstraintContext = createConstraintContext();
+}
+
+/**
+ * Get the currently collected constraints.
+ */
+function getCollectedConstraints(): Constraint[] {
+  return currentConstraintContext.constraints;
+}
 
 /**
  * Scope maintains a symbol table mapping names to their type schemes.
@@ -619,6 +741,8 @@ export type SemanticModule = {
   module?: ModuleDeclaration;
   imports: ImportDeclaration[];
   types: Record<string, Type>;
+  /** Type schemes with constraints for each value (for dictionary-passing) */
+  typeSchemes: Record<string, TypeScheme>;
   /** Registry of user-defined algebraic data types */
   adts: Record<string, ADTInfo>;
   /** Map from constructor names to their type information */
@@ -657,6 +781,7 @@ export function analyze(
   const values: Record<string, ValueInfo> = {};
   const annotations: Record<string, TypeAnnotationDeclaration> = {};
   const types: Record<string, Type> = {};
+  const typeSchemes: Record<string, TypeScheme> = {};
   const substitution: Substitution = new Map();
 
   // Extract the current module name for qualified naming
@@ -1255,6 +1380,10 @@ export function analyze(
 
     // Process value declarations in this SCC together
     if (valueDecls.length > 0) {
+      // Reset constraint context for this SCC
+      // All values in an SCC share constraints (they're mutually recursive)
+      resetConstraintContext();
+
       // Infer all declarations in the SCC
       const inferredTypes: Map<string, Type> = new Map();
 
@@ -1294,6 +1423,8 @@ export function analyze(
           substitution
         );
         globalScope.symbols.set(name, generalizedScheme);
+        // Store the type scheme with constraints for dictionary-passing
+        typeSchemes[name] = generalizedScheme;
       }
     }
   }
@@ -1308,6 +1439,7 @@ export function analyze(
     module: program.module,
     imports,
     types,
+    typeSchemes,
     adts,
     constructors,
     constructorTypes,
@@ -2689,7 +2821,17 @@ function analyzeExpr(
 ): Type {
   switch (expr.kind) {
     case "Var": {
-      const resolved = lookupSymbol(scope, expr.name, expr.span, substitution);
+      // Look up the symbol and collect any protocol constraints
+      const { type: resolved, constraints } = lookupSymbolWithConstraints(
+        scope,
+        expr.name,
+        expr.span,
+        substitution
+      );
+      // Add any constraints from the symbol to the current context
+      for (const constraint of constraints) {
+        addConstraint(currentConstraintContext, constraint);
+      }
       return applySubstitution(resolved, substitution);
     }
     case "Number": {
@@ -3584,6 +3726,48 @@ function declareSymbol(
 }
 
 /**
+ * Result of looking up a symbol, including its type and any constraints.
+ */
+type LookupResult = {
+  type: Type;
+  constraints: Constraint[];
+};
+
+/**
+ * Look up a symbol in the scope and instantiate its type scheme.
+ * Each lookup gets a fresh instantiation, enabling polymorphic usage.
+ * Also returns any protocol constraints associated with the symbol.
+ *
+ * Example:
+ *   id : forall a. a -> a
+ *   First use: id 42        -> instantiated as number -> number
+ *   Second use: id "hello"  -> instantiated as string -> string
+ *
+ *   (+) : forall a. Num a => a -> a -> a
+ *   Use: x + y              -> returns type: a -> a -> a, constraints: [Num a]
+ */
+function lookupSymbolWithConstraints(
+  scope: Scope,
+  name: string,
+  span: Span,
+  substitution: Substitution
+): LookupResult {
+  if (scope.symbols.has(name)) {
+    const scheme = scope.symbols.get(name)!;
+    // Instantiate the scheme to get a fresh type for this use site
+    const { type, constraints } = instantiateWithConstraints(
+      scheme,
+      substitution
+    );
+    return { type, constraints };
+  }
+  if (scope.parent) {
+    return lookupSymbolWithConstraints(scope.parent, name, span, substitution);
+  }
+  throw new SemanticError(`Undefined name '${name}'`, span);
+}
+
+/**
  * Look up a symbol in the scope and instantiate its type scheme.
  * Each lookup gets a fresh instantiation, enabling polymorphic usage.
  *
@@ -3598,15 +3782,7 @@ function lookupSymbol(
   span: Span,
   substitution: Substitution
 ): Type {
-  if (scope.symbols.has(name)) {
-    const scheme = scope.symbols.get(name)!;
-    // Instantiate the scheme to get a fresh type for this use site
-    return instantiate(scheme, substitution);
-  }
-  if (scope.parent) {
-    return lookupSymbol(scope.parent, name, span, substitution);
-  }
-  throw new SemanticError(`Undefined name '${name}'`, span);
+  return lookupSymbolWithConstraints(scope, name, span, substitution).type;
 }
 
 function seedValueType(
@@ -3760,23 +3936,98 @@ function generalize(
     }
   }
 
-  // LIMITATION: Constraint collection during type inference is not yet implemented.
-  //
-  // For proper type class (protocol) support, we would need to:
-  // 1. Track constraints when protocol method symbols are looked up
-  // 2. Propagate constraints through function application and composition
-  // 3. Simplify redundant constraints (e.g., Eq a from Show a)
-  // 4. Include collected constraints in the generalized type scheme
-  //
-  // Currently, protocol methods have constraints attached when registered
-  // (see addProtocolMethodsToScope), but these constraints are not propagated
-  // to functions that use protocol methods. This means functions like:
-  //   show x = x  -- should infer (Show a) => a -> String
-  // currently infer just: a -> a (no constraint)
-  //
-  // This is acceptable for basic usage where concrete types are known,
-  // but limits polymorphic usage of protocol-constrained functions.
-  return { vars: quantified, constraints: [], type };
+  // Get collected constraints and apply substitution
+  const rawConstraints = getCollectedConstraints();
+  const resolvedConstraints = applySubstitutionToConstraints(
+    rawConstraints,
+    substitution
+  );
+
+  // Filter constraints to only those involving quantified type variables
+  // A constraint like "Num Int" is already satisfied and shouldn't be quantified
+  // A constraint like "Num a" where a is quantified should be kept
+  const relevantConstraints = resolvedConstraints.filter((c) => {
+    // Check if any type arg contains a quantified variable
+    return c.typeArgs.some((t) => {
+      const freeVars = getFreeTypeVars(t, substitution);
+      for (const v of freeVars) {
+        if (quantified.has(v)) return true;
+      }
+      return false;
+    });
+  });
+
+  // Deduplicate constraints
+  const uniqueConstraints: Constraint[] = [];
+  for (const c of relevantConstraints) {
+    const isDuplicate = uniqueConstraints.some(
+      (uc) =>
+        uc.protocolName === c.protocolName &&
+        uc.typeArgs.length === c.typeArgs.length &&
+        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!))
+    );
+    if (!isDuplicate) {
+      uniqueConstraints.push(c);
+    }
+  }
+
+  return { vars: quantified, constraints: uniqueConstraints, type };
+}
+
+/**
+ * Result of instantiation including both type and instantiated constraints.
+ */
+type InstantiationResult = {
+  type: Type;
+  constraints: Constraint[];
+};
+
+/**
+ * Instantiate a type scheme by replacing all quantified type variables with fresh ones.
+ * Also instantiates the constraints with the same variable mapping.
+ * This is the dual of generalization - it's used at each use site of a polymorphic binding.
+ *
+ * Example:
+ *   Given scheme: forall a. Num a => a -> a
+ *   First instantiation: Num b => b -> b  (where b is fresh)
+ *   Second instantiation: Num c => c -> c (where c is fresh)
+ *
+ * The instantiation rule:
+ * - For each quantified type variable in the scheme
+ * - Create a fresh type variable
+ * - Substitute it throughout the type AND constraints
+ */
+function instantiateWithConstraints(
+  scheme: TypeScheme,
+  substitution: Substitution
+): InstantiationResult {
+  // If no variables are quantified, the type is monomorphic - return as-is
+  if (scheme.vars.size === 0) {
+    return { type: scheme.type, constraints: scheme.constraints };
+  }
+
+  // Create fresh type variables for each quantified variable
+  const instantiationMap = new Map<number, Type>();
+  for (const varId of scheme.vars) {
+    instantiationMap.set(varId, freshType());
+  }
+
+  // Apply the instantiation to get a fresh copy of the type
+  const instantiatedType = instantiateType(
+    scheme.type,
+    instantiationMap,
+    substitution
+  );
+
+  // Also instantiate the constraints with the same mapping
+  const instantiatedConstraints = scheme.constraints.map((c) => ({
+    protocolName: c.protocolName,
+    typeArgs: c.typeArgs.map((t) =>
+      instantiateType(t, instantiationMap, substitution)
+    ),
+  }));
+
+  return { type: instantiatedType, constraints: instantiatedConstraints };
 }
 
 /**
@@ -3795,19 +4046,7 @@ function generalize(
  * - Substitute it throughout the type
  */
 function instantiate(scheme: TypeScheme, substitution: Substitution): Type {
-  // If no variables are quantified, the type is monomorphic - return as-is
-  if (scheme.vars.size === 0) {
-    return scheme.type;
-  }
-
-  // Create fresh type variables for each quantified variable
-  const instantiationMap = new Map<number, Type>();
-  for (const varId of scheme.vars) {
-    instantiationMap.set(varId, freshType());
-  }
-
-  // Apply the instantiation to get a fresh copy of the type
-  return instantiateType(scheme.type, instantiationMap, substitution);
+  return instantiateWithConstraints(scheme, substitution).type;
 }
 
 /**
@@ -4287,44 +4526,6 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
     )}'`,
     span
   );
-}
-
-function typesEqual(a: Type, b: Type): boolean {
-  if (a.kind !== b.kind) return false;
-  switch (a.kind) {
-    case "var":
-      return (b as TypeVar).id === a.id;
-    case "con":
-      return (
-        (b as TypeCon).name === a.name &&
-        a.args.length === (b as TypeCon).args.length &&
-        a.args.every((arg, idx) => typesEqual(arg, (b as TypeCon).args[idx]!))
-      );
-    case "fun":
-      return (
-        typesEqual(a.from, (b as TypeFun).from) &&
-        typesEqual(a.to, (b as TypeFun).to)
-      );
-    case "tuple":
-      return (
-        a.elements.length === (b as TypeTuple).elements.length &&
-        a.elements.every((el, idx) =>
-          typesEqual(el, (b as TypeTuple).elements[idx]!)
-        )
-      );
-    case "record":
-      return (
-        Object.keys(a.fields).length ===
-          Object.keys((b as TypeRecord).fields).length &&
-        Object.keys(a.fields).every((k) =>
-          a.fields[k] !== undefined && (b as TypeRecord).fields[k] !== undefined
-            ? typesEqual(a.fields[k]!, (b as TypeRecord).fields[k]!)
-            : false
-        )
-      );
-    case "list":
-      return typesEqual(a.element, (b as TypeList).element);
-  }
 }
 
 /**

@@ -142,8 +142,32 @@ isOdd n = if n == 0 then False else isEven (n - 1)
 
 Both functions will be correctly typed as `Int -> Bool`.
 
+## Dictionary Passing (Type Class Implementation)
+
+The compiler uses dictionary-passing style for protocol (type class) constraints:
+
+1. **Constraint Collection**: When a protocol method (like `+` from `Num`) is used during type inference, the constraint is collected and attached to the function's type scheme.
+
+2. **Dictionary Parameters**: Functions with constraints receive dictionary parameters (e.g., `$dict_Num`) that contain the method implementations.
+
+3. **Method Lookup**: Protocol operators look up their implementations from the dictionary parameter (e.g., `$dict_Num._PLUS`).
+
+4. **Instance Resolution**: At monomorphic call sites (concrete types), the compiler resolves the appropriate instance dictionary (e.g., `$dict_Num_Int`). At polymorphic call sites, dictionaries are passed through.
+
+Example transformation:
+
+```
+-- Vibe source
+add : Num a => a -> a -> a
+add x y = x + y
+
+-- Generated JavaScript (conceptual)
+const add = ($dict_Num) => (x) => (y) => $dict_Num._PLUS(x)(y);
+
+-- Call with Int
+add($dict_Num_Int)(1)(2)
+```
+
 ## Known Limitations
 
-1. **Type-directed operator resolution**: Not implemented. Operators must be unambiguous from context.
-2. **Constraint collection during generalization**: Type constraints are not automatically propagated during let-generalization.
-3. **Qualified type constraints**: Parsing exists but semantic enforcement of constraints like `Show a => ...` is limited.
+1. **Qualified type constraints**: Parsing exists but semantic enforcement of constraints like `Show a => ...` from user annotations is limited.
