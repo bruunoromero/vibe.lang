@@ -1,0 +1,21 @@
+module SimpleTest exposing (..)
+
+-- A simple function using arithmetic
+add : Int -> Int -> Int
+add x y = x + y
+
+-- Using Maybe
+safeDiv : Int -> Int -> Maybe Int
+safeDiv x y =
+    if y == 0 then
+        Nothing
+    else
+        Just (x // y)
+
+-- A constant
+greeting : String
+greeting = "Hello from Vibe!"
+
+-- Main entry point  
+main : String
+main = greeting

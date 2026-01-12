@@ -30,7 +30,6 @@ import {
   type Span,
   type TypeDeclaration,
   type TypeAliasDeclaration,
-  type RecordTypeDeclaration,
   type OpaqueTypeDeclaration,
   type ConstructorVariant,
   type ProtocolDeclaration,
@@ -1532,8 +1531,42 @@ class Parser {
    *   _                    (WildcardPattern)
    *   Just x               (ConstructorPattern with arg)
    *   (x, y)               (TuplePattern)
+   *   []                   (Empty ListPattern)
+   *   [x, y]               (ListPattern with elements)
+   *   x :: xs              (ConsPattern)
    */
   private parsePattern(): Pattern {
+    // Parse the primary pattern first
+    const primary = this.parsePrimaryPattern();
+
+    // Check for cons operator (::)
+    if (this.peekOperator("::")) {
+      return this.parseConsPattern(primary);
+    }
+
+    return primary;
+  }
+
+  /**
+   * Parse cons pattern continuation: head :: tail
+   * Cons is right-associative, so x :: y :: zs parses as x :: (y :: zs)
+   */
+  private parseConsPattern(head: Pattern): Pattern {
+    this.advance(); // consume ::
+    const tail = this.parsePattern(); // right-associative, recurse
+
+    return {
+      kind: "ConsPattern",
+      head,
+      tail,
+      span: { start: head.span.start, end: tail.span.end },
+    };
+  }
+
+  /**
+   * Parse primary pattern (without cons)
+   */
+  private parsePrimaryPattern(): Pattern {
     // Check for lower identifier (variable or wildcard)
     if (this.match(TokenKind.LowerIdentifier)) {
       const tok = this.previous();
@@ -1554,7 +1587,7 @@ class Parser {
       // Parse constructor arguments (zero or more patterns)
       const args: Pattern[] = [];
       while (this.isPatternStart(this.current())) {
-        args.push(this.parsePattern());
+        args.push(this.parsePrimaryPattern());
       }
 
       const end = args.at(-1)?.span.end ?? ctor.span.end;
@@ -1566,9 +1599,51 @@ class Parser {
       };
     }
 
+    // Check for list pattern: [] or [p1, p2, ...]
+    if (this.match(TokenKind.LBracket)) {
+      const start = this.previousSpan().start;
+
+      // Empty list pattern
+      if (this.match(TokenKind.RBracket)) {
+        return {
+          kind: "ListPattern",
+          elements: [],
+          span: { start, end: this.previousSpan().end },
+        };
+      }
+
+      // Parse list elements
+      const elements: Pattern[] = [];
+      const first = this.parsePattern();
+      elements.push(first);
+
+      while (this.peek(TokenKind.Comma)) {
+        this.advance(); // consume comma
+        const pat = this.parsePattern();
+        elements.push(pat);
+      }
+
+      this.expect(TokenKind.RBracket, "close list pattern");
+
+      return {
+        kind: "ListPattern",
+        elements,
+        span: { start, end: this.previousSpan().end },
+      };
+    }
+
     // Check for parenthesized pattern or tuple
     if (this.match(TokenKind.LParen)) {
       const start = this.previousSpan().start;
+
+      // Check for empty tuple/unit pattern
+      if (this.match(TokenKind.RParen)) {
+        return {
+          kind: "TuplePattern",
+          elements: [],
+          span: { start, end: this.previousSpan().end },
+        };
+      }
 
       // Parse first pattern
       const first = this.parsePattern();
@@ -2306,11 +2381,17 @@ class Parser {
     return token.kind === TokenKind.Keyword && token.lexeme === keyword;
   }
 
+  private peekOperator(op: string): boolean {
+    const token = this.current();
+    return token.kind === TokenKind.Operator && token.lexeme === op;
+  }
+
   private isPatternStart(token: Token): boolean {
     return (
       token.kind === TokenKind.LowerIdentifier ||
       token.kind === TokenKind.UpperIdentifier ||
-      token.kind === TokenKind.LParen
+      token.kind === TokenKind.LParen ||
+      token.kind === TokenKind.LBracket
     );
   }
 

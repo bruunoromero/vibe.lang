@@ -63,15 +63,18 @@ export function resolveModule(input: ResolveModuleInput): ResolvedModule {
     const pkgConfigPath = path.join(pkgRoot, DEFAULT_CONFIG_NAME);
     let pkgSrcDir = path.join(pkgRoot, "src");
     let pkgDistDir = path.join(pkgRoot, "dist");
+    // Use the vibe.json name if available, otherwise fall back to npm package name
+    let vibePackageName = pkgName;
 
     if (fs.existsSync(pkgConfigPath)) {
       const pkgConfig = loadConfig({ path: pkgConfigPath });
       pkgSrcDir = pkgConfig.srcDir;
       pkgDistDir = pkgConfig.distDir;
+      vibePackageName = pkgConfig.name;
     }
 
     candidates.push({
-      packageName: pkgName,
+      packageName: vibePackageName,
       baseDir: preferDist ? pkgDistDir : pkgSrcDir,
     });
   }
@@ -255,6 +258,133 @@ export function discoverModuleGraph(
   discoverModule(entryModuleName);
 
   // Perform topological sort
+  const sortedModuleNames = topologicalSort(modules);
+
+  return {
+    modules,
+    sortedModuleNames,
+  };
+}
+
+/**
+ * Discover all .vibe source files in a directory recursively.
+ *
+ * @param srcDir - The source directory to scan
+ * @returns Array of module names found
+ */
+export function discoverSourceModules(srcDir: string): string[] {
+  const modules: string[] = [];
+
+  function scan(dir: string, prefix: string): void {
+    if (!fs.existsSync(dir)) {
+      return;
+    }
+
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        // Recurse into subdirectories
+        const newPrefix = prefix ? `${prefix}.${entry.name}` : entry.name;
+        scan(path.join(dir, entry.name), newPrefix);
+      } else if (entry.isFile() && entry.name.endsWith(".vibe")) {
+        // Convert filename to module name
+        const baseName = entry.name.slice(0, -5); // Remove .vibe extension
+        const moduleName = prefix ? `${prefix}.${baseName}` : baseName;
+        modules.push(moduleName);
+      }
+    }
+  }
+
+  scan(srcDir, "");
+  return modules;
+}
+
+/**
+ * Discover all modules from a package's source directory and their dependencies.
+ * Unlike discoverModuleGraph which starts from a single entry point, this discovers
+ * ALL source modules in the package and their transitive dependencies.
+ *
+ * @param config - The resolved Vibe configuration
+ * @param parseFunction - Function to parse source code into an AST
+ * @returns ModuleGraph with all discovered modules and topological ordering
+ */
+export function discoverAllModules(
+  config: ResolvedVibeConfig,
+  parseFunction: (source: string) => Program
+): ModuleGraph {
+  // First, discover all source modules in the config's source directory
+  const sourceModules = discoverSourceModules(config.srcDir);
+
+  // Now build the graph starting from all source modules
+  const modules = new Map<string, ModuleNode>();
+  const visiting = new Set<string>();
+
+  function discoverModule(moduleName: string): void {
+    if (modules.has(moduleName)) {
+      return;
+    }
+
+    if (visiting.has(moduleName)) {
+      throw new Error(
+        `Circular dependency detected: ${[...visiting, moduleName].join(
+          " -> "
+        )}`
+      );
+    }
+
+    visiting.add(moduleName);
+
+    // Resolve and read module
+    const resolved = resolveModule({ config, moduleName });
+    const source = fs.readFileSync(resolved.filePath, "utf8");
+    const ast = parseFunction(source);
+
+    // Extract dependencies
+    const dependencies = new Set<string>();
+    for (const imp of ast.imports) {
+      dependencies.add(imp.moduleName);
+    }
+
+    // Auto-inject Vibe dependency if this is not Vibe itself
+    const isPreludeModule = moduleName === "Vibe";
+    const hasExplicitPreludeImport = ast.imports?.some(
+      (imp) => imp.moduleName === "Vibe"
+    );
+
+    if (!isPreludeModule && !hasExplicitPreludeImport) {
+      try {
+        resolveModule({ config, moduleName: "Vibe" });
+        dependencies.add("Vibe");
+      } catch {
+        // Vibe not found - OK, builtin types are available
+      }
+    }
+
+    // Recursively discover dependencies
+    for (const depName of dependencies) {
+      discoverModule(depName);
+    }
+
+    // Store module node
+    modules.set(moduleName, {
+      moduleName,
+      packageName: resolved.packageName,
+      filePath: resolved.filePath,
+      source,
+      ast,
+      dependencies,
+    });
+
+    visiting.delete(moduleName);
+  }
+
+  // Discover all source modules and their dependencies
+  for (const moduleName of sourceModules) {
+    discoverModule(moduleName);
+  }
+
+  // Topologically sort
   const sortedModuleNames = topologicalSort(modules);
 
   return {

@@ -5,7 +5,6 @@ import type {
   ExternalDeclaration,
   TypeDeclaration,
   TypeAliasDeclaration,
-  RecordTypeDeclaration,
   OpaqueTypeDeclaration,
   ConstructorVariant,
   TypeExpr,
@@ -360,6 +359,216 @@ const BUILTIN_CONSTRUCTORS: Record<string, number> = {
   Char: 0,
 };
 
+// ============================================================================
+// Strongly Connected Components (SCC) for Mutual Recursion
+// ============================================================================
+
+/**
+ * Collect all free variable references in an expression.
+ * These are variables that are not bound within the expression itself.
+ */
+function collectFreeVars(
+  expr: Expr,
+  bound: Set<string> = new Set()
+): Set<string> {
+  const free = new Set<string>();
+
+  function visit(e: Expr, localBound: Set<string>): void {
+    switch (e.kind) {
+      case "Var":
+        if (!localBound.has(e.name)) {
+          free.add(e.name);
+        }
+        break;
+      case "Number":
+      case "String":
+      case "Char":
+      case "Unit":
+        break;
+      case "Paren":
+        visit(e.expression, localBound);
+        break;
+      case "Tuple":
+        e.elements.forEach((el) => visit(el, localBound));
+        break;
+      case "List":
+        e.elements.forEach((el) => visit(el, localBound));
+        break;
+      case "ListRange":
+        visit(e.start, localBound);
+        visit(e.end, localBound);
+        break;
+      case "Record":
+        e.fields.forEach((f) => visit(f.value, localBound));
+        break;
+      case "RecordUpdate":
+        if (!localBound.has(e.base)) {
+          free.add(e.base);
+        }
+        e.fields.forEach((f) => visit(f.value, localBound));
+        break;
+      case "FieldAccess":
+        visit(e.target, localBound);
+        break;
+      case "Apply":
+        visit(e.callee, localBound);
+        e.args.forEach((arg) => visit(arg, localBound));
+        break;
+      case "Infix":
+        visit(e.left, localBound);
+        visit(e.right, localBound);
+        if (!localBound.has(e.operator)) {
+          free.add(e.operator);
+        }
+        break;
+      case "Lambda": {
+        const lambdaBound = new Set(localBound);
+        e.args.forEach((p) => collectPatternVars(p, lambdaBound));
+        visit(e.body, lambdaBound);
+        break;
+      }
+      case "LetIn": {
+        const letBound = new Set(localBound);
+        for (const binding of e.bindings) {
+          // Collect from binding body with current scope
+          visit(binding.body, letBound);
+          // Add binding name to scope for subsequent bindings and main body
+          letBound.add(binding.name);
+          binding.args.forEach((p) => collectPatternVars(p, letBound));
+        }
+        visit(e.body, letBound);
+        break;
+      }
+      case "If":
+        visit(e.condition, localBound);
+        visit(e.thenBranch, localBound);
+        visit(e.elseBranch, localBound);
+        break;
+      case "Case":
+        visit(e.discriminant, localBound);
+        for (const branch of e.branches) {
+          const branchBound = new Set(localBound);
+          collectPatternVars(branch.pattern, branchBound);
+          visit(branch.body, branchBound);
+        }
+        break;
+    }
+  }
+
+  visit(expr, bound);
+  return free;
+}
+
+/**
+ * Collect all variables bound by a pattern into the given set.
+ */
+function collectPatternVars(pattern: Pattern, bound: Set<string>): void {
+  switch (pattern.kind) {
+    case "VarPattern":
+      bound.add(pattern.name);
+      break;
+    case "WildcardPattern":
+      break;
+    case "ConstructorPattern":
+      pattern.args.forEach((p) => collectPatternVars(p, bound));
+      break;
+    case "TuplePattern":
+      pattern.elements.forEach((p) => collectPatternVars(p, bound));
+      break;
+    case "ListPattern":
+      pattern.elements.forEach((p) => collectPatternVars(p, bound));
+      break;
+    case "ConsPattern":
+      collectPatternVars(pattern.head, bound);
+      collectPatternVars(pattern.tail, bound);
+      break;
+  }
+}
+
+/**
+ * Build a dependency graph for value declarations.
+ * Returns a map from each name to the set of names it references.
+ */
+function buildDependencyGraph(
+  values: Record<string, ValueInfo>
+): Map<string, Set<string>> {
+  const graph = new Map<string, Set<string>>();
+  const valueNames = new Set(Object.keys(values));
+
+  for (const [name, info] of Object.entries(values)) {
+    const deps = new Set<string>();
+
+    if (info.declaration.kind === "ValueDeclaration") {
+      // Collect free variables from the body
+      const bound = new Set<string>();
+      info.declaration.args.forEach((p) => collectPatternVars(p, bound));
+      const freeVars = collectFreeVars(info.declaration.body, bound);
+
+      // Filter to only include names that are defined in this module
+      for (const v of freeVars) {
+        if (valueNames.has(v) && v !== name) {
+          deps.add(v);
+        }
+      }
+    }
+
+    graph.set(name, deps);
+  }
+
+  return graph;
+}
+
+/**
+ * Compute strongly connected components using Tarjan's algorithm.
+ * Returns SCCs in reverse topological order (dependencies before dependents).
+ */
+function computeSCCs(graph: Map<string, Set<string>>): string[][] {
+  const index = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+  const sccs: string[][] = [];
+  let currentIndex = 0;
+
+  function strongConnect(v: string): void {
+    index.set(v, currentIndex);
+    lowlink.set(v, currentIndex);
+    currentIndex++;
+    stack.push(v);
+    onStack.add(v);
+
+    const deps = graph.get(v) ?? new Set();
+    for (const w of deps) {
+      if (!index.has(w)) {
+        strongConnect(w);
+        lowlink.set(v, Math.min(lowlink.get(v)!, lowlink.get(w)!));
+      } else if (onStack.has(w)) {
+        lowlink.set(v, Math.min(lowlink.get(v)!, index.get(w)!));
+      }
+    }
+
+    if (lowlink.get(v) === index.get(v)) {
+      const scc: string[] = [];
+      let w: string;
+      do {
+        w = stack.pop()!;
+        onStack.delete(w);
+        scc.push(w);
+      } while (w !== v);
+      sccs.push(scc);
+    }
+  }
+
+  for (const v of graph.keys()) {
+    if (!index.has(v)) {
+      strongConnect(v);
+    }
+  }
+
+  // SCCs are returned in reverse topological order
+  return sccs;
+}
+
 /**
  * Built-in operator type signatures are now EMPTY.
  *
@@ -414,6 +623,8 @@ export type SemanticModule = {
   adts: Record<string, ADTInfo>;
   /** Map from constructor names to their type information */
   constructors: Record<string, ConstructorInfo>;
+  /** Map from constructor names to their type schemes (for importing) */
+  constructorTypes: Record<string, TypeScheme>;
   /** Registry of type aliases */
   typeAliases: Record<string, TypeAliasInfo>;
   /** Registry of opaque types (for JS interop) */
@@ -455,6 +666,7 @@ export function analyze(
   // These track user-defined types for constructor validation and exhaustiveness checking.
   const adts: Record<string, ADTInfo> = {};
   const constructors: Record<string, ConstructorInfo> = {};
+  const constructorTypes: Record<string, TypeScheme> = {};
   const typeAliases: Record<string, TypeAliasInfo> = {};
 
   // ===== Opaque Type Registry =====
@@ -493,6 +705,11 @@ export function analyze(
     moduleName: "__builtin__",
     span: builtinSpan,
   };
+  constructorTypes["True"] = {
+    vars: new Set(),
+    constraints: [],
+    type: { kind: "con", name: "Bool", args: [] },
+  };
   constructors["False"] = {
     arity: 0,
     argTypes: [],
@@ -500,6 +717,11 @@ export function analyze(
     parentParams: [],
     moduleName: "__builtin__",
     span: builtinSpan,
+  };
+  constructorTypes["False"] = {
+    vars: new Set(),
+    constraints: [],
+    type: { kind: "con", name: "Bool", args: [] },
   };
 
   // Primitive opaque types - no pattern matching allowed
@@ -584,6 +806,10 @@ export function analyze(
 
   const globalScope: Scope = { symbols: new Map() };
 
+  // Add built-in Bool constructors (True/False) to global scope
+  globalScope.symbols.set("True", constructorTypes["True"]!);
+  globalScope.symbols.set("False", constructorTypes["False"]!);
+
   // Seed built-in operators as functions for prefix/infix symmetry.
   // Built-in operators are monomorphic (not polymorphic).
   // Note: INFIX_TYPES is now empty; operators come from Vibe.
@@ -654,6 +880,12 @@ export function analyze(
         const depConstructor = depModule.constructors[exposedName];
         if (depConstructor) {
           constructors[exposedName] = depConstructor;
+          // Also import the type scheme so the constructor can be used as a value
+          const ctorScheme = depModule.constructorTypes[exposedName];
+          if (ctorScheme) {
+            globalScope.symbols.set(exposedName, ctorScheme);
+            constructorTypes[exposedName] = ctorScheme;
+          }
         }
 
         // Check for ADTs
@@ -673,6 +905,12 @@ export function analyze(
             const ctor = depModule.constructors[ctorName];
             if (ctor) {
               constructors[ctorName] = ctor;
+              // Also import the type scheme
+              const ctorScheme = depModule.constructorTypes[ctorName];
+              if (ctorScheme) {
+                globalScope.symbols.set(ctorName, ctorScheme);
+                constructorTypes[ctorName] = ctorScheme;
+              }
             }
           }
         }
@@ -713,6 +951,12 @@ export function analyze(
         ConstructorInfo
       ][]) {
         constructors[name] = ctor;
+        // Also import the type scheme so the constructor can be used as a value
+        const ctorScheme = depModule.constructorTypes[name];
+        if (ctorScheme) {
+          globalScope.symbols.set(name, ctorScheme);
+          constructorTypes[name] = ctorScheme;
+        }
       }
 
       // Import all ADTs
@@ -809,6 +1053,7 @@ export function analyze(
         decl,
         adts,
         constructors,
+        constructorTypes,
         globalScope,
         currentModuleName
       );
@@ -833,17 +1078,6 @@ export function analyze(
     if (decl.kind === "TypeAliasDeclaration") {
       registerTypeAliasWithoutValidation(decl, typeAliases, currentModuleName);
       typeAliasDecls.push(decl);
-      continue;
-    }
-  }
-
-  // ===== PASS 1b2: Register record type declarations (DEPRECATED) =====
-  // Record types are now defined using 'type alias' syntax in the parser.
-  // This section remains for backward compatibility with existing parsed ASTs.
-  for (const decl of program.declarations) {
-    if (decl.kind === "RecordTypeDeclaration") {
-      registerRecordTypeDeclaration(decl, typeAliases, currentModuleName);
-      typeAliasDecls.push(convertRecordToAlias(decl));
       continue;
     }
   }
@@ -978,59 +1212,90 @@ export function analyze(
     types[name] = seeded;
   }
 
-  // Infer value bodies and generalize their types ONE AT A TIME.
-  // This ensures that each function is fully generalized before the next one uses it.
-  // This approach works for non-mutually-recursive definitions.
-  // TODO: Handle mutually recursive definition groups properly.
-  for (const info of Object.values(values)) {
-    if (info.declaration.kind === "ExternalDeclaration") {
-      // External declarations with type variables become polymorphic
-      // Each external gets a fresh type variable context
-      info.type = typeFromAnnotation(
-        info.declaration.annotation,
-        new Map(),
-        adts,
-        typeAliases
-      );
-      // External declarations are monomorphic
-      globalScope.symbols.set(info.declaration.name, {
-        vars: new Set(),
-        constraints: [],
-        type: info.type,
-      });
-      continue;
+  // Build dependency graph and compute SCCs for proper mutual recursion handling.
+  // SCCs are returned in reverse topological order, so we process dependencies first.
+  const depGraph = buildDependencyGraph(values);
+  const sccs = computeSCCs(depGraph);
+
+  // Process each SCC:
+  // - For single-element SCCs (non-recursive or self-recursive): infer and generalize immediately
+  // - For multi-element SCCs (mutually recursive): infer all together, then generalize all together
+  for (const scc of sccs) {
+    // First, handle any external declarations in this SCC (they don't participate in mutual recursion)
+    const externals: string[] = [];
+    const valueDecls: string[] = [];
+
+    for (const name of scc) {
+      const info = values[name]!;
+      if (info.declaration.kind === "ExternalDeclaration") {
+        externals.push(name);
+      } else {
+        valueDecls.push(name);
+      }
     }
 
-    const declaredType = types[info.declaration.name]!;
-    const annotationType = info.annotation
-      ? typeFromAnnotation(info.annotation, new Map(), adts, typeAliases)
-      : undefined;
+    // Process externals first
+    for (const name of externals) {
+      const info = values[name]!;
+      if (info.declaration.kind === "ExternalDeclaration") {
+        info.type = typeFromAnnotation(
+          info.declaration.annotation,
+          new Map(),
+          adts,
+          typeAliases
+        );
+        // External declarations are monomorphic
+        globalScope.symbols.set(info.declaration.name, {
+          vars: new Set(),
+          constraints: [],
+          type: info.type,
+        });
+      }
+    }
 
-    const inferred = analyzeValueDeclaration(
-      info.declaration,
-      globalScope,
-      substitution,
-      declaredType,
-      annotationType,
-      constructors,
-      adts,
-      typeAliases,
-      opaqueTypes
-    );
+    // Process value declarations in this SCC together
+    if (valueDecls.length > 0) {
+      // Infer all declarations in the SCC
+      const inferredTypes: Map<string, Type> = new Map();
 
-    // IMPORTANT: Generalize IMMEDIATELY after inference, before analyzing the next declaration.
-    // This ensures that when the next declaration uses this one, it gets the polymorphic version.
-    // Note: We need to generalize with respect to the scope BEFORE this binding was added.
-    // For top-level bindings, we generalize with respect to the initial global scope.
-    const generalizedScheme = generalize(
-      inferred,
-      { symbols: new Map(), parent: globalScope.parent },
-      substitution
-    );
-    globalScope.symbols.set(info.declaration.name, generalizedScheme);
+      for (const name of valueDecls) {
+        const info = values[name]!;
+        if (info.declaration.kind !== "ValueDeclaration") continue;
 
-    types[info.declaration.name] = inferred;
-    info.type = inferred;
+        const declaredType = types[name]!;
+        const annotationType = info.annotation
+          ? typeFromAnnotation(info.annotation, new Map(), adts, typeAliases)
+          : undefined;
+
+        const inferred = analyzeValueDeclaration(
+          info.declaration,
+          globalScope,
+          substitution,
+          declaredType,
+          annotationType,
+          constructors,
+          adts,
+          typeAliases,
+          opaqueTypes
+        );
+
+        inferredTypes.set(name, inferred);
+        types[name] = inferred;
+        info.type = inferred;
+      }
+
+      // After inferring all in the SCC, generalize all together
+      // This ensures mutually recursive functions get proper polymorphic types
+      for (const name of valueDecls) {
+        const inferred = inferredTypes.get(name)!;
+        const generalizedScheme = generalize(
+          inferred,
+          { symbols: new Map(), parent: globalScope.parent },
+          substitution
+        );
+        globalScope.symbols.set(name, generalizedScheme);
+      }
+    }
   }
 
   if (program.module) {
@@ -1045,6 +1310,7 @@ export function analyze(
     types,
     adts,
     constructors,
+    constructorTypes,
     typeAliases,
     opaqueTypes,
     protocols,
@@ -1096,6 +1362,7 @@ function registerTypeDeclaration(
   decl: TypeDeclaration,
   adts: Record<string, ADTInfo>,
   constructors: Record<string, ConstructorInfo>,
+  constructorTypes: Record<string, TypeScheme>,
   globalScope: Scope,
   moduleName?: string
 ) {
@@ -1197,12 +1464,17 @@ function registerTypeDeclaration(
       quantifiedVars.add(tv.id);
     }
 
-    // Register constructor as a polymorphic value in global scope
-    globalScope.symbols.set(ctor.name, {
+    const ctorScheme: TypeScheme = {
       vars: quantifiedVars,
       constraints: [],
       type: ctorType,
-    });
+    };
+
+    // Register constructor as a polymorphic value in global scope
+    globalScope.symbols.set(ctor.name, ctorScheme);
+
+    // Also store in constructorTypes for export
+    constructorTypes[ctor.name] = ctorScheme;
   }
 }
 
@@ -1611,87 +1883,6 @@ function registerOpaqueType(
     name: decl.name,
     moduleName,
     params: decl.params,
-    span: decl.span,
-  };
-}
-
-/**
- * Register a record type declaration as a type alias (DEPRECATED).
- *
- * Old syntax: type Name = { ... }
- * New syntax: type alias Name = { ... }
- *
- * Record types are now defined using 'type alias' syntax in the parser.
- * This function remains for backward compatibility with existing parsed ASTs.
- *
- * Example (old): `type Point = { x : Int, y : Int }` creates a record type.
- * Example (new): `type alias Point = { x : Int, y : Int }` creates a record type.
- */
-function registerRecordTypeDeclaration(
-  decl: RecordTypeDeclaration,
-  typeAliases: Record<string, TypeAliasInfo>,
-  moduleName?: string
-) {
-  // Check for duplicate type name
-  const existingAlias = typeAliases[decl.name];
-  if (existingAlias) {
-    if (existingAlias.moduleName && existingAlias.moduleName !== moduleName) {
-      throw new SemanticError(
-        `Type '${decl.name}' conflicts with type from module '${existingAlias.moduleName}'. ` +
-          `Consider using a different name or qualified imports.`,
-        decl.span
-      );
-    }
-    throw new SemanticError(
-      `Duplicate type declaration for '${decl.name}'`,
-      decl.span
-    );
-  }
-
-  // Validate type parameters are unique
-  const paramSet = new Set<string>();
-  for (const param of decl.params) {
-    if (paramSet.has(param)) {
-      throw new SemanticError(
-        `Duplicate type parameter '${param}' in type '${decl.name}'`,
-        decl.span
-      );
-    }
-    paramSet.add(param);
-  }
-
-  // Convert RecordTypeDeclaration to TypeAliasInfo
-  const recordTypeExpr: TypeExpr = {
-    kind: "RecordType",
-    fields: decl.fields,
-    span: decl.span,
-  };
-
-  typeAliases[decl.name] = {
-    name: decl.name,
-    moduleName,
-    params: decl.params,
-    value: recordTypeExpr,
-    span: decl.span,
-  };
-}
-
-/**
- * Convert a RecordTypeDeclaration to a TypeAliasDeclaration for validation.
- * This allows record types to be validated using the same type reference validation.
- */
-function convertRecordToAlias(
-  decl: RecordTypeDeclaration
-): TypeAliasDeclaration {
-  return {
-    kind: "TypeAliasDeclaration",
-    name: decl.name,
-    params: decl.params,
-    value: {
-      kind: "RecordType",
-      fields: decl.fields,
-      span: decl.span,
-    },
     span: decl.span,
   };
 }
@@ -3286,6 +3477,58 @@ function bindPattern(
         return applySubstitution(expected, substitution);
       }
     }
+    case "ListPattern": {
+      // List pattern: [] or [x, y, z]
+      // Expected type should be List a for some a
+      const elemType = freshType();
+      const listType: TypeCon = { kind: "con", name: "List", args: [elemType] };
+      unify(listType, expected, pattern.span, substitution);
+
+      // Bind each element pattern to the element type
+      pattern.elements.forEach((el) =>
+        bindPattern(
+          el,
+          scope,
+          substitution,
+          seen,
+          applySubstitution(elemType, substitution),
+          constructors,
+          adts
+        )
+      );
+      return applySubstitution(listType, substitution);
+    }
+    case "ConsPattern": {
+      // Cons pattern: head :: tail
+      // Expected type should be List a for some a
+      const elemType = freshType();
+      const listType: TypeCon = { kind: "con", name: "List", args: [elemType] };
+      unify(listType, expected, pattern.span, substitution);
+
+      // Head pattern binds to element type
+      bindPattern(
+        pattern.head,
+        scope,
+        substitution,
+        seen,
+        applySubstitution(elemType, substitution),
+        constructors,
+        adts
+      );
+
+      // Tail pattern binds to list type
+      bindPattern(
+        pattern.tail,
+        scope,
+        substitution,
+        seen,
+        applySubstitution(listType, substitution),
+        constructors,
+        adts
+      );
+
+      return applySubstitution(listType, substitution);
+    }
     default:
       return expected;
   }
@@ -3517,8 +3760,22 @@ function generalize(
     }
   }
 
-  // TODO: Collect constraints during type inference
-  // For now, we use empty constraints
+  // LIMITATION: Constraint collection during type inference is not yet implemented.
+  //
+  // For proper type class (protocol) support, we would need to:
+  // 1. Track constraints when protocol method symbols are looked up
+  // 2. Propagate constraints through function application and composition
+  // 3. Simplify redundant constraints (e.g., Eq a from Show a)
+  // 4. Include collected constraints in the generalized type scheme
+  //
+  // Currently, protocol methods have constraints attached when registered
+  // (see addProtocolMethodsToScope), but these constraints are not propagated
+  // to functions that use protocol methods. This means functions like:
+  //   show x = x  -- should infer (Show a) => a -> String
+  // currently infer just: a -> a (no constraint)
+  //
+  // This is acceptable for basic usage where concrete types are known,
+  // but limits polymorphic usage of protocol-constrained functions.
   return { vars: quantified, constraints: [], type };
 }
 
@@ -3870,8 +4127,24 @@ function typeFromAnnotation(
       };
     }
     case "QualifiedType": {
-      // For now, we extract just the underlying type from qualified types
-      // TODO: When implementing constraint checking, parse and store the constraints
+      // LIMITATION: Qualified type constraints are currently discarded.
+      //
+      // When a type annotation includes constraints like `(Num a) => a -> a -> a`,
+      // we currently extract just the underlying type `a -> a -> a` and ignore
+      // the `Num a` constraint.
+      //
+      // For proper constraint handling, we would need to:
+      // 1. Parse and store the constraints from the annotation
+      // 2. Check that the constraints are satisfied at call sites
+      // 3. Propagate constraints through the type inference process
+      //
+      // This limitation means:
+      // - Type annotations with constraints are accepted but constraints aren't enforced
+      // - Functions with constrained annotations may type-check but could fail at runtime
+      //   if called with types that don't satisfy the constraint
+      //
+      // Protocol methods registered via addProtocolMethodsToScope DO have their
+      // constraints tracked, but user-annotated qualified types do not.
       return typeFromAnnotation(annotation.type, context, adts, typeAliases);
     }
   }

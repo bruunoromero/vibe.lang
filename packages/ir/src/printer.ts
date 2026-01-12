@@ -293,6 +293,14 @@ export function printExpr(
       return `{ ${fields.join(", ")} }`;
     }
 
+    case "IRRecordUpdate": {
+      const base = printExpr(expr.base, indent, 0);
+      const updates = expr.updates.map(
+        (f) => `${f.name} = ${printExpr(f.value, indent, 0)}`
+      );
+      return `{ ${base} | ${updates.join(", ")} }`;
+    }
+
     case "IRFieldAccess":
       return `${printExpr(expr.target, indent, 0)}.${expr.field}`;
 
@@ -345,6 +353,14 @@ export function printPattern(pattern: IRPattern): string {
         return `'${pattern.value}'`;
       }
       return String(pattern.value);
+
+    case "IRListPattern": {
+      const elems = pattern.elements.map(printPattern);
+      return `[${elems.join(", ")}]`;
+    }
+
+    case "IRConsPattern":
+      return `(${printPattern(pattern.head)} :: ${printPattern(pattern.tail)})`;
 
     default:
       return `<unknown: ${(pattern as any).kind}>`;

@@ -18,6 +18,7 @@
       "name": "@vibe/cli",
       "version": "0.0.0",
       "dependencies": {
+        "@vibe/codegen": "workspace:*",
         "@vibe/config": "workspace:*",
         "@vibe/ir": "workspace:*",
         "@vibe/lexer": "workspace:*",
@@ -33,6 +34,10 @@
     "packages/codegen": {
       "name": "@vibe/codegen",
       "version": "0.0.0",
+      "dependencies": {
+        "@vibe/ir": "workspace:*",
+        "@vibe/syntax": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "latest",
       },

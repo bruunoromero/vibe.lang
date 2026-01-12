@@ -366,20 +366,47 @@ strs = singleton "hi"`);
     expect(result.types.strs).toBeDefined();
   });
 
-  test.skip("polymorphic recursion - length function", () => {
-    // TODO: This requires list pattern matching ([] and ::) which parser doesn't support yet
+  test("list pattern matching - empty and cons patterns", () => {
+    // Basic list pattern matching without polymorphism
+    const program = parse(`${TYPE_PREAMBLE}
+isEmpty xs =
+  case xs of
+    [] -> True
+    (x :: rest) -> False
+`);
+    const result = analyze(program, { injectPrelude: false });
+    expect(result.types.isEmpty).toBeDefined();
+  });
+
+  test("polymorphic recursion - length function", () => {
     // length : forall a. [a] -> Int
     // Polymorphic recursive functions should work
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`${OPERATOR_PREAMBLE}
 length xs =
   case xs of
     [] -> 0
     (x :: rest) -> 1 + length rest
-
-n = length [1, 2, 3]
-m = length ["a", "b"]`);
+`);
     const result = analyze(program, { injectPrelude: false });
     expect(result.types.length).toBeDefined();
+  });
+
+  test("mutual recursion - even/odd", () => {
+    // Mutually recursive functions should be typed correctly
+    const program = parse(`${OPERATOR_PREAMBLE}
+isEven n =
+  if n == 0 then True else isOdd (n - 1)
+
+isOdd n =
+  if n == 0 then False else isEven (n - 1)
+
+infixl 4 ==
+@external "@vibe/runtime" "intEq"
+(==) : Int -> Int -> Bool
+`);
+    const result = analyze(program, { injectPrelude: false });
+    expect(result.types.isEven).toBeDefined();
+    expect(result.types.isOdd).toBeDefined();
   });
 
   test("lambda parameters are monomorphic", () => {

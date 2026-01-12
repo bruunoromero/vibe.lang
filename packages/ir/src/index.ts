@@ -74,6 +74,12 @@ export interface LowerOptions {
    * @default false
    */
   validateDependencies?: boolean;
+
+  /**
+   * Package name this module belongs to.
+   * Used for generating correct import paths.
+   */
+  packageName?: string;
 }
 
 /**
@@ -174,6 +180,7 @@ export function lower(
       parentType: info.parentType,
       arity: info.arity,
       tag: ctx.constructorTags.get(name) ?? 0,
+      moduleName: info.moduleName,
     };
   }
 
@@ -252,6 +259,7 @@ export function lower(
     externalImports,
     sourceModule: semantics,
     sourceProgram: program,
+    packageName: options.packageName,
   };
 }
 

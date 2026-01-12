@@ -63,7 +63,7 @@ export type IRConstraint = {
  *
  * Differences from AST Expr:
  * - No LetIn: lifted to top-level sequential bindings
- * - No RecordUpdate: desugared to Record construction
+ * - RecordUpdate: either desugared to IRRecord (if type known) or kept as IRRecordUpdate
  * - No Infix: resolved to function application
  * - No Paren: flattened away
  * - Case on primitives: lowered to If chains
@@ -79,6 +79,7 @@ export type IRExpr =
   | IRUnit
   | IRList
   | IRRecord
+  | IRRecordUpdate
   | IRFieldAccess
   | IRConstructor;
 
@@ -162,7 +163,7 @@ export type IRList = {
   span: Span;
 };
 
-/** Record construction (also used for desugared record updates) */
+/** Record construction (also used for desugared record updates when type is known) */
 export type IRRecord = {
   kind: "IRRecord";
   fields: IRRecordField[];
@@ -172,6 +173,18 @@ export type IRRecord = {
 export type IRRecordField = {
   name: string;
   value: IRExpr;
+  span: Span;
+};
+
+/**
+ * Record update expression (spread semantics).
+ * Used when the base record type isn't fully known at IR lowering time.
+ * Semantics: { ...base, field1: val1, field2: val2 }
+ */
+export type IRRecordUpdate = {
+  kind: "IRRecordUpdate";
+  base: IRExpr;
+  updates: IRRecordField[];
   span: Span;
 };
 
@@ -205,7 +218,9 @@ export type IRPattern =
   | IRWildcardPattern
   | IRConstructorPattern
   | IRTuplePattern
-  | IRLiteralPattern;
+  | IRLiteralPattern
+  | IRListPattern
+  | IRConsPattern;
 
 export type IRVarPattern = {
   kind: "IRVarPattern";
@@ -238,6 +253,21 @@ export type IRLiteralPattern = {
   kind: "IRLiteralPattern";
   value: string | number | boolean;
   literalType: "int" | "float" | "string" | "char" | "bool";
+  span: Span;
+};
+
+/** List pattern: [] or [x, y, z] */
+export type IRListPattern = {
+  kind: "IRListPattern";
+  elements: IRPattern[];
+  span: Span;
+};
+
+/** Cons pattern: head :: tail */
+export type IRConsPattern = {
+  kind: "IRConsPattern";
+  head: IRPattern;
+  tail: IRPattern;
   span: Span;
 };
 
@@ -323,6 +353,8 @@ export type IRConstructorInfo = {
   parentType: string;
   arity: number;
   tag: number;
+  /** Module that defines this constructor */
+  moduleName?: string;
 };
 
 /**
@@ -331,6 +363,9 @@ export type IRConstructorInfo = {
 export type IRProgram = {
   /** Module name (if declared) */
   moduleName?: string;
+
+  /** Package name this module belongs to */
+  packageName?: string;
 
   /** All lowered value bindings, indexed by name */
   values: Record<string, IRValue>;

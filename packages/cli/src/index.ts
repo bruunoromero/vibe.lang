@@ -6,7 +6,12 @@ import { parse, ParseError } from "@vibe/parser";
 import { analyze, SemanticError, type SemanticModule } from "@vibe/semantics";
 import { lower, printProgram, IRError, type IRProgram } from "@vibe/ir";
 import { loadConfig } from "@vibe/config";
-import { resolveModule, discoverModuleGraph } from "@vibe/module-resolver";
+import {
+  resolveModule,
+  discoverModuleGraph,
+  discoverAllModules,
+} from "@vibe/module-resolver";
+import { generate, writeModule, type GeneratedModule } from "@vibe/codegen";
 
 interface CliOptions {
   cwd?: string;
@@ -100,6 +105,15 @@ export async function run(
       }
     );
 
+  program
+    .command("build [module]")
+    .description("Build module and dependencies to JavaScript")
+    .option("-w, --watch", "Watch files for changes and rebuild")
+    .action((module: string | undefined, opts: CommandOptions) => {
+      isHandled = true;
+      handleCommand("build", module, { ...opts, cwd, stdout, stderr });
+    });
+
   try {
     await program.parseAsync(args, { from: "user" });
     return isHandled ? exitCode : 0;
@@ -110,7 +124,7 @@ export async function run(
 }
 
 function handleCommand(
-  command: "tokenize" | "parse" | "analyze" | "ir",
+  command: "tokenize" | "parse" | "analyze" | "ir" | "build",
   module: string | undefined,
   opts: CommandOptions & {
     cwd: string;
@@ -263,6 +277,73 @@ function executeCommand(
         }
         return 0;
       }
+    }
+
+    // Build command: compile all modules to JavaScript
+    if (command === "build") {
+      // Discover ALL modules in the source directory and their dependencies
+      const moduleGraph = discoverAllModules(config, parse);
+
+      // Analyze all modules in topological order
+      const analyzedModules = new Map<string, SemanticModule>();
+
+      for (const currentModuleName of moduleGraph.sortedModuleNames) {
+        const moduleNode = moduleGraph.modules.get(currentModuleName);
+        if (!moduleNode) {
+          throw new Error(`Module "${currentModuleName}" not found in graph`);
+        }
+
+        const semantic = analyze(moduleNode.ast, {
+          dependencies: analyzedModules,
+          injectPrelude: currentModuleName !== "Vibe",
+        });
+
+        analyzedModules.set(currentModuleName, semantic);
+      }
+
+      // Build module to package mapping
+      const modulePackages = new Map<string, string>();
+      for (const [modName, modNode] of moduleGraph.modules) {
+        modulePackages.set(modName, modNode.packageName);
+      }
+
+      // Lower all modules to IR and generate JavaScript
+      const irPrograms: IRProgram[] = [];
+
+      for (const currentModuleName of moduleGraph.sortedModuleNames) {
+        const moduleNode = moduleGraph.modules.get(currentModuleName);
+        const semantic = analyzedModules.get(currentModuleName);
+
+        if (!moduleNode || !semantic) {
+          throw new Error(`Module "${currentModuleName}" missing data`);
+        }
+
+        const ir = lower(moduleNode.ast, semantic, {
+          validateDependencies: false,
+          packageName: moduleNode.packageName,
+        });
+
+        irPrograms.push(ir);
+      }
+
+      // Generate JavaScript for all modules
+      const distDir = config.distDir;
+      const generatedFiles: string[] = [];
+
+      for (const ir of irPrograms) {
+        const generated = generate(ir, { modulePackages });
+        const outputPath = writeModule(generated, {
+          distDir,
+          packageName: generated.packageName,
+        });
+        generatedFiles.push(outputPath);
+        stderr.write(`📦 Built ${generated.moduleName} -> ${outputPath}\n`);
+      }
+
+      stdout.write(
+        `\n✅ Build complete: ${generatedFiles.length} module(s) compiled to ${distDir}\n`
+      );
+      return 0;
     }
 
     return 0;

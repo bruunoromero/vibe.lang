@@ -630,14 +630,13 @@ function lowerRecordUpdate(
     });
   }
 
-  // If we couldn't determine all fields, codegen will need to handle this
-  // We'll include metadata in the IR to indicate this is an update
+  // If we couldn't determine all fields, use IRRecordUpdate with spread semantics
+  // This lets codegen generate proper { ...base, updates... } syntax
   if (allFields.length === 0) {
-    // Emit a special form: spread base and add updated fields
-    // For now, emit just the updated fields with a TODO marker
     return {
-      kind: "IRRecord",
-      fields: expr.fields.map((f) => ({
+      kind: "IRRecordUpdate",
+      base: baseVar,
+      updates: expr.fields.map((f) => ({
         name: f.name,
         value: lowerExpr(f.value, ctx),
         span: f.span,
@@ -732,6 +731,21 @@ export function lowerPattern(
       return {
         kind: "IRTuplePattern",
         elements: pattern.elements.map((p) => lowerPattern(p, ctx)),
+        span: pattern.span,
+      };
+
+    case "ListPattern":
+      return {
+        kind: "IRListPattern",
+        elements: pattern.elements.map((p) => lowerPattern(p, ctx)),
+        span: pattern.span,
+      };
+
+    case "ConsPattern":
+      return {
+        kind: "IRConsPattern",
+        head: lowerPattern(pattern.head, ctx),
+        tail: lowerPattern(pattern.tail, ctx),
         span: pattern.span,
       };
 

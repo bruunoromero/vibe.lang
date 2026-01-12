@@ -99,19 +99,27 @@ TypeArg = Identifier
 
 (* ===== Patterns ===== *)
 
-Pattern = VarPattern
-        | WildcardPattern
-        | ConstructorPattern
-        | TuplePattern
-        | "(", Pattern, ")" ;
+Pattern = ConsPattern ;
+
+ConsPattern = PrimaryPattern, ["::", ConsPattern] ;  (* right-associative *)
+
+PrimaryPattern = VarPattern
+               | WildcardPattern
+               | ConstructorPattern
+               | TuplePattern
+               | ListPattern
+               | "(", Pattern, ")" ;
 
 VarPattern = LowerIdentifier ;
 
 WildcardPattern = "_" ;
 
-ConstructorPattern = UpperIdentifier, {Pattern} ;
+ConstructorPattern = UpperIdentifier, {PrimaryPattern} ;
 
 TuplePattern = "(", Pattern, {",", Pattern}, ")" ;
+
+ListPattern = "[", "]"                          (* empty list *)
+            | "[", Pattern, {",", Pattern}, "]" ;  (* list literal *)
 
 
 (* ===== Expressions ===== *)

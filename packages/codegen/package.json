@@ -7,7 +7,10 @@
     "build": "bun build src/index.ts --outdir dist --target bun",
     "test": "bun test"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@vibe/ir": "workspace:*",
+    "@vibe/syntax": "workspace:*"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   }

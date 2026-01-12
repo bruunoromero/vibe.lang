@@ -135,7 +135,9 @@ export type Pattern =
   | { kind: "VarPattern"; name: string; span: Span }
   | { kind: "WildcardPattern"; span: Span }
   | { kind: "ConstructorPattern"; name: string; args: Pattern[]; span: Span }
-  | { kind: "TuplePattern"; elements: Pattern[]; span: Span };
+  | { kind: "TuplePattern"; elements: Pattern[]; span: Span }
+  | { kind: "ListPattern"; elements: Pattern[]; span: Span }
+  | { kind: "ConsPattern"; head: Pattern; tail: Pattern; span: Span };
 
 export type RecordField = { name: string; value: Expr; span: Span };
 
@@ -254,31 +256,6 @@ export type TypeAliasDeclaration = {
   params: string[];
   /** The type expression this alias refers to (cannot be a record type) */
   value: TypeExpr;
-  /** Source location span for error reporting */
-  span: Span;
-};
-
-/**
- * A record type declaration (DEPRECATED - use TypeAliasDeclaration instead).
- *
- * Old Syntax: type Name param1 param2 ... = { field1 : Type1, field2 : Type2, ... }
- * New Syntax: type alias Name param1 param2 ... = { field1 : Type1, field2 : Type2, ... }
- *
- * This declaration type is kept for backwards compatibility during the transition.
- * Record types should now use 'type alias' syntax.
- *
- * Examples:
- * - type alias Point = { x : number, y : number }
- * - type alias Config a = { value : a, enabled : Bool }
- */
-export type RecordTypeDeclaration = {
-  kind: "RecordTypeDeclaration";
-  /** The type name (must be uppercase, e.g., "Point", "Config") */
-  name: string;
-  /** Type parameters (lowercase identifiers, e.g., ["a"] for Config a) */
-  params: string[];
-  /** The record fields */
-  fields: Array<{ name: string; type: TypeExpr }>;
   /** Source location span for error reporting */
   span: Span;
 };
@@ -522,7 +499,6 @@ export type Declaration =
   | ExternalDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
-  | RecordTypeDeclaration
   | OpaqueTypeDeclaration
   | ProtocolDeclaration
   | ImplementationDeclaration

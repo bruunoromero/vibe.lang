@@ -115,3 +115,35 @@ Always run a rebuild after completing code changes to validate the workspace dep
 - When adding or renaming operator-like identifiers (e.g., `.` → `_DOT`), update the shared map in `packages/syntax/index.ts` (`IDENTIFIER_OPERATOR_MAPPINGS`).
 - Both the semantics alias allocator and the code generator consume those exports, so no per-package edits are needed once the shared constants change.
 - Rebuild any affected packages (typically `bun run packages/prelude` or `bun run packages/cli/index.ts build <target>`) to regenerate emitted JavaScript and confirm the new alias shows up.
+
+## Pattern Matching
+
+The Vibe language supports comprehensive pattern matching in `case` expressions and function parameters:
+
+- **Variable patterns**: `x` binds a value to a name
+- **Wildcard patterns**: `_` matches anything without binding
+- **Constructor patterns**: `Just x`, `Nothing`, `Cons h t` match ADT variants
+- **Tuple patterns**: `(a, b)` destructures tuples
+- **List patterns**: `[]` matches empty list, `[x, y, z]` matches fixed-length lists
+- **Cons patterns**: `x :: xs` destructures a list into head and tail
+
+The cons pattern (`::`) is right-associative, allowing `a :: b :: rest` to match the first two elements of a list.
+
+## Mutual Recursion
+
+Mutually recursive functions are detected and handled using Tarjan's SCC algorithm. Functions in the same strongly connected component are type-inferred together before generalization, ensuring proper polymorphic types.
+
+Example:
+
+```
+isEven n = if n == 0 then True else isOdd (n - 1)
+isOdd n = if n == 0 then False else isEven (n - 1)
+```
+
+Both functions will be correctly typed as `Int -> Bool`.
+
+## Known Limitations
+
+1. **Type-directed operator resolution**: Not implemented. Operators must be unambiguous from context.
+2. **Constraint collection during generalization**: Type constraints are not automatically propagated during let-generalization.
+3. **Qualified type constraints**: Parsing exists but semantic enforcement of constraints like `Show a => ...` is limited.
