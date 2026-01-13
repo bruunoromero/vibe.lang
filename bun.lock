@@ -126,6 +126,9 @@
     "packages/prelude": {
       "name": "@vibe/prelude",
       "version": "0.0.0",
+      "dependencies": {
+        "@vibe/runtime": "workspace:*",
+      },
     },
     "packages/runtime": {
       "name": "@vibe/runtime",

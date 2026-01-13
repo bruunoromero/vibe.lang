@@ -1367,14 +1367,31 @@ export function analyze(
 
     // Handle import alias (e.g., `import Html as H`)
     if (imp.alias) {
-      // Create a namespace-like structure for aliased imports
-      // For now, we'll use a placeholder type, but this should eventually
-      // support qualified name access (e.g., H.div)
+      // Register the alias in scope for qualified name access (e.g., H.div).
+      // The type is a placeholder since module namespaces aren't first-class values -
+      // actual qualified access is resolved specially in tryResolveModuleFieldAccess.
       globalScope.symbols.set(imp.alias, {
         vars: new Set(),
         constraints: [],
-        type: freshType(), // TODO: Implement proper module namespace types
+        type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
       });
+    }
+
+    // Handle unaliased imports (e.g., `import Vibe.JS`)
+    // Register the module path so it can be accessed via qualified names like Vibe.JS.null
+    if (!imp.alias) {
+      // Extract the first component of the module name (e.g., "Vibe" from "Vibe.JS")
+      const moduleParts = imp.moduleName.split(".");
+      const rootModule = moduleParts[0]!;
+
+      // Check if we haven't already registered this module root
+      if (!globalScope.symbols.has(rootModule)) {
+        globalScope.symbols.set(rootModule, {
+          vars: new Set(),
+          constraints: [],
+          type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
+        });
+      }
     }
 
     // Handle explicit exposing with new ExportSpec format
@@ -1584,7 +1601,9 @@ export function analyze(
         constructors,
         opaqueTypes,
         substitution,
-        currentModuleName
+        currentModuleName,
+        imports,
+        dependencies
       );
       continue;
     }
@@ -1792,7 +1811,9 @@ export function analyze(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
+          imports,
+          dependencies
         );
 
         inferredTypes.set(name, inferred);
@@ -2654,7 +2675,9 @@ function registerProtocol(
   constructors: Record<string, ConstructorInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   substitution: Substitution,
-  moduleName?: string
+  moduleName?: string,
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map()
 ) {
   // Check for duplicate protocol name
   const existingProtocol = protocols[decl.name];
@@ -2759,7 +2782,9 @@ function registerProtocol(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
 
       // Apply substitutions to get the final type
@@ -3385,7 +3410,9 @@ function analyzeValueDeclaration(
   constructors: Record<string, ConstructorInfo>,
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map()
 ): Type {
   const paramTypes = annotationType
     ? extractAnnotationParams(annotationType, decl.args.length, decl.span)
@@ -3415,11 +3442,129 @@ function analyzeValueDeclaration(
     constructors,
     adts,
     typeAliases,
-    opaqueTypes
+    opaqueTypes,
+    imports,
+    dependencies
   );
   unify(bodyType, returnType, decl.body.span, substitution);
 
   return applySubstitution(expected, substitution);
+}
+
+/**
+ * Try to resolve a module-qualified field access (e.g., Vibe.JS.null)
+ * Returns the type of the accessed symbol if it's a module access, or null if not.
+ */
+function tryResolveModuleFieldAccess(
+  expr: Extract<Expr, { kind: "FieldAccess" }>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>
+): Type | null {
+  // Collect the chain of field accesses to reconstruct the module path
+  const parts: string[] = [];
+  let current: Expr = expr;
+
+  // Traverse backwards through FieldAccess expressions
+  while (current.kind === "FieldAccess") {
+    parts.unshift(current.field);
+    current = current.target;
+  }
+
+  // The base should be a Var to be a module reference
+  if (current.kind !== "Var") {
+    return null;
+  }
+
+  // The base name (e.g., "Vibe" from "Vibe.JS.null" or "JS" from "JS.null" when using alias)
+  const baseName = current.name;
+  parts.unshift(baseName);
+
+  // Now we have the full path like ["Vibe", "JS", "null"] or ["JS", "null"] for alias access
+  // Try to find a matching import for the module path
+  // For "Vibe.JS.null", we look for:
+  // 1. import Vibe.JS (with field null)
+  // 2. import Vibe (with field JS.null)
+  // For "JS.null" with "import Vibe.JS as JS", we look for the alias match
+
+  for (const imp of imports) {
+    const importParts = imp.moduleName.split(".");
+
+    // Check for module alias match first (e.g., "import Vibe.JS as JS" with "JS.null")
+    // If the base name matches the alias and we have remaining parts, resolve from that module
+    if (imp.alias && baseName === imp.alias && parts.length >= 2) {
+      const depModule = dependencies.get(imp.moduleName);
+      if (!depModule) {
+        continue;
+      }
+
+      // Get the remaining parts after the alias (e.g., ["null"] from ["JS", "null"])
+      const fieldParts = parts.slice(1);
+
+      // Look up the value in the module
+      if (fieldParts.length === 1) {
+        const field = fieldParts[0]!;
+        // Check if it's a value - type may be on valueInfo.type or in depModule.types
+        const valueInfo = depModule.values[field];
+        if (valueInfo) {
+          const valueType = valueInfo.type || depModule.types[field];
+          if (valueType) {
+            return valueType;
+          }
+        }
+        // Check if it's a constructor
+        const ctorScheme = depModule.constructorTypes[field];
+        if (ctorScheme) {
+          return ctorScheme.type;
+        }
+      }
+      // For nested field accesses like Alias.value.field, we return null here
+      // and let the recursive FieldAccess analysis in analyzeExpr handle it.
+    }
+
+    // Check if this import could match our path (non-alias case)
+    // If import is "Vibe.JS" and we access "Vibe.JS.null", it matches
+    if (importParts.length <= parts.length - 1) {
+      let matches = true;
+      for (let i = 0; i < importParts.length; i++) {
+        if (importParts[i] !== parts[i]) {
+          matches = false;
+          break;
+        }
+      }
+
+      if (matches) {
+        const depModule = dependencies.get(imp.moduleName);
+        if (!depModule) {
+          return null;
+        }
+
+        // Get the remaining parts after the module name
+        const fieldParts = parts.slice(importParts.length);
+
+        // Look up the value in the module
+        if (fieldParts.length === 1) {
+          const field = fieldParts[0]!;
+          // Check if it's a value - type may be on valueInfo.type or in depModule.types
+          const valueInfo = depModule.values[field];
+          if (valueInfo) {
+            const valueType = valueInfo.type || depModule.types[field];
+            if (valueType) {
+              return valueType;
+            }
+          }
+          // Check if it's a constructor
+          const ctorScheme = depModule.constructorTypes[field];
+          if (ctorScheme) {
+            return ctorScheme.type;
+          }
+        }
+        // For nested field accesses like Vibe.JS.value.field, we return null here
+        // and let the recursive FieldAccess analysis in analyzeExpr handle it.
+      }
+    }
+  }
+
+  return null;
 }
 
 function analyzeExpr(
@@ -3430,7 +3575,9 @@ function analyzeExpr(
   constructors: Record<string, ConstructorInfo>,
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo> = {}
+  opaqueTypes: Record<string, OpaqueTypeInfo> = {},
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map()
 ): Type {
   switch (expr.kind) {
     case "Var": {
@@ -3501,7 +3648,9 @@ function analyzeExpr(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
+          imports,
+          dependencies
         )
       );
       return { kind: "tuple", elements };
@@ -3518,7 +3667,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       for (const el of expr.elements.slice(1)) {
         const elType = analyzeExpr(
@@ -3529,7 +3680,9 @@ function analyzeExpr(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
+          imports,
+          dependencies
         );
         unify(first, elType, el.span, substitution);
       }
@@ -3544,7 +3697,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       const endType = analyzeExpr(
         expr.end,
@@ -3554,7 +3709,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       unify(startType, endType, expr.span, substitution);
       return listType(applySubstitution(startType, substitution));
@@ -3576,7 +3733,9 @@ function analyzeExpr(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
+          imports,
+          dependencies
         );
       }
       return { kind: "record", fields };
@@ -3606,7 +3765,9 @@ function analyzeExpr(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
+          imports,
+          dependencies
         );
         unify(updatedFields[field.name]!, fieldType, field.span, substitution);
         updatedFields[field.name] = applySubstitution(
@@ -3617,6 +3778,17 @@ function analyzeExpr(
       return { kind: "record", fields: updatedFields };
     }
     case "FieldAccess": {
+      // First, try to resolve module-qualified access (e.g., Vibe.JS.null)
+      const moduleAccess = tryResolveModuleFieldAccess(
+        expr,
+        imports,
+        dependencies
+      );
+      if (moduleAccess) {
+        return moduleAccess;
+      }
+
+      // Otherwise, handle as record field access
       const targetType = analyzeExpr(
         expr.target,
         scope,
@@ -3625,7 +3797,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       const concrete = applySubstitution(targetType, substitution);
       if (concrete.kind !== "record") {
@@ -3662,7 +3836,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       return fnChain(paramTypes, bodyType);
     }
@@ -3675,7 +3851,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       for (const arg of expr.args) {
         const argType = analyzeExpr(
@@ -3686,7 +3864,9 @@ function analyzeExpr(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
+          imports,
+          dependencies
         );
         const resultType = freshType();
         unify(calleeType, fn(argType, resultType), expr.span, substitution);
@@ -3703,7 +3883,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       // Bool type must be defined in the prelude
       const boolAdt = adts["Bool"];
@@ -3723,7 +3905,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       const elseType = analyzeExpr(
         expr.elseBranch,
@@ -3733,7 +3917,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       unify(thenType, elseType, expr.span, substitution);
       return applySubstitution(thenType, substitution);
@@ -3794,7 +3980,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
     }
     case "Case": {
@@ -3806,7 +3994,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       const branchTypes: Type[] = [];
       let hasWildcard = false;
@@ -3834,7 +4024,9 @@ function analyzeExpr(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
+          imports,
+          dependencies
         );
         branchTypes.push(bodyType);
 
@@ -3904,7 +4096,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       const rightType = analyzeExpr(
         expr.right,
@@ -3914,7 +4108,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
       const opType = INFIX_TYPES[expr.operator];
 
@@ -3952,7 +4148,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
     }
     case "Paren":
@@ -3964,7 +4162,9 @@ function analyzeExpr(
         constructors,
         adts,
         typeAliases,
-        opaqueTypes
+        opaqueTypes,
+        imports,
+        dependencies
       );
     default: {
       const _exhaustive: never = expr;

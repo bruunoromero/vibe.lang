@@ -8,6 +8,7 @@
  * 3. Record update desugaring: Transforms `{ r | field = value }` to record construction
  * 4. Infix resolution: Converts infix operators to function application
  * 5. Paren elimination: Removes parentheses (they're just for grouping)
+ * 6. Module access resolution: Transforms module.field chains into IRModuleAccess nodes
  */
 
 import type {
@@ -16,6 +17,7 @@ import type {
   Span,
   RecordField,
   ValueDeclaration,
+  ImportDeclaration,
 } from "@vibe/syntax";
 import type { SemanticModule, ConstructorInfo, ADTInfo } from "@vibe/semantics";
 import type {
@@ -26,6 +28,7 @@ import type {
   IRConstraint,
   IRRecordField,
   IRConstructorInfo,
+  IRModuleAccess,
 } from "./types";
 import { IRError } from "./types";
 
@@ -51,13 +54,21 @@ export type LoweringContext = {
 
   /** Record type field info for desugaring record updates */
   recordFields: Map<string, string[]>;
+
+  /** Import declarations from the source program */
+  imports: ImportDeclaration[];
+
+  /** Dependency modules for resolving module-qualified accesses */
+  dependencies: Map<string, SemanticModule>;
 };
 
 /**
  * Create a fresh lowering context.
  */
 export function createLoweringContext(
-  semantics: SemanticModule
+  semantics: SemanticModule,
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map()
 ): LoweringContext {
   const ctx: LoweringContext = {
     semantics,
@@ -65,6 +76,8 @@ export function createLoweringContext(
     nameCounter: 0,
     constructorTags: new Map(),
     recordFields: new Map(),
+    imports,
+    dependencies,
   };
 
   // Assign tags to constructors
@@ -237,13 +250,20 @@ export function lowerExpr(expr: Expr, ctx: LoweringContext): IRExpr {
     case "RecordUpdate":
       return lowerRecordUpdate(expr, ctx);
 
-    case "FieldAccess":
+    case "FieldAccess": {
+      // First, try to resolve as a module-qualified access (e.g., JS.null or Vibe.JS.null)
+      const moduleAccess = tryResolveModuleAccess(expr, ctx);
+      if (moduleAccess) {
+        return moduleAccess;
+      }
+      // Otherwise, it's a regular record field access
       return {
         kind: "IRFieldAccess",
         target: lowerExpr(expr.target, ctx),
         field: expr.field,
         span: expr.span,
       };
+    }
 
     default:
       const _exhaustive: never = expr;
@@ -252,6 +272,131 @@ export function lowerExpr(expr: Expr, ctx: LoweringContext): IRExpr {
         (expr as any).span
       );
   }
+}
+
+/**
+ * Try to resolve a FieldAccess chain as a module-qualified access.
+ *
+ * This handles cases like:
+ * - `JS.null` when there's an `import Vibe.JS as JS`
+ * - `Vibe.JS.null` when there's an `import Vibe.JS`
+ *
+ * Returns an IRModuleAccess node if successful, or null if this is not a module access.
+ */
+function tryResolveModuleAccess(
+  expr: Extract<Expr, { kind: "FieldAccess" }>,
+  ctx: LoweringContext
+): IRModuleAccess | null {
+  // Collect the chain of field accesses to reconstruct the module path
+  const parts: string[] = [];
+  let current: Expr = expr;
+
+  // Traverse backwards through FieldAccess expressions
+  while (current.kind === "FieldAccess") {
+    parts.unshift(current.field);
+    current = current.target;
+  }
+
+  // The base should be a Var to be a module reference
+  if (current.kind !== "Var") {
+    return null;
+  }
+
+  // The base name (e.g., "Vibe" from "Vibe.JS.null" or "JS" from "JS.null" when using alias)
+  const baseName = current.name;
+  parts.unshift(baseName);
+
+  // Now we have the full path like ["Vibe", "JS", "null"] or ["JS", "null"] for alias access
+  // Try to find a matching import for the module path
+
+  for (const imp of ctx.imports) {
+    const importParts = imp.moduleName.split(".");
+
+    // Check for module alias match first (e.g., "import Vibe.JS as JS" with "JS.null")
+    // If the base name matches the alias and we have remaining parts, resolve from that module
+    if (imp.alias && baseName === imp.alias && parts.length >= 2) {
+      const depModule = ctx.dependencies.get(imp.moduleName);
+      if (!depModule) {
+        continue;
+      }
+
+      // Get the remaining parts after the alias (e.g., ["null"] from ["JS", "null"])
+      const fieldParts = parts.slice(1);
+
+      // Look up the value in the module
+      if (fieldParts.length === 1) {
+        const field = fieldParts[0]!;
+        const valueInfo = depModule.values[field];
+        if (valueInfo) {
+          // Get the external name if this is an external binding
+          const decl = valueInfo.declaration;
+          let externalName: string | undefined;
+          if (decl.kind === "ExternalDeclaration") {
+            externalName = decl.target.exportName;
+          }
+
+          return {
+            kind: "IRModuleAccess",
+            importAlias: imp.alias,
+            moduleName: imp.moduleName,
+            valueName: field,
+            externalName,
+            span: expr.span,
+          };
+        }
+      }
+    }
+
+    // Check if this import could match our path (non-alias case)
+    // If import is "Vibe.JS" and we access "Vibe.JS.null", it matches
+    if (importParts.length <= parts.length - 1) {
+      let matches = true;
+      for (let i = 0; i < importParts.length; i++) {
+        if (importParts[i] !== parts[i]) {
+          matches = false;
+          break;
+        }
+      }
+
+      if (matches) {
+        const depModule = ctx.dependencies.get(imp.moduleName);
+        if (!depModule) {
+          continue;
+        }
+
+        // Get the remaining parts after the module name
+        const fieldParts = parts.slice(importParts.length);
+
+        // Look up the value in the module
+        if (fieldParts.length === 1) {
+          const field = fieldParts[0]!;
+          const valueInfo = depModule.values[field];
+          if (valueInfo) {
+            // Get the external name if this is an external binding
+            const decl = valueInfo.declaration;
+            let externalName: string | undefined;
+            if (decl.kind === "ExternalDeclaration") {
+              externalName = decl.target.exportName;
+            }
+
+            // For unaliased imports, use the last segment of the module name as the alias
+            const alias = imp.alias || importParts[importParts.length - 1]!;
+
+            return {
+              kind: "IRModuleAccess",
+              importAlias: alias,
+              moduleName: imp.moduleName,
+              valueName: field,
+              externalName,
+              span: expr.span,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 /**

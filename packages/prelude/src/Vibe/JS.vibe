@@ -1,0 +1,11 @@
+module Vibe.JS exposing
+    ( null
+    , d
+    )
+
+type Null
+
+@external "@vibe/runtime" "null_"
+null : Null
+
+d = 10

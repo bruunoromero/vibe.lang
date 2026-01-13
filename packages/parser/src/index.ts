@@ -1934,9 +1934,10 @@ class Parser {
   /**
    * Parse primary expression with field access
    *
-   * Grammar: PrimaryWithAccess = Primary, {".", LowerIdentifier}
+   * Grammar: PrimaryWithAccess = Primary, {".", (LowerIdentifier | UpperIdentifier)}
    *
-   * Example: record.field.nested
+   * Allows both record field access (lowercase) and module access (uppercase)
+   * Examples: record.field.nested or Vibe.JS.null
    */
   private parsePrimaryWithAccess(): Expr {
     // Parse base expression
@@ -1944,7 +1945,16 @@ class Parser {
 
     // Parse field accesses (chained with dots)
     while (this.match(TokenKind.Dot)) {
-      const field = this.expect(TokenKind.LowerIdentifier, "record field");
+      // Accept both lower and upper case identifiers
+      // Lower for record fields, upper for module access
+      const token = this.current();
+      if (
+        token.kind !== TokenKind.LowerIdentifier &&
+        token.kind !== TokenKind.UpperIdentifier
+      ) {
+        throw this.error("field or module name", token);
+      }
+      const field = this.advance();
       expr = {
         kind: "FieldAccess",
         target: expr,

@@ -212,6 +212,9 @@ export function printExpr(
     case "IRVar":
       return expr.name;
 
+    case "IRModuleAccess":
+      return `${expr.importAlias}.${expr.externalName || expr.valueName}`;
+
     case "IRLiteral":
       if (expr.literalType === "string") {
         return `"${expr.value}"`;
@@ -452,6 +455,8 @@ export function printExprCompact(expr: IRExpr): string {
   switch (expr.kind) {
     case "IRVar":
       return expr.name;
+    case "IRModuleAccess":
+      return `${expr.importAlias}.${expr.externalName || expr.valueName}`;
     case "IRLiteral":
       return String(expr.value);
     case "IRLambda":
@@ -472,6 +477,8 @@ export function printExprCompact(expr: IRExpr): string {
       return `{${expr.fields.length} fields}`;
     case "IRFieldAccess":
       return `_.${expr.field}`;
+    case "IRRecordUpdate":
+      return `{ ... | ${expr.updates.length} fields }`;
     case "IRConstructor":
       return expr.args.length > 0 ? `${expr.name} ...` : expr.name;
     default:

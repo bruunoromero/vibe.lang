@@ -1,6 +1,7 @@
 module ExampleApp exposing (..)
 
 import Vibe.Maybe exposing (withDefault)
+import Vibe.JS as JS
 
 -- Record type example
 type alias Point =
@@ -16,10 +17,9 @@ origin =
   }
 
 -- Function using record type
-distance : {x: Int, y:Int} -> Int
+distance : {x: Float, y: Float} -> Float
 distance point =
   point.x * point.x + point.y * point.y
 
-main =
-  let x = Just 10 in
-  withDefault 0 x
+main = JS.d + 10
+-- main = Vibe.JS.null

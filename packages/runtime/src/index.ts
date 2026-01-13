@@ -235,3 +235,5 @@ export const println = <A>(value: A): A => {
   console.log(value);
   return value;
 };
+
+export const null_ = null;

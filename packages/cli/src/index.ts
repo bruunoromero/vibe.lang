@@ -289,6 +289,7 @@ function executeCommand(
 
         const ir = lower(moduleNode.ast, result, {
           validateDependencies: true,
+          dependencies: analyzedModules,
         });
 
         if (json) {
@@ -350,6 +351,7 @@ function executeCommand(
         const ir = lower(moduleNode.ast, semantic, {
           validateDependencies: false,
           packageName: moduleNode.packageName,
+          dependencies: analyzedModules,
         });
 
         irPrograms.push(ir);

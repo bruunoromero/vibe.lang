@@ -80,6 +80,12 @@ export interface LowerOptions {
    * Used for generating correct import paths.
    */
   packageName?: string;
+
+  /**
+   * Pre-analyzed dependency modules for resolving module-qualified accesses.
+   * Maps module name to its semantic analysis result.
+   */
+  dependencies?: Map<string, SemanticModule>;
 }
 
 /**
@@ -101,7 +107,10 @@ export function lower(
   semantics: SemanticModule,
   options: LowerOptions = {}
 ): IRProgram {
-  const ctx = createLoweringContext(semantics);
+  const imports = program.imports || [];
+  const dependencies =
+    options.dependencies || new Map<string, SemanticModule>();
+  const ctx = createLoweringContext(semantics, imports, dependencies);
 
   // Lower all value declarations
   const values: Record<string, IRValue> = {};
@@ -248,6 +257,17 @@ export function lower(
     }
   }
 
+  // Build import alias mappings from program imports
+  const importAliases: import("./types").IRImportAlias[] = [];
+  for (const imp of imports) {
+    // Use explicit alias if provided, otherwise use last segment of module name
+    const alias = imp.alias || imp.moduleName.split(".").pop()!;
+    importAliases.push({
+      alias,
+      moduleName: imp.moduleName,
+    });
+  }
+
   return {
     moduleName: semantics.module?.name,
     values,
@@ -259,6 +279,7 @@ export function lower(
     instances,
     constraintMetadata,
     externalImports,
+    importAliases,
     sourceModule: semantics,
     sourceProgram: program,
     packageName: options.packageName,

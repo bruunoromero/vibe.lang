@@ -21,7 +21,12 @@ import type {
   ValueDeclaration,
   RecordField,
 } from "@vibe/syntax";
-import type { SemanticModule, ConstructorInfo, ADTInfo } from "@vibe/semantics";
+import type {
+  SemanticModule,
+  ConstructorInfo,
+  ADTInfo,
+  ExportInfo,
+} from "@vibe/semantics";
 
 // ============================================================================
 // IR Type Definitions
@@ -70,6 +75,7 @@ export type IRConstraint = {
  */
 export type IRExpr =
   | IRVar
+  | IRModuleAccess
   | IRLiteral
   | IRLambda
   | IRApply
@@ -91,6 +97,36 @@ export type IRVar = {
   namespace: "value" | "constructor";
   /** The inferred type of this variable (if available from semantic analysis) */
   type?: IRType;
+  /**
+   * For protocol method references, the constraint this method belongs to.
+   * Used by codegen to resolve the correct instance dictionary.
+   * E.g., for `+` from `Num a`, this would be { protocolName: "Num", typeArgs: [a] }
+   */
+  constraint?: IRConstraint;
+  span: Span;
+};
+
+/**
+ * Module-qualified access (e.g., JS.null or Vibe.JS.null).
+ * This is resolved during IR lowering from FieldAccess chains on module references.
+ */
+export type IRModuleAccess = {
+  kind: "IRModuleAccess";
+  /**
+   * The import alias to use in generated code (e.g., "JS").
+   * For "import Vibe.JS as JS", this is "JS".
+   * For "import Vibe.JS", this is also "JS" (last segment of module name).
+   */
+  importAlias: string;
+  /** The full module name (e.g., "Vibe.JS") */
+  moduleName: string;
+  /** The value name being accessed (e.g., "null") */
+  valueName: string;
+  /**
+   * For external bindings, the actual export name (e.g., "null_").
+   * If undefined, valueName is used directly.
+   */
+  externalName?: string;
   span: Span;
 };
 
@@ -360,6 +396,17 @@ export type IRConstructorInfo = {
 };
 
 /**
+ * Import alias information for code generation.
+ * Maps import aliases to their full module paths.
+ */
+export type IRImportAlias = {
+  /** The alias name (e.g., "JS" from "import Vibe.JS as JS") */
+  alias: string;
+  /** The full module name (e.g., "Vibe.JS") */
+  moduleName: string;
+};
+
+/**
  * The complete IR program representation.
  */
 export type IRProgram = {
@@ -402,6 +449,13 @@ export type IRProgram = {
 
   /** External imports needed by the generated code */
   externalImports: Set<string>;
+
+  /**
+   * Import alias mappings for code generation.
+   * Maps alias names to their full module names.
+   * e.g., "JS" -> "Vibe.JS" from "import Vibe.JS as JS"
+   */
+  importAliases: IRImportAlias[];
 
   /** Original source module for reference */
   sourceModule: SemanticModule;

@@ -5,5 +5,8 @@
   "scripts": {
     "build": "echo 'Prelude is built by the Vibe compiler'",
     "test": "bun test"
+  },
+  "dependencies": {
+    "@vibe/runtime": "workspace:*"
   }
 }

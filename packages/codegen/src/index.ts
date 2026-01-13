@@ -28,6 +28,7 @@ import type {
   IRInstance,
   IRProtocol,
   IRConstructorInfo,
+  IRModuleAccess,
   SCC,
 } from "@vibe/ir";
 import { sanitizeOperator } from "@vibe/syntax";
@@ -64,6 +65,13 @@ export interface CodegenContext {
   /** Generated instance dictionary names: "Protocol_Type" -> "$dict_Protocol_Type" */
   instanceDictNames: Map<string, string>;
 
+  /**
+   * Set of instance keys that are defined locally in this module.
+   * Keys are like "Num_Int", "Eq_Float", etc.
+   * Used to distinguish local dictionaries from imported ones.
+   */
+  localInstanceKeys: Set<string>;
+
   /** Counter for generating unique names */
   uniqueCounter: number;
 
@@ -74,10 +82,32 @@ export interface CodegenContext {
   dictParamsInScope: Set<string>;
 
   /**
+   * Map from protocol names to concrete types for resolved constraints.
+   * Used in monomorphic contexts where the constraint is on a concrete type.
+   * e.g., {"Num" -> "Int"} when inside a function with `Num Int` constraint.
+   */
+  concreteConstraints: Map<string, IRType>;
+
+  /**
    * Dictionary names that were actually generated in this module.
    * Populated during generateInstanceDictionaries(), used for exports.
    */
   generatedDictNames: string[];
+
+  /**
+   * Map from protocol method names to their protocol name.
+   * Built from program.protocols. Used to identify protocol methods
+   * for uniform dictionary dispatch.
+   * e.g., "+" -> "Num", "==" -> "Eq"
+   */
+  protocolMethodMap: Map<string, string>;
+
+  /**
+   * Map from variable names to their types in the current scope.
+   * Used to infer types for field accesses and other expressions.
+   * e.g., {"point" -> {kind: "record", fields: {x: Int, y: Int}}}
+   */
+  varTypes: Map<string, IRType>;
 }
 
 /**
@@ -93,10 +123,22 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     externalImports: new Set(program.externalImports),
     externalBindings: new Map(),
     instanceDictNames: new Map(),
+    localInstanceKeys: new Set(),
     uniqueCounter: 0,
     dictParamsInScope: new Set(),
+    concreteConstraints: new Map(),
     generatedDictNames: [],
+    protocolMethodMap: new Map(),
+    varTypes: new Map(),
   };
+
+  // Build protocol method map from protocol definitions
+  // This maps method names to their protocol names for uniform dictionary dispatch
+  for (const [protocolName, protocol] of Object.entries(program.protocols)) {
+    for (const method of protocol.methods) {
+      ctx.protocolMethodMap.set(method.name, protocolName);
+    }
+  }
 
   // Collect external bindings by module
   for (const value of Object.values(program.values)) {
@@ -109,11 +151,23 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     }
   }
 
-  // Generate instance dictionary names
-  for (const inst of program.instances) {
+  // Generate instance dictionary names and track local instances
+  const currentModule = program.moduleName;
+  const sourceInstances = program.sourceModule.instances;
+
+  for (let i = 0; i < program.instances.length; i++) {
+    const inst = program.instances[i];
+    if (!inst || inst.typeArgs.length === 0) continue;
+
     const typeKey = formatTypeKey(inst.typeArgs[0]);
     const key = `${inst.protocolName}_${typeKey}`;
     ctx.instanceDictNames.set(key, `$dict_${key}`);
+
+    // Check if this instance is defined locally in this module
+    const sourceInst = sourceInstances[i];
+    if (!sourceInst?.moduleName || sourceInst.moduleName === currentModule) {
+      ctx.localInstanceKeys.add(key);
+    }
   }
 
   return ctx;
@@ -612,21 +666,54 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
     return `/* external: ${value.externalTarget?.exportName} */`;
   }
 
-  // Generate dictionary parameter names for each unique constraint
-  // e.g., Num a => [$dict_Num] parameter
+  // Generate dictionary parameter names for each unique constraint on type VARIABLES.
+  // Constraints on concrete types (e.g., Num Int) don't need dictionary parameters -
+  // they'll be resolved directly to the concrete instance dictionary.
   const dictParams: string[] = [];
   const seenConstraints = new Set<string>();
+  const concreteConstraints = new Map<string, IRType>();
+
   for (const constraint of value.constraints) {
-    const dictKey = `${constraint.protocolName}`;
-    if (!seenConstraints.has(dictKey)) {
-      seenConstraints.add(dictKey);
-      dictParams.push(`$dict_${constraint.protocolName}`);
+    const typeArg = constraint.typeArgs[0];
+    if (typeArg) {
+      if (typeArg.kind === "var") {
+        // Type variable: needs dictionary parameter
+        const dictKey = `${constraint.protocolName}`;
+        if (!seenConstraints.has(dictKey)) {
+          seenConstraints.add(dictKey);
+          dictParams.push(`$dict_${constraint.protocolName}`);
+        }
+      } else if (typeArg.kind === "con") {
+        // Concrete type: resolve directly (no dictionary parameter)
+        concreteConstraints.set(constraint.protocolName, typeArg);
+      }
     }
   }
 
-  // Save previous dictionary params and set new scope
+  // Extract parameter types from the function type
+  // For a function like `distance : {x: Int, y: Int} -> Int` with param `point`,
+  // we want to map "point" -> {kind: "record", fields: {x: Int, y: Int}}
+  const varTypes = new Map<string, IRType>();
+  if (value.params.length > 0 && value.type.kind === "fun") {
+    let currentType: IRType = value.type;
+    for (let i = 0; i < value.params.length; i++) {
+      const param = value.params[i];
+      if (currentType.kind === "fun") {
+        if (param?.kind === "IRVarPattern") {
+          varTypes.set(param.name, currentType.from);
+        }
+        currentType = currentType.to;
+      }
+    }
+  }
+
+  // Save previous context and set new scope
   const prevDictParams = ctx.dictParamsInScope;
+  const prevConcreteConstraints = ctx.concreteConstraints;
+  const prevVarTypes = ctx.varTypes;
   ctx.dictParamsInScope = new Set(dictParams);
+  ctx.concreteConstraints = concreteConstraints;
+  ctx.varTypes = varTypes;
 
   // If value has parameters or dictionary params, wrap body in curried lambdas
   if (value.params.length > 0 || dictParams.length > 0) {
@@ -647,6 +734,8 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
 
     // Restore previous scope
     ctx.dictParamsInScope = prevDictParams;
+    ctx.concreteConstraints = prevConcreteConstraints;
+    ctx.varTypes = prevVarTypes;
     return body;
   }
 
@@ -655,6 +744,8 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
 
   // Restore previous scope
   ctx.dictParamsInScope = prevDictParams;
+  ctx.concreteConstraints = prevConcreteConstraints;
+  ctx.varTypes = prevVarTypes;
   return body;
 }
 
@@ -669,6 +760,9 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
   switch (expr.kind) {
     case "IRVar":
       return generateVar(expr, ctx);
+
+    case "IRModuleAccess":
+      return generateModuleAccess(expr, ctx);
 
     case "IRLiteral":
       return generateLiteral(expr);
@@ -713,42 +807,14 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
 }
 
 /**
- * Mapping from protocol operators to their protocol name.
- * Used for dictionary-based method lookup.
- */
-const OPERATOR_PROTOCOLS: Record<string, string> = {
-  "+": "Num",
-  "-": "Num",
-  "*": "Num",
-  negate: "Num",
-  "/": "Fractional",
-  "//": "Integral",
-  "%": "Integral",
-  "==": "Eq",
-  "/=": "Eq",
-  "<": "Ord",
-  "<=": "Ord",
-  ">": "Ord",
-  ">=": "Ord",
-};
-
-/**
- * Non-protocol operators that have fixed implementations (no dictionary needed).
- * These are function combinators and list operations, not type class methods.
- */
-const FIXED_OPERATORS: Record<string, string> = {
-  "&&": "and",
-  "||": "or",
-  "++": "append",
-  "::": "cons",
-  "|>": "pipeForward",
-  "<|": "pipeBackward",
-  ">>": "composeForward",
-  "<<": "composeBackward",
-};
-
-/**
  * Generate a variable reference.
+ *
+ * All protocol methods (operators or regular functions) use uniform dictionary
+ * dispatch. When a protocol method is referenced:
+ * 1. In polymorphic context (dictionary param in scope): use the dictionary parameter
+ * 2. In monomorphic context: we need type info to resolve the concrete dictionary
+ *
+ * Regular functions and external bindings are referenced directly by name.
  */
 function generateVar(
   expr: Extract<IRExpr, { kind: "IRVar" }>,
@@ -762,34 +828,59 @@ function generateVar(
     return sanitizeIdentifier(value.externalTarget.exportName);
   }
 
-  // Check if this is a protocol operator that needs dictionary lookup
-  const protocolName = OPERATOR_PROTOCOLS[expr.name];
+  // Check if this is a protocol method (using the protocol method map)
+  const protocolName = ctx.protocolMethodMap.get(expr.name);
   if (protocolName) {
-    const sanitizedOp = sanitizeIdentifier(expr.name);
+    const sanitizedName = sanitizeIdentifier(expr.name);
     const dictParam = `$dict_${protocolName}`;
 
     // Check if we have a dictionary parameter in scope (polymorphic context)
     if (ctx.dictParamsInScope.has(dictParam)) {
       // Use the dictionary parameter
-      return `${dictParam}.${sanitizedOp}`;
+      return `${dictParam}.${sanitizedName}`;
     }
 
-    // Monomorphic context: we need to resolve to a concrete instance dictionary
-    // For now, look up from Vibe module which has the instance dictionaries
-    // TODO: Determine concrete type and resolve proper instance
-    return `Vibe.${dictParam}_Int.${sanitizedOp}`;
-  }
-
-  // Check if this is a fixed (non-protocol) operator
-  const fixedImpl = FIXED_OPERATORS[expr.name];
-  if (fixedImpl) {
-    // Check if this operator's implementation is available in scope
-    const implValue = ctx.program.values[fixedImpl];
-    if (implValue?.isExternal) {
-      return sanitizeIdentifier(fixedImpl);
+    // Monomorphic context: try to resolve from type info on the variable
+    // or from the constraint field if available
+    if (expr.constraint) {
+      const typeArg = expr.constraint.typeArgs[0];
+      if (typeArg && typeArg.kind === "con") {
+        const typeKey = formatTypeKey(typeArg);
+        const key = `${protocolName}_${typeKey}`;
+        const dictRef = ctx.localInstanceKeys.has(key)
+          ? `$dict_${protocolName}_${typeKey}`
+          : `Vibe.$dict_${protocolName}_${typeKey}`;
+        return `${dictRef}.${sanitizedName}`;
+      }
     }
-    // Otherwise, reference it from Vibe module
-    return `Vibe.${sanitizeIdentifier(fixedImpl)}`;
+
+    // Try to use the variable's type annotation for monomorphic dispatch
+    if (expr.type && expr.type.kind === "fun") {
+      const argType = expr.type.from;
+      if (argType.kind === "con") {
+        const typeKey = formatTypeKey(argType);
+        const key = `${protocolName}_${typeKey}`;
+        const dictRef = ctx.localInstanceKeys.has(key)
+          ? `$dict_${protocolName}_${typeKey}`
+          : `Vibe.$dict_${protocolName}_${typeKey}`;
+        return `${dictRef}.${sanitizedName}`;
+      }
+    }
+
+    // Try to use concrete constraints from the enclosing function
+    const constraintType = ctx.concreteConstraints.get(protocolName);
+    if (constraintType && constraintType.kind === "con") {
+      const typeKey = formatTypeKey(constraintType);
+      const key = `${protocolName}_${typeKey}`;
+      const dictRef = ctx.localInstanceKeys.has(key)
+        ? `$dict_${protocolName}_${typeKey}`
+        : `Vibe.$dict_${protocolName}_${typeKey}`;
+      return `${dictRef}.${sanitizedName}`;
+    }
+
+    // Fallback: use the dictionary parameter (should have been passed)
+    // This handles polymorphic usage where the dict param is expected
+    return `${dictParam}.${sanitizedName}`;
   }
 
   // Check if this is a constructor from another module
@@ -806,6 +897,26 @@ function generateVar(
 
   const safeName = sanitizeIdentifier(expr.name);
   return safeName;
+}
+
+/**
+ * Generate a module-qualified access expression.
+ *
+ * This handles expressions like `JS.null` or `Vibe.JS.null` that were
+ * resolved during IR lowering. The generated code uses the import alias
+ * and the external name if available.
+ *
+ * Examples:
+ * - `JS.null` with external name `null_` -> `JS.null_`
+ * - `Vibe.JS.something` -> `JS.something` (using the import alias)
+ */
+function generateModuleAccess(
+  expr: IRModuleAccess,
+  ctx: CodegenContext
+): string {
+  // Use the external name if available, otherwise use the value name
+  const valueName = sanitizeIdentifier(expr.externalName || expr.valueName);
+  return `${expr.importAlias}.${valueName}`;
 }
 
 /**
@@ -866,11 +977,23 @@ function generateLambda(
  *
  * For constrained functions (those with protocol constraints), we need to
  * pass the appropriate instance dictionaries before the regular arguments.
+ *
+ * Protocol methods (including operators) use uniform dictionary dispatch -
+ * the dictionary is either passed as a parameter (polymorphic) or resolved
+ * to a concrete instance (monomorphic) based on argument types.
  */
 function generateApply(
   expr: Extract<IRExpr, { kind: "IRApply" }>,
   ctx: CodegenContext
 ): string {
+  // Special handling for protocol method applications in monomorphic context
+  // When we have Apply(Apply(protocolMethod, arg1), arg2), we need to resolve
+  // the dictionary based on the argument types
+  const protocolMethodResult = tryGenerateProtocolMethodApply(expr, ctx);
+  if (protocolMethodResult !== null) {
+    return protocolMethodResult;
+  }
+
   const callee = generateExpr(expr.callee, ctx);
 
   // Check if the callee is a named function with constraints
@@ -914,6 +1037,194 @@ function generateApply(
   }
 
   return result;
+}
+
+/**
+ * Try to generate code for a protocol method application in monomorphic context.
+ *
+ * This handles expressions like `(+)(x)(y)` where `+` is a protocol method.
+ * We extract the root method and all arguments, then try to infer the concrete
+ * type from the arguments to resolve the correct instance dictionary.
+ *
+ * Returns null if:
+ * - The callee is not a protocol method
+ * - We're in polymorphic context (dictionary param in scope)
+ * - We can't infer the concrete type from arguments or constraints
+ */
+function tryGenerateProtocolMethodApply(
+  expr: Extract<IRExpr, { kind: "IRApply" }>,
+  ctx: CodegenContext
+): string | null {
+  // Extract the root method and all operands from nested applies
+  const { methodName, operands } = extractMethodAndOperands(expr);
+
+  if (!methodName) {
+    return null;
+  }
+
+  // Check if this is a protocol method
+  const protocolName = ctx.protocolMethodMap.get(methodName);
+  if (!protocolName) {
+    return null;
+  }
+
+  // If we're in polymorphic context (dictionary param in scope), let normal path handle it
+  const dictParam = `$dict_${protocolName}`;
+  if (ctx.dictParamsInScope.has(dictParam)) {
+    return null;
+  }
+
+  // Monomorphic context: try to infer concrete type from operands
+  let concreteType = inferConcreteTypeFromOperands(operands, ctx);
+
+  // If we can't infer from operands, check if we have a concrete constraint
+  // from the enclosing function
+  if (!concreteType) {
+    const constraintType = ctx.concreteConstraints.get(protocolName);
+    if (constraintType) {
+      concreteType = constraintType;
+    }
+  }
+
+  if (!concreteType) {
+    return null; // Can't determine type, fall back to normal generation
+  }
+
+  // Generate code with the resolved dictionary
+  const sanitizedName = sanitizeIdentifier(methodName);
+  const typeKey = formatTypeKey(concreteType);
+  const key = `${protocolName}_${typeKey}`;
+
+  // Determine dictionary reference - use local if defined in this module,
+  // otherwise reference from Vibe module
+  let dictRef: string;
+  if (ctx.localInstanceKeys.has(key)) {
+    dictRef = `$dict_${protocolName}_${typeKey}`;
+  } else {
+    dictRef = `Vibe.$dict_${protocolName}_${typeKey}`;
+  }
+
+  // Generate: dict.method(arg1)(arg2)...
+  let result = `${dictRef}.${sanitizedName}`;
+  for (const operand of operands) {
+    const argCode = generateExpr(operand, ctx);
+    result = `${result}(${argCode})`;
+  }
+
+  return result;
+}
+
+/**
+ * Extract the root method name and all operands from a curried application.
+ *
+ * Given: Apply(Apply(IRVar("+"), x), y)
+ * Returns: { methodName: "+", operands: [x, y] }
+ */
+function extractMethodAndOperands(expr: Extract<IRExpr, { kind: "IRApply" }>): {
+  methodName: string | null;
+  operands: IRExpr[];
+} {
+  const operands: IRExpr[] = [];
+  let current: IRExpr = expr;
+
+  // Traverse down the left spine of applications
+  while (current.kind === "IRApply") {
+    // Collect arguments in reverse (we're traversing from outside in)
+    operands.unshift(...current.args);
+    current = current.callee;
+  }
+
+  // The innermost callee should be a variable
+  if (current.kind === "IRVar" && current.namespace === "value") {
+    return { methodName: current.name, operands };
+  }
+
+  return { methodName: null, operands: [] };
+}
+
+/**
+ * Try to infer a concrete type from operands.
+ *
+ * Looks at literals to determine the concrete type (Int, Float, etc.)
+ */
+function inferConcreteTypeFromOperands(
+  operands: IRExpr[],
+  ctx: CodegenContext
+): IRType | null {
+  for (const operand of operands) {
+    const type = inferExprType(operand, ctx);
+    if (type && type.kind === "con") {
+      return type;
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to infer the type of an IR expression.
+ *
+ * This is a best-effort inference for codegen purposes:
+ * - Literals have known types (int/float literals)
+ * - Variables may have type annotations
+ * - Field accesses and other expressions can sometimes be typed
+ */
+function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
+  switch (expr.kind) {
+    case "IRLiteral":
+      switch (expr.literalType) {
+        case "int":
+          return { kind: "con", name: "Int", args: [] };
+        case "float":
+          return { kind: "con", name: "Float", args: [] };
+        case "string":
+          return { kind: "con", name: "String", args: [] };
+        case "char":
+          return { kind: "con", name: "Char", args: [] };
+        case "bool":
+          return { kind: "con", name: "Bool", args: [] };
+      }
+      break;
+
+    case "IRVar":
+      // If the variable has type information, use it
+      if (expr.type) {
+        return expr.type;
+      }
+      // Check if we have the variable's type in scope
+      const varType = ctx.varTypes.get(expr.name);
+      if (varType) {
+        return varType;
+      }
+      break;
+
+    case "IRFieldAccess":
+      // For field access like `point.x`, look up the target's type
+      // and extract the field type from the record
+      const targetType = inferExprType(expr.target, ctx);
+      if (targetType && targetType.kind === "record") {
+        const fieldType = targetType.fields[expr.field];
+        if (fieldType) {
+          return fieldType;
+        }
+      }
+      break;
+
+    case "IRApply":
+      // For applications like `* point.x point.x`, we can infer the result type
+      // by looking at the operands. For most numeric operations, the result type
+      // matches the operand types.
+      const { operands } = extractMethodAndOperands(expr);
+      for (const operand of operands) {
+        const opType = inferExprType(operand, ctx);
+        if (opType && opType.kind === "con") {
+          // For numeric operations, the result type matches the operand type
+          return opType;
+        }
+      }
+      break;
+  }
+
+  return null;
 }
 
 /**
