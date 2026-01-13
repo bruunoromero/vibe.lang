@@ -72,6 +72,13 @@ export interface CodegenContext {
    */
   localInstanceKeys: Set<string>;
 
+  /**
+   * Map from instance keys to their source module name.
+   * Keys are like "Num_Int", "Eq_Float", etc.
+   * Used to generate correct module-qualified dictionary references.
+   */
+  instanceModules: Map<string, string>;
+
   /** Counter for generating unique names */
   uniqueCounter: number;
 
@@ -124,6 +131,7 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     externalBindings: new Map(),
     instanceDictNames: new Map(),
     localInstanceKeys: new Set(),
+    instanceModules: new Map(),
     uniqueCounter: 0,
     dictParamsInScope: new Set(),
     concreteConstraints: new Map(),
@@ -151,7 +159,7 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     }
   }
 
-  // Generate instance dictionary names and track local instances
+  // Generate instance dictionary names and track local/imported instances
   const currentModule = program.moduleName;
   const sourceInstances = program.sourceModule.instances;
 
@@ -163,9 +171,15 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     const key = `${inst.protocolName}_${typeKey}`;
     ctx.instanceDictNames.set(key, `$dict_${key}`);
 
-    // Check if this instance is defined locally in this module
+    // Track which module defines this instance
     const sourceInst = sourceInstances[i];
-    if (!sourceInst?.moduleName || sourceInst.moduleName === currentModule) {
+    const instanceModule = sourceInst?.moduleName
+      ? sourceInst.moduleName
+      : currentModule;
+    ctx.instanceModules.set(key, instanceModule as string);
+
+    // Check if this instance is defined locally in this module
+    if (instanceModule === currentModule) {
       ctx.localInstanceKeys.add(key);
     }
   }
@@ -205,6 +219,70 @@ function formatTypeKey(type: IRType | undefined): string {
     default:
       return "unknown";
   }
+}
+
+/**
+ * Resolve a dictionary reference for a protocol and concrete type.
+ *
+ * Returns the fully qualified dictionary name (e.g., "$dict_Num_Int" for local,
+ * "Vibe.$dict_Num_Int" for imported from Vibe module).
+ *
+ * Throws an error if the dictionary cannot be found - this indicates a compiler bug
+ * since all instances should be known at compile time.
+ */
+function resolveDictReference(
+  protocolName: string,
+  typeKey: string,
+  ctx: CodegenContext
+): string {
+  const key = `${protocolName}_${typeKey}`;
+
+  // Check if it's defined locally in this module
+  if (ctx.localInstanceKeys.has(key)) {
+    return `$dict_${key}`;
+  }
+
+  // Check if it's in the known instances (from imports)
+  const sourceModule = ctx.instanceModules.get(key);
+  if (sourceModule) {
+    // Use the source module's import alias for the dictionary reference
+    // The import alias is determined by how the module was imported
+    const importAlias = getImportAliasForModule(sourceModule, ctx);
+    return `${importAlias}.$dict_${key}`;
+  }
+
+  // This is a compiler error - we should never reach here if the semantics
+  // phase correctly validated that all protocol constraints are satisfiable
+  throw new Error(
+    `Codegen error: No instance found for ${protocolName} ${typeKey}. ` +
+      `This indicates a bug in the compiler - the semantics phase should have ` +
+      `verified that this instance exists.`
+  );
+}
+
+/**
+ * Get the import alias for a module name.
+ *
+ * Looks up how the module was imported and returns the alias.
+ * For example, if "Vibe.JS" was imported as "JS", returns "JS".
+ * If no alias is found, returns the last segment of the module name.
+ */
+function getImportAliasForModule(
+  moduleName: string,
+  ctx: CodegenContext
+): string {
+  // Check the import aliases in the program
+  for (const alias of ctx.program.importAliases) {
+    if (alias.moduleName === moduleName) {
+      return alias.alias;
+    }
+  }
+
+  // Default: use the last segment of the module name
+  // e.g., "Vibe.JS" -> "Vibe" (first segment for prelude modules)
+  // or just "Vibe" -> "Vibe"
+  const segments = moduleName.split(".");
+  return segments[0] || moduleName;
 }
 
 // ============================================================================
@@ -846,10 +924,7 @@ function generateVar(
       const typeArg = expr.constraint.typeArgs[0];
       if (typeArg && typeArg.kind === "con") {
         const typeKey = formatTypeKey(typeArg);
-        const key = `${protocolName}_${typeKey}`;
-        const dictRef = ctx.localInstanceKeys.has(key)
-          ? `$dict_${protocolName}_${typeKey}`
-          : `Vibe.$dict_${protocolName}_${typeKey}`;
+        const dictRef = resolveDictReference(protocolName, typeKey, ctx);
         return `${dictRef}.${sanitizedName}`;
       }
     }
@@ -859,10 +934,7 @@ function generateVar(
       const argType = expr.type.from;
       if (argType.kind === "con") {
         const typeKey = formatTypeKey(argType);
-        const key = `${protocolName}_${typeKey}`;
-        const dictRef = ctx.localInstanceKeys.has(key)
-          ? `$dict_${protocolName}_${typeKey}`
-          : `Vibe.$dict_${protocolName}_${typeKey}`;
+        const dictRef = resolveDictReference(protocolName, typeKey, ctx);
         return `${dictRef}.${sanitizedName}`;
       }
     }
@@ -871,10 +943,7 @@ function generateVar(
     const constraintType = ctx.concreteConstraints.get(protocolName);
     if (constraintType && constraintType.kind === "con") {
       const typeKey = formatTypeKey(constraintType);
-      const key = `${protocolName}_${typeKey}`;
-      const dictRef = ctx.localInstanceKeys.has(key)
-        ? `$dict_${protocolName}_${typeKey}`
-        : `Vibe.$dict_${protocolName}_${typeKey}`;
+      const dictRef = resolveDictReference(protocolName, typeKey, ctx);
       return `${dictRef}.${sanitizedName}`;
     }
 
@@ -1093,16 +1162,7 @@ function tryGenerateProtocolMethodApply(
   // Generate code with the resolved dictionary
   const sanitizedName = sanitizeIdentifier(methodName);
   const typeKey = formatTypeKey(concreteType);
-  const key = `${protocolName}_${typeKey}`;
-
-  // Determine dictionary reference - use local if defined in this module,
-  // otherwise reference from Vibe module
-  let dictRef: string;
-  if (ctx.localInstanceKeys.has(key)) {
-    dictRef = `$dict_${protocolName}_${typeKey}`;
-  } else {
-    dictRef = `Vibe.$dict_${protocolName}_${typeKey}`;
-  }
+  const dictRef = resolveDictReference(protocolName, typeKey, ctx);
 
   // Generate: dict.method(arg1)(arg2)...
   let result = `${dictRef}.${sanitizedName}`;
@@ -1246,14 +1306,7 @@ function resolveDictionaryForType(
   // If it's a concrete type, look up the instance dictionary
   if (type.kind === "con") {
     const typeKey = formatTypeKey(type);
-    const key = `${protocolName}_${typeKey}`;
-    const dictName = ctx.instanceDictNames.get(key);
-    if (dictName) {
-      return dictName;
-    }
-    // Fall back to checking if dict is available from another module
-    // For now, just use the naming convention
-    return `$dict_${protocolName}_${typeKey}`;
+    return resolveDictReference(protocolName, typeKey, ctx);
   }
 
   // Type variable - pass through the polymorphic dictionary
