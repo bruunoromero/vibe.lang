@@ -253,7 +253,7 @@ export function discoverModuleGraph(
   entryModuleName: string,
   optionsOrParseFunction: DiscoverOptions | ((source: string) => Program),
   preferDistArg = false,
-  injectPreludeArg = true
+  injectPreludeArg = false
 ): ModuleGraph {
   // Handle both old and new API signatures
   let options: DiscoverOptions;
@@ -274,7 +274,7 @@ export function discoverModuleGraph(
     collectInfixDeclarations,
     parseFunction,
     preferDist = false,
-    injectPrelude = true,
+    injectPrelude = false,
   } = options;
 
   // ============================================================
@@ -518,7 +518,7 @@ export function discoverAllModules(
       collectInfixDeclarations: () => ({ registry: new Map() }),
       parseFunction,
       preferDist: false,
-      injectPrelude: true,
+      injectPrelude: false,
     };
   } else {
     options = optionsOrParseFunction;
@@ -527,7 +527,7 @@ export function discoverAllModules(
   const {
     collectInfixDeclarations,
     parseFunction,
-    injectPrelude = true,
+    injectPrelude = false,
   } = options;
 
   // First, discover all source modules in the config's source directory

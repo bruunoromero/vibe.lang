@@ -187,6 +187,19 @@ protocol Ord a where
 
 
 -- =============================================================================
+-- Comparison Protocols
+-- =============================================================================
+
+{-| Protocol for types that can be converted to a String representation.
+
+    Implementing types must provide:
+    - toString : Convert the value to a String}
+-}
+
+protocol Show a where
+    toString : a -> String
+
+-- =============================================================================
 -- Logical Operations (External FFI)
 -- =============================================================================
 

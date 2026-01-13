@@ -233,10 +233,10 @@ export class DocumentManager {
       // Check if this is the Vibe module itself
       const isVibe = moduleName === "Vibe";
 
-      // Analyze with already-loaded dependencies
+      // Analyze without prelude injection (user must explicitly import)
       const analyzed = analyze(program, {
         dependencies: this.loadedModules,
-        injectPrelude: !isVibe && this.preludeModule !== null,
+        injectPrelude: false,
       });
 
       // Cache it
@@ -343,8 +343,8 @@ export class DocumentManager {
 
         // Build analysis options
         const analyzeOptions: AnalyzeOptions = {
-          // Enable prelude injection if we have the prelude loaded
-          injectPrelude: this.preludeModule !== null && !isPreludeModule,
+          // Prelude is not auto-injected; user must explicitly import Vibe
+          injectPrelude: false,
           dependencies,
         };
 

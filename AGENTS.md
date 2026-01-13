@@ -73,6 +73,29 @@ Always run a rebuild after completing code changes to validate the workspace dep
 - **`tsconfig.base.json`**: Base TypeScript configuration inherited by packages.
 - **`vibe` config**: Packages can define a `vibe` key in their `package.json` to configure source directories, output directories, and entry points (e.g., see `packages/example-app/package.json`).
 
+## Standard Library (Prelude)
+
+The Vibe standard library is defined in `packages/prelude/src/Vibe.vibe`. Unlike some languages, **the prelude is NOT automatically imported**. Users must explicitly import it:
+
+```vibe
+import Vibe exposing (..)
+```
+
+Or import specific items:
+
+```vibe
+import Vibe exposing (Maybe(..), Result(..), (|>), (>>))
+```
+
+The prelude provides:
+
+- Core types: `Maybe`, `Result`, `Pair`
+- Protocols: `Num`, `Fractional`, `Integral`, `Eq`, `Ord`, `Show`
+- Operators: arithmetic (`+`, `-`, `*`, `/`, `//`, `%`), comparison (`==`, `/=`, `<`, `>`, `<=`, `>=`), logical (`&&`, `||`), list (`::`, `++`), function composition (`>>`, `<<`, `|>`, `<|`)
+- Utility functions: `identity`, `always`, `flip`, `apply`, `not`
+
+Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are always available without imports.
+
 ## Documentation
 
 - Refer to `docs/compiler-plan.md` for the current development status and roadmap.

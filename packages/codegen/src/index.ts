@@ -1702,14 +1702,74 @@ function generatePattern(pattern: IRPattern, ctx: CodegenContext): string {
 /**
  * Generate export statements for module values.
  * Respects the module's exposing clause from semantic analysis.
+ *
+ * Re-exports from other modules are handled specially:
+ * - Local exports use `export { name };`
+ * - Re-exports use `export { name } from "module";`
  */
 function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
   const lines: string[] = [];
   const currentModule = program.moduleName;
   const moduleExports = program.exports;
 
-  // Collect all exportable names
-  const exports: string[] = [];
+  // Collect local exports (defined in this module)
+  const localExports: string[] = [];
+
+  // Collect re-exports grouped by source module
+  // Map from module name -> set of names to re-export
+  const reExports = new Map<string, Set<string>>();
+
+  /**
+   * Helper to add a re-export. Groups by source module for efficient output.
+   */
+  function addReExport(moduleName: string, name: string): void {
+    if (!reExports.has(moduleName)) {
+      reExports.set(moduleName, new Set());
+    }
+    reExports.get(moduleName)!.add(sanitizeIdentifier(name));
+  }
+
+  /**
+   * Helper to add a constructor export, checking if it's local or from another module.
+   */
+  function addConstructorExport(ctorName: string): void {
+    const ctor = program.constructors[ctorName];
+    if (!ctor) return;
+
+    // Check if this constructor is from another module
+    if (
+      ctor.moduleName &&
+      ctor.moduleName !== currentModule &&
+      ctor.moduleName !== "__builtin__"
+    ) {
+      // Re-export from the source module
+      addReExport(ctor.moduleName, ctorName);
+    } else {
+      // Local export
+      localExports.push(sanitizeIdentifier(ctorName));
+    }
+  }
+
+  /**
+   * Helper to add a value export, checking if it's local or from another module.
+   * Note: For now we assume values are local unless we track their source module.
+   */
+  function addValueExport(
+    name: string,
+    value: IRValue | undefined,
+    checkLocal: boolean = true
+  ): void {
+    if (!value && checkLocal) return;
+
+    // Check if this value is defined locally
+    if (value) {
+      if (value.isExternal && value.externalTarget) {
+        localExports.push(sanitizeIdentifier(value.externalTarget.exportName));
+      } else {
+        localExports.push(sanitizeIdentifier(name));
+      }
+    }
+  }
 
   // If module exports everything, use the old behavior
   if (moduleExports.exportsAll) {
@@ -1717,13 +1777,7 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
     for (const [name, value] of Object.entries(program.values)) {
       // Skip internal names
       if (name.startsWith("$")) continue;
-
-      // For external declarations, export the external name
-      if (value.isExternal && value.externalTarget) {
-        exports.push(sanitizeIdentifier(value.externalTarget.exportName));
-      } else {
-        exports.push(sanitizeIdentifier(name));
-      }
+      addValueExport(name, value);
     }
 
     // Export all constructors that belong to this module
@@ -1741,12 +1795,12 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
         continue;
       }
 
-      exports.push(sanitizeIdentifier(ctorName));
+      localExports.push(sanitizeIdentifier(ctorName));
     }
 
     // Export all instance dictionaries that were generated in this module
     for (const dictName of ctx.generatedDictNames) {
-      exports.push(dictName);
+      localExports.push(dictName);
     }
   } else {
     // Respect the explicit export specifications
@@ -1755,11 +1809,7 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
     for (const valueName of moduleExports.values) {
       const value = program.values[valueName];
       if (value) {
-        if (value.isExternal && value.externalTarget) {
-          exports.push(sanitizeIdentifier(value.externalTarget.exportName));
-        } else {
-          exports.push(sanitizeIdentifier(valueName));
-        }
+        addValueExport(valueName, value);
       }
     }
 
@@ -1767,11 +1817,7 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
     for (const opName of moduleExports.operators) {
       const value = program.values[opName];
       if (value) {
-        if (value.isExternal && value.externalTarget) {
-          exports.push(sanitizeIdentifier(value.externalTarget.exportName));
-        } else {
-          exports.push(sanitizeIdentifier(opName));
-        }
+        addValueExport(opName, value);
       }
     }
 
@@ -1781,14 +1827,14 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
         // Export all constructors for this type
         for (const [ctorName, ctor] of Object.entries(program.constructors)) {
           if (ctor.parentType === typeName) {
-            exports.push(sanitizeIdentifier(ctorName));
+            addConstructorExport(ctorName);
           }
         }
       } else if (typeExport.constructors) {
         // Export only specified constructors
         for (const ctorName of typeExport.constructors) {
           if (program.constructors[ctorName]) {
-            exports.push(sanitizeIdentifier(ctorName));
+            addConstructorExport(ctorName);
           }
         }
       }
@@ -1801,20 +1847,83 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
       for (const dictName of ctx.generatedDictNames) {
         // Dictionary names are like $dict_Num_Int, $dict_Eq_Float
         if (dictName.startsWith(`$dict_${protocolName}_`)) {
-          exports.push(dictName);
+          localExports.push(dictName);
         }
       }
     }
+
+    // Add re-exported values from moduleExports.reExportedValues
+    for (const [name, sourceModule] of moduleExports.reExportedValues) {
+      addReExport(sourceModule, name);
+    }
   }
 
-  // Remove duplicates and sort
-  const uniqueExports = [...new Set(exports)].sort();
+  // Generate re-export statements first
+  // These use ES6 re-export syntax: export { name } from "module";
+  for (const [moduleName, names] of reExports) {
+    const sortedNames = [...names].sort();
+    if (sortedNames.length > 0) {
+      // Calculate the import path for the source module
+      const importPath = calculateReExportPath(program, moduleName);
+      lines.push(`export { ${sortedNames.join(", ")} } from "${importPath}";`);
+    }
+  }
 
-  if (uniqueExports.length > 0) {
-    lines.push(`export { ${uniqueExports.join(", ")} };`);
+  // Generate local export statement
+  const uniqueLocalExports = [...new Set(localExports)].sort();
+  if (uniqueLocalExports.length > 0) {
+    lines.push(`export { ${uniqueLocalExports.join(", ")} };`);
   }
 
   return lines;
+}
+
+/**
+ * Calculate the import path for re-exporting from another module.
+ * This mirrors the logic in generateDependencyImports.
+ */
+function calculateReExportPath(
+  program: IRProgram,
+  targetModule: string
+): string {
+  const currentModule = program.moduleName || "Main";
+  const currentPackage = program.packageName || currentModule;
+
+  // Calculate the depth of the current module within its package
+  const currentDepth = currentModule.split(".").length - 1;
+
+  // Find the import for this module to get its package info
+  const imports = program.sourceProgram.imports || [];
+  let targetPackage = targetModule; // Default: assume module name is package name
+
+  for (const imp of imports) {
+    if (imp.moduleName === targetModule) {
+      // Could extract package info here if available
+      break;
+    }
+  }
+
+  // Convert module name to path segments
+  const moduleSegments = targetModule.split(".");
+  const fileName = moduleSegments[moduleSegments.length - 1];
+  const modulePath =
+    moduleSegments.length > 1
+      ? moduleSegments.slice(0, -1).join("/") + `/${fileName}.js`
+      : `${fileName}.js`;
+
+  if (currentPackage === targetPackage) {
+    // Same package - use relative path within package
+    if (currentDepth === 0) {
+      return `./${modulePath}`;
+    } else {
+      const ups = "../".repeat(currentDepth);
+      return `${ups}${modulePath}`;
+    }
+  } else {
+    // Different package - go up to dist, then into target package
+    const ups = "../".repeat(currentDepth + 1);
+    return `${ups}${targetPackage}/${modulePath}`;
+  }
 }
 
 // ============================================================================

@@ -143,6 +143,55 @@ ffiCompute : Int -> Int`);
     expect(result.values.ffiCompute?.annotation?.kind).toBe("FunctionType");
   });
 
+  test("rejects undefined type in external declaration annotation", () => {
+    // UndefinedType is not defined - should error
+    expectError(
+      `@external "./lib.js" "compute"
+ffiCompute : UndefinedType -> Int`,
+      "Type 'UndefinedType' is not defined"
+    );
+  });
+
+  test("rejects undefined type in value annotation", () => {
+    // UndefinedType is not defined - should error
+    expectError(
+      `foo : UndefinedType -> Int
+foo x = 1`,
+      "Type 'UndefinedType' is not defined"
+    );
+  });
+
+  test("rejects undefined type argument in external declaration", () => {
+    // List a is fine (a is type variable), but List Foo is not if Foo is undefined
+    expectError(
+      `@external "./lib.js" "compute"
+ffiCompute : List Undefined -> Int`,
+      "Type 'Undefined' is not defined"
+    );
+  });
+
+  test("rejects undefined type argument in value annotation", () => {
+    expectError(
+      `foo : List Undefined -> Int
+foo x = 1`,
+      "Type 'Undefined' is not defined"
+    );
+  });
+
+  test("allows type variables in external declaration annotation", () => {
+    // Type variables (lowercase like 'a') should be allowed
+    const result = analyzeNoPrelude(`@external "./lib.js" "identity"
+ffiIdentity : a -> a`);
+    expect(result.values.ffiIdentity).toBeDefined();
+  });
+
+  test("allows defined types in external declaration annotation", () => {
+    // Maybe is defined in TYPE_PREAMBLE, so this should work
+    const result = analyzeNoPrelude(`@external "./lib.js" "compute"
+ffiCompute : Maybe Int -> Int`);
+    expect(result.values.ffiCompute).toBeDefined();
+  });
+
   test("rejects extra annotations for externals", () => {
     expectError(
       `@external "./lib.js" "compute"

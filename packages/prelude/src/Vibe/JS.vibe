@@ -3,9 +3,11 @@ module Vibe.JS exposing
     , d
     )
 
+import Vibe exposing (..)
+
 type Null
 
 @external "@vibe/runtime" "null_"
-null : Null
+null : Maybe a
 
 d = 10

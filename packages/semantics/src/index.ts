@@ -770,6 +770,13 @@ export type ExportInfo = {
   >;
   /** Whether this module exports everything (exposing (..)) */
   exportsAll: boolean;
+
+  /**
+   * Re-exported values from other modules.
+   * Map from value name -> source module name.
+   * Used by codegen to generate proper re-export statements.
+   */
+  reExportedValues: Map<string, string>;
 };
 
 /**
@@ -897,7 +904,8 @@ function importExportSpec(
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   protocols: Record<string, ProtocolInfo>,
-  operators: OperatorRegistry
+  operators: OperatorRegistry,
+  importedValues: Map<string, string>
 ): void {
   switch (spec.kind) {
     case "ExportValue": {
@@ -965,6 +973,8 @@ function importExportSpec(
         const importedType = depValue.type;
         const scheme = generalize(importedType, globalScope, substitution);
         globalScope.symbols.set(name, scheme);
+        // Track for re-export support
+        importedValues.set(name, imp.moduleName);
       }
 
       // Also check for constructors (might be re-exported)
@@ -1196,6 +1206,11 @@ export function analyze(
   const operators: OperatorRegistry = new Map();
   const infixDeclarations: InfixDeclaration[] = [];
 
+  // ===== Imported Values Registry =====
+  // Track values imported from other modules for re-export support.
+  // Maps value name -> source module name.
+  const importedValues = new Map<string, string>();
+
   // ===== Initialize Builtin Types =====
   // These primitive types are built into the compiler and automatically available.
   const builtinSpan: Span = {
@@ -1283,11 +1298,10 @@ export function analyze(
   };
 
   // ===== Auto-inject Prelude =====
-  // By default, inject `import Vibe exposing (..)` unless:
-  // 1. injectPrelude is explicitly false
-  // 2. This is the Vibe module itself
-  // 3. There's already an explicit Vibe import
-  const { dependencies = new Map(), injectPrelude = true } = options;
+  // The prelude is NOT injected by default. Users must explicitly import:
+  //   import Vibe exposing (..)
+  // The injectPrelude option is kept for backwards compatibility and special cases.
+  const { dependencies = new Map(), injectPrelude = false } = options;
   const isPreludeModule = program.module?.name === "Vibe";
   const hasExplicitPreludeImport = program.imports?.some(
     (imp) => imp.moduleName === "Vibe"
@@ -1409,7 +1423,8 @@ export function analyze(
           typeAliases,
           opaqueTypes,
           protocols,
-          operators
+          operators,
+          importedValues
         );
       }
     }
@@ -1425,6 +1440,8 @@ export function analyze(
           const importedType = depValue.type;
           const scheme = generalize(importedType, globalScope, substitution);
           globalScope.symbols.set(name, scheme);
+          // Track for re-export support
+          importedValues.set(name, imp.moduleName);
         }
       }
 
@@ -1531,6 +1548,8 @@ export function analyze(
       for (const [op, info] of depModule.operators) {
         if (isExportedFromModule(depModule, op, "operator")) {
           operators.set(op, info);
+          // Track for re-export support (operators are also values)
+          importedValues.set(op, imp.moduleName);
         }
       }
     }
@@ -1704,6 +1723,27 @@ export function analyze(
     let annotatedConstraints: Constraint[] | undefined;
 
     if (annotationExpr) {
+      // Validate that all type references in the annotation are defined.
+      // For value/external declarations, type variables are implicitly defined,
+      // so we collect them first to treat as "defined params".
+      const typeVars = collectTypeVariables(annotationExpr);
+      const validationErrors = validateTypeExpr(
+        annotationExpr,
+        typeVars,
+        adts,
+        typeAliases,
+        info.declaration.span,
+        opaqueTypes
+      );
+
+      if (validationErrors.length > 0) {
+        const err = validationErrors[0]!;
+        const message = err.suggestion
+          ? `${err.message}. ${err.suggestion}`
+          : err.message;
+        throw new SemanticError(message, err.span);
+      }
+
       const result = typeFromAnnotationWithConstraints(
         annotationExpr,
         new Map(),
@@ -1849,7 +1889,8 @@ export function analyze(
     typeAliases,
     opaqueTypes,
     protocols,
-    operators
+    operators,
+    importedValues
   );
 
   return {
@@ -2147,6 +2188,59 @@ type TypeValidationError = {
   span: Span;
   suggestion?: string;
 };
+
+/**
+ * Collect all type variable names from a type expression.
+ * Type variables are lowercase identifiers (e.g., 'a', 'b', 'elem').
+ * This is used to determine which names are implicitly defined type parameters
+ * in a type annotation.
+ */
+function collectTypeVariables(expr: TypeExpr): Set<string> {
+  const vars = new Set<string>();
+
+  function collect(e: TypeExpr): void {
+    switch (e.kind) {
+      case "TypeRef": {
+        const name = e.name;
+        // Type variables are lowercase identifiers
+        if (name.length > 0 && name[0] === name[0]!.toLowerCase()) {
+          vars.add(name);
+        }
+        // Also collect from type arguments
+        for (const arg of e.args) {
+          collect(arg);
+        }
+        break;
+      }
+      case "FunctionType":
+        collect(e.from);
+        collect(e.to);
+        break;
+      case "TupleType":
+        for (const el of e.elements) {
+          collect(el);
+        }
+        break;
+      case "RecordType":
+        for (const field of e.fields) {
+          collect(field.type);
+        }
+        break;
+      case "QualifiedType":
+        collect(e.type);
+        // Also collect from constraints
+        for (const constraint of e.constraints) {
+          for (const arg of constraint.typeArgs) {
+            collect(arg);
+          }
+        }
+        break;
+    }
+  }
+
+  collect(expr);
+  return vars;
+}
 
 /**
  * Validate that all type references in a type expression are defined.
@@ -3133,6 +3227,9 @@ function typeOverlaps(type1: Type, type2: Type): boolean {
 /**
  * Compute export information for a module based on its exposing clause.
  * This validates that all exported items exist and builds the ExportInfo structure.
+ *
+ * @param importedValues - Map from value name to source module name, for values imported
+ *                         from other modules that can be re-exported.
  */
 function computeModuleExports(
   moduleDecl: ModuleDeclaration | undefined,
@@ -3142,7 +3239,8 @@ function computeModuleExports(
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   protocols: Record<string, ProtocolInfo>,
-  operators: OperatorRegistry
+  operators: OperatorRegistry,
+  importedValues: Map<string, string> = new Map()
 ): ExportInfo {
   // Default: empty exports
   const exports: ExportInfo = {
@@ -3151,6 +3249,7 @@ function computeModuleExports(
     types: new Map(),
     protocols: new Map(),
     exportsAll: false,
+    reExportedValues: new Map(),
   };
 
   if (!moduleDecl || !moduleDecl.exposing) {
@@ -3209,9 +3308,15 @@ function computeModuleExports(
       case "ExportValue": {
         const name = spec.name;
 
-        // Check if it's a value/function
+        // Check if it's a value/function defined locally
         if (values[name]) {
           exports.values.add(name);
+          continue;
+        }
+
+        // Check if it's an imported value that can be re-exported
+        if (importedValues.has(name)) {
+          exports.reExportedValues.set(name, importedValues.get(name)!);
           continue;
         }
 
@@ -3251,7 +3356,7 @@ function computeModuleExports(
         const op = spec.operator;
 
         // Check if operator is defined (either as a value or in operator registry)
-        if (!values[op] && !operators.has(op)) {
+        if (!values[op] && !operators.has(op) && !importedValues.has(op)) {
           throw new SemanticError(
             `Module exposes operator '${op}' which is not defined`,
             spec.span
@@ -3262,6 +3367,8 @@ function computeModuleExports(
         // Also add to values since operators are functions
         if (values[op]) {
           exports.values.add(op);
+        } else if (importedValues.has(op)) {
+          exports.reExportedValues.set(op, importedValues.get(op)!);
         }
         break;
       }

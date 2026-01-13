@@ -26,7 +26,7 @@ function createDiscoverOptions(
     collectInfixDeclarations,
     parseFunction: parse,
     preferDist: false,
-    injectPrelude: true,
+    injectPrelude: false,
     ...overrides,
   };
 }
@@ -260,10 +260,8 @@ function executeCommand(
         }
 
         // Analyze with pre-analyzed dependencies
-        // Don't inject Vibe for the Vibe module itself
         const semantic = analyze(moduleNode.ast, {
           dependencies: analyzedModules,
-          injectPrelude: currentModuleName !== "Vibe",
         });
 
         analyzedModules.set(currentModuleName, semantic);
@@ -325,7 +323,6 @@ function executeCommand(
 
         const semantic = analyze(moduleNode.ast, {
           dependencies: analyzedModules,
-          injectPrelude: currentModuleName !== "Vibe",
         });
 
         analyzedModules.set(currentModuleName, semantic);

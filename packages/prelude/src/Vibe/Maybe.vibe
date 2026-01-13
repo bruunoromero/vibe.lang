@@ -2,6 +2,8 @@ module Vibe.Maybe exposing
     ( withDefault 
     )
 
+import Vibe exposing (Maybe(..))
+
 withDefault : a -> Maybe a -> a
 withDefault defaultValue maybeValue =
     case maybeValue of
