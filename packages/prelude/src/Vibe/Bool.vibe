@@ -1,0 +1,21 @@
+module Vibe.Bool exposing
+  ( toString
+  , not
+  , and
+  , or
+  )
+
+toString : Bool -> String
+toString x =
+  case x of
+    True -> "True"
+    False -> "False"
+
+@external "@vibe/runtime" "not"
+not : Bool -> Bool
+
+@external "@vibe/runtime" "and"
+and : Bool -> Bool -> Bool
+
+@external "@vibe/runtime" "or"
+or : Bool -> Bool -> Bool

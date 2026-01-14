@@ -54,7 +54,45 @@ ExternalDeclaration = "@", "external", String, String, DeclarationName, ":", Typ
 
 TypeAnnotationDeclaration = DeclarationName, ":", TypeExpr ;
 
-ValueDeclaration = DeclarationName, {Pattern}, "=", Expr ;
+(* Function parameters allow restricted patterns for type-safe destructuring.
+   Allowed patterns:
+     - Variables and wildcards: x, _
+     - Tuples: (a, b), (x, y, z)
+     - Records: { x, y }, { x = pat }
+     - Single-constructor ADTs: Pair a b, JustOneMore x
+   
+   NOT allowed (use case expressions instead):
+     - Multi-constructor ADTs: Just x, Ok value (these can fail at runtime)
+     - List patterns: [], [x, y], x :: xs
+   
+   Examples:
+     -- Allowed: single-constructor ADT
+     never (JustOneMore nvr) = nvr
+     
+     -- Allowed: tuple destructuring
+     fst (a, b) = a
+     
+     -- Allowed: record destructuring
+     getX { x, y } = x
+     
+     -- NOT allowed: multi-constructor ADT (Maybe has Just and Nothing)
+     -- fromJust (Just x) = x  -- Error! Use case expression instead
+*)
+ValueDeclaration = DeclarationName, {FunctionParamPattern}, "=", Expr ;
+
+(* Function parameter patterns - restricted subset for type-safe destructuring *)
+FunctionParamPattern = VarPattern
+                     | WildcardPattern
+                     | TuplePattern
+                     | RecordPattern
+                     | ConstructorPattern ;  (* Only single-constructor ADTs validated in semantics *)
+
+(* Record pattern for destructuring *)
+RecordPattern = "{", "}"
+              | "{", RecordFieldPattern, {",", RecordFieldPattern}, "}" ;
+
+RecordFieldPattern = LowerIdentifier                          (* shorthand: { x } *)
+                   | LowerIdentifier, "=", FunctionParamPattern ; (* with pattern: { x = pat } *)
 
 DeclarationName = LowerIdentifier
                 | "(", Operator, ")" ;
@@ -148,7 +186,21 @@ ListPattern = "[", "]"                          (* empty list *)
 
 Expr = BinaryExpr ;
 
-BinaryExpr = Application, {Operator, Application} ;  (* precedence handled at runtime *)
+BinaryExpr = UnaryExpr, {Operator, UnaryExpr} ;  (* precedence handled at runtime *)
+
+(* Unary expressions: prefix negation with higher precedence than binary operators.
+   Only `-` is supported as a unary operator, and only for Int/Float types.
+   
+   Note: `--` starts a comment, so double negation requires grouping: -(-x)
+   
+   Examples:
+     -x          -- negation of variable
+     -10         -- negation of literal
+     -(x + 1)    -- negation of grouped expression
+     -(-x)       -- double negation (requires grouping)
+*)
+UnaryExpr = "-", UnaryExpr                      (* unary negation *)
+          | Application ;
 
 Application = PrimaryWithAccess, {PrimaryWithAccess} ;  (* function application via juxtaposition *)
 

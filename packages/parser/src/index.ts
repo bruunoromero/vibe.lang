@@ -578,9 +578,11 @@ class Parser {
 
     // Otherwise, parse value declaration (name args = body)
     // Parse pattern arguments (if any)
+    // Allowed patterns: variables, wildcards, tuples, records, and single-constructor ADTs.
+    // Single-constructor validation happens in semantics phase.
     const args: Pattern[] = [];
-    while (this.isPatternStart(this.current())) {
-      args.push(this.parsePattern());
+    while (this.isFunctionParamPatternStart(this.current())) {
+      args.push(this.parseFunctionParamPattern());
     }
 
     // Consume equals sign
@@ -1842,8 +1844,8 @@ class Parser {
     minPrecedence: number,
     baseIndentFloor?: number
   ): Expr {
-    // Parse left operand (an application expression)
-    let left = this.parseApplication(baseIndentFloor);
+    // Parse left operand (a unary expression, which may be an application)
+    let left = this.parseUnary(baseIndentFloor);
 
     // Parse operators and right operands
     while (true) {
@@ -1887,6 +1889,56 @@ class Parser {
     }
 
     return left;
+  }
+
+  /**
+   * Parse unary expression (prefix operator)
+   *
+   * Grammar: UnaryExpr = "-", UnaryExpr | Application
+   *
+   * Currently only supports unary negation (-).
+   * Unary minus binds tighter than all binary operators.
+   *
+   * Examples:
+   *   -x        (negation of variable)
+   *   -(x + 1)  (negation of grouped expression)
+   *   -(-10)    (double negation with grouping)
+   *
+   * Note: `--` is NOT allowed as double negation; it starts a comment.
+   * Double negation requires explicit grouping: -(-x)
+   *
+   * @param baseIndentFloor - Minimum indentation for layout
+   */
+  private parseUnary(baseIndentFloor?: number): Expr {
+    const token = this.current();
+
+    // Check for unary minus: must be `-` followed by alphanumeric or `(`
+    if (token.kind === TokenKind.Operator && token.lexeme === "-") {
+      const nextToken = this.peekAhead(1);
+      if (
+        nextToken &&
+        (nextToken.kind === TokenKind.LowerIdentifier ||
+          nextToken.kind === TokenKind.UpperIdentifier ||
+          nextToken.kind === TokenKind.Number ||
+          nextToken.kind === TokenKind.LParen)
+      ) {
+        const start = token.span.start;
+        this.advance(); // consume the `-`
+
+        // Recursively parse the operand (allows -(-x) with grouping)
+        const operand = this.parseUnary(baseIndentFloor);
+
+        return {
+          kind: "Unary",
+          operator: "-",
+          operand,
+          span: { start, end: operand.span.end },
+        };
+      }
+    }
+
+    // Not a unary expression, fall through to application
+    return this.parseApplication(baseIndentFloor);
   }
 
   /**
@@ -2537,6 +2589,234 @@ class Parser {
       token.kind === TokenKind.LParen ||
       token.kind === TokenKind.LBracket
     );
+  }
+
+  /**
+   * Check if a token can start a simple pattern (variable or wildcard only).
+   * Used for function parameters where complex patterns are not allowed.
+   */
+  private isSimplePatternStart(token: Token): boolean {
+    return token.kind === TokenKind.LowerIdentifier;
+  }
+
+  /**
+   * Check if a token can start a function parameter pattern.
+   * Allowed patterns: variables, wildcards, tuples, records, and constructor patterns.
+   * Note: Constructor patterns are validated in semantics to ensure single-constructor ADTs.
+   * List patterns and cons patterns are NOT allowed in function parameters.
+   */
+  private isFunctionParamPatternStart(token: Token): boolean {
+    return (
+      token.kind === TokenKind.LowerIdentifier ||
+      token.kind === TokenKind.UpperIdentifier ||
+      token.kind === TokenKind.LParen ||
+      token.kind === TokenKind.LBrace
+    );
+  }
+
+  /**
+   * Parse a function parameter pattern.
+   * Allowed patterns: variables, wildcards, tuples, records, and constructor patterns.
+   * Constructor patterns are validated in semantics to ensure they're for single-constructor ADTs.
+   * List patterns are NOT allowed in function parameters.
+   */
+  private parseFunctionParamPattern(): Pattern {
+    // Variable or wildcard pattern
+    if (this.match(TokenKind.LowerIdentifier)) {
+      const tok = this.previous();
+
+      // Underscore is wildcard pattern
+      if (tok.lexeme === "_") {
+        return { kind: "WildcardPattern", span: tok.span };
+      }
+
+      // Otherwise it's a variable pattern
+      return { kind: "VarPattern", name: tok.lexeme, span: tok.span };
+    }
+
+    // Constructor pattern (validated in semantics for single-constructor ADTs)
+    if (this.match(TokenKind.UpperIdentifier)) {
+      const ctor = this.previous();
+
+      // Parse constructor arguments (zero or more patterns)
+      // Only allow simple patterns as constructor arguments in function params
+      const args: Pattern[] = [];
+      while (this.isFunctionParamPatternStart(this.current())) {
+        args.push(this.parseFunctionParamPattern());
+      }
+
+      const end = args.at(-1)?.span.end ?? ctor.span.end;
+      return {
+        kind: "ConstructorPattern",
+        name: ctor.lexeme,
+        args,
+        span: { start: ctor.span.start, end },
+      };
+    }
+
+    // Tuple or parenthesized pattern
+    if (this.match(TokenKind.LParen)) {
+      const start = this.previousSpan().start;
+
+      // Check for empty tuple/unit pattern
+      if (this.match(TokenKind.RParen)) {
+        return {
+          kind: "TuplePattern",
+          elements: [],
+          span: { start, end: this.previousSpan().end },
+        };
+      }
+
+      // Parse first pattern
+      const first = this.parseFunctionParamPattern();
+      const elements: Pattern[] = [first];
+      const baseIndent = first.span.start.column;
+      let lastEnd = first.span.end;
+
+      // Check for additional comma-separated patterns (tuple)
+      while (this.peek(TokenKind.Comma)) {
+        const next = this.peekAhead(1);
+
+        // Respect layout rules for multi-line tuples
+        if (!next || !this.continuesLayout(baseIndent, lastEnd, next)) break;
+
+        this.advance(); // consume comma
+        const pat = this.parseFunctionParamPattern();
+        elements.push(pat);
+        lastEnd = pat.span.end;
+      }
+
+      this.expect(TokenKind.RParen, "close pattern group");
+
+      // Single element = just a grouped pattern
+      if (elements.length === 1) {
+        return { ...first, span: { start, end: this.previousSpan().end } };
+      }
+
+      // Multiple elements = tuple pattern
+      return {
+        kind: "TuplePattern",
+        elements,
+        span: { start, end: this.previousSpan().end },
+      };
+    }
+
+    // Record pattern (destructuring)
+    if (this.match(TokenKind.LBrace)) {
+      const start = this.previousSpan().start;
+
+      // Empty record pattern
+      if (this.match(TokenKind.RBrace)) {
+        return {
+          kind: "RecordPattern",
+          fields: [],
+          span: { start, end: this.previousSpan().end },
+        };
+      }
+
+      // Parse record field patterns
+      const fields: { name: string; pattern?: Pattern }[] = [];
+
+      // First field
+      const fieldName = this.expect(
+        TokenKind.LowerIdentifier,
+        "record field name"
+      );
+      let fieldPattern: Pattern | undefined;
+
+      // Check for field with pattern: { x = pat }
+      if (this.match(TokenKind.Equals)) {
+        fieldPattern = this.parseFunctionParamPattern();
+      }
+
+      fields.push({ name: fieldName.lexeme, pattern: fieldPattern });
+
+      // Additional fields
+      while (this.peek(TokenKind.Comma)) {
+        this.advance(); // consume comma
+
+        const nextFieldName = this.expect(
+          TokenKind.LowerIdentifier,
+          "record field name"
+        );
+        let nextFieldPattern: Pattern | undefined;
+
+        if (this.match(TokenKind.Equals)) {
+          nextFieldPattern = this.parseFunctionParamPattern();
+        }
+
+        fields.push({ name: nextFieldName.lexeme, pattern: nextFieldPattern });
+      }
+
+      this.expect(TokenKind.RBrace, "close record pattern");
+
+      return {
+        kind: "RecordPattern",
+        fields,
+        span: { start, end: this.previousSpan().end },
+      };
+    }
+
+    // List patterns are not allowed in function parameters
+    const token = this.current();
+    if (token.kind === TokenKind.LBracket) {
+      throw new ParseError(
+        `List patterns are not allowed in function parameters. ` +
+          `Use a case expression in the function body instead: ` +
+          `\`fn x = case x of [a, b] -> ...\``,
+        token.span
+      );
+    }
+
+    throw this.error("function parameter pattern", token);
+  }
+
+  /**
+   * Parse a simple pattern (variable or wildcard only).
+   * Complex patterns (constructors, tuples, lists) are not allowed in function parameters.
+   * Use a case expression in the function body instead.
+   */
+  private parseSimplePattern(): Pattern {
+    if (this.match(TokenKind.LowerIdentifier)) {
+      const tok = this.previous();
+
+      // Underscore is wildcard pattern
+      if (tok.lexeme === "_") {
+        return { kind: "WildcardPattern", span: tok.span };
+      }
+
+      // Otherwise it's a variable pattern
+      return { kind: "VarPattern", name: tok.lexeme, span: tok.span };
+    }
+
+    // Provide helpful error messages for complex patterns
+    const token = this.current();
+    if (token.kind === TokenKind.UpperIdentifier) {
+      throw new ParseError(
+        `Constructor patterns are not allowed in function parameters. ` +
+          `Use a case expression in the function body instead: ` +
+          `\`fn x = case x of ${token.lexeme} ... -> ...\``,
+        token.span
+      );
+    }
+    if (token.kind === TokenKind.LParen) {
+      throw new ParseError(
+        `Tuple patterns are not allowed in function parameters. ` +
+          `Use a case expression in the function body instead: ` +
+          `\`fn x = case x of (a, b) -> ...\``,
+        token.span
+      );
+    }
+    if (token.kind === TokenKind.LBracket) {
+      throw new ParseError(
+        `List patterns are not allowed in function parameters. ` +
+          `Use a case expression in the function body instead: ` +
+          `\`fn x = case x of [a, b] -> ...\``,
+        token.span
+      );
+    }
+
+    throw this.error("variable or wildcard pattern", token);
   }
 
   private isExpressionStart(token: Token): boolean {

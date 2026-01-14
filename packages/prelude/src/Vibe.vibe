@@ -7,7 +7,6 @@ module Vibe exposing
     , (||)
     , (::)
     , (++)
-    , not
     , Maybe(..)
     , Result(..)
     , Pair(..)
@@ -16,12 +15,25 @@ module Vibe exposing
     , Integral(..)
     , Eq(..)
     , Ord(..)
+    , Show(..)
     , identity
     , always
     , flip
     , apply
+    , Never
     )
 
+import Vibe.Int as Int
+import Vibe.Float as Float
+import Vibe.Bool as Bool
+import Vibe.List as List
+import Vibe.String as String
+
+type Never = JustOneMore Never
+
+never : Never -> a
+never (JustOneMore nvr) = 
+    never nvr
 {- =============================================================================
    Vibe - The Standard Library for Vibe
    =============================================================================
@@ -171,6 +183,7 @@ protocol Integral a where
 protocol Eq a where
     (==) : a -> a -> Bool
     (/=) : a -> a -> Bool
+    (/=) x y = Bool.not (x == y)
 
 
 {-| Protocol for types supporting ordering comparison.
@@ -185,6 +198,9 @@ protocol Ord a where
     (>) : a -> a -> Bool
     (>=) : a -> a -> Bool
 
+protocol Appendable a where
+    (++) : a -> a -> a
+
 
 -- =============================================================================
 -- Comparison Protocols
@@ -193,7 +209,7 @@ protocol Ord a where
 {-| Protocol for types that can be converted to a String representation.
 
     Implementing types must provide:
-    - toString : Convert the value to a String}
+    - toString : Convert the value to a String
 -}
 
 protocol Show a where
@@ -209,8 +225,8 @@ protocol Show a where
     True && False  == False
     False && _     == False  (short-circuits)
 -}
-@external "@vibe/runtime" "and"
 (&&) : Bool -> Bool -> Bool
+(&&) = Bool.and
 
 
 {-| Logical OR. Returns True if either argument is True.
@@ -219,18 +235,18 @@ protocol Show a where
     False || True  == True
     False || False == False
 -}
-@external "@vibe/runtime" "or"
 (||) : Bool -> Bool -> Bool
+(||) = Bool.or
 
 
-{-| Logical NOT. Inverts a boolean value.
+{-| Logical not. Inverts the boolean value.
 
     not True  == False
     not False == True
 -}
-@external "@vibe/runtime" "not"
-not : Bool -> Bool
 
+not: Bool -> Bool
+not = Bool.not
 
 -- =============================================================================
 -- Function Composition and Application
@@ -297,156 +313,61 @@ not : Bool -> Bool
 @external "@vibe/runtime" "cons"
 (::) : a -> List a -> List a
 
-
-{-| Append operator. Concatenates two lists.
-
-    [1, 2] ++ [3, 4]  ==  [1, 2, 3, 4]
--}
-@external "@vibe/runtime" "append"
-(++) : List a -> List a -> List a
-
-
--- =============================================================================
--- String Operations
--- =============================================================================
-
-{-| String concatenation. Joins two strings together.
-
-    "Hello, " ++ "World!"  ==  "Hello, World!"
-
-    Note: This is overloaded with list append. The runtime handles
-    both cases based on the argument types.
--}
-
-
--- =============================================================================
--- Numeric Implementations (External FFI)
--- =============================================================================
-
--- Int implementations
-@external "@vibe/runtime" "intAdd"
-intAdd : Int -> Int -> Int
-
-@external "@vibe/runtime" "intSub"
-intSub : Int -> Int -> Int
-
-@external "@vibe/runtime" "intMul"
-intMul : Int -> Int -> Int
-
-@external "@vibe/runtime" "intDiv"
-intDiv : Int -> Int -> Int
-
-@external "@vibe/runtime" "intMod"
-intMod : Int -> Int -> Int
-
-@external "@vibe/runtime" "intNegate"
-intNegate : Int -> Int
-
-@external "@vibe/runtime" "intEq"
-intEq : Int -> Int -> Bool
-
-@external "@vibe/runtime" "intNeq"
-intNeq : Int -> Int -> Bool
-
-@external "@vibe/runtime" "intLt"
-intLt : Int -> Int -> Bool
-
-@external "@vibe/runtime" "intLte"
-intLte : Int -> Int -> Bool
-
-@external "@vibe/runtime" "intGt"
-intGt : Int -> Int -> Bool
-
-@external "@vibe/runtime" "intGte"
-intGte : Int -> Int -> Bool
-
-
--- Float implementations
-@external "@vibe/runtime" "floatAdd"
-floatAdd : Float -> Float -> Float
-
-@external "@vibe/runtime" "floatSub"
-floatSub : Float -> Float -> Float
-
-@external "@vibe/runtime" "floatMul"
-floatMul : Float -> Float -> Float
-
-@external "@vibe/runtime" "floatDiv"
-floatDiv : Float -> Float -> Float
-
-@external "@vibe/runtime" "floatNegate"
-floatNegate : Float -> Float
-
-@external "@vibe/runtime" "floatEq"
-floatEq : Float -> Float -> Bool
-
-@external "@vibe/runtime" "floatNeq"
-floatNeq : Float -> Float -> Bool
-
-@external "@vibe/runtime" "floatLt"
-floatLt : Float -> Float -> Bool
-
-@external "@vibe/runtime" "floatLte"
-floatLte : Float -> Float -> Bool
-
-@external "@vibe/runtime" "floatGt"
-floatGt : Float -> Float -> Bool
-
-@external "@vibe/runtime" "floatGte"
-floatGte : Float -> Float -> Bool
-
-
--- Exponentiation
-@external "@vibe/runtime" "intPow"
-intPow : Int -> Int -> Int
-
-@external "@vibe/runtime" "floatPow"
-floatPow : Float -> Float -> Float
-
-
 -- =============================================================================
 -- Protocol Implementations
 -- =============================================================================
 
 implement Num Int where
-    (+) = intAdd
-    (-) = intSub
-    (*) = intMul
-    negate = intNegate
+    (+) = Int.add
+    (-) = Int.sub
+    (*) = Int.mul
+    negate = Int.negate
 
 implement Num Float where
-    (+) = floatAdd
-    (-) = floatSub
-    (*) = floatMul
-    negate = floatNegate
+    (+) = Float.add
+    (-) = Float.sub
+    (*) = Float.mul
+    negate = Float.negate
 
 implement Fractional Float where
-    (/) = floatDiv
+    (/) = Float.div
 
 implement Integral Int where
-    (//) = intDiv
-    (%) = intMod
+    (//) = Int.div
+    (%) = Int.mod
 
 implement Eq Int where
-    (==) = intEq
-    (/=) = intNeq
+    (==) = Int.eq
 
 implement Eq Float where
-    (==) = floatEq
-    (/=) = floatNeq
+    (==) = Float.eq
 
 implement Ord Int where
-    (<) = intLt
-    (<=) = intLte
-    (>) = intGt
-    (>=) = intGte
+    (<) = Int.lt
+    (<=) = Int.lte
+    (>) = Int.gt
+    (>=) = Int.gte
 
 implement Ord Float where
-    (<) = floatLt
-    (<=) = floatLte
-    (>) = floatGt
-    (>=) = floatGte
+    (<) = Float.lt
+    (<=) = Float.lte
+    (>) = Float.gt
+    (>=) = Float.gte
 
+implement Appendable (List a) where
+    (++) = List.append
+
+implement Appendable String where
+    (++) = String.append
+
+implement Show Int where
+    toString = Int.toString
+
+implement Show Float where
+    toString = Float.toString
+
+implement Show Bool where
+    toString = Bool.toString
 
 -- =============================================================================
 -- Utility Functions

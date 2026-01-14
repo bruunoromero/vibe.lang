@@ -59,99 +59,68 @@ export const composeBackward =
 // =============================================================================
 
 /** Cons: prepend element to list */
-export const cons =
+export const listCons =
   <A>(head: A) =>
   (tail: A[]): A[] =>
     [head, ...tail];
 
-/** Append: concatenate two lists or strings */
-export const append =
-  <A>(xs: A[] | string) =>
-  (ys: A[] | string): A[] | string => {
-    if (typeof xs === "string" && typeof ys === "string") {
-      return xs + ys;
-    }
-    return [...(xs as A[]), ...(ys as A[])];
+/** Append: concatenate two lists (exported as 'append' for prelude (++) operator) */
+export const listAppend =
+  <A>(xs: A[]) =>
+  (ys: A[]): A[] => {
+    return [...xs, ...ys];
   };
 
 // =============================================================================
-// Int Operations
+// String Operations
 // =============================================================================
 
-/** Integer addition */
-export const intAdd =
-  (a: number) =>
-  (b: number): number =>
-    (a + b) | 0;
+export const stringAppend =
+  (a: string) =>
+  (b: string): string =>
+    a + b;
 
-/** Integer subtraction */
-export const intSub =
-  (a: number) =>
-  (b: number): number =>
-    (a - b) | 0;
+// =============================================================================
+// Generic Number Operations
+// =============================================================================
 
-/** Integer multiplication */
-export const intMul =
-  (a: number) =>
-  (b: number): number =>
-    (a * b) | 0;
-
-/** Integer division (truncated toward zero) */
-export const intDiv =
-  (a: number) =>
-  (b: number): number =>
-    Math.trunc(a / b);
-
-/** Integer modulo */
-export const intMod =
-  (a: number) =>
-  (b: number): number =>
-    a % b;
-
-/** Integer negation */
-export const intNegate = (a: number): number => -a | 0;
-
-/** Integer equality */
-export const intEq =
+/** Number equality */
+export const numEq =
   (a: number) =>
   (b: number): boolean =>
     a === b;
 
-/** Integer inequality */
-export const intNeq =
+/** Number not equal */
+export const numNeq =
   (a: number) =>
   (b: number): boolean =>
     a !== b;
 
-/** Integer less than */
-export const intLt =
+/** Number less than */
+export const numLt =
   (a: number) =>
   (b: number): boolean =>
     a < b;
 
-/** Integer less than or equal */
-export const intLte =
+/** Number less than or equal */
+export const numLte =
   (a: number) =>
   (b: number): boolean =>
     a <= b;
 
-/** Integer greater than */
-export const intGt =
+/** Number greater than */
+export const numGt =
   (a: number) =>
   (b: number): boolean =>
     a > b;
 
-/** Integer greater than or equal */
-export const intGte =
+/** Number greater than or equal */
+export const numGte =
   (a: number) =>
   (b: number): boolean =>
     a >= b;
 
-/** Integer exponentiation */
-export const intPow =
-  (base: number) =>
-  (exp: number): number =>
-    Math.pow(base, exp) | 0;
+export const numToString = (n: number): string => n.toString();
 
 // =============================================================================
 // Float Operations
@@ -184,47 +153,54 @@ export const floatDiv =
 /** Float negation */
 export const floatNegate = (a: number): number => -a;
 
-/** Float equality */
-export const floatEq =
-  (a: number) =>
-  (b: number): boolean =>
-    a === b;
-
-/** Float inequality */
-export const floatNeq =
-  (a: number) =>
-  (b: number): boolean =>
-    a !== b;
-
-/** Float less than */
-export const floatLt =
-  (a: number) =>
-  (b: number): boolean =>
-    a < b;
-
-/** Float less than or equal */
-export const floatLte =
-  (a: number) =>
-  (b: number): boolean =>
-    a <= b;
-
-/** Float greater than */
-export const floatGt =
-  (a: number) =>
-  (b: number): boolean =>
-    a > b;
-
-/** Float greater than or equal */
-export const floatGte =
-  (a: number) =>
-  (b: number): boolean =>
-    a >= b;
-
 /** Float exponentiation */
 export const floatPow =
   (base: number) =>
   (exp: number): number =>
     Math.pow(base, exp);
+
+// =============================================================================
+// Int Operations
+// =============================================================================
+
+/** Integer addition */
+export const intAdd =
+  (a: number) =>
+  (b: number): number =>
+    floatAdd(a)(b) | 0;
+
+/** Integer subtraction */
+export const intSub =
+  (a: number) =>
+  (b: number): number =>
+    floatSub(a)(b) | 0;
+
+/** Integer multiplication */
+export const intMul =
+  (a: number) =>
+  (b: number): number =>
+    floatMul(a)(b) | 0;
+
+/** Integer division (truncated toward zero) */
+export const intDiv =
+  (a: number) =>
+  (b: number): number =>
+    Math.trunc(floatDiv(a)(b));
+
+/** Integer modulo */
+export const intMod =
+  (a: number) =>
+  (b: number): number =>
+    a % b;
+
+/** Integer negation */
+export const intNegate = (a: number): number => floatNegate(a) | 0;
+
+/** Integer exponentiation */
+export const intPow =
+  (base: number) =>
+  (exp: number): number =>
+    floatPow(base)(exp) | 0;
 
 // =============================================================================
 // Debug / Development

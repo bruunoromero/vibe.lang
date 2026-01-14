@@ -193,6 +193,14 @@ export function lowerExpr(expr: Expr, ctx: LoweringContext): IRExpr {
     case "Infix":
       return lowerInfix(expr, ctx);
 
+    case "Unary":
+      return {
+        kind: "IRUnary",
+        operator: expr.operator,
+        operand: lowerExpr(expr.operand, ctx),
+        span: expr.span,
+      };
+
     case "Paren":
       // Parentheses are just for grouping, lower the inner expression
       return lowerExpr(expr.expression, ctx);
@@ -891,6 +899,16 @@ export function lowerPattern(
         kind: "IRConsPattern",
         head: lowerPattern(pattern.head, ctx),
         tail: lowerPattern(pattern.tail, ctx),
+        span: pattern.span,
+      };
+
+    case "RecordPattern":
+      return {
+        kind: "IRRecordPattern",
+        fields: pattern.fields.map((f) => ({
+          name: f.name,
+          pattern: f.pattern ? lowerPattern(f.pattern, ctx) : undefined,
+        })),
         span: pattern.span,
       };
 

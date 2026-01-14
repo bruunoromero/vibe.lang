@@ -175,7 +175,12 @@ export type Pattern =
   | { kind: "ConstructorPattern"; name: string; args: Pattern[]; span: Span }
   | { kind: "TuplePattern"; elements: Pattern[]; span: Span }
   | { kind: "ListPattern"; elements: Pattern[]; span: Span }
-  | { kind: "ConsPattern"; head: Pattern; tail: Pattern; span: Span };
+  | { kind: "ConsPattern"; head: Pattern; tail: Pattern; span: Span }
+  | {
+      kind: "RecordPattern";
+      fields: { name: string; pattern?: Pattern }[];
+      span: Span;
+    };
 
 export type RecordField = { name: string; value: Expr; span: Span };
 
@@ -346,6 +351,7 @@ export type Expr =
       span: Span;
     }
   | { kind: "Infix"; left: Expr; operator: string; right: Expr; span: Span }
+  | { kind: "Unary"; operator: string; operand: Expr; span: Span }
   | { kind: "Paren"; expression: Expr; span: Span }
   | { kind: "Tuple"; elements: Expr[]; span: Span }
   | { kind: "Unit"; span: Span }

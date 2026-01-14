@@ -63,6 +63,9 @@ describe("Implementation Registration", () => {
 protocol Num a where
   plus : a -> a -> a
 
+@external "@vibe/runtime" "intPlus"
+intPlus : Int -> Int -> Int
+
 implement Num Int where
   plus = intPlus
 `;
@@ -71,6 +74,114 @@ implement Num Int where
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.protocolName).toBe("Num");
+  });
+
+  test("rejects implementation with undefined function reference", () => {
+    const source = `
+protocol Num a where
+  plus : a -> a -> a
+
+implement Num Int where
+  plus = undefinedFunction
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow(
+      "Undefined name 'undefinedFunction'"
+    );
+  });
+
+  test("validates module-qualified access in implementation", () => {
+    // Create the dependency module
+    const intModuleSource = `
+module Vibe.Int exposing (add)
+
+@external "@vibe/runtime" "intAdd"
+add : Int -> Int -> Int
+`;
+    const intProgram = parse(intModuleSource);
+    const intModule = analyze(intProgram);
+
+    // Create the main module that imports and uses the function
+    const mainSource = `
+import Vibe.Int as Int
+
+protocol Num a where
+  (+) : a -> a -> a
+
+implement Num Int where
+  (+) = Int.add
+`;
+    const mainProgram = parse(mainSource);
+    const dependencies = new Map([["Vibe.Int", intModule]]);
+
+    // Should succeed since Int.add exists and is exported
+    const result = analyze(mainProgram, { dependencies });
+    expect(result.instances).toHaveLength(1);
+  });
+
+  test("rejects implementation with undefined module field", () => {
+    // Create the dependency module without 'add'
+    const intModuleSource = `
+module Vibe.Int exposing (sub)
+
+@external "@vibe/runtime" "intSub"
+sub : Int -> Int -> Int
+`;
+    const intProgram = parse(intModuleSource);
+    const intModule = analyze(intProgram);
+
+    // Create the main module that tries to use a non-existent function
+    const mainSource = `
+import Vibe.Int as Int
+
+protocol Num a where
+  (+) : a -> a -> a
+
+implement Num Int where
+  (+) = Int.add
+`;
+    const mainProgram = parse(mainSource);
+    const dependencies = new Map([["Vibe.Int", intModule]]);
+
+    expect(() => analyze(mainProgram, { dependencies })).toThrow(SemanticError);
+    expect(() => analyze(mainProgram, { dependencies })).toThrow(
+      "'add' is not defined in module 'Vibe.Int'"
+    );
+  });
+
+  test("rejects implementation with unexported module field", () => {
+    // Create the dependency module with 'add' NOT exported
+    const intModuleSource = `
+module Vibe.Int exposing (sub)
+
+@external "@vibe/runtime" "intAdd"
+add : Int -> Int -> Int
+
+@external "@vibe/runtime" "intSub"
+sub : Int -> Int -> Int
+`;
+    const intProgram = parse(intModuleSource);
+    const intModule = analyze(intProgram);
+
+    // Create the main module that tries to use the non-exported function
+    const mainSource = `
+import Vibe.Int as Int
+
+protocol Num a where
+  (+) : a -> a -> a
+
+implement Num Int where
+  (+) = Int.add
+`;
+    const mainProgram = parse(mainSource);
+    const dependencies = new Map([["Vibe.Int", intModule]]);
+
+    expect(() => analyze(mainProgram, { dependencies })).toThrow(SemanticError);
+    expect(() => analyze(mainProgram, { dependencies })).toThrow(
+      "'add' is not exported from module 'Vibe.Int'"
+    );
   });
 
   test("rejects implementation for non-existent protocol", () => {
@@ -90,6 +201,9 @@ protocol Num a where
   plus : a -> a -> a
   minus : a -> a -> a
 
+@external "@vibe/runtime" "intPlus"
+intPlus : Int -> Int -> Int
+
 implement Num Int where
   plus = intPlus
 `;
@@ -103,6 +217,12 @@ implement Num Int where
     const source = `
 protocol Num a where
   plus : a -> a -> a
+
+@external "@vibe/runtime" "intPlus"
+intPlus : Int -> Int -> Int
+
+@external "@vibe/runtime" "extraImpl"
+extraImpl : Int
 
 implement Num Int where
   plus = intPlus
@@ -118,6 +238,12 @@ implement Num Int where
     const source = `
 protocol Num a where
   plus : a -> a -> a
+
+@external "@vibe/runtime" "intPlus1"
+intPlus1 : Int -> Int -> Int
+
+@external "@vibe/runtime" "intPlus2"
+intPlus2 : Int -> Int -> Int
 
 implement Num Int where
   plus = intPlus1
@@ -135,6 +261,12 @@ implement Num Int where
     const source = `
 protocol Num a where
   plus : a -> a -> a
+
+@external "@vibe/runtime" "intPlus"
+intPlus : Int -> Int -> Int
+
+@external "@vibe/runtime" "floatPlus"
+floatPlus : Float -> Float -> Float
 
 implement Num Int where
   plus = intPlus
@@ -155,6 +287,9 @@ describe("Implementation with Constraints", () => {
 protocol Show a where
   show : a -> String
 
+@external "@vibe/runtime" "showList"
+showList : List a -> String
+
 implement Show a => Show (List a) where
   show = showList
 `;
@@ -173,6 +308,11 @@ protocol Num a where
 
 protocol Show a where
   show : a -> String
+
+type Pair a b = Pair a b
+
+@external "@vibe/runtime" "showPair"
+showPair : Pair a a -> String
 
 implement (Num a, Show a) => Show (Pair a a) where
   show = showPair
@@ -201,6 +341,9 @@ protocol Num a where
     const source = `
 import Dep
 
+@external "@vibe/runtime" "intPlus"
+intPlus : Int -> Int -> Int
+
 implement Num Int where
   plus = intPlus
 `;
@@ -218,6 +361,9 @@ implement Num Int where
 describe("Protocol Default Methods", () => {
   test("registers protocol with default method", () => {
     const source = `
+@external "@vibe/runtime" "not"
+not : Bool -> Bool
+
 protocol Eq a where
   eq : a -> a -> Bool
   neq : a -> a -> Bool
@@ -238,10 +384,16 @@ protocol Eq a where
 
   test("allows implementation to omit method with default", () => {
     const source = `
+@external "@vibe/runtime" "not"
+not : Bool -> Bool
+
 protocol Eq a where
   eq : a -> a -> Bool
   neq : a -> a -> Bool
   neq x y = not (eq x y)
+
+@external "@vibe/runtime" "intEqual"
+intEqual : Int -> Int -> Bool
 
 implement Eq Int where
   eq = intEqual
@@ -258,10 +410,19 @@ implement Eq Int where
 
   test("allows implementation to override default method", () => {
     const source = `
+@external "@vibe/runtime" "not"
+not : Bool -> Bool
+
 protocol Eq a where
   eq : a -> a -> Bool
   neq : a -> a -> Bool
   neq x y = not (eq x y)
+
+@external "@vibe/runtime" "intEqual"
+intEqual : Int -> Int -> Bool
+
+@external "@vibe/runtime" "intNotEqual"
+intNotEqual : Int -> Int -> Bool
 
 implement Eq Int where
   eq = intEqual
@@ -276,10 +437,16 @@ implement Eq Int where
 
   test("requires implementation of method without default", () => {
     const source = `
+@external "@vibe/runtime" "not"
+not : Bool -> Bool
+
 protocol Eq a where
   eq : a -> a -> Bool
   neq : a -> a -> Bool
   neq x y = not (eq x y)
+
+@external "@vibe/runtime" "intNotEqual"
+intNotEqual : Int -> Int -> Bool
 
 implement Eq Int where
   neq = intNotEqual
@@ -330,6 +497,9 @@ protocol Describable a where
   describe _ = "A value"
   longDescription : a -> String
   longDescription x = describe x
+
+@external "@vibe/runtime" "showInt"
+showInt : Int -> String
 
 implement Describable Int where
   describe = showInt
@@ -460,6 +630,9 @@ protocol Show a where
   showList : List a -> String
   showList xs = show xs
 
+@external "@vibe/runtime" "showInt"
+showInt : Int -> String
+
 implement Show Int where
   show = showInt
 `;
@@ -499,12 +672,21 @@ type Color = Red | Green | Blue
 
   test("override one default while using another", () => {
     const source = `
+@external "@vibe/runtime" "not"
+not : Bool -> Bool
+
 protocol Eq a where
   eq : a -> a -> Bool
   neq : a -> a -> Bool
   neq x y = not (eq x y)
   allEqual : a -> a -> a -> Bool
   allEqual x y z = eq x y
+
+@external "@vibe/runtime" "intEqual"
+intEqual : Int -> Int -> Bool
+
+@external "@vibe/runtime" "customAllEqual"
+customAllEqual : Int -> Int -> Int -> Bool
 
 implement Eq Int where
   eq = intEqual
@@ -590,6 +772,9 @@ protocol Showable a where
   show : a -> String
   debugShow x = show x
 
+@external "@vibe/runtime" "intToString"
+intToString : Int -> String
+
 implement Showable Int where
   show = intToString
 `;
@@ -660,6 +845,9 @@ double x = add x x
     const source = `
 protocol Num a where
   plus : a -> a -> a
+
+@external "@vibe/runtime" "intPlus"
+intPlus : Int -> Int -> Int
 
 implement Num Int where
   plus = intPlus

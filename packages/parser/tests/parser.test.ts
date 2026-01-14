@@ -1105,4 +1105,105 @@ describe("module export syntax", () => {
       }
     }
   });
+
+  // ===== Unary Negation Tests =====
+
+  test("parses unary negation of variable", () => {
+    const program = parse("y = -x");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Unary");
+    if (decl.body.kind === "Unary") {
+      expect(decl.body.operator).toBe("-");
+      expect(decl.body.operand.kind).toBe("Var");
+      if (decl.body.operand.kind === "Var") {
+        expect(decl.body.operand.name).toBe("x");
+      }
+    }
+  });
+
+  test("parses unary negation of number literal", () => {
+    const program = parse("y = -10");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Unary");
+    if (decl.body.kind === "Unary") {
+      expect(decl.body.operator).toBe("-");
+      expect(decl.body.operand.kind).toBe("Number");
+      if (decl.body.operand.kind === "Number") {
+        expect(decl.body.operand.value).toBe("10");
+      }
+    }
+  });
+
+  test("parses unary negation of parenthesized expression", () => {
+    const program = parse("y = -(x + 1)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Unary");
+    if (decl.body.kind === "Unary") {
+      expect(decl.body.operator).toBe("-");
+      expect(decl.body.operand.kind).toBe("Paren");
+      if (decl.body.operand.kind === "Paren") {
+        expect(decl.body.operand.expression.kind).toBe("Infix");
+      }
+    }
+  });
+
+  test("parses double negation with grouping", () => {
+    const program = parse("y = -(-10)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Unary");
+    if (decl.body.kind === "Unary") {
+      expect(decl.body.operator).toBe("-");
+      expect(decl.body.operand.kind).toBe("Paren");
+      if (decl.body.operand.kind === "Paren") {
+        expect(decl.body.operand.expression.kind).toBe("Unary");
+      }
+    }
+  });
+
+  test("parses unary negation in binary expression", () => {
+    const program = parse("y = 5 + -x");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Infix");
+    if (decl.body.kind === "Infix") {
+      expect(decl.body.operator).toBe("+");
+      expect(decl.body.right.kind).toBe("Unary");
+      if (decl.body.right.kind === "Unary") {
+        expect(decl.body.right.operand.kind).toBe("Var");
+      }
+    }
+  });
+
+  test("parses unary negation with higher precedence than binary", () => {
+    const program = parse("y = -x * 2");
+    const decl = program.declarations[0] as ValueDeclaration;
+    // -x * 2 should parse as (-x) * 2
+    expect(decl.body.kind).toBe("Infix");
+    if (decl.body.kind === "Infix") {
+      expect(decl.body.operator).toBe("*");
+      expect(decl.body.left.kind).toBe("Unary");
+    }
+  });
+
+  test("binary minus is not parsed as unary", () => {
+    const program = parse("y = x - 1");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Infix");
+    if (decl.body.kind === "Infix") {
+      expect(decl.body.operator).toBe("-");
+      expect(decl.body.left.kind).toBe("Var");
+      expect(decl.body.right.kind).toBe("Number");
+    }
+  });
+
+  test("parses negation of constructor", () => {
+    const program = parse("y = -SomeValue");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Unary");
+    if (decl.body.kind === "Unary") {
+      expect(decl.body.operand.kind).toBe("Var");
+      if (decl.body.operand.kind === "Var") {
+        expect(decl.body.operand.namespace).toBe("upper");
+      }
+    }
+  });
 });

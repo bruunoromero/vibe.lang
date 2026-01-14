@@ -427,6 +427,8 @@ export type InstanceInfo = {
   constraints: Constraint[];
   /** Method implementations: name -> implementation expression */
   methods: Map<string, Expr>;
+  /** Method names that were explicitly provided (vs. inherited from defaults) */
+  explicitMethods: Set<string>;
   /** Source span for error messages */
   span: Span;
 };
@@ -560,6 +562,9 @@ function collectFreeVars(
         if (!localBound.has(e.operator)) {
           free.add(e.operator);
         }
+        break;
+      case "Unary":
+        visit(e.operand, localBound);
         break;
       case "Lambda": {
         const lambdaBound = new Set(localBound);
@@ -905,7 +910,8 @@ function importExportSpec(
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   protocols: Record<string, ProtocolInfo>,
   operators: OperatorRegistry,
-  importedValues: Map<string, string>
+  importedValues: Map<string, string>,
+  typeSchemes: Record<string, TypeScheme>
 ): void {
   switch (spec.kind) {
     case "ExportValue": {
@@ -1070,7 +1076,14 @@ function importExportSpec(
         protocols[name] = depProtocol;
 
         // Add all protocol methods to scope
-        addProtocolMethodsToScope(depProtocol, globalScope);
+        const methodSchemes = addProtocolMethodsToScope(
+          depProtocol,
+          globalScope
+        );
+        // Store in typeSchemes for LSP hover/completion
+        for (const [methodName, scheme] of methodSchemes) {
+          typeSchemes[methodName] = scheme;
+        }
         return;
       }
 
@@ -1200,6 +1213,10 @@ export function analyze(
   // These track type class definitions and their implementations.
   const protocols: Record<string, ProtocolInfo> = {};
   const instances: InstanceInfo[] = [];
+  // Track instances defined in THIS module (not imported) for validation.
+  // We only need to validate local instances since imported instances were
+  // already validated when their defining module was analyzed.
+  const localInstances: InstanceInfo[] = [];
 
   // ===== Operator Registries =====
   // These track custom operator precedence and associativity declarations.
@@ -1372,7 +1389,11 @@ export function analyze(
 
       // Also add protocol methods to global scope
       // Protocol methods are polymorphic functions with constraints
-      addProtocolMethodsToScope(protocol, globalScope);
+      const methodSchemes = addProtocolMethodsToScope(protocol, globalScope);
+      // Store in typeSchemes for LSP hover/completion
+      for (const [methodName, scheme] of methodSchemes) {
+        typeSchemes[methodName] = scheme;
+      }
     }
 
     for (const instance of depModule.instances) {
@@ -1424,7 +1445,8 @@ export function analyze(
           opaqueTypes,
           protocols,
           operators,
-          importedValues
+          importedValues,
+          typeSchemes
         );
       }
     }
@@ -1505,15 +1527,16 @@ export function analyze(
         if (isExportedFromModule(depModule, name, "type")) {
           // Check for collision with existing opaque type from different module
           // Allow builtin types to be shadowed by imports (e.g., prelude can re-export Int)
-          const existing = opaqueTypes[name];
+          // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
           if (
-            existing &&
-            existing.moduleName !== "__builtin__" &&
-            existing.moduleName !== imp.moduleName
+            Object.hasOwn(opaqueTypes, name) &&
+            opaqueTypes[name]!.moduleName !== "__builtin__" &&
+            opaqueTypes[name]!.moduleName !== imp.moduleName
           ) {
             throw new SemanticError(
-              `Opaque type '${name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
-                `Consider using a different name or qualified imports.`,
+              `Opaque type '${name}' conflicts with opaque type from module '${
+                opaqueTypes[name]!.moduleName
+              }'. ` + `Consider using a different name or qualified imports.`,
               imp.span
             );
           }
@@ -1536,6 +1559,16 @@ export function analyze(
             "protocol"
           );
           protocols[name] = protocol;
+
+          // Add protocol methods to scope so they can be called directly
+          const methodSchemes = addProtocolMethodsToScope(
+            protocol,
+            globalScope
+          );
+          // Store in typeSchemes for LSP hover/completion
+          for (const [methodName, scheme] of methodSchemes) {
+            typeSchemes[methodName] = scheme;
+          }
         }
       }
 
@@ -1637,6 +1670,7 @@ export function analyze(
         decl,
         protocols,
         instances,
+        localInstances,
         adts,
         typeAliases,
         currentModuleName
@@ -1652,6 +1686,7 @@ export function analyze(
       registerImplementation(
         decl,
         instances,
+        localInstances,
         protocols,
         adts,
         typeAliases,
@@ -1672,7 +1707,8 @@ export function analyze(
     }
 
     if (decl.kind === "TypeAnnotationDeclaration") {
-      if (annotations[decl.name]) {
+      // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+      if (Object.hasOwn(annotations, decl.name)) {
         throw new SemanticError(
           `Duplicate type annotation for '${decl.name}'`,
           decl.span
@@ -1683,13 +1719,14 @@ export function analyze(
   }
 
   for (const [name, ann] of Object.entries(annotations)) {
-    const value = values[name];
-    if (!value) {
+    // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+    if (!Object.hasOwn(values, name)) {
       throw new SemanticError(
         `Type annotation for '${name}' has no matching definition`,
         ann.span
       );
     }
+    const value = values[name]!;
     if (value.declaration.kind === "ExternalDeclaration") {
       throw new SemanticError(
         `External declaration '${name}' already includes a type annotation`,
@@ -1709,14 +1746,8 @@ export function analyze(
         ? info.declaration.annotation
         : undefined);
 
-    if (annotationExpr && info.declaration.kind === "ValueDeclaration") {
-      validateAnnotationArity(
-        annotationExpr,
-        info.declaration.args.length,
-        info.declaration.span,
-        name
-      );
-    }
+    // Arity validation is not needed here - the type system will verify
+    // that the RHS expression's type matches the annotation during unification.
 
     // Use typeFromAnnotationWithConstraints to extract both type and constraints
     let annotationType: Type | undefined;
@@ -1815,11 +1846,14 @@ export function analyze(
         }
 
         // External declarations use their annotated constraints directly
-        globalScope.symbols.set(info.declaration.name, {
-          vars: new Set(),
+        const scheme: TypeScheme = {
+          vars: new Set<number>(),
           constraints: result.constraints,
           type: info.type,
-        });
+        };
+        globalScope.symbols.set(info.declaration.name, scheme);
+        // Store the type scheme for external declarations too (needed by IR lowering)
+        typeSchemes[name] = scheme;
       }
     }
 
@@ -1880,6 +1914,30 @@ export function analyze(
     }
   }
 
+  // ===== PASS 2.5: Validate implementation method expressions =====
+  // Now that all values are registered, validate that method implementations
+  // reference defined identifiers. Only validate localInstances since imported
+  // instances were already validated in their defining module.
+  validateImplementationMethodExpressions(
+    localInstances,
+    globalScope,
+    constructors,
+    imports,
+    dependencies
+  );
+
+  // ===== PASS 2.6: Validate protocol default implementations =====
+  // Validate that default implementations in protocols reference defined identifiers.
+  // This is done after all values are registered so forward references work.
+  validateProtocolDefaultImplementations(
+    protocols,
+    globalScope,
+    constructors,
+    imports,
+    dependencies,
+    currentModuleName
+  );
+
   // Compute export information for this module
   const exports = computeModuleExports(
     program.module,
@@ -1917,8 +1975,8 @@ function registerValue(
   values: Record<string, ValueInfo>,
   decl: ValueDeclaration | ExternalDeclaration
 ) {
-  const existing = values[decl.name];
-  if (existing) {
+  // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+  if (Object.hasOwn(values, decl.name)) {
     throw new SemanticError(
       `Duplicate definition for '${decl.name}'`,
       decl.span
@@ -2497,8 +2555,9 @@ function registerOpaqueType(
   moduleName?: string
 ) {
   // Check for duplicate type name
-  const existing = opaqueTypes[decl.name];
-  if (existing) {
+  // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+  if (Object.hasOwn(opaqueTypes, decl.name)) {
+    const existing = opaqueTypes[decl.name]!;
     if (existing.moduleName && existing.moduleName !== moduleName) {
       throw new SemanticError(
         `Opaque type '${decl.name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
@@ -2622,6 +2681,9 @@ function addProtocolMethodsToScope(protocol: ProtocolInfo, scope: Scope) {
     quantifiedVars.add(tv.id);
   }
 
+  // Return the method schemes for optional storage in module.typeSchemes
+  const methodSchemes = new Map<string, TypeScheme>();
+
   // Add each method to scope
   for (const [methodName, methodInfo] of protocol.methods) {
     // Only add if not already defined (don't override explicit definitions)
@@ -2635,8 +2697,11 @@ function addProtocolMethodsToScope(protocol: ProtocolInfo, scope: Scope) {
         type: refreshedType,
       };
       scope.symbols.set(methodName, scheme);
+      methodSchemes.set(methodName, scheme);
     }
   }
+
+  return methodSchemes;
 }
 
 /**
@@ -2942,6 +3007,7 @@ function processImplementingClause(
   decl: TypeDeclaration,
   protocols: Record<string, ProtocolInfo>,
   instances: InstanceInfo[],
+  localInstances: InstanceInfo[],
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
   moduleName?: string
@@ -3026,15 +3092,21 @@ function processImplementingClause(
       }
     }
 
-    // Register the synthetic instance
-    instances.push({
+    // Create the synthetic instance
+    // Note: explicitMethods is empty since all methods come from defaults
+    const instanceInfo: InstanceInfo = {
       protocolName,
       moduleName,
       typeArgs,
       constraints: [], // Synthetic implementations have no extra constraints
       methods,
+      explicitMethods: new Set(), // No explicit implementations, all from defaults
       span: decl.span,
-    });
+    };
+
+    // Register in both global and local instance lists
+    instances.push(instanceInfo);
+    localInstances.push(instanceInfo);
   }
 }
 
@@ -3044,6 +3116,7 @@ function processImplementingClause(
 function registerImplementation(
   decl: ImplementationDeclaration,
   instances: InstanceInfo[],
+  localInstances: InstanceInfo[],
   protocols: Record<string, ProtocolInfo>,
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
@@ -3132,8 +3205,10 @@ function registerImplementation(
   // Convert method implementations to a map
   // For methods not explicitly implemented, use the default implementation from the protocol
   const methods = new Map<string, Expr>();
+  const explicitMethods = new Set<string>();
   for (const method of decl.methods) {
     methods.set(method.name, method.implementation);
+    explicitMethods.add(method.name);
   }
 
   // For methods with defaults that weren't explicitly implemented,
@@ -3152,15 +3227,638 @@ function registerImplementation(
     }
   }
 
-  // Register the instance
-  instances.push({
+  // Create the instance info
+  const instanceInfo: InstanceInfo = {
     protocolName: decl.protocolName,
     moduleName,
     typeArgs,
     constraints,
     methods,
+    explicitMethods,
     span: decl.span,
-  });
+  };
+
+  // Register the instance in both the global list and local list
+  // The global list includes imported instances for overlap checking
+  // The local list is used for validation (only validate methods in this module)
+  instances.push(instanceInfo);
+  localInstances.push(instanceInfo);
+}
+
+/**
+ * Validate that all identifiers referenced in implementation method expressions
+ * are defined in the current scope. This ensures we catch undefined function
+ * references like `intAdd` at compile time rather than runtime.
+ *
+ * This is called after all value declarations have been processed, so the
+ * globalScope contains all defined symbols.
+ *
+ * Note: Only validates explicitly provided method implementations, not default
+ * implementations inherited from protocols (those are validated during protocol
+ * registration in a scope that includes other protocol methods).
+ */
+function validateImplementationMethodExpressions(
+  instances: InstanceInfo[],
+  globalScope: Scope,
+  constructors: Record<string, ConstructorInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>
+): void {
+  for (const instance of instances) {
+    // Only validate methods that were explicitly provided in the implement block
+    // Default implementations from protocols are validated during protocol registration
+    for (const methodName of instance.explicitMethods) {
+      const methodExpr = instance.methods.get(methodName);
+      if (methodExpr) {
+        validateExpressionIdentifiers(
+          methodExpr,
+          globalScope,
+          constructors,
+          instance.protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Validate that all identifiers referenced in protocol default implementation
+ * expressions are defined in the current scope. This ensures we catch undefined
+ * function references at compile time.
+ *
+ * This is called after all value declarations have been processed, so the
+ * globalScope contains all defined symbols.
+ */
+function validateProtocolDefaultImplementations(
+  protocols: Record<string, ProtocolInfo>,
+  globalScope: Scope,
+  constructors: Record<string, ConstructorInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>,
+  currentModuleName?: string
+): void {
+  for (const [protocolName, protocol] of Object.entries(protocols)) {
+    // Only validate protocols defined in this module
+    if (protocol.moduleName !== currentModuleName) continue;
+
+    for (const [methodName, methodInfo] of protocol.methods) {
+      if (methodInfo.defaultImpl) {
+        // Create a scope with the method parameters bound
+        const methodScope: Scope = { symbols: new Map(), parent: globalScope };
+        for (const arg of methodInfo.defaultImpl.args) {
+          bindPatternNames(arg, methodScope);
+        }
+
+        // Validate the body expression
+        validateExpressionIdentifiers(
+          methodInfo.defaultImpl.body,
+          methodScope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Recursively validate that all identifier references in an expression exist
+ * in the given scope. Throws SemanticError for undefined identifiers.
+ *
+ * @param expr The expression to validate
+ * @param scope The scope to look up identifiers in
+ * @param constructors Known constructors (for distinguishing value vs constructor refs)
+ * @param protocolName Protocol name for error context
+ * @param methodName Method name for error context
+ * @param imports Import declarations for module resolution
+ * @param dependencies Dependency modules for module-qualified access validation
+ */
+function validateExpressionIdentifiers(
+  expr: Expr,
+  scope: Scope,
+  constructors: Record<string, ConstructorInfo>,
+  protocolName: string,
+  methodName: string,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>
+): void {
+  switch (expr.kind) {
+    case "Var": {
+      const name = expr.name;
+      // Check if it's a constructor (constructors are always valid)
+      if (constructors[name]) {
+        return;
+      }
+      // Check if it's defined in scope
+      if (!symbolExists(scope, name)) {
+        throw new SemanticError(
+          `Undefined name '${name}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+          expr.span
+        );
+      }
+      return;
+    }
+    case "Lambda": {
+      // Create a child scope with the lambda arguments
+      const childScope: Scope = { symbols: new Map(), parent: scope };
+      for (const arg of expr.args) {
+        bindPatternNames(arg, childScope);
+      }
+      validateExpressionIdentifiers(
+        expr.body,
+        childScope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      return;
+    }
+    case "Apply": {
+      validateExpressionIdentifiers(
+        expr.callee,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      for (const arg of expr.args) {
+        validateExpressionIdentifiers(
+          arg,
+          scope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+      return;
+    }
+    case "If": {
+      validateExpressionIdentifiers(
+        expr.condition,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      validateExpressionIdentifiers(
+        expr.thenBranch,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      validateExpressionIdentifiers(
+        expr.elseBranch,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      return;
+    }
+    case "LetIn": {
+      // Create a child scope for let bindings
+      const childScope: Scope = { symbols: new Map(), parent: scope };
+      for (const binding of expr.bindings) {
+        // First validate the binding body in the parent scope
+        validateExpressionIdentifiers(
+          binding.body,
+          scope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+        // Then add the binding name to the child scope
+        childScope.symbols.set(binding.name, {
+          vars: new Set(),
+          constraints: [],
+          type: { kind: "var", id: -1 }, // Placeholder type
+        });
+      }
+      validateExpressionIdentifiers(
+        expr.body,
+        childScope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      return;
+    }
+    case "Case": {
+      validateExpressionIdentifiers(
+        expr.discriminant,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      for (const branch of expr.branches) {
+        // Create a child scope with pattern bindings
+        const branchScope: Scope = { symbols: new Map(), parent: scope };
+        bindPatternNames(branch.pattern, branchScope);
+        validateExpressionIdentifiers(
+          branch.body,
+          branchScope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+      return;
+    }
+    case "Infix": {
+      // For infix expressions, we need to check if the operator is defined
+      // Operators like +, -, etc. are protocol methods and should be in scope
+      if (!symbolExists(scope, expr.operator)) {
+        throw new SemanticError(
+          `Undefined operator '${expr.operator}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+          expr.span
+        );
+      }
+      validateExpressionIdentifiers(
+        expr.left,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      validateExpressionIdentifiers(
+        expr.right,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      return;
+    }
+    case "Unary": {
+      validateExpressionIdentifiers(
+        expr.operand,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      return;
+    }
+    case "Paren": {
+      validateExpressionIdentifiers(
+        expr.expression,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      return;
+    }
+    case "Tuple": {
+      for (const element of expr.elements) {
+        validateExpressionIdentifiers(
+          element,
+          scope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+      return;
+    }
+    case "List": {
+      for (const element of expr.elements) {
+        validateExpressionIdentifiers(
+          element,
+          scope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+      return;
+    }
+    case "ListRange": {
+      validateExpressionIdentifiers(
+        expr.start,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      validateExpressionIdentifiers(
+        expr.end,
+        scope,
+        constructors,
+        protocolName,
+        methodName,
+        imports,
+        dependencies
+      );
+      return;
+    }
+    case "Record": {
+      for (const field of expr.fields) {
+        validateExpressionIdentifiers(
+          field.value,
+          scope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+      return;
+    }
+    case "RecordUpdate": {
+      // Check that the base record exists
+      if (!symbolExists(scope, expr.base)) {
+        throw new SemanticError(
+          `Undefined name '${expr.base}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+          expr.span
+        );
+      }
+      for (const field of expr.fields) {
+        validateExpressionIdentifiers(
+          field.value,
+          scope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+      return;
+    }
+    case "FieldAccess": {
+      // For field access (e.g., Int.add), validate module-qualified access
+      // by checking that the module exists and exports the field
+      const resolved = validateModuleFieldAccess(
+        expr,
+        imports,
+        dependencies,
+        protocolName,
+        methodName
+      );
+      if (!resolved) {
+        // Not a module access, validate the target expression normally
+        validateExpressionIdentifiers(
+          expr.target,
+          scope,
+          constructors,
+          protocolName,
+          methodName,
+          imports,
+          dependencies
+        );
+      }
+      return;
+    }
+    case "Number":
+    case "String":
+    case "Char":
+    case "Unit":
+      // Literals don't reference identifiers
+      return;
+  }
+}
+
+/**
+ * Validate a module-qualified field access (e.g., Int.add).
+ * Returns true if this was a valid module access, false if not a module access.
+ * Throws SemanticError if it looks like a module access but is invalid.
+ */
+function validateModuleFieldAccess(
+  expr: Extract<Expr, { kind: "FieldAccess" }>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>,
+  protocolName: string,
+  methodName: string
+): boolean {
+  // Collect the chain of field accesses to reconstruct the module path
+  const parts: string[] = [];
+  let current: Expr = expr;
+
+  // Traverse backwards through FieldAccess expressions
+  while (current.kind === "FieldAccess") {
+    parts.unshift(current.field);
+    current = current.target;
+  }
+
+  // The base should be a Var to be a module reference
+  if (current.kind !== "Var") {
+    return false;
+  }
+
+  // The base name (e.g., "Int" from "Int.add")
+  const baseName = current.name;
+  parts.unshift(baseName);
+
+  // Try to find a matching import for the module path
+  for (const imp of imports) {
+    // Check for module alias match (e.g., "import Vibe.Int as Int" with "Int.add")
+    if (imp.alias && baseName === imp.alias && parts.length >= 2) {
+      const depModule = dependencies.get(imp.moduleName);
+      if (!depModule) {
+        throw new SemanticError(
+          `Module '${imp.moduleName}' (aliased as '${imp.alias}') not found in implementation of '${methodName}' for protocol '${protocolName}'`,
+          expr.span
+        );
+      }
+
+      // Get the field name (e.g., "add" from ["Int", "add"])
+      const fieldName = parts[1]!;
+
+      // Check if it's an exported value
+      const valueInfo = depModule.values[fieldName];
+      if (valueInfo) {
+        // Check if it's exported
+        if (!isExportedFromModule(depModule, fieldName, "value")) {
+          throw new SemanticError(
+            `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span
+          );
+        }
+        return true;
+      }
+
+      // Check if it's a constructor
+      const ctorInfo = depModule.constructors[fieldName];
+      if (ctorInfo) {
+        if (!isExportedFromModule(depModule, fieldName, "constructor")) {
+          throw new SemanticError(
+            `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span
+          );
+        }
+        return true;
+      }
+
+      // Field not found in the module
+      throw new SemanticError(
+        `'${fieldName}' is not defined in module '${imp.moduleName}' (aliased as '${imp.alias}') in implementation of '${methodName}' for protocol '${protocolName}'`,
+        expr.span
+      );
+    }
+
+    // Check for unaliased import match (e.g., "import Vibe.JS" with "Vibe.JS.null")
+    const importParts = imp.moduleName.split(".");
+    if (!imp.alias && importParts.length <= parts.length - 1) {
+      let matches = true;
+      for (let i = 0; i < importParts.length; i++) {
+        if (importParts[i] !== parts[i]) {
+          matches = false;
+          break;
+        }
+      }
+
+      if (matches) {
+        const depModule = dependencies.get(imp.moduleName);
+        if (!depModule) {
+          throw new SemanticError(
+            `Module '${imp.moduleName}' not found in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span
+          );
+        }
+
+        // Get the remaining parts after the module name
+        const fieldParts = parts.slice(importParts.length);
+
+        if (fieldParts.length === 1) {
+          const fieldName = fieldParts[0]!;
+
+          // Check if it's an exported value
+          const valueInfo = depModule.values[fieldName];
+          if (valueInfo) {
+            if (!isExportedFromModule(depModule, fieldName, "value")) {
+              throw new SemanticError(
+                `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+                expr.span
+              );
+            }
+            return true;
+          }
+
+          // Check if it's a constructor
+          const ctorInfo = depModule.constructors[fieldName];
+          if (ctorInfo) {
+            if (!isExportedFromModule(depModule, fieldName, "constructor")) {
+              throw new SemanticError(
+                `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+                expr.span
+              );
+            }
+            return true;
+          }
+
+          // Field not found in the module
+          throw new SemanticError(
+            `'${fieldName}' is not defined in module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span
+          );
+        }
+      }
+    }
+  }
+
+  // Not a recognized module access pattern
+  return false;
+}
+
+/**
+ * Check if a symbol exists in the scope hierarchy (without throwing).
+ */
+function symbolExists(scope: Scope, name: string): boolean {
+  if (scope.symbols.has(name)) {
+    return true;
+  }
+  if (scope.parent) {
+    return symbolExists(scope.parent, name);
+  }
+  return false;
+}
+
+/**
+ * Bind pattern variable names into a scope (for lambda args, case branches, etc.)
+ * This is a simple version that just adds placeholder type schemes.
+ */
+function bindPatternNames(pattern: Pattern, scope: Scope): void {
+  switch (pattern.kind) {
+    case "VarPattern":
+      scope.symbols.set(pattern.name, {
+        vars: new Set(),
+        constraints: [],
+        type: { kind: "var", id: -1 }, // Placeholder
+      });
+      return;
+    case "WildcardPattern":
+      return;
+    case "ConstructorPattern":
+      for (const arg of pattern.args) {
+        bindPatternNames(arg, scope);
+      }
+      return;
+    case "TuplePattern":
+      for (const element of pattern.elements) {
+        bindPatternNames(element, scope);
+      }
+      return;
+    case "ListPattern":
+      for (const element of pattern.elements) {
+        bindPatternNames(element, scope);
+      }
+      return;
+    case "ConsPattern":
+      bindPatternNames(pattern.head, scope);
+      bindPatternNames(pattern.tail, scope);
+      return;
+    case "RecordPattern":
+      for (const field of pattern.fields) {
+        if (field.pattern) {
+          bindPatternNames(field.pattern, scope);
+        }
+      }
+      return;
+  }
 }
 
 /**
@@ -3393,10 +4091,8 @@ function computeModuleExports(
             allMethods: true,
             methods: new Set(protocol.methods.keys()),
           });
-          // Also export all protocol method names as values
-          for (const methodName of protocol.methods.keys()) {
-            exports.values.add(methodName);
-          }
+          // Protocol methods are NOT exported as standalone values
+          // They are only accessible through instance dictionaries
           continue;
         }
 
@@ -3521,6 +4217,9 @@ function analyzeValueDeclaration(
   imports: ImportDeclaration[] = [],
   dependencies: Map<string, SemanticModule> = new Map()
 ): Type {
+  // Validate function parameter patterns (single-constructor ADTs, tuples, records)
+  validateFunctionParamPatterns(decl.args, constructors, adts);
+
   const paramTypes = annotationType
     ? extractAnnotationParams(annotationType, decl.args.length, decl.span)
     : decl.args.map(() => freshType());
@@ -3826,7 +4525,8 @@ function analyzeExpr(
     case "Record": {
       const fields: Record<string, Type> = {};
       for (const field of expr.fields) {
-        if (fields[field.name]) {
+        // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+        if (Object.hasOwn(fields, field.name)) {
           throw new SemanticError(
             `Duplicate record field '${field.name}'`,
             field.span
@@ -4273,6 +4973,45 @@ function analyzeExpr(
         imports,
         dependencies
       );
+    case "Unary": {
+      // Unary negation: only allowed for Int and Float
+      const operandType = analyzeExpr(
+        expr.operand,
+        scope,
+        substitution,
+        globalScope,
+        constructors,
+        adts,
+        typeAliases,
+        opaqueTypes,
+        imports,
+        dependencies
+      );
+      const concreteType = applySubstitution(operandType, substitution);
+
+      // Check if the operand is Int or Float
+      if (concreteType.kind === "con") {
+        if (concreteType.name === "Int" || concreteType.name === "Float") {
+          return concreteType;
+        }
+      }
+
+      // For type variables, we need to defer the check or constrain the type
+      // For now, we require the type to be known as Int or Float
+      if (concreteType.kind === "var") {
+        throw new SemanticError(
+          `Unary negation requires a concrete numeric type (Int or Float), but got an unknown type. Add a type annotation to disambiguate.`,
+          expr.span
+        );
+      }
+
+      throw new SemanticError(
+        `Unary negation is only allowed for Int and Float, but got '${formatType(
+          concreteType
+        )}'`,
+        expr.span
+      );
+    }
     default: {
       const _exhaustive: never = expr;
       throw new SemanticError(
@@ -4362,6 +5101,102 @@ function constructorCoverage(
   }
 
   return { exhaustive: false };
+}
+
+/**
+ * Validate that patterns used in function parameters are allowed.
+ *
+ * Function parameters can use:
+ * - Variable patterns (x)
+ * - Wildcard patterns (_)
+ * - Tuple patterns ((a, b))
+ * - Record patterns ({ x, y })
+ * - Constructor patterns ONLY for single-constructor ADTs (e.g., Pair a b)
+ *
+ * Multi-constructor ADTs (like Maybe, Result) require case expressions.
+ */
+function validateFunctionParamPatterns(
+  patterns: Pattern[],
+  constructors: Record<string, ConstructorInfo>,
+  adts: Record<string, ADTInfo>
+): void {
+  for (const pattern of patterns) {
+    validateFunctionParamPattern(pattern, constructors, adts);
+  }
+}
+
+/**
+ * Recursively validate a single function parameter pattern.
+ */
+function validateFunctionParamPattern(
+  pattern: Pattern,
+  constructors: Record<string, ConstructorInfo>,
+  adts: Record<string, ADTInfo>
+): void {
+  switch (pattern.kind) {
+    case "VarPattern":
+    case "WildcardPattern":
+      // Always allowed
+      return;
+
+    case "TuplePattern":
+      // Allowed, but validate nested patterns
+      for (const element of pattern.elements) {
+        validateFunctionParamPattern(element, constructors, adts);
+      }
+      return;
+
+    case "RecordPattern":
+      // Allowed, but validate nested patterns
+      for (const field of pattern.fields) {
+        if (field.pattern) {
+          validateFunctionParamPattern(field.pattern, constructors, adts);
+        }
+      }
+      return;
+
+    case "ConstructorPattern": {
+      // Only allowed for single-constructor ADTs
+      const ctorInfo = constructors[pattern.name];
+
+      if (!ctorInfo) {
+        // Unknown constructor - will be caught by other validation
+        return;
+      }
+
+      const adtInfo = adts[ctorInfo.parentType];
+
+      if (!adtInfo) {
+        // Unknown ADT - will be caught by other validation
+        return;
+      }
+
+      if (adtInfo.constructors.length > 1) {
+        const constructorNames = adtInfo.constructors.join(", ");
+        throw new SemanticError(
+          `Constructor pattern '${pattern.name}' is not allowed in function parameters. ` +
+            `The type '${ctorInfo.parentType}' has multiple constructors (${constructorNames}). ` +
+            `Use a case expression in the function body instead.`,
+          pattern.span
+        );
+      }
+
+      // Validate nested patterns
+      for (const arg of pattern.args) {
+        validateFunctionParamPattern(arg, constructors, adts);
+      }
+      return;
+    }
+
+    case "ListPattern":
+    case "ConsPattern":
+      // These should have been rejected by the parser, but check anyway
+      throw new SemanticError(
+        `List patterns are not allowed in function parameters. ` +
+          `Use a case expression in the function body instead.`,
+        pattern.span
+      );
+  }
 }
 
 function bindPatterns(
@@ -4587,6 +5422,59 @@ function bindPattern(
       );
 
       return applySubstitution(lt, substitution);
+    }
+    case "RecordPattern": {
+      // Record pattern: { x, y } or { x = pat, y }
+      // Expected type should be a record with at least these fields
+
+      // Build record type from field names
+      const fieldTypes: Record<string, Type> = {};
+      for (const field of pattern.fields) {
+        fieldTypes[field.name] = freshType();
+      }
+
+      // Create record type and unify with expected
+      const recordType: Type = {
+        kind: "record",
+        fields: fieldTypes,
+      };
+      unify(recordType, expected, pattern.span, substitution);
+
+      // Bind each field's pattern (or the field name as variable)
+      for (const field of pattern.fields) {
+        const fieldType = fieldTypes[field.name]!;
+        const appliedFieldType = applySubstitution(fieldType, substitution);
+
+        if (field.pattern) {
+          // Field has an explicit pattern: { x = pat }
+          bindPattern(
+            field.pattern,
+            scope,
+            substitution,
+            seen,
+            appliedFieldType,
+            constructors,
+            adts
+          );
+        } else {
+          // Field without pattern becomes a variable: { x } === { x = x }
+          if (seen.has(field.name)) {
+            throw new SemanticError(
+              `Duplicate pattern variable '${field.name}'`,
+              pattern.span
+            );
+          }
+          seen.add(field.name);
+          declareSymbol(
+            scope,
+            field.name,
+            { vars: new Set(), constraints: [], type: appliedFieldType },
+            pattern.span
+          );
+        }
+      }
+
+      return applySubstitution(recordType, substitution);
     }
     default:
       return expected;
@@ -5165,14 +6053,16 @@ function extractAnnotationParams(
   argCount: number,
   span: Span
 ): Type[] {
+  // Extract params from annotation. If the annotation has fewer params than
+  // argCount, fill in fresh type variables for the rest. The type system
+  // will catch any mismatches during unification.
   const params = flattenFunctionParams(annotation);
-  if (params.length !== argCount) {
-    throw new SemanticError(
-      `Type annotation expects ${params.length} argument(s), but definition has ${argCount}`,
-      span
-    );
+  const result = params.slice(0, argCount);
+  // Fill in fresh types for any missing params
+  while (result.length < argCount) {
+    result.push(freshType());
   }
-  return params.slice(0, argCount);
+  return result;
 }
 
 function extractAnnotationReturn(annotation: Type, argCount: number): Type {

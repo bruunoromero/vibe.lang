@@ -745,7 +745,7 @@ f _ = 1
     expect(value.params[0]?.kind).toBe("IRWildcardPattern");
   });
 
-  test("tuple pattern", () => {
+  test("tuple pattern in function param", () => {
     const source = `
 f (a, b) = a
 `;

@@ -8,7 +8,8 @@
     "tokenize": "bun ../cli/src/index.ts tokenize",
     "parse": "bun ../cli/src/index.ts parse",
     "analyze": "bun ../cli/src/index.ts analyze",
-    "build": "bun ../cli/src/index.ts build"
+    "build": "bun ../cli/src/index.ts build",
+    "start": "bun run ./main.ts"
   },
   "dependencies": {
     "@vibe/prelude": "workspace:*"

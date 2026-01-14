@@ -1,7 +1,0 @@
-module SimpleTest exposing (..)
-
-import Vibe exposing (..)
-import Vibe.Maybe exposing (withDefault)
-import Vibe.JS as JS
-
-main = JS.null

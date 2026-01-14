@@ -3,10 +3,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "echo 'Prelude is built by the Vibe compiler'",
+    "build": "bun ../cli/src/index.ts build",
     "test": "bun test"
   },
   "dependencies": {
     "@vibe/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@vibe/cli": "workspace:*"
   }
 }

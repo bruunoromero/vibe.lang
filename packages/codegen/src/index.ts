@@ -59,8 +59,10 @@ export interface CodegenContext {
   /** Set of external modules that need to be imported */
   externalImports: Set<string>;
 
-  /** Map from external module path to imported bindings */
-  externalBindings: Map<string, Set<string>>;
+  /** Map from external module path to imported bindings.
+   *  Inner map: Vibe name -> runtime export name (e.g., "add" -> "intAdd")
+   */
+  externalBindings: Map<string, Map<string, string>>;
 
   /** Generated instance dictionary names: "Protocol_Type" -> "$dict_Protocol_Type" */
   instanceDictNames: Map<string, string>;
@@ -149,13 +151,14 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
   }
 
   // Collect external bindings by module
-  for (const value of Object.values(program.values)) {
+  // Store mapping from Vibe name to runtime export name
+  for (const [vibeName, value] of Object.entries(program.values)) {
     if (value.isExternal && value.externalTarget) {
       const { modulePath, exportName } = value.externalTarget;
       if (!ctx.externalBindings.has(modulePath)) {
-        ctx.externalBindings.set(modulePath, new Set());
+        ctx.externalBindings.set(modulePath, new Map());
       }
-      ctx.externalBindings.get(modulePath)!.add(exportName);
+      ctx.externalBindings.get(modulePath)!.set(vibeName, exportName);
     }
   }
 
@@ -302,8 +305,8 @@ export interface GeneratedModule {
   /** The generated JavaScript code */
   code: string;
 
-  /** External imports required */
-  imports: Map<string, Set<string>>;
+  /** External imports required: module path -> (Vibe name -> runtime name) */
+  imports: Map<string, Map<string, string>>;
 
   /** Exports from this module */
   exports: string[];
@@ -350,7 +353,19 @@ export function generate(
     lines.push("");
   }
 
-  // 4. Generate protocol instance dictionaries
+  // 4. Generate synthetic values for default protocol implementations
+  // These must be generated before the dictionaries that reference them.
+  if (program.syntheticDefaultImpls.length > 0) {
+    lines.push("// Default Protocol Implementations");
+    for (const syntheticValue of program.syntheticDefaultImpls) {
+      const safeName = sanitizeIdentifier(syntheticValue.name);
+      const body = generateValue(syntheticValue, ctx);
+      lines.push(`const ${safeName} = ${body};`);
+    }
+    lines.push("");
+  }
+
+  // 5. Generate protocol instance dictionaries
   const dictLines = generateInstanceDictionaries(ctx);
   if (dictLines.length > 0) {
     lines.push("// Protocol Instance Dictionaries");
@@ -358,14 +373,14 @@ export function generate(
     lines.push("");
   }
 
-  // 5. Generate values in dependency order
+  // 6. Generate values in dependency order
   lines.push("// Values");
   for (const scc of program.dependencyOrder) {
     const sccLines = generateSCC(scc, ctx);
     lines.push(...sccLines);
   }
 
-  // 6. Generate exports
+  // 7. Generate exports
   const exportLines = generateExports(program, ctx);
   if (exportLines.length > 0) {
     lines.push("");
@@ -394,12 +409,32 @@ function generateImports(ctx: CodegenContext): string[] {
   const lines: string[] = [];
 
   for (const [modulePath, bindings] of ctx.externalBindings) {
-    const bindingList = Array.from(bindings).sort();
-    if (bindingList.length > 0) {
+    if (bindings.size > 0) {
       // Use relative path for @vibe/runtime - it will be bundled
       const importPath =
         modulePath === "@vibe/runtime" ? "@vibe/runtime" : modulePath;
-      lines.push(`import { ${bindingList.join(", ")} } from "${importPath}";`);
+
+      // Generate import specifiers with aliasing where needed
+      // e.g., "intAdd as add" when Vibe name differs from runtime name
+      const importSpecifiers: string[] = [];
+      const sortedEntries = Array.from(bindings.entries()).sort(([a], [b]) =>
+        a.localeCompare(b)
+      );
+
+      for (const [vibeName, runtimeName] of sortedEntries) {
+        const safeVibeName = sanitizeIdentifier(vibeName);
+        if (runtimeName === vibeName || runtimeName === safeVibeName) {
+          // No aliasing needed
+          importSpecifiers.push(runtimeName);
+        } else {
+          // Alias runtime name to Vibe name
+          importSpecifiers.push(`${runtimeName} as ${safeVibeName}`);
+        }
+      }
+
+      lines.push(
+        `import { ${importSpecifiers.join(", ")} } from "${importPath}";`
+      );
     }
   }
 
@@ -878,6 +913,10 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
     case "IRConstructor":
       return generateConstructorExpr(expr, ctx);
 
+    case "IRUnary":
+      // Emit native JavaScript unary negation
+      return `-${generateExpr(expr.operand, ctx)}`;
+
     default:
       const _exhaustive: never = expr;
       throw new Error(`Unknown expression kind: ${(expr as any).kind}`);
@@ -973,18 +1012,21 @@ function generateVar(
  *
  * This handles expressions like `JS.null` or `Vibe.JS.null` that were
  * resolved during IR lowering. The generated code uses the import alias
- * and the external name if available.
+ * and the value name as exported by the Vibe module.
+ *
+ * Note: We use valueName (the Vibe-level name), NOT externalName (the runtime export name).
+ * The compiled module already re-exports values with the Vibe names.
  *
  * Examples:
- * - `JS.null` with external name `null_` -> `JS.null_`
+ * - `Int.eq` -> `Int.eq` (the Vibe module re-exports with this name)
  * - `Vibe.JS.something` -> `JS.something` (using the import alias)
  */
 function generateModuleAccess(
   expr: IRModuleAccess,
   ctx: CodegenContext
 ): string {
-  // Use the external name if available, otherwise use the value name
-  const valueName = sanitizeIdentifier(expr.externalName || expr.valueName);
+  // Use the Vibe-level value name, not the external/runtime name
+  const valueName = sanitizeIdentifier(expr.valueName);
   return `${expr.importAlias}.${valueName}`;
 }
 
@@ -1070,7 +1112,11 @@ function generateApply(
   let dictPasses: string[] = [];
   if (expr.callee.kind === "IRVar") {
     const calleeValue = ctx.program.values[expr.callee.name];
-    if (calleeValue && calleeValue.constraints.length > 0) {
+    if (
+      calleeValue &&
+      calleeValue.constraints &&
+      calleeValue.constraints.length > 0
+    ) {
       // The callee has constraints - we need to pass dictionaries
       const seenProtocols = new Set<string>();
       for (const constraint of calleeValue.constraints) {
@@ -1245,6 +1291,15 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
       }
       break;
 
+    case "IRConstructor": {
+      // Look up the constructor to find its parent type
+      const ctorInfo = ctx.constructors[expr.name];
+      if (ctorInfo) {
+        return { kind: "con", name: ctorInfo.parentType, args: [] };
+      }
+      break;
+    }
+
     case "IRVar":
       // If the variable has type information, use it
       if (expr.type) {
@@ -1282,6 +1337,10 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
         }
       }
       break;
+
+    case "IRUnary":
+      // Unary negation returns the same type as the operand
+      return inferExprType(expr.operand, ctx);
   }
 
   return null;
@@ -1506,6 +1565,29 @@ function generateBranchCode(
         return conditions.join(" && ");
       }
 
+      case "IRRecordPattern": {
+        // Record pattern: match and bind field values
+        const conditions: string[] = [];
+        for (const field of pat.fields) {
+          const fieldAccessor = `${accessor}.${field.name}`;
+          if (field.pattern) {
+            // Nested pattern matching on the field
+            const fieldCondition = buildConditionAndBindings(
+              field.pattern,
+              fieldAccessor
+            );
+            if (fieldCondition) {
+              conditions.push(fieldCondition);
+            }
+          } else {
+            // Simple binding: { x } means bind x to the field value
+            const safeName = sanitizeIdentifier(field.name);
+            bindings.push(`const ${safeName} = ${fieldAccessor};`);
+          }
+        }
+        return conditions.length > 0 ? conditions.join(" && ") : null;
+      }
+
       default:
         const _exhaustive: never = pat;
         throw new Error(`Unknown pattern kind: ${(pat as any).kind}`);
@@ -1666,9 +1748,18 @@ function generatePattern(pattern: IRPattern, ctx: CodegenContext): string {
       return "_";
 
     case "IRConstructorPattern":
-      // Constructor patterns in parameters need destructuring
-      // For now, use a placeholder and handle in body
-      return freshName(ctx, "p");
+      // For single-constructor ADTs, generate destructuring
+      // The constructor tag is checked at compile time, so we can directly destructure
+      // Generate: { $0: arg1, $1: arg2, ... } for the constructor fields
+      if (pattern.args.length === 0) {
+        // Nullary constructor, just use a placeholder
+        return freshName(ctx, "p");
+      }
+      const ctorBindings = pattern.args.map((arg, i) => {
+        const argPattern = generatePattern(arg, ctx);
+        return `$${i}: ${argPattern}`;
+      });
+      return `{ ${ctorBindings.join(", ")} }`;
 
     case "IRTuplePattern":
       const elements = pattern.elements.map((e) => generatePattern(e, ctx));
@@ -1688,6 +1779,20 @@ function generatePattern(pattern: IRPattern, ctx: CodegenContext): string {
       const head = generatePattern(pattern.head, ctx);
       const tail = generatePattern(pattern.tail, ctx);
       return `[${head}, ...${tail}]`;
+
+    case "IRRecordPattern":
+      // Record pattern: { x, y } or { x: pat }
+      const recordBindings = pattern.fields.map((f) => {
+        if (f.pattern) {
+          // Field with explicit pattern: { x = pat } -> { x: pat }
+          const fieldPattern = generatePattern(f.pattern, ctx);
+          return `${f.name}: ${fieldPattern}`;
+        } else {
+          // Field without pattern: { x } -> { x }
+          return f.name;
+        }
+      });
+      return `{ ${recordBindings.join(", ")} }`;
 
     default:
       const _exhaustive: never = pattern;
@@ -1763,11 +1868,9 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
 
     // Check if this value is defined locally
     if (value) {
-      if (value.isExternal && value.externalTarget) {
-        localExports.push(sanitizeIdentifier(value.externalTarget.exportName));
-      } else {
-        localExports.push(sanitizeIdentifier(name));
-      }
+      // Always export the Vibe name, not the runtime name
+      // For externals, we import "runtimeName as vibeName" so we export vibeName
+      localExports.push(sanitizeIdentifier(name));
     }
   }
 

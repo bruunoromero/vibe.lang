@@ -320,6 +320,9 @@ export function printExpr(
       return `${expr.name} ${args.join(" ")}`;
     }
 
+    case "IRUnary":
+      return `-${printExpr(expr.operand, indent, 0)}`;
+
     default:
       return `<unknown: ${(expr as any).kind}>`;
   }
@@ -481,6 +484,8 @@ export function printExprCompact(expr: IRExpr): string {
       return `{ ... | ${expr.updates.length} fields }`;
     case "IRConstructor":
       return expr.args.length > 0 ? `${expr.name} ...` : expr.name;
+    case "IRUnary":
+      return `-${printExprCompact(expr.operand)}`;
     default:
       return "?";
   }

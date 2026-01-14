@@ -87,7 +87,8 @@ export type IRExpr =
   | IRRecord
   | IRRecordUpdate
   | IRFieldAccess
-  | IRConstructor;
+  | IRConstructor
+  | IRUnary;
 
 /** Variable reference */
 export type IRVar = {
@@ -244,6 +245,14 @@ export type IRConstructor = {
   span: Span;
 };
 
+/** Unary expression (e.g., negation) */
+export type IRUnary = {
+  kind: "IRUnary";
+  operator: string;
+  operand: IRExpr;
+  span: Span;
+};
+
 // ============================================================================
 // IR Pattern Types
 // ============================================================================
@@ -258,7 +267,8 @@ export type IRPattern =
   | IRTuplePattern
   | IRLiteralPattern
   | IRListPattern
-  | IRConsPattern;
+  | IRConsPattern
+  | IRRecordPattern;
 
 export type IRVarPattern = {
   kind: "IRVarPattern";
@@ -306,6 +316,13 @@ export type IRConsPattern = {
   kind: "IRConsPattern";
   head: IRPattern;
   tail: IRPattern;
+  span: Span;
+};
+
+/** Record pattern: { x, y } or { x = pat } */
+export type IRRecordPattern = {
+  kind: "IRRecordPattern";
+  fields: { name: string; pattern?: IRPattern }[];
   span: Span;
 };
 
@@ -431,6 +448,12 @@ export type IRProgram = {
    * These are named with unique prefixes to avoid collision.
    */
   liftedBindings: IRValue[];
+
+  /**
+   * Synthetic values created for default protocol implementations.
+   * These are not in the dependencyOrder and should be emitted separately.
+   */
+  syntheticDefaultImpls: IRValue[];
 
   /** ADT information for pattern matching */
   adts: Record<string, ADTInfo>;

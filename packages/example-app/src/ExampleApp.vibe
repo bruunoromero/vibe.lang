@@ -1,26 +1,5 @@
 module ExampleApp exposing (..)
 
 import Vibe exposing (..)
-import Vibe.Maybe exposing (withDefault)
-import Vibe.JS as JS
 
--- Record type example
-type alias Point =
-  { x : Int
-  , y : Int
-  }
-
--- Create a point
-origin : Point
-origin =
-  { x = 0
-  , y = 0
-  }
-
--- Function using record type
-distance : {x: Float, y: Float} -> Float
-distance point =
-  point.x * point.x + point.y * point.y
-
-main = JS.d + 10
--- main = Vibe.JS.null
+main = 1 /= 1

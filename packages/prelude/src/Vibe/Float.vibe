@@ -1,0 +1,50 @@
+module Vibe.Float exposing
+  ( add
+  , sub
+  , mul
+  , div
+  , negate
+  , toString
+  , eq
+  , neq
+  , lt
+  , lte
+  , gt
+  , gte
+  )
+
+@external "@vibe/runtime" "floatAdd"
+add: Float -> Float -> Float
+
+@external "@vibe/runtime" "floatSub"
+sub: Float -> Float -> Float
+
+@external "@vibe/runtime" "floatMul"
+mul: Float -> Float -> Float
+
+@external "@vibe/runtime" "floatDiv"
+div: Float -> Float -> Float
+
+@external "@vibe/runtime" "numToString"
+toString: Float -> String
+
+@external "@vibe/runtime" "numEq"
+eq: Float -> Float -> Bool
+
+@external "@vibe/runtime" "numNeq"
+neq: Float -> Float -> Bool
+
+@external "@vibe/runtime" "numLt"
+lt: Float -> Float -> Bool
+
+@external "@vibe/runtime" "numLte"
+lte: Float -> Float -> Bool
+
+@external "@vibe/runtime" "numGt"
+gt: Float -> Float -> Bool
+
+@external "@vibe/runtime" "numGte"
+gte: Float -> Float -> Bool
+
+negate: Float -> Float
+negate x = -x

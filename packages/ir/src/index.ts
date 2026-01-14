@@ -6,6 +6,7 @@
  */
 
 import type { Program } from "@vibe/syntax";
+import { sanitizeOperator } from "@vibe/syntax";
 import type { SemanticModule } from "@vibe/semantics";
 import type {
   IRProgram,
@@ -59,6 +60,229 @@ export {
   printExprCompact,
   type PrettyPrintOptions,
 } from "./printer";
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Format a type as a string key for synthetic value naming.
+ * E.g., `Int` -> "Int", `List Int` -> "List_Int"
+ */
+function formatTypeKey(type: IRType | undefined): string {
+  if (!type) return "Unknown";
+  switch (type.kind) {
+    case "var":
+      return `Var${type.id}`;
+    case "con":
+      if (type.args.length === 0) return type.name;
+      return `${type.name}_${type.args.map(formatTypeKey).join("_")}`;
+    case "fun":
+      return `fn_${formatTypeKey(type.from)}_${formatTypeKey(type.to)}`;
+    case "tuple":
+      return `tuple_${type.elements.map(formatTypeKey).join("_")}`;
+    case "list":
+      return `list_${formatTypeKey(type.element)}`;
+    case "record":
+      return `record`;
+  }
+}
+
+import type { Expr } from "@vibe/syntax";
+
+/**
+ * Substitute protocol method references in an expression with concrete implementations.
+ * This is used when lowering default implementations for specific instances.
+ *
+ * @param expr The expression to transform
+ * @param methodSubstitutions Map from method name to concrete implementation expression
+ * @returns A new expression with substitutions applied
+ */
+function substituteProtocolMethods(
+  expr: Expr,
+  methodSubstitutions: Map<string, Expr>
+): Expr {
+  switch (expr.kind) {
+    case "Var":
+      // Check if this variable is a protocol method that needs substitution
+      if (methodSubstitutions.has(expr.name)) {
+        return methodSubstitutions.get(expr.name)!;
+      }
+      return expr;
+
+    case "Infix": {
+      // Check if the operator is a protocol method
+      if (methodSubstitutions.has(expr.operator)) {
+        // Transform `x op y` to `(substitute op) x y`
+        const newOp = methodSubstitutions.get(expr.operator)!;
+        const left = substituteProtocolMethods(expr.left, methodSubstitutions);
+        const right = substituteProtocolMethods(
+          expr.right,
+          methodSubstitutions
+        );
+        return {
+          kind: "Apply",
+          callee: {
+            kind: "Apply",
+            callee: newOp,
+            args: [left],
+            span: expr.span,
+          },
+          args: [right],
+          span: expr.span,
+        };
+      }
+      return {
+        kind: "Infix",
+        left: substituteProtocolMethods(expr.left, methodSubstitutions),
+        operator: expr.operator,
+        right: substituteProtocolMethods(expr.right, methodSubstitutions),
+        span: expr.span,
+      };
+    }
+
+    case "Lambda":
+      return {
+        kind: "Lambda",
+        args: expr.args,
+        body: substituteProtocolMethods(expr.body, methodSubstitutions),
+        span: expr.span,
+      };
+
+    case "Apply":
+      return {
+        kind: "Apply",
+        callee: substituteProtocolMethods(expr.callee, methodSubstitutions),
+        args: expr.args.map((arg) =>
+          substituteProtocolMethods(arg, methodSubstitutions)
+        ),
+        span: expr.span,
+      };
+
+    case "If":
+      return {
+        kind: "If",
+        condition: substituteProtocolMethods(
+          expr.condition,
+          methodSubstitutions
+        ),
+        thenBranch: substituteProtocolMethods(
+          expr.thenBranch,
+          methodSubstitutions
+        ),
+        elseBranch: substituteProtocolMethods(
+          expr.elseBranch,
+          methodSubstitutions
+        ),
+        span: expr.span,
+      };
+
+    case "LetIn":
+      return {
+        kind: "LetIn",
+        bindings: expr.bindings.map((b) => ({
+          ...b,
+          body: substituteProtocolMethods(b.body, methodSubstitutions),
+        })),
+        body: substituteProtocolMethods(expr.body, methodSubstitutions),
+        span: expr.span,
+      };
+
+    case "Case":
+      return {
+        kind: "Case",
+        discriminant: substituteProtocolMethods(
+          expr.discriminant,
+          methodSubstitutions
+        ),
+        branches: expr.branches.map((branch) => ({
+          ...branch,
+          body: substituteProtocolMethods(branch.body, methodSubstitutions),
+        })),
+        span: expr.span,
+      };
+
+    case "Paren":
+      return {
+        kind: "Paren",
+        expression: substituteProtocolMethods(
+          expr.expression,
+          methodSubstitutions
+        ),
+        span: expr.span,
+      };
+
+    case "Tuple":
+      return {
+        kind: "Tuple",
+        elements: expr.elements.map((e) =>
+          substituteProtocolMethods(e, methodSubstitutions)
+        ),
+        span: expr.span,
+      };
+
+    case "List":
+      return {
+        kind: "List",
+        elements: expr.elements.map((e) =>
+          substituteProtocolMethods(e, methodSubstitutions)
+        ),
+        span: expr.span,
+      };
+
+    case "ListRange":
+      return {
+        kind: "ListRange",
+        start: substituteProtocolMethods(expr.start, methodSubstitutions),
+        end: substituteProtocolMethods(expr.end, methodSubstitutions),
+        span: expr.span,
+      };
+
+    case "Record":
+      return {
+        kind: "Record",
+        fields: expr.fields.map((f) => ({
+          ...f,
+          value: substituteProtocolMethods(f.value, methodSubstitutions),
+        })),
+        span: expr.span,
+      };
+
+    case "RecordUpdate":
+      return {
+        kind: "RecordUpdate",
+        base: expr.base,
+        fields: expr.fields.map((f) => ({
+          ...f,
+          value: substituteProtocolMethods(f.value, methodSubstitutions),
+        })),
+        span: expr.span,
+      };
+
+    case "FieldAccess":
+      return {
+        kind: "FieldAccess",
+        target: substituteProtocolMethods(expr.target, methodSubstitutions),
+        field: expr.field,
+        span: expr.span,
+      };
+
+    // Literals don't need substitution
+    case "Number":
+    case "String":
+    case "Char":
+    case "Unit":
+      return expr;
+
+    case "Unary":
+      return {
+        kind: "Unary",
+        operator: expr.operator,
+        operand: substituteProtocolMethods(expr.operand, methodSubstitutions),
+        span: expr.span,
+      };
+  }
+}
 
 // ============================================================================
 // Main Lower Function
@@ -217,6 +441,9 @@ export function lower(
     };
   }
 
+  // Track synthetic values created for default implementations
+  const syntheticValues: Record<string, IRValue> = {};
+
   // Extract instance metadata
   const instances: IRInstance[] = semantics.instances.map((inst) => {
     // inst.methods is a Map<string, Expr>
@@ -225,8 +452,76 @@ export function lower(
       // Get the implementation name from the expression
       if (methodExpr.kind === "Var") {
         methodsObj[methodName] = methodExpr.name;
+      } else if (methodExpr.kind === "FieldAccess") {
+        // Handle module-qualified access like Int.add
+        // Build the full path by traversing nested FieldAccess
+        const parts: string[] = [methodExpr.field];
+        let current = methodExpr.target;
+        while (current.kind === "FieldAccess") {
+          parts.unshift(current.field);
+          current = current.target;
+        }
+        if (current.kind === "Var") {
+          parts.unshift(current.name);
+        }
+        methodsObj[methodName] = parts.join(".");
+      } else if (methodExpr.kind === "Lambda") {
+        // Lambda expressions from default implementations need to be lowered
+        // and turned into synthetic top-level values.
+        // Generate a unique name for this default implementation.
+        // Sanitize the method name to ensure it's a valid JS identifier.
+        const typeKey =
+          inst.typeArgs.length > 0
+            ? formatTypeKey(convertType(inst.typeArgs[0]))
+            : "Unknown";
+        const sanitizedMethodName = sanitizeOperator(methodName);
+        const syntheticName = `$default_${inst.protocolName}_${typeKey}_${sanitizedMethodName}`;
+
+        // Build method substitutions for protocol methods used in the body.
+        // For each method in this instance that has a concrete implementation,
+        // we substitute references to that method with its implementation.
+        const methodSubstitutions = new Map<string, Expr>();
+        for (const [otherMethodName, otherMethodExpr] of inst.methods) {
+          // Only substitute non-default implementations (Var or FieldAccess)
+          if (
+            otherMethodExpr.kind === "Var" ||
+            otherMethodExpr.kind === "FieldAccess"
+          ) {
+            methodSubstitutions.set(otherMethodName, otherMethodExpr);
+          }
+        }
+
+        // Apply substitutions to the lambda expression before lowering
+        const substitutedExpr = substituteProtocolMethods(
+          methodExpr,
+          methodSubstitutions
+        );
+
+        // Lower the substituted lambda to IR
+        const irLambda = lowerExpr(substitutedExpr, ctx);
+
+        // Get the method type from the protocol if available
+        const protocol = semantics.protocols[inst.protocolName];
+        const methodInfo = protocol?.methods.get(methodName);
+        const methodType = methodInfo?.type
+          ? convertType(methodInfo.type)
+          : { kind: "var" as const, id: -1 };
+
+        // Create a synthetic IRValue for this default implementation
+        const syntheticValue: IRValue = {
+          name: syntheticName,
+          params: [], // Lambda is in the body
+          body: irLambda,
+          type: methodType,
+          constraints: [],
+          isExternal: false,
+          span: methodExpr.span,
+        };
+
+        syntheticValues[syntheticName] = syntheticValue;
+        methodsObj[methodName] = syntheticName;
       } else {
-        // For complex expressions, use a placeholder
+        // For other complex expressions, use a placeholder
         methodsObj[methodName] = `<expr:${methodExpr.kind}>`;
       }
     }
@@ -240,6 +535,9 @@ export function lower(
       methods: methodsObj,
     };
   });
+
+  // Convert synthetic values object to array
+  const syntheticDefaultImpls = Object.values(syntheticValues);
 
   // Build constraint metadata map
   const constraintMetadata = new Map<string, IRConstraint[]>();
@@ -273,6 +571,7 @@ export function lower(
     values,
     dependencyOrder: sccs,
     liftedBindings: ctx.liftedBindings,
+    syntheticDefaultImpls,
     adts: semantics.adts,
     constructors,
     protocols,

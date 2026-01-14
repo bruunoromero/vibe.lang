@@ -20,8 +20,8 @@ import {
   type Type,
   type AnalyzeOptions,
 } from "@vibe/semantics";
-import { resolveModule, type ResolvedVibeConfig } from "@vibe/module-resolver";
-import { loadConfig } from "@vibe/config";
+import { resolveModule } from "@vibe/module-resolver";
+import { loadConfig, type ResolvedVibeConfig } from "@vibe/config";
 import type {
   DocumentCache,
   ParseResult,
@@ -51,12 +51,6 @@ export class DocumentManager {
 
   /** Debounce delay in ms */
   private debounceDelay = 150;
-
-  /** Cached prelude semantic module */
-  private preludeModule: SemanticModule | null = null;
-
-  /** Flag to indicate prelude loading has been attempted */
-  private preludeLoadAttempted = false;
 
   /** Cached loaded modules by name */
   private loadedModules = new Map<string, SemanticModule>();
@@ -126,14 +120,14 @@ export class DocumentManager {
   }
 
   /**
-   * Try to load and analyze the Vibe prelude module.
+   * Initialize project config from a document URI.
    * This is called lazily on the first document analysis.
    */
-  private loadPrelude(documentUri: string): void {
-    if (this.preludeLoadAttempted) {
+  private initProjectConfig(documentUri: string): void {
+    if (this.projectConfigAttempted) {
       return;
     }
-    this.preludeLoadAttempted = true;
+    this.projectConfigAttempted = true;
 
     try {
       // Extract file path from URI
@@ -143,15 +137,14 @@ export class DocumentManager {
 
       // Find the workspace root by looking for vibe.json or package.json
       let dir = path.dirname(filePath);
-      let config: ResolvedVibeConfig | null = null;
 
       while (dir && dir !== path.dirname(dir)) {
         const vibeConfigPath = path.join(dir, "vibe.json");
         const packageJsonPath = path.join(dir, "package.json");
 
         if (fs.existsSync(vibeConfigPath)) {
-          config = loadConfig({ path: vibeConfigPath });
-          break;
+          this.projectConfig = loadConfig({ path: vibeConfigPath });
+          return;
         }
 
         // Check if package.json has vibe config
@@ -161,8 +154,8 @@ export class DocumentManager {
               fs.readFileSync(packageJsonPath, "utf8")
             );
             if (pkgJson.vibe) {
-              config = loadConfig({ path: packageJsonPath });
-              break;
+              this.projectConfig = loadConfig({ path: packageJsonPath });
+              return;
             }
           } catch {
             // Ignore parse errors
@@ -171,42 +164,14 @@ export class DocumentManager {
 
         dir = path.dirname(dir);
       }
-
-      if (!config) {
-        // No config found, try to find prelude relative to the workspace
-        return;
-      }
-
-      // Save the config for later use in loading dependencies
-      this.projectConfig = config;
-
-      // Try to resolve the Vibe module
-      const resolved = resolveModule({
-        config,
-        moduleName: "Vibe",
-        preferDist: false,
-      });
-
-      const preludeSource = fs.readFileSync(resolved.filePath, "utf8");
-
-      // Parse the prelude
-      const { program: preludeAst } = parseWithInfix(preludeSource);
-
-      // Analyze the prelude (without prelude injection since it IS the prelude)
-      this.preludeModule = analyze(preludeAst, {
-        injectPrelude: false,
-      });
-
-      // Cache the prelude module
-      this.loadedModules.set("Vibe", this.preludeModule);
     } catch {
-      // Silently fail - prelude is optional for LSP
-      // Errors will show up as "symbol not found" diagnostics
+      // Config not found, module loading will be limited
     }
   }
 
   /**
    * Load a module from disk and analyze it.
+   * Recursively loads the module's own imports first.
    * Returns null if the module cannot be loaded.
    */
   private loadModule(moduleName: string): SemanticModule | null {
@@ -230,12 +195,27 @@ export class DocumentManager {
       const source = fs.readFileSync(resolved.filePath, "utf8");
       const { program } = parseWithInfix(source);
 
-      // Check if this is the Vibe module itself
-      const isVibe = moduleName === "Vibe";
+      // Recursively load this module's own imports first
+      const moduleDeps = new Map<string, SemanticModule>();
+      if (program.imports) {
+        for (const imp of program.imports) {
+          if (!this.loadedModules.has(imp.moduleName)) {
+            const depModule = this.loadModule(imp.moduleName);
+            if (depModule) {
+              moduleDeps.set(imp.moduleName, depModule);
+            }
+          } else {
+            const cachedModule = this.loadedModules.get(imp.moduleName);
+            if (cachedModule) {
+              moduleDeps.set(imp.moduleName, cachedModule);
+            }
+          }
+        }
+      }
 
-      // Analyze without prelude injection (user must explicitly import)
+      // Analyze with the loaded dependencies
       const analyzed = analyze(program, {
-        dependencies: this.loadedModules,
+        dependencies: moduleDeps,
         injectPrelude: false,
       });
 
@@ -284,8 +264,8 @@ export class DocumentManager {
    * Analyze a document through all compilation phases.
    */
   private analyzeDocument(cache: DocumentCache): void {
-    // Try to load prelude on first analysis
-    this.loadPrelude(cache.uri);
+    // Initialize project config on first analysis (needed for resolving imports)
+    this.initProjectConfig(cache.uri);
 
     const diagnostics: Diagnostic[] = [];
 
@@ -643,10 +623,24 @@ export class DocumentManager {
     // Check values
     if (module.typeSchemes[name]) {
       const typeStr = this.formatTypeScheme(module.typeSchemes[name]);
+      const valueEntry = module.values[name];
+
+      // If not a regular value, might be a protocol method - try to infer concrete type
+      if (!valueEntry && module.instances.length > 0) {
+        const concreteType = this.inferProtocolMethodType(name, module);
+        if (concreteType) {
+          return {
+            name,
+            type: concreteType,
+            span: this.defaultSpan(),
+          };
+        }
+      }
+
       return {
         name,
         type: typeStr,
-        span: module.values[name]?.declaration.span || this.defaultSpan(),
+        span: valueEntry?.declaration?.span || this.defaultSpan(),
       };
     }
 
@@ -701,6 +695,9 @@ export class DocumentManager {
    * Format a type scheme as a readable string.
    */
   formatTypeScheme(scheme: TypeScheme): string {
+    if (!scheme || !scheme.type) {
+      return "<unknown type>";
+    }
     const constraints = this.formatConstraints(scheme.constraints);
     const typeStr = this.formatType(scheme.type);
 
@@ -711,12 +708,39 @@ export class DocumentManager {
   }
 
   /**
+   * Infer the concrete type of a protocol method by checking instances.
+   * For a method like toString, look for instances that define it
+   * and return the first matching concrete type.
+   */
+  private inferProtocolMethodType(
+    methodName: string,
+    module: SemanticModule
+  ): string | undefined {
+    // Look through all instances to find one that defines this method
+    for (const instance of module.instances) {
+      const protocol = module.protocols[instance.protocolName];
+      if (!protocol) continue;
+
+      // Check if this protocol has this method
+      const methodInfo = protocol.methods.get(methodName);
+      if (methodInfo) {
+        // Get the method's type and format it
+        // This is the generic type from the protocol definition
+        const typeStr = this.formatType(methodInfo.type);
+        return typeStr;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
    * Format constraints.
    */
   private formatConstraints(
     constraints: Array<{ protocolName: string; typeArgs: Type[] }>
   ): string {
-    if (constraints.length === 0) return "";
+    if (!constraints || constraints.length === 0) return "";
     const parts = constraints.map((c) => {
       const args = c.typeArgs.map((t) => this.formatType(t)).join(" ");
       return `${c.protocolName} ${args}`;
@@ -729,6 +753,9 @@ export class DocumentManager {
    * Format a type as a readable string.
    */
   formatType(type: Type): string {
+    if (!type) {
+      return "<unknown>";
+    }
     switch (type.kind) {
       case "var":
         return this.typeVarName(type.id);
@@ -759,6 +786,9 @@ export class DocumentManager {
    * Format a type argument (with parens if needed).
    */
   private formatTypeArg(type: Type): string {
+    if (!type) {
+      return "<unknown>";
+    }
     if (type.kind === "fun" || (type.kind === "con" && type.args.length > 0)) {
       return `(${this.formatType(type)})`;
     }

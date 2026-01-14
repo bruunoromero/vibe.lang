@@ -1,0 +1,6 @@
+module Vibe.String exposing 
+  ( append
+  )
+
+@external "@vibe/runtime" "stringAppend"
+append : String -> String -> String

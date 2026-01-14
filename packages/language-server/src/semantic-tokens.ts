@@ -153,15 +153,21 @@ function extractASTTokens(
   }
 
   // Imports
-  for (const imp of ast.imports) {
-    // Module name in import
-    const modSpan = getModuleNameSpan(imp.span, imp.moduleName, content);
-    addToken(tokens, modSpan, TokenTypeIndex.Namespace, 0);
+  if (ast.imports) {
+    for (const imp of ast.imports) {
+      if (!imp) continue;
+      // Module name in import
+      const modSpan = getModuleNameSpan(imp.span, imp.moduleName, content);
+      addToken(tokens, modSpan, TokenTypeIndex.Namespace, 0);
+    }
   }
 
   // Declarations
-  for (const decl of ast.declarations) {
-    extractDeclarationTokens(decl, semantics, content, tokens);
+  if (ast.declarations) {
+    for (const decl of ast.declarations) {
+      if (!decl) continue;
+      extractDeclarationTokens(decl, semantics, content, tokens);
+    }
   }
 }
 
@@ -174,11 +180,13 @@ function extractDeclarationTokens(
   content: string,
   tokens: SemanticToken[]
 ): void {
+  if (!decl) return;
+
   switch (decl.kind) {
     case "ValueDeclaration": {
       // Function/value name
       const isFunction =
-        decl.args.length > 0 ||
+        (decl.args && decl.args.length > 0) ||
         semantics?.typeSchemes[decl.name]?.type.kind === "fun";
       const typeIdx = isFunction
         ? TokenTypeIndex.Function
@@ -194,12 +202,18 @@ function extractDeclarationTokens(
       );
 
       // Parameters
-      for (const arg of decl.args) {
-        extractPatternTokens(arg, content, tokens, true);
+      if (decl.args) {
+        for (const arg of decl.args) {
+          if (arg) {
+            extractPatternTokens(arg, content, tokens, true);
+          }
+        }
       }
 
       // Body
-      extractExprTokens(decl.body, semantics, content, tokens);
+      if (decl.body) {
+        extractExprTokens(decl.body, semantics, content, tokens);
+      }
       break;
     }
 
@@ -207,8 +221,8 @@ function extractDeclarationTokens(
       // Name in type annotation
       const nameSpan = getNameSpan(decl.span, decl.name, content);
       const isFunction =
-        decl.annotation.kind === "FunctionType" ||
-        decl.annotation.kind === "QualifiedType";
+        decl.annotation?.kind === "FunctionType" ||
+        decl.annotation?.kind === "QualifiedType";
       addToken(
         tokens,
         nameSpan,
@@ -217,7 +231,9 @@ function extractDeclarationTokens(
       );
 
       // Type expression
-      extractTypeExprTokens(decl.annotation, content, tokens);
+      if (decl.annotation) {
+        extractTypeExprTokens(decl.annotation, content, tokens);
+      }
       break;
     }
 
@@ -382,13 +398,15 @@ function extractExprTokens(
   content: string,
   tokens: SemanticToken[]
 ): void {
+  if (!expr || !expr.kind) return;
+
   switch (expr.kind) {
     case "Var": {
       // Determine if it's a constructor, function, or variable
       let typeIdx: number;
       if (expr.namespace === "upper") {
         typeIdx = TokenTypeIndex.Constructor;
-      } else if (semantics?.typeSchemes[expr.name]?.type.kind === "fun") {
+      } else if (semantics?.typeSchemes[expr.name]?.type?.kind === "fun") {
         typeIdx = TokenTypeIndex.Function;
       } else {
         typeIdx = TokenTypeIndex.Variable;
@@ -410,23 +428,41 @@ function extractExprTokens(
       break;
 
     case "Lambda":
-      for (const arg of expr.args) {
-        extractPatternTokens(arg, content, tokens, true);
+      if (expr.args) {
+        for (const arg of expr.args) {
+          if (arg) {
+            extractPatternTokens(arg, content, tokens, true);
+          }
+        }
       }
-      extractExprTokens(expr.body, semantics, content, tokens);
+      if (expr.body) {
+        extractExprTokens(expr.body, semantics, content, tokens);
+      }
       break;
 
     case "Apply":
-      extractExprTokens(expr.callee, semantics, content, tokens);
-      for (const arg of expr.args) {
-        extractExprTokens(arg, semantics, content, tokens);
+      if (expr.callee) {
+        extractExprTokens(expr.callee, semantics, content, tokens);
+      }
+      if (expr.args) {
+        for (const arg of expr.args) {
+          if (arg) {
+            extractExprTokens(arg, semantics, content, tokens);
+          }
+        }
       }
       break;
 
     case "If":
-      extractExprTokens(expr.condition, semantics, content, tokens);
-      extractExprTokens(expr.thenBranch, semantics, content, tokens);
-      extractExprTokens(expr.elseBranch, semantics, content, tokens);
+      if (expr.condition) {
+        extractExprTokens(expr.condition, semantics, content, tokens);
+      }
+      if (expr.thenBranch) {
+        extractExprTokens(expr.thenBranch, semantics, content, tokens);
+      }
+      if (expr.elseBranch) {
+        extractExprTokens(expr.elseBranch, semantics, content, tokens);
+      }
       break;
 
     case "LetIn":
@@ -531,6 +567,8 @@ function extractPatternTokens(
   tokens: SemanticToken[],
   isParameter: boolean
 ): void {
+  if (!pattern || !pattern.kind) return;
+
   switch (pattern.kind) {
     case "VarPattern":
       addToken(
@@ -581,6 +619,8 @@ function extractTypeExprTokens(
   content: string,
   tokens: SemanticToken[]
 ): void {
+  if (!typeExpr || !typeExpr.kind) return;
+
   switch (typeExpr.kind) {
     case "TypeRef": {
       // Check if it's a type variable (lowercase) or type name (uppercase)

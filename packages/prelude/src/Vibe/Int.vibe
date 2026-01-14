@@ -1,0 +1,54 @@
+module Vibe.Int exposing
+  ( add
+  , sub
+  , mul
+  , div
+  , mod
+  , negate
+  , toString
+  , eq
+  , neq
+  , lt
+  , lte
+  , gt
+  , gte
+  )
+
+@external "@vibe/runtime" "intAdd"
+add: Int -> Int -> Int
+
+@external "@vibe/runtime" "intSub"
+sub: Int -> Int -> Int
+
+@external "@vibe/runtime" "intMul"
+mul: Int -> Int -> Int
+
+@external "@vibe/runtime" "intDiv"
+div: Int -> Int -> Int
+
+@external "@vibe/runtime" "intMod"
+mod: Int -> Int -> Int
+
+@external "@vibe/runtime" "numToString"
+toString: Int -> String
+
+@external "@vibe/runtime" "numEq"
+eq: Int -> Int -> Bool
+
+@external "@vibe/runtime" "numNeq"
+neq: Int -> Int -> Bool
+
+@external "@vibe/runtime" "numLt"
+lt: Int -> Int -> Bool
+
+@external "@vibe/runtime" "numLte"
+lte: Int -> Int -> Bool
+
+@external "@vibe/runtime" "numGt"
+gt: Int -> Int -> Bool
+
+@external "@vibe/runtime" "numGte"
+gte: Int -> Int -> Bool
+
+negate: Int -> Int
+negate x = -x
