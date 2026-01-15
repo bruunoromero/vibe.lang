@@ -74,58 +74,13 @@ export function isKeyword(value: string): value is Keyword {
   return KEYWORD_SET.has(value as Keyword);
 }
 
-/**
- * Mappings from single operator characters to valid identifier components.
- * Multi-character operators are built by concatenating single-character mappings.
- *
- * Examples:
- * - `==` → `_EQ` + `_EQ` → `_EQ_EQ`
- * - `|>` → `_PIPE` + `_GT` → `_PIPE_GT`
- * - `->` → `_MINUS` + `_GT` → `_MINUS_GT`
- */
-const CHAR_TO_IDENTIFIER: Record<string, string> = {
-  ".": "_DOT",
-  "+": "_PLUS",
-  "-": "_MINUS",
-  "*": "_STAR",
-  "/": "_SLASH",
-  "%": "_PERCENT",
-  "^": "_CARET",
-  "<": "_LT",
-  ">": "_GT",
-  "=": "_EQ",
-  "|": "_PIPE",
-  "&": "_AMP",
-  "!": "_BANG",
-  ":": "_COLON",
-  "~": "_TILDE",
-  $: "_DOLLAR",
-  "#": "_HASH",
-  "@": "_AT",
-  "?": "_QUESTION",
-};
-
-/**
- * Convert an operator to a valid identifier by composing character mappings.
- * Unknown characters pass through unchanged.
- */
-export function sanitizeOperator(lexeme: string): string {
-  if (lexeme.length === 0) return lexeme;
-
-  // Try to build from character mappings
-  const parts: string[] = [];
-  for (const char of lexeme) {
-    const mapping = CHAR_TO_IDENTIFIER[char];
-    if (mapping) {
-      parts.push(mapping);
-    } else {
-      // If any character is unmapped, return the original lexeme unchanged
-      return lexeme;
-    }
-  }
-
-  return parts.join("");
-}
+// Re-export operator utilities from dedicated module
+export {
+  OPERATOR_CHARS,
+  CHAR_TO_IDENTIFIER,
+  sanitizeOperator,
+  isOperatorChar,
+} from "./operators.js";
 
 /**
  * Export specification for a single item in an exposing clause.

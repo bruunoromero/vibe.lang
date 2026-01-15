@@ -1,7 +1,5 @@
 import type { Keyword, Token, Position, Span } from "@vibe/syntax";
-import { TokenKind, isKeyword } from "@vibe/syntax";
-
-const operatorCharacters = new Set(Array.from("!#$%&*+./<=>?@%\\^|~:-"));
+import { TokenKind, isKeyword, isOperatorChar } from "@vibe/syntax";
 
 class LexerState {
   private index = 0;
@@ -343,13 +341,13 @@ function readPunctuationOrOperator(
     return makeSimpleToken(state, start, TokenKind.Backslash, 1);
   }
 
-  if (operatorCharacters.has(current)) {
+  if (isOperatorChar(current)) {
     state.advance();
     while (true) {
       const next = state.peek();
       if (
         next &&
-        operatorCharacters.has(next) &&
+        isOperatorChar(next) &&
         !(next === "-" && state.peek(1) === ">")
       ) {
         state.advance();

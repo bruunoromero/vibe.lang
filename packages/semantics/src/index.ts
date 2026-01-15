@@ -278,6 +278,103 @@ function getCollectedConstraints(): Constraint[] {
 }
 
 /**
+ * Eagerly validate pending constraints after unification.
+ *
+ * This function is called after each application in the Apply case to detect
+ * type mismatches early. When a protocol method's return type (a type variable)
+ * gets unified with a function type due to over-application, this catches the
+ * error immediately rather than waiting until generalization.
+ *
+ * The key insight: if a type variable from a protocol constraint gets unified
+ * to a concrete type structure (function, tuple, etc.) that no instance could
+ * ever match, we should report it as a type mismatch rather than a missing
+ * instance error.
+ *
+ * @param substitution - Current type substitution
+ * @param span - Source location for error reporting
+ * @param expectedNonFunctionType - If provided, the type that was expected to not be a function
+ */
+function validateConstraintsEagerly(
+  substitution: Substitution,
+  span: Span,
+  expectedNonFunctionType?: Type
+): void {
+  const constraints = getCollectedConstraints();
+  if (constraints.length === 0) return;
+
+  for (const c of constraints) {
+    // Apply substitution to get the current resolved type args
+    const resolvedTypeArgs = c.typeArgs.map((t) =>
+      applySubstitution(t, substitution)
+    );
+
+    // Check if any type arg has become a concrete non-variable type
+    // (meaning it's no longer polymorphic and can be validated now)
+    const hasConcreteNonVarArg = resolvedTypeArgs.some((t) => {
+      // A type is "concrete" for validation if it has a known shape
+      // that isn't just a type variable
+      if (t.kind === "var") return false;
+      if (t.kind === "fun") return true; // Function types are concrete structures
+      if (t.kind === "tuple") return true;
+      if (t.kind === "record") return true;
+      // For type constructors, check if they have any unresolved type variables
+      if (t.kind === "con") {
+        // If all args are resolved (no free vars), it's fully concrete
+        // Otherwise, it's partially concrete but may still need validation
+        // For now, we focus on function types as those are the most common source
+        // of over-application errors
+        return false;
+      }
+      return false;
+    });
+
+    if (!hasConcreteNonVarArg) continue;
+
+    // Check if this constraint involves a function type that can't be satisfied
+    const resolvedConstraint: Constraint = {
+      protocolName: c.protocolName,
+      typeArgs: resolvedTypeArgs,
+    };
+
+    const satisfiability = checkConstraintSatisfiability(
+      resolvedConstraint,
+      currentInstanceRegistry
+    );
+
+    if (!satisfiability.possible) {
+      // Find which type arg is the problematic function type
+      for (const typeArg of resolvedTypeArgs) {
+        if (typeArg.kind === "fun") {
+          // This is the key: produce a type mismatch error, not an instance error
+          // The real problem is that the user is trying to apply a non-function value
+          // to more arguments than its type allows.
+          //
+          // When `convert3 10.0 []` is written with convert3 : a -> b,
+          // the `b` gets unified with `List t -> result` because we're trying
+          // to apply (convert3 10.0) to another argument [].
+          // But the actual instance returns List Int (not a function).
+          //
+          // We format the error to show what type was expected vs what we tried
+          // to use it as (a function type).
+          throw new SemanticError(
+            `Type mismatch: cannot unify '${formatType(
+              typeArg.from
+            )}' with '${formatType(typeArg)}'`,
+            span
+          );
+        }
+      }
+      // Fallback: generic type mismatch for non-function cases
+      const typeArgsStr = resolvedTypeArgs.map((t) => formatType(t)).join(", ");
+      throw new SemanticError(
+        `Type mismatch: expression cannot be used as a function (constraint '${c.protocolName}' on '${typeArgsStr}' cannot be satisfied)`,
+        span
+      );
+    }
+  }
+}
+
+/**
  * Scope maintains a symbol table mapping names to their type schemes.
  * Type schemes enable let-polymorphism: bindings can be polymorphic,
  * and each use site gets a fresh instantiation of the type.
@@ -1851,6 +1948,25 @@ export function analyze(
   // have matching instances.
   setInstanceRegistry(instances);
 
+  // ===== PASS 2.0b: Concretize polymorphic instance type args =====
+  // Before value inference, analyze each instance's method bodies to determine
+  // if polymorphic type args can be concretized. This is important for multi-parameter
+  // protocols where the return type is constrained (e.g., `implement Appendable a => Proto Float a`
+  // where the method body forces `a` to be `List Int`).
+  concretizeInstanceTypeArgs(
+    localInstances,
+    instances,
+    protocols,
+    globalScope,
+    substitution,
+    constructors,
+    adts,
+    typeAliases,
+    opaqueTypes,
+    imports,
+    dependencies
+  );
+
   // Build dependency graph and compute SCCs for proper mutual recursion handling.
   // SCCs are returned in reverse topological order, so we process dependencies first.
   const depGraph = buildDependencyGraph(values);
@@ -1978,6 +2094,7 @@ export function analyze(
   // declared method signature (with type parameters substituted).
   validateImplementationMethodTypes(
     localInstances,
+    instances,
     protocols,
     globalScope,
     substitution,
@@ -3358,14 +3475,18 @@ function registerImplementation(
 }
 
 /**
- * Validate that all method implementations in protocol instances have types
- * that match the protocol's declared method signatures.
+ * Concretize polymorphic instance type args by analyzing method bodies.
  *
- * For example, if Show declares `toString : a -> String`, and we're implementing
- * `Show A`, then the implementation must have type `A -> String`, not `String`.
+ * When an implementation body forces a polymorphic type arg to be concrete
+ * (e.g., `convert3 _ = [1]` forces `a` to be `List Int`), we update the
+ * instance's typeArgs so that later generalization produces concrete types
+ * instead of leaving quantified variables with constraints.
+ *
+ * This fixes hover showing `ExampleProtocol3 Float t402 => t402` instead of `List Int`.
  */
-function validateImplementationMethodTypes(
-  instances: InstanceInfo[],
+function concretizeInstanceTypeArgs(
+  localInstances: InstanceInfo[],
+  allInstances: InstanceInfo[],
   protocols: Record<string, ProtocolInfo>,
   globalScope: Scope,
   substitution: Substitution,
@@ -3376,7 +3497,150 @@ function validateImplementationMethodTypes(
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>
 ): void {
-  for (const instance of instances) {
+  for (const instance of localInstances) {
+    const protocol = protocols[instance.protocolName];
+    if (!protocol) continue;
+
+    // Only process instances that have type variables in their typeArgs
+    const hasTypeVars = instance.typeArgs.some((t) => t.kind === "var");
+    if (!hasTypeVars) continue;
+
+    // Analyze each explicitly implemented method to infer concrete types
+    for (const methodName of instance.explicitMethods) {
+      const methodExpr = instance.methods.get(methodName);
+      const protocolMethodInfo = protocol.methods.get(methodName);
+
+      if (!methodExpr || !protocolMethodInfo) continue;
+
+      // Get the expected type from the protocol, substituting type parameters
+      const expectedType = substituteTypeParams(
+        protocolMethodInfo.type,
+        protocol.params,
+        instance.typeArgs
+      );
+
+      // Create a fresh substitution for inference
+      const inferSubstitution: Substitution = new Map(substitution);
+
+      // Infer the type of the implementation expression
+      const tempScope: Scope = { symbols: new Map(), parent: globalScope };
+      try {
+        const inferredType = analyzeExpr(
+          methodExpr,
+          tempScope,
+          inferSubstitution,
+          globalScope,
+          constructors,
+          adts,
+          typeAliases,
+          opaqueTypes,
+          imports,
+          dependencies
+        );
+
+        // Unify to get concrete types
+        unify(inferredType, expectedType, methodExpr.span, inferSubstitution);
+
+        // Apply the inference results back to the instance's typeArgs
+        for (let i = 0; i < instance.typeArgs.length; i++) {
+          const typeArg = instance.typeArgs[i]!;
+          const resolved = applySubstitution(typeArg, inferSubstitution);
+          // Only update if we got a more concrete type (not still a bare type variable)
+          if (resolved.kind !== "var" && typeArg.kind === "var") {
+            instance.typeArgs[i] = resolved;
+          }
+        }
+
+        // Update constraints' type args and remove fully-satisfied constraints
+        // When a constraint's type arg becomes concrete (e.g., Appendable a -> Appendable (List Int)),
+        // and there's a matching instance, the constraint is satisfied and can be removed.
+        const constraintsToRemove: Constraint[] = [];
+        for (const constraint of instance.constraints) {
+          let allConcrete = true;
+          for (let i = 0; i < constraint.typeArgs.length; i++) {
+            const typeArg = constraint.typeArgs[i]!;
+            const resolved = applySubstitution(typeArg, inferSubstitution);
+            if (resolved.kind !== "var" && typeArg.kind === "var") {
+              constraint.typeArgs[i] = resolved;
+            }
+            if (constraint.typeArgs[i]!.kind === "var") {
+              allConcrete = false;
+            }
+          }
+
+          // If all type args are now concrete, check if the constraint is satisfied
+          if (allConcrete) {
+            const isSatisfied = findInstanceForConstraint(
+              constraint.protocolName,
+              constraint.typeArgs,
+              allInstances
+            );
+            if (isSatisfied) {
+              constraintsToRemove.push(constraint);
+            }
+          }
+        }
+
+        // Remove satisfied constraints from the instance
+        for (const toRemove of constraintsToRemove) {
+          const idx = instance.constraints.indexOf(toRemove);
+          if (idx !== -1) {
+            instance.constraints.splice(idx, 1);
+          }
+        }
+      } catch {
+        // If analysis fails, continue - validation will catch errors later
+      }
+    }
+  }
+}
+
+/**
+ * Check if there's an instance that satisfies a constraint with the given type args.
+ */
+function findInstanceForConstraint(
+  protocolName: string,
+  typeArgs: Type[],
+  instances: InstanceInfo[]
+): boolean {
+  for (const inst of instances) {
+    if (inst.protocolName !== protocolName) continue;
+    if (inst.typeArgs.length !== typeArgs.length) continue;
+
+    // Check if all type args match
+    let allMatch = true;
+    for (let i = 0; i < typeArgs.length; i++) {
+      if (!instanceTypeMatches(inst.typeArgs[i]!, typeArgs[i]!)) {
+        allMatch = false;
+        break;
+      }
+    }
+    if (allMatch) return true;
+  }
+  return false;
+}
+
+/**
+ * Validate that all method implementations in protocol instances have types
+ * that match the protocol's declared method signatures.
+ *
+ * For example, if Show declares `toString : a -> String`, and we're implementing
+ * `Show A`, then the implementation must have type `A -> String`, not `String`.
+ */
+function validateImplementationMethodTypes(
+  localInstances: InstanceInfo[],
+  allInstances: InstanceInfo[],
+  protocols: Record<string, ProtocolInfo>,
+  globalScope: Scope,
+  substitution: Substitution,
+  constructors: Record<string, ConstructorInfo>,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>
+): void {
+  for (const instance of localInstances) {
     const protocol = protocols[instance.protocolName];
     if (!protocol) continue;
 
@@ -3445,6 +3709,66 @@ function validateImplementationMethodTypes(
           );
         }
         throw e;
+      }
+
+      // After successful unification, check that any constraints on the instance
+      // are satisfied when type variables are unified with concrete types.
+      // For example, if we have `implement Appendable a => Proto Float a`
+      // and the method implementation returns Int, then a=Int must satisfy Appendable.
+      for (const constraint of instance.constraints) {
+        for (const constraintTypeArg of constraint.typeArgs) {
+          // Apply the substitution to see what the constraint type arg resolves to
+          const resolvedType = applySubstitution(
+            constraintTypeArg,
+            inferSubstitution
+          );
+
+          // If it resolved to a concrete type, check that an instance exists
+          if (resolvedType.kind === "con") {
+            const hasInstance = findInstanceForTypeInternal(
+              constraint.protocolName,
+              resolvedType,
+              allInstances
+            );
+            if (!hasInstance) {
+              throw new SemanticError(
+                `Implementation of '${methodName}' for '${instance.protocolName}' ` +
+                  `requires '${constraint.protocolName}' constraint on type parameter, ` +
+                  `but the implementation uses type '${formatType(
+                    resolvedType
+                  )}' ` +
+                  `which does not implement '${constraint.protocolName}'`,
+                methodExpr.span
+              );
+            }
+          }
+        }
+      }
+
+      // IMPORTANT: Concretize the instance's type args based on inference results.
+      // When the implementation body forces a polymorphic type arg to be concrete
+      // (e.g., `convert3 _ = [1]` forces `a` to be `List Int`), we update the
+      // instance's typeArgs so that later generalization produces concrete types
+      // instead of leaving quantified variables with constraints.
+      // This fixes hover showing `ExampleProtocol3 Float t402 => t402` instead of `List Int`.
+      for (let i = 0; i < instance.typeArgs.length; i++) {
+        const typeArg = instance.typeArgs[i]!;
+        const resolved = applySubstitution(typeArg, inferSubstitution);
+        // Only update if we got a more concrete type (not still a bare type variable)
+        if (resolved.kind !== "var" && typeArg.kind === "var") {
+          instance.typeArgs[i] = resolved;
+        }
+      }
+
+      // Also update constraints' type args to reflect any concretization
+      for (const constraint of instance.constraints) {
+        for (let i = 0; i < constraint.typeArgs.length; i++) {
+          const typeArg = constraint.typeArgs[i]!;
+          const resolved = applySubstitution(typeArg, inferSubstitution);
+          if (resolved.kind !== "var" && typeArg.kind === "var") {
+            constraint.typeArgs[i] = resolved;
+          }
+        }
       }
     }
   }
@@ -3708,6 +4032,366 @@ type InstanceLookupResult =
     };
 
 /**
+ * Check if an instance type pattern matches a concrete type.
+ *
+ * Type variables in the instance type match anything (including other type variables).
+ * This is used for instance lookup where `implement Protocol (List a)` should match
+ * when looking for `Protocol (List Int)` or `Protocol (List t121)`.
+ */
+function instanceTypeMatches(instType: Type, concreteType: Type): boolean {
+  // Type variable in instance matches anything
+  if (instType.kind === "var") {
+    return true;
+  }
+
+  // Both must be the same kind
+  if (instType.kind !== concreteType.kind) {
+    return false;
+  }
+
+  if (instType.kind === "con" && concreteType.kind === "con") {
+    if (instType.name !== concreteType.name) {
+      return false;
+    }
+    if (instType.args.length !== concreteType.args.length) {
+      return false;
+    }
+    for (let i = 0; i < instType.args.length; i++) {
+      if (!instanceTypeMatches(instType.args[i]!, concreteType.args[i]!)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (instType.kind === "fun" && concreteType.kind === "fun") {
+    return (
+      instanceTypeMatches(instType.from, concreteType.from) &&
+      instanceTypeMatches(instType.to, concreteType.to)
+    );
+  }
+
+  if (instType.kind === "tuple" && concreteType.kind === "tuple") {
+    if (instType.elements.length !== concreteType.elements.length) {
+      return false;
+    }
+    for (let i = 0; i < instType.elements.length; i++) {
+      if (
+        !instanceTypeMatches(instType.elements[i]!, concreteType.elements[i]!)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (instType.kind === "record" && concreteType.kind === "record") {
+    const instKeys = Object.keys(instType.fields);
+    const concreteKeys = Object.keys(concreteType.fields);
+    if (instKeys.length !== concreteKeys.length) {
+      return false;
+    }
+    for (const key of instKeys) {
+      if (!(key in concreteType.fields)) {
+        return false;
+      }
+      if (
+        !instanceTypeMatches(instType.fields[key]!, concreteType.fields[key]!)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Same kind but not handled - use equality
+  return typesEqual(instType, concreteType);
+}
+
+/**
+ * Check if a constraint can possibly be satisfied, even if it contains type variables.
+ * This is a more permissive check than validateConstraintSatisfiable - it returns
+ * possible=true if there COULD be a valid instance, and possible=false if the
+ * constraint can NEVER be satisfied.
+ *
+ * The key insight is that certain type shapes (like function types) may not have
+ * any instances for certain protocols. For example, there's typically no
+ * `Appendable (a -> b)` instance, so `Appendable (List t -> r)` can never be satisfied.
+ *
+ * @param constraint - The constraint to check
+ * @param instances - Available protocol instances
+ * @returns {possible: boolean} - Whether the constraint could possibly be satisfied
+ */
+function checkConstraintSatisfiability(
+  constraint: Constraint,
+  instances: InstanceInfo[]
+): { possible: boolean } {
+  // If all type args are fully concrete, do a full validation
+  const hasFreeVars = constraint.typeArgs.some((t) => {
+    const freeVars = getFreeTypeVars(t, new Map());
+    return freeVars.size > 0;
+  });
+
+  if (!hasFreeVars) {
+    // All concrete - do full validation
+    const result = validateConstraintSatisfiable(constraint, instances);
+    return { possible: result.found };
+  }
+
+  // Has free type variables - check if the type shape could match any instance
+  // For each type arg, check if its "shape" (outermost constructor or function)
+  // could possibly match an instance
+  for (const typeArg of constraint.typeArgs) {
+    // Get the outermost shape of the type
+    const shape = getTypeShape(typeArg);
+
+    if (shape === "fun") {
+      // This is a function type. Check if there's ANY instance for function types.
+      // If not, this constraint can never be satisfied.
+      const hasFunctionInstance = instances.some((inst) => {
+        if (inst.protocolName !== constraint.protocolName) return false;
+        // Check if any type arg of the instance is a function type or type variable
+        // A type variable could match a function, so that counts
+        return inst.typeArgs.some((t) => t.kind === "fun" || t.kind === "var");
+      });
+
+      if (!hasFunctionInstance) {
+        // No instance could possibly match a function type for this protocol
+        return { possible: false };
+      }
+    }
+
+    if (shape === "tuple") {
+      // Similar check for tuple types
+      const hasTupleInstance = instances.some((inst) => {
+        if (inst.protocolName !== constraint.protocolName) return false;
+        return inst.typeArgs.some(
+          (t) => t.kind === "tuple" || t.kind === "var"
+        );
+      });
+
+      if (!hasTupleInstance) {
+        return { possible: false };
+      }
+    }
+
+    if (shape === "record") {
+      // Similar check for record types
+      const hasRecordInstance = instances.some((inst) => {
+        if (inst.protocolName !== constraint.protocolName) return false;
+        return inst.typeArgs.some(
+          (t) => t.kind === "record" || t.kind === "var"
+        );
+      });
+
+      if (!hasRecordInstance) {
+        return { possible: false };
+      }
+    }
+
+    // For concrete types (con) with a specific name, check if there could be a matching instance
+    if (shape === "con" && typeArg.kind === "con") {
+      const hasMatchingInstance = instances.some((inst) => {
+        if (inst.protocolName !== constraint.protocolName) return false;
+        return inst.typeArgs.some(
+          (t) =>
+            t.kind === "var" || (t.kind === "con" && t.name === typeArg.name)
+        );
+      });
+
+      if (!hasMatchingInstance) {
+        return { possible: false };
+      }
+    }
+  }
+
+  // Could not rule out satisfiability - assume it's possible
+  return { possible: true };
+}
+
+/**
+ * Get the "shape" of a type - its outermost constructor kind.
+ * This is used for quick checks of whether a type could possibly match an instance.
+ */
+function getTypeShape(type: Type): "var" | "con" | "fun" | "tuple" | "record" {
+  switch (type.kind) {
+    case "var":
+      return "var";
+    case "con":
+      return "con";
+    case "fun":
+      return "fun";
+    case "tuple":
+      return "tuple";
+    case "record":
+      return "record";
+    default:
+      return "con"; // Default fallback
+  }
+}
+
+/**
+ * Validate that a constraint (with all its type arguments) is satisfiable.
+ * This handles multi-parameter protocols correctly by:
+ * 1. Matching all type arguments against instance type arguments
+ * 2. Building a substitution for type variables in the instance
+ * 3. Checking that instance constraints are satisfied with the substituted types
+ *
+ * @param constraint - The full constraint to validate (protocol name + all type args)
+ * @param instances - Available protocol instances
+ * @returns Information about whether the constraint is satisfiable
+ */
+function validateConstraintSatisfiable(
+  constraint: Constraint,
+  instances: InstanceInfo[]
+): InstanceLookupResult {
+  let firstUnsatisfiedConstraint: {
+    constraint: string;
+    forType: string;
+  } | null = null;
+
+  for (const inst of instances) {
+    if (inst.protocolName !== constraint.protocolName) continue;
+
+    // Must have same number of type arguments
+    if (inst.typeArgs.length !== constraint.typeArgs.length) continue;
+
+    // Try to match all type arguments and build a substitution
+    // The substitution maps instance type variables to concrete types from the constraint
+    const instSubstitution = new Map<number, Type>();
+    let allArgsMatch = true;
+
+    for (let i = 0; i < inst.typeArgs.length; i++) {
+      const instArg = inst.typeArgs[i]!;
+      const constraintArg = constraint.typeArgs[i]!;
+
+      if (!matchTypeArgForInstance(instArg, constraintArg, instSubstitution)) {
+        allArgsMatch = false;
+        break;
+      }
+    }
+
+    if (!allArgsMatch) continue;
+
+    // All type args matched! Now check if instance constraints are satisfied
+    if (inst.constraints.length === 0) {
+      return { found: true }; // No constraints, instance matches
+    }
+
+    // Check each constraint on the instance
+    let allConstraintsSatisfied = true;
+    for (const instConstraint of inst.constraints) {
+      // Apply the substitution to the constraint's type args
+      // e.g., if instance has `Appendable a` and we matched a -> List Int,
+      // we need to check if `Appendable (List Int)` holds
+      const substitutedTypeArgs = instConstraint.typeArgs.map((t) =>
+        applySubstitution(t, instSubstitution)
+      );
+
+      const substitutedConstraint: Constraint = {
+        protocolName: instConstraint.protocolName,
+        typeArgs: substitutedTypeArgs,
+      };
+
+      // Check if constraint can potentially be satisfied
+      // Even with free type variables, some type shapes (like function types)
+      // might never have an instance for certain protocols
+      const canBeSatisfied = checkConstraintSatisfiability(
+        substitutedConstraint,
+        instances
+      );
+
+      if (!canBeSatisfied.possible) {
+        allConstraintsSatisfied = false;
+        if (!firstUnsatisfiedConstraint) {
+          firstUnsatisfiedConstraint = {
+            constraint: instConstraint.protocolName,
+            forType: substitutedTypeArgs.map((t) => formatType(t)).join(", "),
+          };
+        }
+        break;
+      }
+    }
+
+    if (allConstraintsSatisfied) {
+      return { found: true };
+    }
+  }
+
+  // No matching instance found
+  if (firstUnsatisfiedConstraint) {
+    return {
+      found: false,
+      reason: "unsatisfied-constraint",
+      constraint: firstUnsatisfiedConstraint.constraint,
+      forType: firstUnsatisfiedConstraint.forType,
+    };
+  }
+
+  return { found: false, reason: "no-instance" };
+}
+
+/**
+ * Try to match an instance type argument against a constraint type argument.
+ * Builds up a substitution mapping instance type variables to concrete types.
+ *
+ * Returns true if the match succeeds, false otherwise.
+ */
+function matchTypeArgForInstance(
+  instArg: Type,
+  constraintArg: Type,
+  substitution: Map<number, Type>
+): boolean {
+  // If instance arg is a type variable, it can match anything
+  // Record the mapping for constraint validation
+  if (instArg.kind === "var") {
+    const existing = substitution.get(instArg.id);
+    if (existing) {
+      // Already mapped - must be equal
+      return typesEqual(existing, constraintArg);
+    }
+    substitution.set(instArg.id, constraintArg);
+    return true;
+  }
+
+  // If constraint arg is a type variable, this is a polymorphic constraint
+  // We can't fully resolve it, but the match can succeed
+  if (constraintArg.kind === "var") {
+    // For polymorphic constraints, we allow the match but can't fully validate
+    return true;
+  }
+
+  // Both must be same kind
+  if (instArg.kind !== constraintArg.kind) return false;
+
+  if (instArg.kind === "con" && constraintArg.kind === "con") {
+    if (instArg.name !== constraintArg.name) return false;
+    if (instArg.args.length !== constraintArg.args.length) return false;
+    for (let i = 0; i < instArg.args.length; i++) {
+      if (
+        !matchTypeArgForInstance(
+          instArg.args[i]!,
+          constraintArg.args[i]!,
+          substitution
+        )
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  if (instArg.kind === "fun" && constraintArg.kind === "fun") {
+    return (
+      matchTypeArgForInstance(instArg.from, constraintArg.from, substitution) &&
+      matchTypeArgForInstance(instArg.to, constraintArg.to, substitution)
+    );
+  }
+
+  return typesEqual(instArg, constraintArg);
+}
+
+/**
  * Find an instance for a given protocol and concrete type.
  * Returns detailed information about whether a matching instance exists
  * and why it might not match.
@@ -3736,9 +4420,10 @@ function findInstanceForTypeWithReason(
       instTypeArg.args.length === concreteType.args.length
     ) {
       // Check if type arguments match (for parameterized types like List Int)
+      // Use instanceTypeMatches which allows type variables in the instance to match anything
       let argsMatch = true;
       for (let i = 0; i < instTypeArg.args.length; i++) {
-        if (!typesEqual(instTypeArg.args[i]!, concreteType.args[i]!)) {
+        if (!instanceTypeMatches(instTypeArg.args[i]!, concreteType.args[i]!)) {
           argsMatch = false;
           break;
         }
@@ -5343,6 +6028,10 @@ function analyzeExpr(
         );
         const resultType = freshType();
         unify(calleeType, fn(argType, resultType), expr.span, substitution);
+        // Eagerly validate constraints after unification to catch type mismatches
+        // where a protocol method's return type gets unified with a function type
+        // due to over-application
+        validateConstraintsEagerly(substitution, arg.span);
         calleeType = applySubstitution(resultType, substitution);
       }
       return applySubstitution(calleeType, substitution);
@@ -6484,45 +7173,58 @@ function generalizeWithAnnotatedConstraints(
     substitution
   );
 
-  // Validate concrete constraints - constraints on concrete types must have instances
-  // These are the constraints that will be filtered out during generalization,
-  // but we need to verify they're actually satisfiable.
+  // Validate constraints that are not purely polymorphic.
+  // Constraints that ONLY involve quantified type variables are deferred until call time.
+  // But constraints that have concrete type arguments (or type structures like function types)
+  // should be validated now to catch errors early.
   for (const c of resolvedConstraints) {
-    for (const typeArg of c.typeArgs) {
-      const resolved = applySubstitution(typeArg, substitution);
-      // Only validate fully concrete types (no type variables)
-      if (resolved.kind === "con") {
-        const freeVars = getFreeTypeVars(resolved, substitution);
-        if (freeVars.size === 0) {
-          // This is a concrete constraint - validate instance exists
-          const lookupResult = findInstanceForTypeWithReason(
-            c.protocolName,
-            resolved as TypeCon,
-            currentInstanceRegistry
-          );
-          if (!lookupResult.found) {
-            if (lookupResult.reason === "unsatisfied-constraint") {
-              throw new SemanticError(
-                `Type '${formatType(resolved)}' does not satisfy constraint '${
-                  lookupResult.constraint
-                }' ` +
-                  `required by '${c.protocolName}'. ` +
-                  `Add an implementation: implement ${lookupResult.constraint} ${lookupResult.forType} where ...`,
-                span
-              );
-            } else {
-              throw new SemanticError(
-                `No instance of '${c.protocolName}' for type '${formatType(
-                  resolved
-                )}'. ` +
-                  `Add an implementation: implement ${
-                    c.protocolName
-                  } ${formatType(resolved)} where ...`,
-                span
-              );
-            }
-          }
-        }
+    // Apply substitution to all type args
+    const resolvedTypeArgs = c.typeArgs.map((t) =>
+      applySubstitution(t, substitution)
+    );
+
+    // Check if the constraint involves ONLY quantified type variables at the top level
+    // If so, skip validation - it will be validated at call sites when instantiated
+    const isFullyPolymorphic = resolvedTypeArgs.every((t) => {
+      if (t.kind === "var" && quantified.has(t.id)) {
+        return true; // This is a quantified type variable
+      }
+      return false;
+    });
+
+    if (isFullyPolymorphic) {
+      // All type args are quantified vars - skip validation, defer to call sites
+      continue;
+    }
+
+    const resolvedConstraint: Constraint = {
+      protocolName: c.protocolName,
+      typeArgs: resolvedTypeArgs,
+    };
+
+    // Validate that an instance exists (or could exist) for this constraint
+    const lookupResult = validateConstraintSatisfiable(
+      resolvedConstraint,
+      currentInstanceRegistry
+    );
+
+    if (!lookupResult.found) {
+      // Build a helpful error message
+      const typeArgsStr = resolvedTypeArgs.map((t) => formatType(t)).join(", ");
+
+      if (lookupResult.reason === "unsatisfied-constraint") {
+        throw new SemanticError(
+          `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
+            `The instance requires '${lookupResult.constraint}' for '${lookupResult.forType}', ` +
+            `but no such instance exists.`,
+          span
+        );
+      } else {
+        throw new SemanticError(
+          `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
+            `Add an implementation: implement ${c.protocolName} ${typeArgsStr} where ...`,
+          span
+        );
       }
     }
   }
@@ -6595,7 +7297,83 @@ function generalizeWithAnnotatedConstraints(
     }
   }
 
-  return { vars: quantified, constraints: uniqueConstraints, type };
+  // IMPORTANT: Try to resolve constraints against instances to concretize type variables.
+  // When a constraint has some concrete type args and some type variables (e.g., ExampleProtocol3 Float t123),
+  // and there's a unique matching instance (e.g., ExampleProtocol3 Float (List Int)), we can unify
+  // the type variable with the instance's concrete type. This fixes hover showing polymorphic types
+  // with constraints instead of concrete resolved types.
+  const constraintsToRemove: Constraint[] = [];
+  for (const c of uniqueConstraints) {
+    // Check if any type arg is a quantified type variable
+    const resolvedTypeArgs = c.typeArgs.map((t) =>
+      applySubstitution(t, substitution)
+    );
+
+    // Find all type variable positions and concrete positions
+    const varPositions: number[] = [];
+    const concretePositions: number[] = [];
+    for (let i = 0; i < resolvedTypeArgs.length; i++) {
+      const arg = resolvedTypeArgs[i]!;
+      if (arg.kind === "var" && quantified.has(arg.id)) {
+        varPositions.push(i);
+      } else if (arg.kind !== "var") {
+        concretePositions.push(i);
+      }
+    }
+
+    // If we have at least one concrete type arg and at least one type variable,
+    // try to find a unique matching instance
+    if (concretePositions.length > 0 && varPositions.length > 0) {
+      const matchingInstances = currentInstanceRegistry.filter((inst) => {
+        if (inst.protocolName !== c.protocolName) return false;
+        if (inst.typeArgs.length !== resolvedTypeArgs.length) return false;
+
+        // Check that all concrete positions match
+        for (const pos of concretePositions) {
+          const instArg = inst.typeArgs[pos]!;
+          const constraintArg = resolvedTypeArgs[pos]!;
+          if (!instanceTypeMatches(instArg, constraintArg)) return false;
+        }
+
+        // Check that the instance has concrete types for the variable positions
+        // (so we can actually resolve the type variable)
+        for (const pos of varPositions) {
+          const instArg = inst.typeArgs[pos]!;
+          // Instance type arg must be concrete (not a bare type variable)
+          if (instArg.kind === "var") return false;
+        }
+
+        return true;
+      });
+
+      // If exactly one matching instance, unify the type variables with instance types
+      if (matchingInstances.length === 1) {
+        const matchingInst = matchingInstances[0]!;
+        for (const pos of varPositions) {
+          const typeVar = resolvedTypeArgs[pos]!;
+          const instType = matchingInst.typeArgs[pos]!;
+          if (typeVar.kind === "var") {
+            // Add to substitution to concretize this type variable
+            substitution.set(typeVar.id, instType);
+            // Remove from quantified set since it's now concrete
+            quantified.delete(typeVar.id);
+          }
+        }
+        // Mark this constraint for removal since it's now fully resolved
+        constraintsToRemove.push(c);
+      }
+    }
+  }
+
+  // Remove fully resolved constraints
+  const finalConstraints = uniqueConstraints.filter(
+    (c) => !constraintsToRemove.includes(c)
+  );
+
+  // Apply the updated substitution to the type
+  const finalType = applySubstitution(type, substitution);
+
+  return { vars: quantified, constraints: finalConstraints, type: finalType };
 }
 
 /**

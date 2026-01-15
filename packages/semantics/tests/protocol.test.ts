@@ -1163,3 +1163,226 @@ add x y = plus x y
     expect(numConstraints.length).toBe(1);
   });
 });
+
+describe("Multi-Parameter Protocol Constraint Validation", () => {
+  test("validates constraint applies to correct type parameter", () => {
+    // Bug fix test: constraint `Appendable a` applies to second type arg, not first
+    const source = `
+protocol Appendable a where
+  append : a -> a -> a
+
+protocol Convert a b where
+  convert : a -> b
+
+-- List implements Appendable
+implement Appendable (List a) where
+  append xs ys = xs
+
+-- Implementation where second type param has Appendable constraint
+-- convert3 returns [], which is List - should pass because List is Appendable
+implement Appendable b => Convert Int b where
+  convert _ = []
+`;
+    const program = parse(source);
+    // Should not throw - List is Appendable
+    const result = analyze(program);
+    expect(result.instances.length).toBe(2);
+  });
+
+  test("rejects implementation where return type violates constraint", () => {
+    // Bug fix test: returning Int when constraint requires Appendable should fail
+    const source = `
+protocol Appendable a where
+  append : a -> a -> a
+
+protocol Convert a b where
+  convert : a -> b
+
+-- Int does NOT implement Appendable
+-- This implementation returns 10 (Int), which violates the Appendable constraint
+implement Appendable b => Convert Float b where
+  convert _ = 10
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow(/Appendable/);
+    expect(() => analyze(program)).toThrow(/Int/);
+  });
+
+  test("validates multi-parameter protocol with constraint on first param", () => {
+    const source = `
+protocol Eq a where
+  eq : a -> a -> Bool
+
+protocol Transform a b where
+  transform : a -> b
+
+-- Constraint on first param
+implement Eq a => Transform a Int where
+  transform x = 42
+`;
+    const program = parse(source);
+    // Should pass - transform takes an Eq a and returns Int
+    const result = analyze(program);
+    expect(result.instances.length).toBe(1);
+  });
+
+  test("allows polymorphic return type matching Appendable constraint", () => {
+    const source = `
+protocol Appendable a where
+  append : a -> a -> a
+
+protocol Convert a b where
+  convert : a -> b
+
+implement Appendable (List a) where
+  append xs ys = xs
+
+-- Return type is List which is Appendable (polymorphic match)
+implement Appendable b => Convert String b where
+  convert _ = []
+`;
+    const program = parse(source);
+    const result = analyze(program);
+    expect(result.instances.length).toBe(2);
+  });
+
+  test("rejects constraint violation with String (non-Appendable)", () => {
+    const source = `
+protocol Appendable a where
+  append : a -> a -> a
+
+protocol Convert a b where
+  convert : a -> b
+
+-- String literal - assuming String doesn't implement Appendable
+implement Appendable b => Convert Int b where
+  convert _ = "hello"
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow(/Appendable/);
+  });
+
+  test("validates constraint on nested type parameter", () => {
+    const source = `
+protocol Show a where
+  show : a -> String
+
+protocol Wrap a b where
+  wrap : a -> b
+
+-- List Show constraint
+implement Show (List a) where
+  show xs = "list"
+
+implement Show b => Wrap Int b where
+  wrap _ = []
+`;
+    const program = parse(source);
+    const result = analyze(program);
+    expect(result.instances.length).toBe(2);
+  });
+
+  test("concretizes instance type args from implementation body", () => {
+    // Bug fix test: when an implementation body forces a polymorphic type arg
+    // to be concrete (e.g., `convert3 _ = [1]` forces `a` to be `List Int`),
+    // the instance's typeArgs should be updated so that later generalization
+    // produces concrete types instead of polymorphic with constraints.
+    // This fixes hover showing `ExampleProtocol3 Float t402 => t402` instead of `List Int`.
+    const source = `
+protocol Appendable a where
+  append : a -> a -> a
+
+protocol ExampleProtocol3 a b where
+  convert3 : a -> b
+
+implement Appendable (List a) where
+  append xs ys = xs
+
+-- Implementation forces b to be List Int due to the literal [1]
+implement Appendable a => ExampleProtocol3 Float a where
+  convert3 _ = [1]
+
+main = convert3 10.0
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // The instance for ExampleProtocol3 should have typeArgs [Float, List Int]
+    // after concretization, not [Float, a] with Appendable a constraint
+    const ep3Instance = result.instances.find(
+      (i) => i.protocolName === "ExampleProtocol3"
+    );
+    expect(ep3Instance).toBeDefined();
+    expect(ep3Instance!.typeArgs.length).toBe(2);
+    expect(ep3Instance!.typeArgs[0]).toEqual({
+      kind: "con",
+      name: "Float",
+      args: [],
+    });
+    // Second type arg should now be List Int (concretized from the body)
+    expect(ep3Instance!.typeArgs[1]!.kind).toBe("con");
+    expect((ep3Instance!.typeArgs[1] as any).name).toBe("List");
+
+    // main should have type List Int (concrete), not a polymorphic type with constraint
+    const mainScheme = result.typeSchemes.main;
+    expect(mainScheme).toBeDefined();
+    // The type should be concrete List Int, not a type variable
+    expect(mainScheme!.type.kind).toBe("con");
+    expect((mainScheme!.type as any).name).toBe("List");
+    // Should have no constraints (or at least no Appendable constraint on a free var)
+    // since the type is now fully concrete
+    expect(mainScheme!.constraints.length).toBe(0);
+  });
+});
+
+describe("Over-application of Protocol Methods", () => {
+  test("produces type mismatch error when protocol method result is over-applied", () => {
+    // This tests the fix for the inconsistent error message issue.
+    // When `convert3 10.0 []` is written, and convert3 : a -> b,
+    // the result of `convert3 10.0` (type b) is being applied to [],
+    // which means b must be a function type. But the instance returns
+    // List Int, not a function. This should produce a "Type mismatch" error,
+    // not a "No instance of" error.
+    const source = `
+protocol Appendable a where
+  append : a -> a -> a
+
+protocol ExampleProtocol3 a b where
+  convert3 : a -> b
+
+implement Appendable (List a) where
+  append xs ys = xs
+
+implement Appendable a => ExampleProtocol3 Float a where
+  convert3 _ = [1]
+
+main = convert3 10.0 []
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    // The error should be a type mismatch, not a missing instance error
+    expect(() => analyze(program)).toThrow("Type mismatch");
+  });
+
+  test("still produces correct error for missing instance when not over-applied", () => {
+    // This verifies we haven't broken the case where there really is a missing instance
+    const source = `
+protocol Show a where
+  show : a -> String
+
+type MyType = MyType
+
+-- No Show instance for MyType
+main = show MyType
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow("No instance of");
+  });
+});

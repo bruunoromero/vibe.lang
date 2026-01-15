@@ -17,6 +17,7 @@
     "turbo": "^2.7.2"
   },
   "scripts": {
-    "build": "bun install && turbo run build"
+    "build": "bun install && turbo run build",
+    "start": "bun ./packages/example-app/main.ts"
   }
 }

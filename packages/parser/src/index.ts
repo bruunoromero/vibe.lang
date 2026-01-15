@@ -39,9 +39,13 @@ import {
   type Constraint,
   type MethodImplementation,
   type InfixDeclaration,
-  type OperatorInfo,
   type OperatorRegistry,
 } from "@vibe/syntax";
+import {
+  buildRegistryFromTokens,
+  getOperatorInfo as getOperatorInfoFromRegistry,
+  InfixParseError,
+} from "./operator-registry.js";
 
 /**
  * Error thrown during parsing when unexpected syntax is encountered
@@ -89,110 +93,16 @@ export function collectInfixDeclarations(source: string): {
   errors: ParseError[];
 } {
   const tokens = lex(source);
-  const registry: OperatorRegistry = new Map();
-  const declarations: InfixDeclaration[] = [];
-  const errors: ParseError[] = [];
+  const result = buildRegistryFromTokens(tokens);
 
-  let i = 0;
+  // Convert InfixParseError to ParseError for backward compatibility
+  const errors = result.errors.map((e) => new ParseError(e.message, e.span));
 
-  while (i < tokens.length && tokens[i]!.kind !== TokenKind.Eof) {
-    const tok = tokens[i]!;
-
-    // Look for infix/infixl/infixr keywords
-    if (
-      tok.kind === TokenKind.Keyword &&
-      (tok.lexeme === "infix" ||
-        tok.lexeme === "infixl" ||
-        tok.lexeme === "infixr")
-    ) {
-      const start = tok.span.start;
-      const fixity = tok.lexeme as "infix" | "infixl" | "infixr";
-      i++;
-
-      // Parse precedence number
-      if (i >= tokens.length || tokens[i]!.kind !== TokenKind.Number) {
-        errors.push(
-          new ParseError(
-            "Expected precedence number after infix keyword",
-            tokens[i - 1]!.span
-          )
-        );
-        continue;
-      }
-      const precedence = parseInt(tokens[i]!.lexeme, 10);
-      i++;
-
-      // Parse operator (optional parens)
-      let operator: string;
-      let end: Span["end"];
-
-      if (i < tokens.length && tokens[i]!.kind === TokenKind.LParen) {
-        i++; // consume (
-        if (i >= tokens.length || tokens[i]!.kind !== TokenKind.Operator) {
-          errors.push(
-            new ParseError(
-              "Expected operator inside parentheses",
-              tokens[i - 1]!.span
-            )
-          );
-          continue;
-        }
-        operator = tokens[i]!.lexeme;
-        i++; // consume operator
-        if (i >= tokens.length || tokens[i]!.kind !== TokenKind.RParen) {
-          errors.push(
-            new ParseError(
-              "Expected closing parenthesis after operator",
-              tokens[i - 1]!.span
-            )
-          );
-          continue;
-        }
-        end = tokens[i]!.span.end;
-        i++; // consume )
-      } else if (i < tokens.length && tokens[i]!.kind === TokenKind.Operator) {
-        operator = tokens[i]!.lexeme;
-        end = tokens[i]!.span.end;
-        i++;
-      } else {
-        errors.push(
-          new ParseError(
-            "Expected operator after precedence in infix declaration",
-            tokens[i - 1]!.span
-          )
-        );
-        continue;
-      }
-
-      // Convert fixity to associativity
-      const associativity: "left" | "right" | "none" =
-        fixity === "infixl" ? "left" : fixity === "infixr" ? "right" : "none";
-
-      // Check for duplicate declarations
-      if (registry.has(operator)) {
-        errors.push(
-          new ParseError(
-            `Duplicate infix declaration for operator '${operator}'`,
-            { start, end }
-          )
-        );
-        continue;
-      }
-
-      registry.set(operator, { precedence, associativity });
-      declarations.push({
-        kind: "InfixDeclaration",
-        fixity,
-        precedence,
-        operator,
-        span: { start, end },
-      });
-    } else {
-      i++;
-    }
-  }
-
-  return { registry, declarations, errors };
+  return {
+    registry: result.registry,
+    declarations: result.declarations,
+    errors,
+  };
 }
 
 /**
@@ -235,7 +145,7 @@ class Parser {
 
   /**
    * Get operator precedence and associativity.
-   * Looks up the operator in the provided registry.
+   * Looks up the operator in the provided registry, falling back to defaults.
    *
    * All standard operators should be declared via infix declarations in Vibe.vibe.
    * For unknown operators without declarations, we use a default of precedence 9
@@ -246,16 +156,7 @@ class Parser {
     precedence: number;
     associativity: "left" | "right" | "none";
   } {
-    // Check the operator registry (populated from infix declarations)
-    const info = this.operatorRegistry.get(op);
-    if (info) {
-      return info;
-    }
-
-    // Unknown operator - use default precedence 9 (high) and left associativity.
-    // This is a fallback for operators that haven't been declared via infix.
-    // In a well-formed program with proper imports, all operators should be in the registry.
-    return { precedence: 9, associativity: "left" };
+    return getOperatorInfoFromRegistry(this.operatorRegistry, op);
   }
 
   /**

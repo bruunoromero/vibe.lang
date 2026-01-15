@@ -124,6 +124,14 @@ export interface CodegenContext {
    * and what constraint dictionaries it needs.
    */
   constrainedInstances: Map<string, IRConstraint[]>;
+
+  /**
+   * The expected return type for the current expression context.
+   * Used for multi-parameter protocols where constraints may be on the return type.
+   * For example, in `main : List Int = convert3 10.0`, the expected return type
+   * is `List Int`, which helps resolve the `Appendable` constraint.
+   */
+  expectedReturnType: IRType | undefined;
 }
 
 /**
@@ -148,6 +156,7 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     protocolMethodMap: new Map(),
     varTypes: new Map(),
     constrainedInstances: new Map(),
+    expectedReturnType: undefined,
   };
 
   // Build protocol method map from protocol definitions
@@ -238,6 +247,104 @@ function formatTypeKey(type: IRType | undefined): string {
 }
 
 /**
+ * Check if a type is a type variable (or contains only type variables).
+ * Used to determine if a type is concrete enough for dictionary resolution.
+ */
+function isTypeVariable(type: IRType): boolean {
+  switch (type.kind) {
+    case "var":
+      return true;
+    case "con":
+      return false;
+    case "list":
+      // List with a concrete element is concrete enough
+      return isTypeVariable(type.element);
+    case "tuple":
+      return type.elements.every(isTypeVariable);
+    case "fun":
+      return isTypeVariable(type.from) && isTypeVariable(type.to);
+    case "record":
+      return Object.values(type.fields).every(isTypeVariable);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Build a substitution map from type variable IDs to concrete types.
+ *
+ * Given an instance's type args (which may contain type variables) and
+ * the concrete types at a call site, builds a mapping from type variable IDs
+ * to their concrete substitutions.
+ *
+ * @param instanceTypeArgs - The type args from the instance definition
+ * @param concreteTypes - The concrete types at the call site
+ * @returns Map from type variable ID to concrete type
+ */
+function buildTypeVarSubstitution(
+  instanceTypeArgs: IRType[],
+  concreteTypes: IRType[]
+): Map<number, IRType> {
+  const subst = new Map<number, IRType>();
+
+  function collectSubst(instType: IRType, concreteType: IRType): void {
+    if (instType.kind === "var") {
+      // Type variable - record the substitution
+      subst.set(instType.id, concreteType);
+    } else if (instType.kind === "con" && concreteType.kind === "con") {
+      // Type constructor - recurse into args
+      for (
+        let i = 0;
+        i < instType.args.length && i < concreteType.args.length;
+        i++
+      ) {
+        collectSubst(instType.args[i]!, concreteType.args[i]!);
+      }
+    } else if (instType.kind === "list" && concreteType.kind === "list") {
+      collectSubst(instType.element, concreteType.element);
+    } else if (instType.kind === "tuple" && concreteType.kind === "tuple") {
+      for (
+        let i = 0;
+        i < instType.elements.length && i < concreteType.elements.length;
+        i++
+      ) {
+        collectSubst(instType.elements[i]!, concreteType.elements[i]!);
+      }
+    } else if (instType.kind === "fun" && concreteType.kind === "fun") {
+      collectSubst(instType.from, concreteType.from);
+      collectSubst(instType.to, concreteType.to);
+    }
+  }
+
+  for (
+    let i = 0;
+    i < instanceTypeArgs.length && i < concreteTypes.length;
+    i++
+  ) {
+    collectSubst(instanceTypeArgs[i]!, concreteTypes[i]!);
+  }
+
+  return subst;
+}
+
+/**
+ * Apply a type variable substitution to get the concrete type.
+ *
+ * @param type - The type (may be a type variable)
+ * @param subst - The substitution map from type var IDs to concrete types
+ * @returns The substituted concrete type, or the original type if no substitution found
+ */
+function applyTypeSubstitution(
+  type: IRType,
+  subst: Map<number, IRType>
+): IRType {
+  if (type.kind === "var") {
+    return subst.get(type.id) ?? type;
+  }
+  return type;
+}
+
+/**
  * Resolve a dictionary reference for a protocol and concrete type.
  *
  * Returns the fully qualified dictionary expression. For simple instances
@@ -252,12 +359,16 @@ function formatTypeKey(type: IRType | undefined): string {
  *
  * @param concreteType - The concrete type we're resolving for (e.g., Int). Used to
  *                       resolve constraint dictionaries for polymorphic instances.
+ *                       For single-parameter protocols, this is the first type arg.
+ * @param allConcreteTypes - Optional array of ALL concrete type args at the call site.
+ *                           Used for multi-parameter protocols to properly resolve constraints.
  */
 function resolveDictReference(
   protocolName: string,
   typeKey: string,
   ctx: CodegenContext,
-  concreteType?: IRType
+  concreteType?: IRType,
+  allConcreteTypes?: IRType[]
 ): string {
   const key = `${protocolName}_${typeKey}`;
 
@@ -332,20 +443,56 @@ function resolveDictReference(
 
   // Check if this instance is constrained (needs dictionary parameters)
   const constraints = ctx.constrainedInstances.get(instanceKey);
+  const matchedInstance = ctx.instances.find(
+    (inst) =>
+      inst.protocolName === protocolName &&
+      `${protocolName}_${formatTypeKey(inst.typeArgs[0])}` === instanceKey
+  );
+
   if (constraints && constraints.length > 0) {
     // The dictionary is a function - we need to pass constraint dictionaries
-    // For each constraint, resolve the appropriate dictionary based on concreteType
+    // For each constraint, resolve the appropriate dictionary based on the correct type arg
     const constraintDicts: string[] = [];
     const seenProtocols = new Set<string>();
+
+    // Build type variable substitution if we have all concrete types and the instance
+    const typeVarSubst =
+      allConcreteTypes && matchedInstance
+        ? buildTypeVarSubstitution(matchedInstance.typeArgs, allConcreteTypes)
+        : new Map<number, IRType>();
 
     for (const constraint of constraints) {
       if (!seenProtocols.has(constraint.protocolName)) {
         seenProtocols.add(constraint.protocolName);
 
-        if (concreteType && concreteType.kind === "con") {
+        // Get the type variable from the constraint and resolve it using substitution
+        const constraintTypeArg = constraint.typeArgs[0];
+        let resolvedType: IRType | undefined;
+
+        if (constraintTypeArg && constraintTypeArg.kind === "var") {
+          // Use substitution to find the concrete type for this type variable
+          resolvedType = typeVarSubst.get(constraintTypeArg.id);
+          // If substitution didn't find a match, the constraint is on a type variable
+          // that wasn't matched to any concrete operand type - use polymorphic path
+        } else if (constraintTypeArg) {
+          // Already a concrete type
+          resolvedType = constraintTypeArg;
+        }
+
+        // NOTE: We deliberately do NOT fallback to concreteType here.
+        // If we couldn't resolve the type variable, it means the constraint is on
+        // a type parameter that isn't determined by the call's operands.
+        // In this case, we should use the polymorphic path.
+
+        if (resolvedType && resolvedType.kind === "con") {
           // We have a concrete type - resolve the constraint dictionary for it
           constraintDicts.push(
-            resolveDictionaryForType(constraint.protocolName, concreteType, ctx)
+            resolveDictionaryForType(constraint.protocolName, resolvedType, ctx)
+          );
+        } else if (resolvedType && resolvedType.kind === "list") {
+          // Handle list type - resolve Appendable for List
+          constraintDicts.push(
+            resolveDictionaryForType(constraint.protocolName, resolvedType, ctx)
           );
         } else {
           // Polymorphic context - pass through the dictionary parameter
@@ -1092,6 +1239,8 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
   // For a function like `distance : {x: Int, y: Int} -> Int` with param `point`,
   // we want to map "point" -> {kind: "record", fields: {x: Int, y: Int}}
   const varTypes = new Map<string, IRType>();
+  // Also extract the final return type (after all parameters)
+  let returnType: IRType = value.type;
   if (value.params.length > 0 && value.type.kind === "fun") {
     let currentType: IRType = value.type;
     for (let i = 0; i < value.params.length; i++) {
@@ -1103,15 +1252,20 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
         currentType = currentType.to;
       }
     }
+    returnType = currentType;
   }
 
   // Save previous context and set new scope
   const prevDictParams = ctx.dictParamsInScope;
   const prevConcreteConstraints = ctx.concreteConstraints;
   const prevVarTypes = ctx.varTypes;
+  const prevExpectedReturnType = ctx.expectedReturnType;
   ctx.dictParamsInScope = new Set(dictParams);
   ctx.concreteConstraints = concreteConstraints;
   ctx.varTypes = varTypes;
+  // Set expected return type for the body - this helps resolve constraints
+  // on return types (e.g., for multi-parameter protocols like ExampleProtocol3)
+  ctx.expectedReturnType = returnType;
 
   // If value has parameters or dictionary params, wrap body in curried lambdas
   if (value.params.length > 0 || dictParams.length > 0) {
@@ -1134,6 +1288,7 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
     ctx.dictParamsInScope = prevDictParams;
     ctx.concreteConstraints = prevConcreteConstraints;
     ctx.varTypes = prevVarTypes;
+    ctx.expectedReturnType = prevExpectedReturnType;
     return body;
   }
 
@@ -1144,6 +1299,7 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
   ctx.dictParamsInScope = prevDictParams;
   ctx.concreteConstraints = prevConcreteConstraints;
   ctx.varTypes = prevVarTypes;
+  ctx.expectedReturnType = prevExpectedReturnType;
   return body;
 }
 
@@ -1248,7 +1404,14 @@ function generateVar(
       const typeArg = expr.constraint.typeArgs[0];
       if (typeArg && typeArg.kind === "con") {
         const typeKey = formatTypeKey(typeArg);
-        const dictRef = resolveDictReference(protocolName, typeKey, ctx);
+        // Pass all constraint type args for multi-parameter protocols
+        const dictRef = resolveDictReference(
+          protocolName,
+          typeKey,
+          ctx,
+          typeArg,
+          expr.constraint.typeArgs
+        );
         return `${dictRef}.${sanitizedName}`;
       }
     }
@@ -1268,6 +1431,19 @@ function generateVar(
     if (constraintType && constraintType.kind === "con") {
       const typeKey = formatTypeKey(constraintType);
       const dictRef = resolveDictReference(protocolName, typeKey, ctx);
+      return `${dictRef}.${sanitizedName}`;
+    }
+
+    // Try to use the expected return type for zero-argument protocol methods
+    // This handles cases like `defaultVal : a` when we know the expected type is `List Int`
+    if (ctx.expectedReturnType && !isTypeVariable(ctx.expectedReturnType)) {
+      const typeKey = formatTypeKey(ctx.expectedReturnType);
+      const dictRef = resolveDictReference(
+        protocolName,
+        typeKey,
+        ctx,
+        ctx.expectedReturnType
+      );
       return `${dictRef}.${sanitizedName}`;
     }
 
@@ -1474,8 +1650,19 @@ function tryGenerateProtocolMethodApply(
     return null;
   }
 
-  // Monomorphic context: try to infer concrete type from operands
+  // Monomorphic context: try to infer concrete types from operands
+  // For multi-parameter protocols, we need ALL operand types to properly resolve constraints
   let concreteType = inferConcreteTypeFromOperands(operands, ctx);
+  let allOperandTypes = inferAllTypesFromOperands(operands, ctx);
+
+  // Include the expected return type if available
+  // This is crucial for multi-parameter protocols where constraints may be on the return type
+  // For example, in `ExampleProtocol3 a b where convert3 : a -> b` with instance
+  // `Appendable b => ExampleProtocol3 Float b`, when calling `convert3 10.0` we need to
+  // know the expected return type to resolve the `Appendable` constraint correctly.
+  if (ctx.expectedReturnType && !isTypeVariable(ctx.expectedReturnType)) {
+    allOperandTypes = [...allOperandTypes, ctx.expectedReturnType];
+  }
 
   // If we can't infer from operands, check if we have a concrete constraint
   // from the enclosing function
@@ -1493,12 +1680,13 @@ function tryGenerateProtocolMethodApply(
   // Generate code with the resolved dictionary
   const sanitizedName = sanitizeIdentifier(methodName);
   const typeKey = formatTypeKey(concreteType);
-  // Pass concreteType so constrained instances can resolve their constraint dicts
+  // Pass concreteType and all operand types so constrained instances can resolve their constraint dicts
   const dictRef = resolveDictReference(
     protocolName,
     typeKey,
     ctx,
-    concreteType
+    concreteType,
+    allOperandTypes.length > 0 ? allOperandTypes : undefined
   );
 
   // Generate: dict.method(arg1)(arg2)...
@@ -1555,6 +1743,26 @@ function inferConcreteTypeFromOperands(
     }
   }
   return null;
+}
+
+/**
+ * Infer ALL concrete types from operands.
+ *
+ * This is used for multi-parameter protocols where we need to know
+ * the concrete types for each type parameter to properly resolve constraints.
+ */
+function inferAllTypesFromOperands(
+  operands: IRExpr[],
+  ctx: CodegenContext
+): IRType[] {
+  const types: IRType[] = [];
+  for (const operand of operands) {
+    const type = inferExprType(operand, ctx);
+    if (type) {
+      types.push(type);
+    }
+  }
+  return types;
 }
 
 /**
@@ -1689,6 +1897,17 @@ function resolveDictionaryForType(
     const typeKey = formatTypeKey(type);
     // Pass the concrete type so constrained instances can resolve their constraint dicts
     return resolveDictReference(protocolName, typeKey, ctx, type);
+  }
+
+  // Handle list type - convert to con type for lookup
+  if (type.kind === "list") {
+    const listAsCon: IRType = {
+      kind: "con",
+      name: "List",
+      args: [type.element],
+    };
+    const typeKey = formatTypeKey(listAsCon);
+    return resolveDictReference(protocolName, typeKey, ctx, listAsCon);
   }
 
   // Type variable - pass through the polymorphic dictionary

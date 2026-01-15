@@ -67,6 +67,26 @@ bun run build
 
 Always run a rebuild after completing code changes to validate the workspace dependency graph and ensure all packages compile successfully.
 
+### Running the Example App
+
+The example app (`packages/example-app`) demonstrates Vibe language features:
+
+```bash
+cd packages/example-app
+
+# Build the app
+bun run build
+
+# Run the compiled JavaScript
+bun run start
+```
+
+The example app showcases:
+
+- Multi-parameter protocols with constrained instances
+- Type annotations with return type inference
+- Dictionary-passing for protocol constraints
+
 ## Configuration
 
 - **`package.json`**: Defines workspaces and common scripts.
@@ -134,6 +154,42 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
    - Missing interface definitions
 
 5. **Zero tolerance policy**: A task with TypeScript errors is fundamentally incomplete and may cause issues for subsequent work.
+
+## Regression Testing
+
+**CRITICAL:** Always write tests to prevent regressions after fixing bugs or implementing features:
+
+1. **When to write tests**:
+
+   - After fixing any bug, write tests that would have caught the bug
+   - After implementing a new feature, add tests covering the feature
+   - When making changes to type checking, constraint resolution, or code generation logic
+
+2. **Test scope and coverage**:
+
+   - Tests should verify both positive cases (correct behavior works) and negative cases (invalid code fails with proper errors)
+   - Test error messages to ensure they are clear and accurate
+   - Test edge cases and boundary conditions relevant to the fix
+   - Include examples that directly relate to the bug being fixed
+
+3. **Test organization**:
+
+   - Group related tests in a describe block
+   - Use clear, descriptive test names that explain what is being tested
+   - Add comments in tests explaining why they exist (especially referencing the bug they prevent)
+   - Place tests near the code they test (e.g., protocol tests in `packages/semantics/tests/protocol.test.ts`)
+
+4. **Verification process**:
+
+   - Run the specific test file to verify new tests pass: `bun test packages/<package>/tests/<file>.test.ts`
+   - Run the full test suite to ensure no regressions: `bun test`
+   - Verify all tests pass before considering the task complete
+
+5. **Example**: When fixing multi-parameter protocol constraint validation:
+   - Test that constraints apply to correct type parameters (not just the first one)
+   - Test that invalid implementations with constraint violations are rejected
+   - Test that valid implementations with polymorphic types are accepted
+   - Test edge cases like nested type parameters
 
 ## Grammar File Updates
 

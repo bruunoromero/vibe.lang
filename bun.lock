@@ -40,6 +40,8 @@
       },
       "devDependencies": {
         "@types/bun": "latest",
+        "@vibe/parser": "workspace:*",
+        "@vibe/semantics": "workspace:*",
       },
     },
     "packages/config": {

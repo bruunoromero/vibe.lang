@@ -1,4 +1,4 @@
-module ExampleApp exposing (..)
+
 
 import Vibe exposing (..)
 
@@ -32,17 +32,21 @@ implement ExampleProtocol (List a) where
 --     exampleMethod = "ExampleProtocol2 method called"
 
 -- -- Example 4: Protocol with multiple type parameters
--- protocol ExampleProtocol3 a b where
---     convert3 : a -> b
-
--- -- Placeholder function for the implementation
--- floatToInt : Float -> Int
--- floatToInt _ = 0
+protocol ExampleProtocol3 a b where
+    convert3 : a -> b
 
 -- -- Example 5: Implementation with multiple type arguments
 -- implement ExampleProtocol3 Float Int where
 --     convert3 = floatToInt
 
+implement Appendable a => ExampleProtocol3 Float a where
+    convert3 _ = []
+
+-- implement Appendable a => ExampleProtocol3 Float a where
+--     convert3 _ = 10
+
 -- main = 100
-main = exampleMethod []
+-- main : List Int
+main = convert3 10.0
+-- main = showA A ""
 -- main = exampleMethod 100
