@@ -23,59 +23,98 @@ import type {
   OperatorRegistry,
 } from "@vibe/syntax";
 
-export class SemanticError extends Error {
-  constructor(message: string, public readonly span: Span) {
-    super(message);
-  }
-}
+// Re-export errors for external consumers
+export { SemanticError, ImplementingProtocolError } from "./errors";
+import { SemanticError, ImplementingProtocolError } from "./errors";
 
-/**
- * Error thrown when a type uses 'implementing' with a protocol that has methods without defaults.
- * Provides a clear message listing missing defaults and actionable hints.
- */
-export class ImplementingProtocolError extends SemanticError {
-  constructor(
-    public readonly typeName: string,
-    public readonly protocolName: string,
-    public readonly methodsWithoutDefaults: string[],
-    public readonly methodsWithDefaults: string[],
-    span: Span
-  ) {
-    const missing = methodsWithoutDefaults.join(", ");
-    const hasDefaults =
-      methodsWithDefaults.length > 0
-        ? `\n  Methods with defaults: ${methodsWithDefaults.join(", ")}`
-        : "";
+// Re-export types for external consumers
+export type {
+  Type,
+  TypeVar,
+  TypeCon,
+  TypeFun,
+  TypeTuple,
+  TypeRecord,
+  TypeScheme,
+  Constraint,
+  Scope,
+  Substitution,
+  ConstructorInfo,
+  ADTInfo,
+  TypeAliasInfo,
+  OpaqueTypeInfo,
+  ProtocolInfo,
+  ProtocolMethodInfo,
+  DefaultMethodImpl,
+  InstanceInfo,
+  ValueInfo,
+  ExportInfo,
+  SemanticModule,
+  AnalyzeOptions,
+  ConstraintContext,
+  LookupResult,
+  InstanceLookupResult,
+  InstantiationResult,
+  TypeVarContext,
+  AnnotationResult,
+  TypeValidationError,
+} from "./types";
 
-    const message =
-      `Cannot use 'implementing' with protocol '${protocolName}' for type '${typeName}'\n` +
-      `  Protocol '${protocolName}' has methods without default implementations\n` +
-      `  Missing defaults for: ${missing}${hasDefaults}\n\n` +
-      `Hint: Either add default implementations for these methods in the protocol,\n` +
-      `      or write a manual 'implement' block for this type.`;
+import type {
+  Type,
+  TypeVar,
+  TypeCon,
+  TypeScheme,
+  Constraint,
+  Scope,
+  Substitution,
+  ConstructorInfo,
+  ADTInfo,
+  TypeAliasInfo,
+  OpaqueTypeInfo,
+  ProtocolInfo,
+  ProtocolMethodInfo,
+  DefaultMethodImpl,
+  InstanceInfo,
+  ValueInfo,
+  ExportInfo,
+  SemanticModule,
+  AnalyzeOptions,
+  ConstraintContext,
+  LookupResult,
+  InstanceLookupResult,
+  TypeValidationError,
+} from "./types";
 
-    super(message, span);
-    this.name = "ImplementingProtocolError";
-  }
-}
+// Import type utilities
+import {
+  freshType,
+  listType,
+  fn,
+  fnChain,
+  typesEqual,
+  applySubstitution,
+  applySubstitutionToConstraints,
+  getFreeTypeVars,
+  getFreeTypeVarsInScope,
+  formatType,
+  createConstraintContext,
+  addConstraint,
+  flattenFunctionParams,
+  collectTypeVarIds,
+  collectTypeVarIdsOrdered,
+  applyVarSubstitution,
+  applyTypeSubstitution,
+} from "./utils";
 
-// ===== Internal Type Representation =====
-// Simple HM-style types for type inference using Hindley-Milner algorithm.
-
-export type TypeVar = { kind: "var"; id: number };
-export type TypeCon = { kind: "con"; name: string; args: Type[] };
-export type TypeFun = { kind: "fun"; from: Type; to: Type };
-export type TypeTuple = { kind: "tuple"; elements: Type[] };
-export type TypeRecord = { kind: "record"; fields: Record<string, Type> };
-export type Type = TypeVar | TypeCon | TypeFun | TypeTuple | TypeRecord;
-
-/**
- * Helper to create a List type using TypeCon.
- * List is represented as TypeCon with name "List" and one type argument.
- */
-function listType(element: Type): TypeCon {
-  return { kind: "con", name: "List", args: [element] };
-}
+// Import builtins
+import {
+  BUILTIN_CONSTRUCTORS,
+  INFIX_TYPES,
+  BUILTIN_SPAN,
+  initializeBuiltinADTs,
+  initializeBuiltinOpaqueTypes,
+} from "./builtins";
 
 /**
  * Create a Lambda expression from pattern arguments and a body expression.
@@ -98,146 +137,6 @@ function makeLambda(args: Pattern[], body: Expr, span: Span): Expr {
     span,
   };
 }
-
-/**
- * Check if a type is a List type.
- */
-function isListType(type: Type): type is TypeCon {
-  return type.kind === "con" && type.name === "List" && type.args.length === 1;
-}
-
-/**
- * Get the element type of a List type. Returns undefined if not a list.
- */
-function getListElement(type: Type): Type | undefined {
-  if (isListType(type)) {
-    return type.args[0];
-  }
-  return undefined;
-}
-
-/**
- * Constraint represents a protocol requirement on a type.
- * Example: Constraint("Num", [TypeVar(0)]) means "type variable 0 must implement Num protocol"
- */
-export type Constraint = {
-  protocolName: string;
-  typeArgs: Type[];
-};
-
-/**
- * ConstraintContext collects protocol constraints during type inference.
- * When a protocol method is accessed (like `+` from `Num`), we record
- * the constraint with the actual type variables involved.
- *
- * This enables dictionary-passing style compilation:
- * - Functions using protocol methods get dictionary parameters
- * - Call sites pass appropriate implementation dictionaries
- */
-type ConstraintContext = {
-  /** Collected constraints during inference */
-  constraints: Constraint[];
-};
-
-/**
- * Create a fresh constraint context for collecting protocol constraints.
- */
-function createConstraintContext(): ConstraintContext {
-  return { constraints: [] };
-}
-
-/**
- * Add a constraint to the context (deduplicating by protocol name and type args).
- */
-function addConstraint(ctx: ConstraintContext, constraint: Constraint): void {
-  // Check if we already have this constraint
-  const isDuplicate = ctx.constraints.some(
-    (c) =>
-      c.protocolName === constraint.protocolName &&
-      c.typeArgs.length === constraint.typeArgs.length &&
-      c.typeArgs.every((t, i) => typesEqual(t, constraint.typeArgs[i]!))
-  );
-  if (!isDuplicate) {
-    ctx.constraints.push(constraint);
-  }
-}
-
-/**
- * Check if two types are structurally equal.
- */
-function typesEqual(t1: Type, t2: Type): boolean {
-  if (t1.kind !== t2.kind) return false;
-  switch (t1.kind) {
-    case "var":
-      return (t2 as TypeVar).id === t1.id;
-    case "con":
-      return (
-        (t2 as TypeCon).name === t1.name &&
-        t1.args.length === (t2 as TypeCon).args.length &&
-        t1.args.every((a, i) => typesEqual(a, (t2 as TypeCon).args[i]!))
-      );
-    case "fun":
-      return (
-        typesEqual(t1.from, (t2 as TypeFun).from) &&
-        typesEqual(t1.to, (t2 as TypeFun).to)
-      );
-    case "tuple":
-      return (
-        t1.elements.length === (t2 as TypeTuple).elements.length &&
-        t1.elements.every((e, i) =>
-          typesEqual(e, (t2 as TypeTuple).elements[i]!)
-        )
-      );
-    case "record": {
-      const r2 = t2 as TypeRecord;
-      const keys1 = Object.keys(t1.fields).sort();
-      const keys2 = Object.keys(r2.fields).sort();
-      return (
-        keys1.length === keys2.length &&
-        keys1.every(
-          (k, i) => k === keys2[i] && typesEqual(t1.fields[k]!, r2.fields[k]!)
-        )
-      );
-    }
-  }
-}
-
-/**
- * Apply substitution to constraints, resolving type variables.
- */
-function applySubstitutionToConstraints(
-  constraints: Constraint[],
-  substitution: Substitution
-): Constraint[] {
-  return constraints.map((c) => ({
-    protocolName: c.protocolName,
-    typeArgs: c.typeArgs.map((t) => applySubstitution(t, substitution)),
-  }));
-}
-
-/**
- * TypeScheme represents a polymorphic type with universally quantified type variables
- * and optional constraints.
- *
- * Example: `forall a. Num a => a -> a` is represented as:
- * {
- *   vars: Set([0]),
- *   constraints: [{ protocolName: "Num", typeArgs: [TypeVar(0)] }],
- *   type: { kind: "fun", from: TypeVar(0), to: TypeVar(0) }
- * }
- *
- * In Elm/ML terminology:
- * - A monomorphic type has no quantified variables (empty Set)
- * - A polymorphic type has one or more quantified variables
- * - A constrained type has protocol requirements on type variables
- */
-export type TypeScheme = {
-  vars: Set<number>; // Set of type variable IDs that are quantified (polymorphic)
-  constraints: Constraint[]; // Protocol constraints on type variables
-  type: Type; // The underlying type structure
-};
-
-type Substitution = Map<number, Type>;
 
 /**
  * Module-level constraint context for collecting protocol constraints during type inference.
@@ -378,13 +277,10 @@ function validateConstraintsEagerly(
  * Scope maintains a symbol table mapping names to their type schemes.
  * Type schemes enable let-polymorphism: bindings can be polymorphic,
  * and each use site gets a fresh instantiation of the type.
+ * 
+ * NOTE: This local alias is used since Scope is also imported from types.ts
+ * but we use it differently in places here. This will be cleaned up in a future refactor.
  */
-type Scope = {
-  parent?: Scope;
-  symbols: Map<string, TypeScheme>; // Maps names to their polymorphic type schemes
-};
-
-let nextTypeVarId = 0;
 
 /**
  * Primitive type constants are no longer defined here.
@@ -397,176 +293,6 @@ let nextTypeVarId = 0;
 // ===== Algebraic Data Type (ADT) Registry =====
 // The ADT registry tracks user-defined types and their constructors.
 // This enables proper type checking and exhaustiveness analysis.
-
-/**
- * Information about a single constructor in an ADT.
- *
- * For example, in `type Maybe a = Just a | Nothing`:
- * - Just: { arity: 1, argTypes: [TypeVar(a)], parentType: "Maybe", parentParams: ["a"] }
- * - Nothing: { arity: 0, argTypes: [], parentType: "Maybe", parentParams: ["a"] }
- */
-export type ConstructorInfo = {
-  /** Number of arguments the constructor takes */
-  arity: number;
-  /** Type expressions for each argument (from source) */
-  argTypes: TypeExpr[];
-  /** Name of the parent ADT (e.g., "Maybe") */
-  parentType: string;
-  /** Type parameters of the parent ADT (e.g., ["a"]) */
-  parentParams: string[];
-  /** The module that defines this constructor (e.g., "Vibe", "MyModule") */
-  moduleName?: string;
-  /** Source span for error messages */
-  span: Span;
-};
-
-/**
- * Information about an Algebraic Data Type.
- *
- * For example, `type Maybe a = Just a | Nothing` becomes:
- * {
- *   name: "Maybe",
- *   params: ["a"],
- *   constructors: ["Just", "Nothing"],
- *   span: <source span>
- * }
- */
-export type ADTInfo = {
-  /** The type name (e.g., "Maybe", "Result") */
-  name: string;
-  /** The module that defines this type (e.g., "Vibe", "MyModule") */
-  moduleName?: string;
-  /** Type parameters (e.g., ["a"] for Maybe a) */
-  params: string[];
-  /** Names of all constructors in this type */
-  constructors: string[];
-  /** Source span for error messages */
-  span: Span;
-};
-
-/**
- * Information about a type alias.
- *
- * For example, `type alias UserId = number` becomes:
- * {
- *   name: "UserId",
- *   params: [],
- *   value: TypeRef "number"
- * }
- */
-export type TypeAliasInfo = {
-  /** The alias name (e.g., "UserId") */
-  name: string;
-  /** The module that defines this alias (e.g., "MyModule") */
-  moduleName?: string;
-  /** Type parameters (e.g., ["a", "b"] for Pair a b) */
-  params: string[];
-  /** The type expression this alias expands to */
-  value: TypeExpr;
-  /** Source span for error messages */
-  span: Span;
-};
-
-/**
- * Information about an opaque type.
- *
- * Opaque types are abstract types that hide their implementation.
- * They are useful for JS interop or creating abstract data types.
- * Pattern matching and record updates are not allowed on opaque types.
- *
- * For example, `type Promise a` becomes:
- * {
- *   name: "Promise",
- *   params: ["a"]
- * }
- */
-export type OpaqueTypeInfo = {
-  /** The opaque type name (e.g., "Promise", "Element") */
-  name: string;
-  /** The module that defines this opaque type */
-  moduleName?: string;
-  /** Type parameters (e.g., ["a"] for Promise a) */
-  params: string[];
-  /** Source span for error messages */
-  span: Span;
-};
-
-/**
- * Default implementation for a protocol method.
- * Contains the type-checked parameters and body expression.
- */
-export type DefaultMethodImpl = {
-  /** Parameters for the default implementation (patterns) */
-  args: Pattern[];
-  /** Body expression of the default implementation */
-  body: Expr;
-};
-
-/**
- * Information about a method in a protocol, including optional default implementation.
- */
-export type ProtocolMethodInfo = {
-  /** The method's type signature */
-  type: Type;
-  /** Source span for error messages */
-  span: Span;
-  /** Optional default implementation (if present, method can be omitted in implement blocks) */
-  defaultImpl?: DefaultMethodImpl;
-};
-
-/**
- * Information about a protocol (type class).
- *
- * For example, `protocol Num a where plus : a -> a -> a` becomes:
- * {
- *   name: "Num",
- *   params: ["a"],
- *   methods: Map { "plus" => { type: ..., span: ..., defaultImpl: undefined } }
- * }
- */
-export type ProtocolInfo = {
-  /** The protocol name (e.g., "Num", "Show") */
-  name: string;
-  /** The module that defines this protocol (e.g., "Vibe") */
-  moduleName?: string;
-  /** Type parameters (typically just one, e.g., ["a"]) */
-  params: string[];
-  /** Superclass constraints (e.g., [Eq a] in "protocol Eq a => Ord a where") */
-  superclassConstraints: Constraint[];
-  /** Method signatures with optional default implementations */
-  methods: Map<string, ProtocolMethodInfo>;
-  /** Source span for error messages */
-  span: Span;
-};
-
-/**
- * Information about an instance implementation.
- *
- * For example, `instance Num Int where plus = intPlusImpl` becomes:
- * {
- *   protocolName: "Num",
- *   typeArgs: [TypeCon("Int")],
- *   constraints: [],
- *   methods: Map { "plus" => <implementation expr> },
- *   span: ...
- * }
- */
-export type InstanceInfo = {
-  /** The protocol name being implemented */
-  protocolName: string;
-  /** The module that defines this instance */
-  moduleName?: string;
-  /** Concrete type(s) for this instance */
-  typeArgs: Type[];
-  /** Context constraints (e.g., "Show a" in "Show a => Show (List a)") */
-  constraints: Constraint[];
-  /** Method implementations: name -> implementation expression */
-  methods: Map<string, Expr>;
-  /** Method names that were explicitly provided (vs. inherited from defaults) */
-  explicitMethods: Set<string>;
-  /** Source span for error messages */
-  span: Span;
-};
 
 /**
  * Helper to create a qualified name for display in error messages.
@@ -609,32 +335,6 @@ function checkTypeCollision(
     );
   }
 }
-
-/**
- * Built-in constructors registry.
- *
- * These are the primitive types that are built into the compiler.
- * They are automatically available in all modules.
- *
- * - Bool: True | False (used in if-then-else expressions)
- * - Unit: Unit (used for functions with no meaningful return value)
- * - Int: Integer numbers
- * - Float: Floating-point numbers
- * - String: Text values
- * - Char: Single characters
- */
-const BUILTIN_CONSTRUCTORS: Record<string, number> = {
-  // Bool constructors
-  True: 0,
-  False: 0,
-  // Unit constructor
-  Unit: 0,
-  // Primitive type constructors (zero-arity, but exist for type system)
-  Int: 0,
-  Float: 0,
-  String: 0,
-  Char: 0,
-};
 
 // ============================================================================
 // Strongly Connected Components (SCC) for Mutual Recursion
@@ -868,118 +568,6 @@ function computeSCCs(graph: Map<string, Set<string>>): string[][] {
  *     (-) = intSub
  *     (*) = intMul
  */
-const INFIX_TYPES: Record<string, Type> = {};
-
-export type ValueInfo = {
-  declaration: ValueDeclaration | ExternalDeclaration;
-  annotation?: TypeExpr;
-  externalTarget?: ExternalDeclaration["target"];
-  type?: Type;
-  /** User-annotated protocol constraints from qualified type annotations */
-  annotatedConstraints?: Constraint[];
-  /** All constraints collected during type inference (before filtering to polymorphic) */
-  collectedConstraints?: Constraint[];
-  /** Source location for error reporting */
-  span?: Span;
-};
-
-/**
- * Information about what a module exports.
- * This is computed from the module's exposing clause and what's defined in the module.
- */
-export type ExportInfo = {
-  /** Exported values and functions (by name) */
-  values: Set<string>;
-  /** Exported operators */
-  operators: Set<string>;
-  /** Exported types (by name) */
-  types: Map<
-    string,
-    {
-      /** If true, all constructors are exported; if false, only listed ones */
-      allConstructors: boolean;
-      /** If allConstructors is false, the specific constructors exported */
-      constructors?: Set<string>;
-    }
-  >;
-  /** Exported protocols (by name) */
-  protocols: Map<
-    string,
-    {
-      /** If true, all methods are exported; if false, only listed ones */
-      allMethods: boolean;
-      /** If allMethods is false, the specific methods exported */
-      methods?: Set<string>;
-    }
-  >;
-  /** Whether this module exports everything (exposing (..)) */
-  exportsAll: boolean;
-
-  /**
-   * Re-exported values from other modules.
-   * Map from value name -> source module name.
-   * Used by codegen to generate proper re-export statements.
-   */
-  reExportedValues: Map<string, string>;
-};
-
-/**
- * The result of semantic analysis for a module.
- *
- * Contains all the analyzed information needed for code generation:
- * - values: All value declarations with their inferred types
- * - annotations: Standalone type annotations
- * - types: Inferred types for all values
- * - adts: User-defined algebraic data types
- * - constructors: Map from constructor names to their info
- * - typeAliases: Type alias definitions
- * - opaqueTypes: Opaque type declarations (for JS interop)
- * - protocols: Protocol (type class) definitions
- * - instances: Instance implementations
- * - module: Module declaration (if any)
- * - imports: Import declarations
- * - exports: Computed export information
- */
-export type SemanticModule = {
-  values: Record<string, ValueInfo>;
-  annotations: Record<string, TypeAnnotationDeclaration>;
-  module?: ModuleDeclaration;
-  imports: ImportDeclaration[];
-  types: Record<string, Type>;
-  /** Type schemes with constraints for each value (for dictionary-passing) */
-  typeSchemes: Record<string, TypeScheme>;
-  /** Registry of user-defined algebraic data types */
-  adts: Record<string, ADTInfo>;
-  /** Map from constructor names to their type information */
-  constructors: Record<string, ConstructorInfo>;
-  /** Map from constructor names to their type schemes (for importing) */
-  constructorTypes: Record<string, TypeScheme>;
-  /** Registry of type aliases */
-  typeAliases: Record<string, TypeAliasInfo>;
-  /** Registry of opaque types (for JS interop) */
-  opaqueTypes: Record<string, OpaqueTypeInfo>;
-  /** Registry of protocols (type classes) */
-  protocols: Record<string, ProtocolInfo>;
-  /** List of instance implementations */
-  instances: InstanceInfo[];
-  /** Registry of custom operator precedence/associativity */
-  operators: OperatorRegistry;
-  /** Infix declarations for operators */
-  infixDeclarations: InfixDeclaration[];
-  /** Computed export information for this module */
-  exports: ExportInfo;
-};
-
-export interface AnalyzeOptions {
-  /** Pre-analyzed dependency modules to merge into scope */
-  dependencies?: Map<string, SemanticModule>;
-  /**
-   * Whether to automatically inject `import Vibe exposing (..)`.
-   * Defaults to true. Set to false for the Vibe module itself
-   * or when testing without prelude.
-   */
-  injectPrelude?: boolean;
-}
 
 /**
  * Helper function to check if an item is exported from a module.
@@ -1300,7 +888,7 @@ function importExportSpec(
           }
 
           // Create constrained type scheme for the method
-          const constraintTypeVar: Type = { kind: "var", id: nextTypeVarId++ };
+          const constraintTypeVar: Type = freshType();
           const methodType = methodInfo.type;
           const scheme: TypeScheme = {
             vars: new Set([
@@ -1369,89 +957,8 @@ export function analyze(
 
   // ===== Initialize Builtin Types =====
   // These primitive types are built into the compiler and automatically available.
-  const builtinSpan: Span = {
-    start: { offset: 0, line: 0, column: 0 },
-    end: { offset: 0, line: 0, column: 0 },
-  };
-
-  // Bool ADT: True | False (still an ADT for pattern matching)
-  adts["Bool"] = {
-    name: "Bool",
-    params: [],
-    constructors: ["True", "False"],
-    span: builtinSpan,
-  };
-  constructors["True"] = {
-    arity: 0,
-    argTypes: [],
-    parentType: "Bool",
-    parentParams: [],
-    moduleName: "__builtin__",
-    span: builtinSpan,
-  };
-  constructorTypes["True"] = {
-    vars: new Set(),
-    constraints: [],
-    type: { kind: "con", name: "Bool", args: [] },
-  };
-  constructors["False"] = {
-    arity: 0,
-    argTypes: [],
-    parentType: "Bool",
-    parentParams: [],
-    moduleName: "__builtin__",
-    span: builtinSpan,
-  };
-  constructorTypes["False"] = {
-    vars: new Set(),
-    constraints: [],
-    type: { kind: "con", name: "Bool", args: [] },
-  };
-
-  // Primitive opaque types - no pattern matching allowed
-  opaqueTypes["Unit"] = {
-    name: "Unit",
-    moduleName: "__builtin__",
-    params: [],
-    span: builtinSpan,
-  };
-
-  opaqueTypes["Int"] = {
-    name: "Int",
-    moduleName: "__builtin__",
-    params: [],
-    span: builtinSpan,
-  };
-
-  opaqueTypes["Float"] = {
-    name: "Float",
-    moduleName: "__builtin__",
-    params: [],
-    span: builtinSpan,
-  };
-
-  opaqueTypes["String"] = {
-    name: "String",
-    moduleName: "__builtin__",
-    params: [],
-    span: builtinSpan,
-  };
-
-  opaqueTypes["Char"] = {
-    name: "Char",
-    moduleName: "__builtin__",
-    params: [],
-    span: builtinSpan,
-  };
-
-  // List ADT: List a (builtin parameterized type for lists)
-  // Note: List uses the internal "list" type representation but is exposed as "List" ADT
-  adts["List"] = {
-    name: "List",
-    params: ["a"],
-    constructors: [], // List constructors are handled specially (via list literals)
-    span: builtinSpan,
-  };
+  initializeBuiltinADTs(adts, constructors, constructorTypes);
+  initializeBuiltinOpaqueTypes(opaqueTypes);
 
   // ===== Auto-inject Prelude =====
   // The prelude is NOT injected by default. Users must explicitly import:
@@ -2440,16 +1947,6 @@ function constructorArgToType(
 }
 
 /**
- * Error thrown when a type reference cannot be resolved.
- * Contains helpful information for generating suggestions.
- */
-type TypeValidationError = {
-  message: string;
-  span: Span;
-  suggestion?: string;
-};
-
-/**
  * Collect all type variable names from a type expression.
  * Type variables are lowercase identifiers (e.g., 'a', 'b', 'elem').
  * This is used to determine which names are implicitly defined type parameters
@@ -2932,79 +2429,6 @@ function refreshType(type: Type, newVarMap: Map<string, TypeVar>): Type {
   }
 
   return applyVarSubstitution(type, varSubst);
-}
-
-/**
- * Collect all type variable IDs in a type, in order of first appearance.
- */
-function collectTypeVarIds(type: Type): Set<number> {
-  const ids = new Set<number>();
-  collectTypeVarIdsHelper(type, ids);
-  return ids;
-}
-
-function collectTypeVarIdsHelper(type: Type, ids: Set<number>): void {
-  switch (type.kind) {
-    case "var":
-      ids.add(type.id);
-      break;
-    case "fun":
-      collectTypeVarIdsHelper(type.from, ids);
-      collectTypeVarIdsHelper(type.to, ids);
-      break;
-    case "tuple":
-      for (const el of type.elements) {
-        collectTypeVarIdsHelper(el, ids);
-      }
-      break;
-    case "con":
-      for (const arg of type.args) {
-        collectTypeVarIdsHelper(arg, ids);
-      }
-      break;
-    case "record":
-      for (const v of Object.values(type.fields)) {
-        collectTypeVarIdsHelper(v, ids);
-      }
-      break;
-  }
-}
-
-/**
- * Apply a type variable substitution (mapping var IDs to new types).
- */
-function applyVarSubstitution(type: Type, subst: Map<number, Type>): Type {
-  switch (type.kind) {
-    case "var": {
-      const replacement = subst.get(type.id);
-      return replacement ?? type;
-    }
-    case "fun":
-      return {
-        kind: "fun",
-        from: applyVarSubstitution(type.from, subst),
-        to: applyVarSubstitution(type.to, subst),
-      };
-    case "tuple":
-      return {
-        kind: "tuple",
-        elements: type.elements.map((el) => applyVarSubstitution(el, subst)),
-      };
-    case "con":
-      return {
-        kind: "con",
-        name: type.name,
-        args: type.args.map((arg) => applyVarSubstitution(arg, subst)),
-      };
-    case "record":
-      const fields: Record<string, Type> = {};
-      for (const [k, v] of Object.entries(type.fields)) {
-        fields[k] = applyVarSubstitution(v, subst);
-      }
-      return { kind: "record", fields };
-    default:
-      return type;
-  }
 }
 
 /**
@@ -3803,84 +3227,6 @@ function substituteTypeParams(
 }
 
 /**
- * Collect all unique type variable IDs from a type in order of first occurrence.
- */
-function collectTypeVarIdsOrdered(
-  type: Type,
-  result: number[],
-  seen: Set<number>
-): void {
-  switch (type.kind) {
-    case "var":
-      if (!seen.has(type.id)) {
-        seen.add(type.id);
-        result.push(type.id);
-      }
-      break;
-    case "con":
-      for (const arg of type.args) {
-        collectTypeVarIdsOrdered(arg, result, seen);
-      }
-      break;
-    case "fun":
-      collectTypeVarIdsOrdered(type.from, result, seen);
-      collectTypeVarIdsOrdered(type.to, result, seen);
-      break;
-    case "tuple":
-      for (const el of type.elements) {
-        collectTypeVarIdsOrdered(el, result, seen);
-      }
-      break;
-    case "record":
-      for (const v of Object.values(type.fields)) {
-        collectTypeVarIdsOrdered(v, result, seen);
-      }
-      break;
-  }
-}
-
-/**
- * Apply a substitution (type var ID -> Type) to a type.
- */
-function applyTypeSubstitution(
-  type: Type,
-  substitution: Map<number, Type>
-): Type {
-  switch (type.kind) {
-    case "var": {
-      const mapped = substitution.get(type.id);
-      return mapped ?? type;
-    }
-    case "con":
-      return {
-        kind: "con",
-        name: type.name,
-        args: type.args.map((arg) => applyTypeSubstitution(arg, substitution)),
-      };
-    case "fun":
-      return {
-        kind: "fun",
-        from: applyTypeSubstitution(type.from, substitution),
-        to: applyTypeSubstitution(type.to, substitution),
-      };
-    case "tuple":
-      return {
-        kind: "tuple",
-        elements: type.elements.map((el) =>
-          applyTypeSubstitution(el, substitution)
-        ),
-      };
-    case "record": {
-      const fields: Record<string, Type> = {};
-      for (const [k, v] of Object.entries(type.fields)) {
-        fields[k] = applyTypeSubstitution(v, substitution);
-      }
-      return { kind: "record", fields };
-    }
-  }
-}
-
-/**
  * Validate that all identifiers referenced in implementation method expressions
  * are defined in the current scope. This ensures we catch undefined function
  * references like `intAdd` at compile time rather than runtime.
@@ -4017,19 +3363,6 @@ function validateConcreteConstraintInstances(
     }
   }
 }
-
-/**
- * Result of looking up an instance for a given protocol and concrete type.
- */
-type InstanceLookupResult =
-  | { found: true }
-  | { found: false; reason: "no-instance" }
-  | {
-      found: false;
-      reason: "unsatisfied-constraint";
-      constraint: string;
-      forType: string;
-    };
 
 /**
  * Check if an instance type pattern matches a concrete type.
@@ -6886,14 +6219,6 @@ function declareSymbol(
 }
 
 /**
- * Result of looking up a symbol, including its type and any constraints.
- */
-type LookupResult = {
-  type: Type;
-  constraints: Constraint[];
-};
-
-/**
  * Look up a symbol in the scope and instantiate its type scheme.
  * Each lookup gets a fresh instantiation, enabling polymorphic usage.
  * Also returns any protocol constraints associated with the symbol.
@@ -6956,106 +6281,6 @@ function seedValueType(
   const argTypes = decl.args.map(() => freshType());
   const resultType = freshType();
   return fnChain(argTypes, resultType);
-}
-
-function freshType(): TypeVar {
-  return { kind: "var", id: nextTypeVarId++ };
-}
-
-/**
- * Compute the set of free type variables in a type.
- * A type variable is "free" if it appears in the type and isn't bound by a quantifier.
- * This is used during generalization to determine which type variables should be quantified.
- *
- * Example:
- * - getFreeTypeVars(number) = {}
- * - getFreeTypeVars(a -> b) = {a.id, b.id}
- * - getFreeTypeVars([a]) = {a.id}
- */
-function getFreeTypeVars(type: Type, substitution: Substitution): Set<number> {
-  const concrete = applySubstitution(type, substitution);
-
-  if (concrete.kind === "var") {
-    return new Set([concrete.id]);
-  }
-
-  if (concrete.kind === "con") {
-    const result = new Set<number>();
-    for (const arg of concrete.args) {
-      for (const v of getFreeTypeVars(arg, substitution)) {
-        result.add(v);
-      }
-    }
-    return result;
-  }
-
-  if (concrete.kind === "fun") {
-    const result = new Set<number>();
-    for (const v of getFreeTypeVars(concrete.from, substitution)) {
-      result.add(v);
-    }
-    for (const v of getFreeTypeVars(concrete.to, substitution)) {
-      result.add(v);
-    }
-    return result;
-  }
-
-  if (concrete.kind === "tuple") {
-    const result = new Set<number>();
-    for (const el of concrete.elements) {
-      for (const v of getFreeTypeVars(el, substitution)) {
-        result.add(v);
-      }
-    }
-    return result;
-  }
-
-  if (concrete.kind === "record") {
-    const result = new Set<number>();
-    for (const fieldType of Object.values(concrete.fields)) {
-      for (const v of getFreeTypeVars(fieldType, substitution)) {
-        result.add(v);
-      }
-    }
-    return result;
-  }
-
-  return new Set();
-}
-
-/**
- * Compute the set of free type variables in a scope.
- * This includes all type variables that appear in any type scheme in the scope
- * but are NOT quantified by that scheme.
- *
- * Used during generalization to avoid quantifying over variables that are
- * already bound in the enclosing scope.
- */
-function getFreeTypeVarsInScope(
-  scope: Scope,
-  substitution: Substitution
-): Set<number> {
-  const result = new Set<number>();
-
-  // Collect free variables from this scope
-  for (const scheme of scope.symbols.values()) {
-    const typeFree = getFreeTypeVars(scheme.type, substitution);
-    for (const v of typeFree) {
-      // Only include variables that are NOT quantified in the scheme
-      if (!scheme.vars.has(v)) {
-        result.add(v);
-      }
-    }
-  }
-
-  // Recursively collect from parent scope
-  if (scope.parent) {
-    for (const v of getFreeTypeVarsInScope(scope.parent, substitution)) {
-      result.add(v);
-    }
-  }
-
-  return result;
 }
 
 /**
@@ -7509,17 +6734,6 @@ function instantiateType(
   return concrete;
 }
 
-function fn(a: Type, b: Type, c?: Type): TypeFun {
-  if (c) {
-    return fn(a, fn(b, c));
-  }
-  return { kind: "fun", from: a, to: b };
-}
-
-function fnChain(args: Type[], result: Type): Type {
-  return args.reduceRight((acc, arg) => fn(arg, acc), result);
-}
-
 function validateAnnotationArity(
   annotation: TypeExpr,
   argCount: number,
@@ -7561,16 +6775,6 @@ function extractAnnotationReturn(annotation: Type, argCount: number): Type {
     result = result.to;
   }
   return result;
-}
-
-function flattenFunctionParams(type: Type): Type[] {
-  const params: Type[] = [];
-  let current: Type = type;
-  while (current.kind === "fun") {
-    params.push(current.from);
-    current = current.to;
-  }
-  return params;
 }
 
 function countAnnotationParams(annotation: TypeExpr): number {
@@ -7874,40 +7078,6 @@ function typeFromAnnotation(
   }
 }
 
-function applySubstitution(type: Type, substitution: Substitution): Type {
-  if (type.kind === "var") {
-    const replacement = substitution.get(type.id);
-    return replacement ? applySubstitution(replacement, substitution) : type;
-  }
-  if (type.kind === "fun") {
-    return fn(
-      applySubstitution(type.from, substitution),
-      applySubstitution(type.to, substitution)
-    );
-  }
-  if (type.kind === "tuple") {
-    return {
-      kind: "tuple",
-      elements: type.elements.map((t) => applySubstitution(t, substitution)),
-    };
-  }
-  if (type.kind === "record") {
-    const fields: Record<string, Type> = {};
-    for (const [k, v] of Object.entries(type.fields)) {
-      fields[k] = applySubstitution(v, substitution);
-    }
-    return { kind: "record", fields };
-  }
-  if (type.kind === "con") {
-    return {
-      kind: "con",
-      name: type.name,
-      args: type.args.map((t) => applySubstitution(t, substitution)),
-    };
-  }
-  return type;
-}
-
 function occursIn(id: number, type: Type, substitution: Substitution): boolean {
   const concrete = applySubstitution(type, substitution);
   if (concrete.kind === "var") {
@@ -8000,30 +7170,3 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
   );
 }
 
-/**
- * Format a type for display in error messages.
- */
-function formatType(type: Type): string {
-  switch (type.kind) {
-    case "var":
-      return `t${type.id}`;
-    case "con":
-      if (type.args.length === 0) {
-        return type.name;
-      }
-      return `${type.name} ${type.args.map(formatType).join(" ")}`;
-    case "fun":
-      const from =
-        type.from.kind === "fun"
-          ? `(${formatType(type.from)})`
-          : formatType(type.from);
-      return `${from} -> ${formatType(type.to)}`;
-    case "tuple":
-      return `(${type.elements.map(formatType).join(", ")})`;
-    case "record":
-      const fields = Object.entries(type.fields)
-        .map(([k, v]) => `${k}: ${formatType(v)}`)
-        .join(", ");
-      return `{ ${fields} }`;
-  }
-}
