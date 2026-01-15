@@ -117,6 +117,13 @@ export interface CodegenContext {
    * e.g., {"point" -> {kind: "record", fields: {x: Int, y: Int}}}
    */
   varTypes: Map<string, IRType>;
+
+  /**
+   * Map from instance keys (e.g., "ExampleProtocol_v96") to their constraint info.
+   * Used to determine if an instance dictionary is parameterized (a function)
+   * and what constraint dictionaries it needs.
+   */
+  constrainedInstances: Map<string, IRConstraint[]>;
 }
 
 /**
@@ -140,6 +147,7 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     generatedDictNames: [],
     protocolMethodMap: new Map(),
     varTypes: new Map(),
+    constrainedInstances: new Map(),
   };
 
   // Build protocol method map from protocol definitions
@@ -185,6 +193,11 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     if (instanceModule === currentModule) {
       ctx.localInstanceKeys.add(key);
     }
+
+    // Track constrained instances (those that need dictionary parameters)
+    if (inst.constraints.length > 0) {
+      ctx.constrainedInstances.set(key, inst.constraints);
+    }
   }
 
   return ctx;
@@ -227,40 +240,270 @@ function formatTypeKey(type: IRType | undefined): string {
 /**
  * Resolve a dictionary reference for a protocol and concrete type.
  *
- * Returns the fully qualified dictionary name (e.g., "$dict_Num_Int" for local,
- * "Vibe.$dict_Num_Int" for imported from Vibe module).
+ * Returns the fully qualified dictionary expression. For simple instances
+ * like `implement Num Int`, returns "$dict_Num_Int".
  *
- * Throws an error if the dictionary cannot be found - this indicates a compiler bug
- * since all instances should be known at compile time.
+ * For constrained instances like `implement Eq a => ExampleProtocol a`,
+ * returns the dictionary function applied to resolved constraint dictionaries,
+ * e.g., "$dict_ExampleProtocol_v96($dict_Eq_Int)" when called with concrete type Int.
+ *
+ * For polymorphic instances (type variable in type args), we find the matching
+ * polymorphic instance and apply the constraint dictionaries for the concrete type.
+ *
+ * @param concreteType - The concrete type we're resolving for (e.g., Int). Used to
+ *                       resolve constraint dictionaries for polymorphic instances.
  */
 function resolveDictReference(
   protocolName: string,
   typeKey: string,
-  ctx: CodegenContext
+  ctx: CodegenContext,
+  concreteType?: IRType
 ): string {
   const key = `${protocolName}_${typeKey}`;
 
-  // Check if it's defined locally in this module
+  // Get the base dictionary name
+  let dictRef: string | null = null;
+  let instanceKey: string = key;
+
+  // Check if it's defined locally in this module (exact match)
   if (ctx.localInstanceKeys.has(key)) {
-    return `$dict_${key}`;
+    dictRef = `$dict_${key}`;
+  } else {
+    // Check if it's in the known instances (from imports)
+    const sourceModule = ctx.instanceModules.get(key);
+    if (sourceModule) {
+      // Use the source module's import alias for the dictionary reference
+      const importAlias = getImportAliasForModule(sourceModule, ctx);
+      dictRef = `${importAlias}.$dict_${key}`;
+    }
   }
 
-  // Check if it's in the known instances (from imports)
-  const sourceModule = ctx.instanceModules.get(key);
-  if (sourceModule) {
-    // Use the source module's import alias for the dictionary reference
-    // The import alias is determined by how the module was imported
-    const importAlias = getImportAliasForModule(sourceModule, ctx);
-    return `${importAlias}.$dict_${key}`;
+  // If no exact match found, try to find a structurally matching instance
+  // This handles cases like `implement Protocol (List a)` matching `List Int`
+  if (!dictRef && concreteType) {
+    const structuralMatch = findMatchingInstance(
+      protocolName,
+      concreteType,
+      ctx
+    );
+    if (structuralMatch) {
+      instanceKey = structuralMatch.key;
+      if (ctx.localInstanceKeys.has(instanceKey)) {
+        dictRef = `$dict_${instanceKey}`;
+      } else {
+        const sourceModule = ctx.instanceModules.get(instanceKey);
+        if (sourceModule) {
+          const importAlias = getImportAliasForModule(sourceModule, ctx);
+          dictRef = `${importAlias}.$dict_${instanceKey}`;
+        }
+      }
+    }
   }
 
-  // This is a compiler error - we should never reach here if the semantics
-  // phase correctly validated that all protocol constraints are satisfiable
-  throw new Error(
-    `Codegen error: No instance found for ${protocolName} ${typeKey}. ` +
-      `This indicates a bug in the compiler - the semantics phase should have ` +
-      `verified that this instance exists.`
-  );
+  // If still no match, try to find a fully polymorphic instance
+  // A polymorphic instance has a bare type variable (e.g., `implement Eq a => Protocol a`)
+  if (!dictRef) {
+    const polymorphicMatch = findPolymorphicInstance(protocolName, ctx);
+    if (polymorphicMatch) {
+      instanceKey = polymorphicMatch.key;
+      if (ctx.localInstanceKeys.has(instanceKey)) {
+        dictRef = `$dict_${instanceKey}`;
+      } else {
+        const sourceModule = ctx.instanceModules.get(instanceKey);
+        if (sourceModule) {
+          const importAlias = getImportAliasForModule(sourceModule, ctx);
+          dictRef = `${importAlias}.$dict_${instanceKey}`;
+        }
+      }
+    }
+  }
+
+  if (!dictRef) {
+    // No instance found - this is a user error (missing instance declaration)
+    // Format a helpful error message
+    const typeName = typeKey.startsWith("v")
+      ? "a type variable"
+      : `'${typeKey}'`;
+    throw new Error(
+      `No instance of '${protocolName}' found for ${typeName}. ` +
+        `You may need to add: implement ${protocolName} ${typeKey} where ...`
+    );
+  }
+
+  // Check if this instance is constrained (needs dictionary parameters)
+  const constraints = ctx.constrainedInstances.get(instanceKey);
+  if (constraints && constraints.length > 0) {
+    // The dictionary is a function - we need to pass constraint dictionaries
+    // For each constraint, resolve the appropriate dictionary based on concreteType
+    const constraintDicts: string[] = [];
+    const seenProtocols = new Set<string>();
+
+    for (const constraint of constraints) {
+      if (!seenProtocols.has(constraint.protocolName)) {
+        seenProtocols.add(constraint.protocolName);
+
+        if (concreteType && concreteType.kind === "con") {
+          // We have a concrete type - resolve the constraint dictionary for it
+          constraintDicts.push(
+            resolveDictionaryForType(constraint.protocolName, concreteType, ctx)
+          );
+        } else {
+          // Polymorphic context - pass through the dictionary parameter
+          constraintDicts.push(`$dict_${constraint.protocolName}`);
+        }
+      }
+    }
+
+    // Apply the dictionary function with constraint dictionaries
+    return `${dictRef}(${constraintDicts.join(", ")})`;
+  }
+
+  return dictRef;
+}
+
+/**
+ * Find a polymorphic instance for a protocol.
+ *
+ * Polymorphic instances have type variables (e.g., `implement Show a => Show (List a)`)
+ * instead of concrete types. This function finds such an instance for the given protocol.
+ *
+ * Returns the instance key (e.g., "ExampleProtocol_v96") or null if not found.
+ */
+function findPolymorphicInstance(
+  protocolName: string,
+  ctx: CodegenContext
+): { key: string; instance: IRInstance } | null {
+  for (const inst of ctx.instances) {
+    if (inst.protocolName !== protocolName) continue;
+
+    // Check if this instance has a type variable in its first type argument
+    const firstTypeArg = inst.typeArgs[0];
+    if (firstTypeArg && firstTypeArg.kind === "var") {
+      const typeKey = formatTypeKey(firstTypeArg);
+      return {
+        key: `${protocolName}_${typeKey}`,
+        instance: inst,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Find an instance that matches a concrete type by structure.
+ *
+ * This handles parameterized type constructors like `List a`. For example,
+ * if we have `implement ExampleProtocol (List a)` and the concrete type is
+ * `List Int`, this will find that instance because the type constructor `List`
+ * matches, even though the type arguments differ.
+ *
+ * This function does NOT match bare type variable instances (like `implement Protocol a`).
+ * Those are handled by `findPolymorphicInstance` as a fallback.
+ *
+ * @param protocolName - The protocol to find an instance for
+ * @param concreteType - The concrete type we're matching against
+ * @param ctx - Codegen context with instance information
+ * @returns The matching instance key and instance, or null if not found
+ */
+function findMatchingInstance(
+  protocolName: string,
+  concreteType: IRType,
+  ctx: CodegenContext
+): { key: string; instance: IRInstance } | null {
+  for (const inst of ctx.instances) {
+    if (inst.protocolName !== protocolName) continue;
+
+    const instTypeArg = inst.typeArgs[0];
+    if (!instTypeArg) continue;
+
+    // Skip bare type variable instances - those are handled by findPolymorphicInstance
+    // We only want to match instances with concrete type constructors here
+    if (instTypeArg.kind === "var") continue;
+
+    // Check if the instance type structurally matches the concrete type
+    if (typeStructureMatches(instTypeArg, concreteType)) {
+      const typeKey = formatTypeKey(instTypeArg);
+      return {
+        key: `${protocolName}_${typeKey}`,
+        instance: inst,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if an instance type pattern matches a concrete type by structure.
+ *
+ * This ignores type variable IDs and just checks that the type constructor
+ * structure matches. For example:
+ * - `List v97` matches `List Int` (same constructor, different args)
+ * - `List v97` matches `List v123` (same constructor, both have variable args)
+ * - `v96` matches anything (bare type variable is fully polymorphic)
+ * - `Int` only matches `Int` (concrete types must be identical)
+ *
+ * @param instType - The instance's type pattern (may contain type variables)
+ * @param concreteType - The concrete type we're checking against
+ * @returns true if the instance type pattern matches the concrete type
+ */
+function typeStructureMatches(instType: IRType, concreteType: IRType): boolean {
+  // A type variable in the instance matches anything
+  if (instType.kind === "var") {
+    return true;
+  }
+
+  // Both must be the same kind of type constructor
+  if (instType.kind === "con" && concreteType.kind === "con") {
+    // Type constructor names must match
+    if (instType.name !== concreteType.name) {
+      return false;
+    }
+
+    // Arity must match
+    if (instType.args.length !== concreteType.args.length) {
+      return false;
+    }
+
+    // All type arguments must structurally match
+    for (let i = 0; i < instType.args.length; i++) {
+      if (!typeStructureMatches(instType.args[i]!, concreteType.args[i]!)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  // Handle list type
+  if (instType.kind === "list" && concreteType.kind === "list") {
+    return typeStructureMatches(instType.element, concreteType.element);
+  }
+
+  // Handle tuple types
+  if (instType.kind === "tuple" && concreteType.kind === "tuple") {
+    if (instType.elements.length !== concreteType.elements.length) {
+      return false;
+    }
+    for (let i = 0; i < instType.elements.length; i++) {
+      if (
+        !typeStructureMatches(instType.elements[i]!, concreteType.elements[i]!)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Handle function types
+  if (instType.kind === "fun" && concreteType.kind === "fun") {
+    return (
+      typeStructureMatches(instType.from, concreteType.from) &&
+      typeStructureMatches(instType.to, concreteType.to)
+    );
+  }
+
+  // Different kinds don't match
+  return false;
 }
 
 /**
@@ -678,6 +921,12 @@ function generateConstructors(ctx: CodegenContext): string[] {
  *     "_PLUS": intAdd,
  *     "_MINUS": intSub,
  *   };
+ *
+ * For constrained instances like `implement Eq a => ExampleProtocol a where ...`,
+ * the dictionary becomes a function that takes constraint dictionaries:
+ *   const $dict_ExampleProtocol_v0 = ($dict_Eq) => ({
+ *     exampleMethod: $impl_ExampleProtocol_v0_exampleMethod($dict_Eq)
+ *   });
  */
 function generateInstanceDictionaries(ctx: CodegenContext): string[] {
   const lines: string[] = [];
@@ -705,17 +954,53 @@ function generateInstanceDictionaries(ctx: CodegenContext): string[] {
     const dictName = ctx.instanceDictNames.get(key);
     if (!dictName) continue;
 
+    // Check if this instance has constraints (needs dictionary parameters)
+    const constraints = ctx.constrainedInstances.get(key);
+
     const methodEntries: string[] = [];
     for (const [methodName, implName] of Object.entries(inst.methods)) {
       const safeName = sanitizeIdentifier(methodName);
       const safeImpl = sanitizeIdentifier(implName);
-      methodEntries.push(`  ${safeName}: ${safeImpl}`);
+
+      if (constraints && constraints.length > 0) {
+        // Constrained instance: method implementations need to receive dictionaries
+        // Build the dictionary parameter list for passing to the method impl
+        const dictParams: string[] = [];
+        const seenProtocols = new Set<string>();
+        for (const constraint of constraints) {
+          if (!seenProtocols.has(constraint.protocolName)) {
+            seenProtocols.add(constraint.protocolName);
+            dictParams.push(`$dict_${constraint.protocolName}`);
+          }
+        }
+        // Pass dictionaries to the method implementation
+        const dictPasses = dictParams.map((d) => `(${d})`).join("");
+        methodEntries.push(`  ${safeName}: ${safeImpl}${dictPasses}`);
+      } else {
+        methodEntries.push(`  ${safeName}: ${safeImpl}`);
+      }
     }
 
     if (methodEntries.length > 0) {
-      lines.push(`const ${dictName} = {`);
-      lines.push(methodEntries.join(",\n"));
-      lines.push(`};`);
+      if (constraints && constraints.length > 0) {
+        // Constrained instance: wrap in a lambda that takes dictionary parameters
+        const dictParams: string[] = [];
+        const seenProtocols = new Set<string>();
+        for (const constraint of constraints) {
+          if (!seenProtocols.has(constraint.protocolName)) {
+            seenProtocols.add(constraint.protocolName);
+            dictParams.push(`$dict_${constraint.protocolName}`);
+          }
+        }
+        // Generate: const $dict_Protocol_v0 = ($dict_Eq) => ({ ... });
+        lines.push(`const ${dictName} = (${dictParams.join(", ")}) => ({`);
+        lines.push(methodEntries.join(",\n"));
+        lines.push(`});`);
+      } else {
+        lines.push(`const ${dictName} = {`);
+        lines.push(methodEntries.join(",\n"));
+        lines.push(`};`);
+      }
       generatedDicts.push(dictName);
     }
   }
@@ -1208,7 +1493,13 @@ function tryGenerateProtocolMethodApply(
   // Generate code with the resolved dictionary
   const sanitizedName = sanitizeIdentifier(methodName);
   const typeKey = formatTypeKey(concreteType);
-  const dictRef = resolveDictReference(protocolName, typeKey, ctx);
+  // Pass concreteType so constrained instances can resolve their constraint dicts
+  const dictRef = resolveDictReference(
+    protocolName,
+    typeKey,
+    ctx,
+    concreteType
+  );
 
   // Generate: dict.method(arg1)(arg2)...
   let result = `${dictRef}.${sanitizedName}`;
@@ -1341,6 +1632,37 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
     case "IRUnary":
       // Unary negation returns the same type as the operand
       return inferExprType(expr.operand, ctx);
+
+    case "IRList": {
+      // A list literal has type List a
+      // If we can infer the element type from the first element, use it
+      // Otherwise, use a type variable for the element
+      if (expr.elements.length > 0) {
+        const elemType = inferExprType(expr.elements[0]!, ctx);
+        if (elemType) {
+          return { kind: "con", name: "List", args: [elemType] };
+        }
+      }
+      // Empty list or unknown element type - still a List, with a type variable
+      // We use a fresh type variable ID (doesn't matter which since we're just
+      // matching the List constructor structure)
+      return { kind: "con", name: "List", args: [{ kind: "var", id: -1 }] };
+    }
+
+    case "IRTuple": {
+      // A tuple literal has type (a, b, ...)
+      const elemTypes: IRType[] = [];
+      for (const elem of expr.elements) {
+        const elemType = inferExprType(elem, ctx);
+        if (elemType) {
+          elemTypes.push(elemType);
+        } else {
+          // Unknown element type
+          elemTypes.push({ kind: "var", id: -1 });
+        }
+      }
+      return { kind: "tuple", elements: elemTypes };
+    }
   }
 
   return null;
@@ -1365,7 +1687,8 @@ function resolveDictionaryForType(
   // If it's a concrete type, look up the instance dictionary
   if (type.kind === "con") {
     const typeKey = formatTypeKey(type);
-    return resolveDictReference(protocolName, typeKey, ctx);
+    // Pass the concrete type so constrained instances can resolve their constraint dicts
+    return resolveDictReference(protocolName, typeKey, ctx, type);
   }
 
   // Type variable - pass through the polymorphic dictionary
@@ -2047,9 +2370,9 @@ function sanitizeIdentifier(name: string): string {
     name = name.slice(1, -1);
   }
 
-  // Check for operator characters
-  if (/^[+\-*/<>=!&|^%:.]+$/.test(name)) {
-    return operatorToIdentifier(name);
+  // Check for operator characters - use the shared sanitizeOperator from @vibe/syntax
+  if (/^[+\-*/<>=!&|^%:.~$#@?]+$/.test(name)) {
+    return sanitizeOperator(name);
   }
 
   // Check for reserved words
@@ -2059,42 +2382,6 @@ function sanitizeIdentifier(name: string): string {
 
   return name;
 }
-
-/**
- * Convert an operator to a valid JavaScript identifier.
- */
-function operatorToIdentifier(op: string): string {
-  const chars: string[] = [];
-  for (const c of op) {
-    const mapped = OPERATOR_CHAR_MAP[c];
-    if (mapped) {
-      chars.push(mapped);
-    } else {
-      chars.push(`_${c.charCodeAt(0)}_`);
-    }
-  }
-  return `_${chars.join("")}`;
-}
-
-/**
- * Map of operator characters to identifier-safe names.
- */
-const OPERATOR_CHAR_MAP: Record<string, string> = {
-  "+": "PLUS",
-  "-": "MINUS",
-  "*": "STAR",
-  "/": "SLASH",
-  "<": "LT",
-  ">": "GT",
-  "=": "EQ",
-  "!": "BANG",
-  "&": "AND",
-  "|": "OR",
-  "^": "CARET",
-  "%": "PERCENT",
-  ":": "COLON",
-  ".": "DOT",
-};
 
 /**
  * JavaScript reserved words that need to be escaped.

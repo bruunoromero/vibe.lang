@@ -2,4 +2,47 @@ module ExampleApp exposing (..)
 
 import Vibe exposing (..)
 
-main = 1 /= 1
+type A = A
+
+showA : A -> String
+showA _ = "This is an A"
+
+implement Show A where
+    toString a = showA a
+
+protocol ExampleProtocol a where
+    exampleMethod : a -> Bool
+
+implement Eq a => ExampleProtocol a where
+    exampleMethod var = var == var
+
+implement ExampleProtocol (List a) where
+    exampleMethod str = False
+
+-- -- Example 1: Protocol with constraints (superclass constraint)
+-- protocol Eq a => ExampleProtocol1 a where
+--     exampleMethod : a -> String
+
+-- -- Example 2: Nullary protocol (no type parameters)
+-- protocol ExampleProtocol2 where
+--     exampleMethod : String
+
+-- -- Example 3: Implementation for nullary protocol
+-- implement ExampleProtocol2 where
+--     exampleMethod = "ExampleProtocol2 method called"
+
+-- -- Example 4: Protocol with multiple type parameters
+-- protocol ExampleProtocol3 a b where
+--     convert3 : a -> b
+
+-- -- Placeholder function for the implementation
+-- floatToInt : Float -> Int
+-- floatToInt _ = 0
+
+-- -- Example 5: Implementation with multiple type arguments
+-- implement ExampleProtocol3 Float Int where
+--     convert3 = floatToInt
+
+-- main = 100
+main = exampleMethod []
+-- main = exampleMethod 100

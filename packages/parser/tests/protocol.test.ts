@@ -16,6 +16,7 @@ protocol Show a where
     if (decl?.kind === "ProtocolDeclaration") {
       expect(decl.name).toBe("Show");
       expect(decl.params).toEqual(["a"]);
+      expect(decl.constraints).toHaveLength(0);
       expect(decl.methods).toHaveLength(1);
       expect(decl.methods[0]?.name).toBe("show");
     }
@@ -37,12 +38,90 @@ protocol Num a where
     if (decl?.kind === "ProtocolDeclaration") {
       expect(decl.name).toBe("Num");
       expect(decl.params).toEqual(["a"]);
+      expect(decl.constraints).toHaveLength(0);
       expect(decl.methods).toHaveLength(3);
       expect(decl.methods.map((m) => m.name)).toEqual([
         "plus",
         "minus",
         "times",
       ]);
+    }
+  });
+
+  test("parses protocol with single superclass constraint", () => {
+    const source = `
+protocol Eq a => Ord a where
+  compare : a -> a -> Int
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ProtocolDeclaration");
+
+    if (decl?.kind === "ProtocolDeclaration") {
+      expect(decl.name).toBe("Ord");
+      expect(decl.params).toEqual(["a"]);
+      expect(decl.constraints).toHaveLength(1);
+      expect(decl.constraints[0]?.protocolName).toBe("Eq");
+    }
+  });
+
+  test("parses protocol with multiple superclass constraints", () => {
+    const source = `
+protocol (Eq a, Show a) => Printable a where
+  printValue : a -> String
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ProtocolDeclaration");
+
+    if (decl?.kind === "ProtocolDeclaration") {
+      expect(decl.name).toBe("Printable");
+      expect(decl.params).toEqual(["a"]);
+      expect(decl.constraints).toHaveLength(2);
+      expect(decl.constraints[0]?.protocolName).toBe("Eq");
+      expect(decl.constraints[1]?.protocolName).toBe("Show");
+    }
+  });
+
+  test("parses nullary protocol (no type parameters)", () => {
+    const source = `
+protocol GlobalConfig where
+  getConfig : String
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ProtocolDeclaration");
+
+    if (decl?.kind === "ProtocolDeclaration") {
+      expect(decl.name).toBe("GlobalConfig");
+      expect(decl.params).toEqual([]);
+      expect(decl.constraints).toHaveLength(0);
+      expect(decl.methods).toHaveLength(1);
+    }
+  });
+
+  test("parses protocol with multiple type parameters", () => {
+    const source = `
+protocol Convertible a b where
+  convert : a -> b
+  convertBack : b -> a
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ProtocolDeclaration");
+
+    if (decl?.kind === "ProtocolDeclaration") {
+      expect(decl.name).toBe("Convertible");
+      expect(decl.params).toEqual(["a", "b"]);
+      expect(decl.methods).toHaveLength(2);
     }
   });
 });
@@ -66,6 +145,129 @@ implement Num Int where
       expect(decl.constraints).toHaveLength(0);
       expect(decl.typeArgs).toHaveLength(1);
       expect(decl.methods).toHaveLength(3);
+      // Expression-style methods have no args
+      expect(decl.methods[0]?.args).toBeUndefined();
+      expect(decl.methods[1]?.args).toBeUndefined();
+      expect(decl.methods[2]?.args).toBeUndefined();
+    }
+  });
+
+  test("parses implementation with inline function definitions", () => {
+    const source = `
+implement Show A where
+  toString a = showA a
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ImplementationDeclaration");
+
+    if (decl?.kind === "ImplementationDeclaration") {
+      expect(decl.protocolName).toBe("Show");
+      expect(decl.methods).toHaveLength(1);
+      expect(decl.methods[0]?.name).toBe("toString");
+      // Inline function style has args
+      expect(decl.methods[0]?.args).toBeDefined();
+      expect(decl.methods[0]?.args).toHaveLength(1);
+      if (decl.methods[0]?.args?.[0]?.kind === "VarPattern") {
+        expect(decl.methods[0].args[0].name).toBe("a");
+      }
+    }
+  });
+
+  test("parses implementation with multiple inline parameters", () => {
+    const source = `
+implement Num MyInt where
+  plus x y = addMyInt x y
+  minus a b = subMyInt a b
+  times m n = mulMyInt m n
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ImplementationDeclaration");
+
+    if (decl?.kind === "ImplementationDeclaration") {
+      expect(decl.protocolName).toBe("Num");
+      expect(decl.methods).toHaveLength(3);
+
+      // All methods have 2 arguments
+      expect(decl.methods[0]?.args).toHaveLength(2);
+      expect(decl.methods[1]?.args).toHaveLength(2);
+      expect(decl.methods[2]?.args).toHaveLength(2);
+    }
+  });
+
+  test("parses implementation with operator inline function", () => {
+    const source = `
+implement Eq MyType where
+  (==) x y = eqMyType x y
+  (/=) a b = not (a == b)
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ImplementationDeclaration");
+
+    if (decl?.kind === "ImplementationDeclaration") {
+      expect(decl.protocolName).toBe("Eq");
+      expect(decl.methods).toHaveLength(2);
+
+      expect(decl.methods[0]?.name).toBe("==");
+      expect(decl.methods[0]?.args).toHaveLength(2);
+
+      expect(decl.methods[1]?.name).toBe("/=");
+      expect(decl.methods[1]?.args).toHaveLength(2);
+    }
+  });
+
+  test("parses implementation with mixed expression and inline styles", () => {
+    const source = `
+implement Eq MyType where
+  (==) = eqMyType
+  (/=) a b = not (a == b)
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ImplementationDeclaration");
+
+    if (decl?.kind === "ImplementationDeclaration") {
+      expect(decl.protocolName).toBe("Eq");
+      expect(decl.methods).toHaveLength(2);
+
+      // (==) uses expression style
+      expect(decl.methods[0]?.name).toBe("==");
+      expect(decl.methods[0]?.args).toBeUndefined();
+
+      // (/=) uses inline function style
+      expect(decl.methods[1]?.name).toBe("/=");
+      expect(decl.methods[1]?.args).toHaveLength(2);
+    }
+  });
+
+  test("parses implementation with tuple pattern in inline function", () => {
+    const source = `
+implement Show (Pair a b) where
+  toString (x, y) = "(" ++ show x ++ ", " ++ show y ++ ")"
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ImplementationDeclaration");
+
+    if (decl?.kind === "ImplementationDeclaration") {
+      expect(decl.protocolName).toBe("Show");
+      expect(decl.methods).toHaveLength(1);
+      expect(decl.methods[0]?.name).toBe("toString");
+      expect(decl.methods[0]?.args).toHaveLength(1);
+      // The argument is a tuple pattern
+      expect(decl.methods[0]?.args?.[0]?.kind).toBe("TuplePattern");
     }
   });
 
@@ -103,6 +305,56 @@ implement (Num a, Show a) => Show (Pair a a) where
       expect(decl.constraints).toHaveLength(2);
       expect(decl.constraints[0]?.protocolName).toBe("Num");
       expect(decl.constraints[1]?.protocolName).toBe("Show");
+    }
+  });
+
+  test("parses implementation without type arguments (nullary protocol)", () => {
+    const source = `
+implement GlobalConfig where
+  getConfig = "default"
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ImplementationDeclaration");
+
+    if (decl?.kind === "ImplementationDeclaration") {
+      expect(decl.protocolName).toBe("GlobalConfig");
+      expect(decl.typeArgs).toHaveLength(0);
+      expect(decl.constraints).toHaveLength(0);
+      expect(decl.methods).toHaveLength(1);
+    }
+  });
+
+  test("parses implementation with multiple type arguments", () => {
+    const source = `
+implement Convertible Float Int where
+  convert = floatToInt
+  convertBack = intToFloat
+`;
+    const program = parse(source);
+    expect(program.declarations).toHaveLength(1);
+
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("ImplementationDeclaration");
+
+    if (decl?.kind === "ImplementationDeclaration") {
+      expect(decl.protocolName).toBe("Convertible");
+      expect(decl.typeArgs).toHaveLength(2);
+      // First type arg is Float
+      const firstArg = decl.typeArgs[0];
+      expect(firstArg?.kind).toBe("TypeRef");
+      if (firstArg?.kind === "TypeRef") {
+        expect(firstArg.name).toBe("Float");
+      }
+      // Second type arg is Int
+      const secondArg = decl.typeArgs[1];
+      expect(secondArg?.kind).toBe("TypeRef");
+      if (secondArg?.kind === "TypeRef") {
+        expect(secondArg.name).toBe("Int");
+      }
+      expect(decl.methods).toHaveLength(2);
     }
   });
 });

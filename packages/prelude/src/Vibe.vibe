@@ -34,6 +34,7 @@ type Never = JustOneMore Never
 never : Never -> a
 never (JustOneMore nvr) = 
     never nvr
+
 {- =============================================================================
    Vibe - The Standard Library for Vibe
    =============================================================================
@@ -157,7 +158,6 @@ protocol Num a where
     (-) : a -> a -> a
     (*) : a -> a -> a
     negate : a -> a
-
 
 {-| Protocol for types supporting division operations. -}
 protocol Fractional a where
@@ -310,7 +310,7 @@ not = Bool.not
 
     1 :: [2, 3]  ==  [1, 2, 3]
 -}
-@external "@vibe/runtime" "cons"
+@external "@vibe/runtime" "listAppend"
 (::) : a -> List a -> List a
 
 -- =============================================================================

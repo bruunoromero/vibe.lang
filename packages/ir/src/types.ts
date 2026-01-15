@@ -383,6 +383,8 @@ export type MethodDictionary = {
 export type IRProtocol = {
   name: string;
   params: string[];
+  /** Superclass constraints (e.g., [Eq a] in "protocol Eq a => Ord a where") */
+  superclassConstraints: IRConstraint[];
   methods: Array<{
     name: string;
     type: IRType;

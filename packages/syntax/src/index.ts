@@ -422,7 +422,7 @@ export type ProtocolMethod = {
 /**
  * A protocol declaration defining a type class interface.
  *
- * Syntax: protocol Name param1 param2 ... where
+ * Syntax: protocol [Constraints =>] Name param1 param2 ... where
  *           method1 : Type1
  *           method2 : Type2
  *           method3 : Type3
@@ -433,6 +433,10 @@ export type ProtocolMethod = {
  *   plus : a -> a -> a
  *   minus : a -> a -> a
  *   times : a -> a -> a
+ *
+ * Example with constraints (superclass):
+ * protocol Eq a => Ord a where
+ *   compare : a -> a -> Ordering
  *
  * Example with defaults:
  * protocol Eq a where
@@ -446,6 +450,8 @@ export type ProtocolDeclaration = {
   name: string;
   /** Type parameters (lowercase identifiers, typically just one) */
   params: string[];
+  /** Superclass constraints (e.g., "Eq a" in "Eq a => Ord a") */
+  constraints: Constraint[];
   /** Method signatures with optional default implementations */
   methods: ProtocolMethod[];
   /** Source location span for error reporting */
@@ -458,6 +464,8 @@ export type ProtocolDeclaration = {
 export type MethodImplementation = {
   /** Method name */
   name: string;
+  /** Optional pattern parameters for inline function definitions (e.g., `plus x y = ...`) */
+  args?: Pattern[];
   /** Implementation expression (usually a variable referencing an implementation function) */
   implementation: Expr;
   /** Source location span for error reporting */

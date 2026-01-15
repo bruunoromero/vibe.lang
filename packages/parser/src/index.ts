@@ -577,19 +577,8 @@ class Parser {
     }
 
     // Otherwise, parse value declaration (name args = body)
-    // Parse pattern arguments (if any)
-    // Allowed patterns: variables, wildcards, tuples, records, and single-constructor ADTs.
-    // Single-constructor validation happens in semantics phase.
-    const args: Pattern[] = [];
-    while (this.isFunctionParamPatternStart(this.current())) {
-      args.push(this.parseFunctionParamPattern());
-    }
-
-    // Consume equals sign
-    this.expect(TokenKind.Equals, "declaration body");
-
-    // Parse expression body
-    const body = this.parseExpression();
+    // Uses shared parseMethodBody for consistency with protocol/implementation methods
+    const { args, body } = this.parseMethodBody();
     const span: Span = { start: nameSpan.start, end: body.span.end };
 
     return {
@@ -836,6 +825,30 @@ class Parser {
     // Consume "protocol" keyword
     const protocolToken = this.expectKeyword("protocol");
 
+    // Try to parse constraints (optional superclass context)
+    const constraints: Constraint[] = [];
+
+    // Check if we have constraints (look ahead for =>)
+    const hasConstraints = this.peekConstraintContextInProtocol();
+
+    if (hasConstraints) {
+      // Parse constraint(s) before =>
+      if (this.match(TokenKind.LParen)) {
+        // Multiple constraints: (Eq a, Show a) =>
+        do {
+          constraints.push(this.parseConstraint());
+        } while (this.match(TokenKind.Comma));
+
+        this.expect(TokenKind.RParen, "close constraint list");
+      } else {
+        // Single constraint: Eq a =>
+        constraints.push(this.parseConstraint());
+      }
+
+      // Consume =>
+      this.expectOperator("=>");
+    }
+
     // Parse protocol name (must be uppercase)
     const nameToken = this.expect(TokenKind.UpperIdentifier, "protocol name");
     const name = nameToken.lexeme;
@@ -948,9 +961,10 @@ class Parser {
           // If we matched the method name, check for arguments and =
           if (nextMethodName === methodName) {
             // Parse pattern arguments (if any)
+            // Use isFunctionParamPatternStart for consistency with standard functions
             const args: Pattern[] = [];
-            while (this.isPatternStart(this.current())) {
-              args.push(this.parsePattern());
+            while (this.isFunctionParamPatternStart(this.current())) {
+              args.push(this.parseFunctionParamPattern());
             }
 
             // Check for equals sign
@@ -969,21 +983,12 @@ class Parser {
           }
         }
       } else if (
-        this.isPatternStart(this.current()) ||
+        this.isFunctionParamPatternStart(this.current()) ||
         this.peek(TokenKind.Equals)
       ) {
         // No type annotation, must have default implementation
-        // Parse pattern arguments (if any)
-        const args: Pattern[] = [];
-        while (this.isPatternStart(this.current())) {
-          args.push(this.parsePattern());
-        }
-
-        // Expect equals sign
-        this.expect(TokenKind.Equals, "'=' for default implementation");
-
-        // Parse the default implementation expression
-        const body = this.parseExpression();
+        // Uses shared parseMethodBody for consistency
+        const { args, body } = this.parseMethodBody();
         defaultImpl = { args, body };
       } else {
         throw new ParseError(
@@ -1018,6 +1023,7 @@ class Parser {
       kind: "ProtocolDeclaration",
       name,
       params,
+      constraints,
       methods,
       span,
     } satisfies ProtocolDeclaration;
@@ -1072,16 +1078,12 @@ class Parser {
     const protocolName = protocolNameToken.lexeme;
 
     // Parse type arguments (the concrete type(s) for this implementation)
+    // Type arguments are optional - zero type args means a nullary protocol implementation
+    // We use parseTypeAtom for each argument so that "Convertible Float Int" parses as
+    // [Float, Int] rather than [Float Int] (which would be Float applied to Int).
     const typeArgs: TypeExpr[] = [];
     while (this.isTypeStart(this.current())) {
-      typeArgs.push(this.parseTypeTerm());
-    }
-
-    if (typeArgs.length === 0) {
-      throw new ParseError(
-        "Expected at least one type argument for implementation",
-        this.currentSpan()
-      );
+      typeArgs.push(this.parseTypeAtom());
     }
 
     // Consume "where" keyword
@@ -1113,34 +1115,19 @@ class Parser {
         break;
       }
 
-      // Parse method name - either identifier or operator in parens
-      let methodName: string;
-      const methodStart = methodToken.span.start;
+      // Parse method name using shared parseDeclarationName
+      // This handles both regular identifiers and operators in parens
+      const { name: methodName, span: nameSpan } = this.parseDeclarationName();
 
-      if (this.match(TokenKind.LParen)) {
-        // Operator method: (==), (+), etc.
-        const opToken = this.expect(
-          TokenKind.Operator,
-          "operator in implementation method"
-        );
-        methodName = opToken.lexeme;
-        this.expect(TokenKind.RParen, "close paren after operator");
-      } else {
-        // Regular method name
-        this.advance();
-        methodName = methodToken.lexeme;
-      }
-
-      // Expect equals
-      this.expect(TokenKind.Equals, "'=' after method name");
-
-      // Parse implementation expression
-      const implementation = this.parseExpression();
+      // Parse method body using shared parseMethodBody
+      // This ensures consistent pattern parsing with standard functions
+      const { args, body: implementation } = this.parseMethodBody();
 
       methods.push({
         name: methodName,
+        args: args.length > 0 ? args : undefined,
         implementation,
-        span: { start: methodStart, end: implementation.span.end },
+        span: { start: nameSpan.start, end: implementation.span.end },
       });
     }
 
@@ -1290,6 +1277,47 @@ class Parser {
 
       // Don't look too far ahead
       if (i > 20) break;
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if we have a constraint context in a protocol declaration (looks ahead for =>)
+   * Similar to peekConstraintContext but specifically for protocol declarations.
+   * The => must appear before the protocol name (UpperIdentifier followed by 'where').
+   */
+  private peekConstraintContextInProtocol(): boolean {
+    // Look ahead to find => operator before we hit the protocol name + 'where'
+    let i = 0;
+    let parenDepth = 0;
+
+    while (this.peekAhead(i)) {
+      const tok = this.peekAhead(i);
+      if (!tok) break;
+
+      // Track parentheses depth for nested constraints like (Eq a, Show a)
+      if (tok.kind === TokenKind.LParen) parenDepth++;
+      if (tok.kind === TokenKind.RParen) parenDepth--;
+
+      // Found => at top level - we have constraints
+      if (
+        parenDepth === 0 &&
+        tok.kind === TokenKind.Operator &&
+        tok.lexeme === "=>"
+      ) {
+        return true;
+      }
+
+      // Stop looking if we hit 'where' - no constraints before protocol name
+      if (tok.kind === TokenKind.Keyword && tok.lexeme === "where") {
+        return false;
+      }
+
+      i++;
+
+      // Don't look too far ahead
+      if (i > 30) break;
     }
 
     return false;
@@ -2451,6 +2479,32 @@ class Parser {
     }
 
     throw this.error("declaration name", this.current());
+  }
+
+  /**
+   * Parse a method/function body: pattern arguments followed by `= expression`.
+   * This is shared between:
+   * - Standard value declarations (top-level functions)
+   * - Protocol default method implementations
+   * - Implementation method definitions
+   *
+   * @returns The parsed arguments and body expression
+   */
+  private parseMethodBody(): { args: Pattern[]; body: Expr } {
+    // Parse pattern arguments (if any)
+    // Uses isFunctionParamPatternStart for consistency with standard functions
+    const args: Pattern[] = [];
+    while (this.isFunctionParamPatternStart(this.current())) {
+      args.push(this.parseFunctionParamPattern());
+    }
+
+    // Expect equals sign
+    this.expect(TokenKind.Equals, "'=' after parameters");
+
+    // Parse the body expression
+    const body = this.parseExpression();
+
+    return { args, body };
   }
 
   private parseExternalDeclaration(): Declaration {

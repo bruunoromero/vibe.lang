@@ -123,16 +123,22 @@ TypeAliasDeclaration = "type", "alias", UpperIdentifier, {LowerIdentifier}, "=",
 
 (* Protocol (type class) declarations *)
 (* Methods can be regular identifiers or operators in parentheses *)
-ProtocolDeclaration = "protocol", UpperIdentifier, {LowerIdentifier}, "where", {MethodSignature} ;
+(* Protocols may have superclass constraints: protocol Eq a => Ord a where ... *)
+ProtocolDeclaration = "protocol", [Constraints, "=>"], UpperIdentifier, {LowerIdentifier}, "where", {MethodSignature} ;
 
 MethodSignature = LowerIdentifier, ":", TypeExpr
                 | "(", Operator, ")", ":", TypeExpr ;
 
 (* Implementation (instance) declarations *)
-ImplementationDeclaration = "implement", [Constraints, "=>"], UpperIdentifier, TypeTerm, {TypeTerm}, "where", {MethodImpl} ;
+(* Type arguments are optional - zero type args means a nullary protocol implementation *)
+ImplementationDeclaration = "implement", [Constraints, "=>"], UpperIdentifier, {TypeTerm}, "where", {MethodImpl} ;
 
-MethodImpl = LowerIdentifier, "=", Expr
-           | "(", Operator, ")", "=", Expr ;
+(* Method implementations can be either:
+   - Simple expression: `plus = intPlus` (reference to existing function)
+   - Inline function: `plus x y = x + y` (with pattern parameters)
+   Operators in parentheses: `(+) x y = x + y` *)
+MethodImpl = LowerIdentifier, {Pattern}, "=", Expr
+           | "(", Operator, ")", {Pattern}, "=", Expr ;
 
 Constraints = Constraint
             | "(", Constraint, {",", Constraint}, ")" ;

@@ -78,6 +78,28 @@ function listType(element: Type): TypeCon {
 }
 
 /**
+ * Create a Lambda expression from pattern arguments and a body expression.
+ * This is shared between protocol default methods, implementation methods,
+ * and implementing clause generation to ensure consistent behavior.
+ *
+ * @param args - Pattern arguments for the lambda
+ * @param body - Body expression
+ * @param span - Source location for error reporting
+ * @returns A Lambda expression, or the body directly if args is empty
+ */
+function makeLambda(args: Pattern[], body: Expr, span: Span): Expr {
+  if (args.length === 0) {
+    return body;
+  }
+  return {
+    kind: "Lambda",
+    args,
+    body,
+    span,
+  };
+}
+
+/**
  * Check if a type is a List type.
  */
 function isListType(type: Type): type is TypeCon {
@@ -226,6 +248,20 @@ type Substitution = Map<number, Type>;
  * all the recursive analysis functions.
  */
 let currentConstraintContext: ConstraintContext = createConstraintContext();
+
+/**
+ * Module-level instance registry for validating concrete constraints.
+ * This is set at the start of analyzing a module and used during generalization
+ * to validate that constraints on concrete types have matching instances.
+ */
+let currentInstanceRegistry: InstanceInfo[] = [];
+
+/**
+ * Set the instance registry for constraint validation.
+ */
+function setInstanceRegistry(instances: InstanceInfo[]): void {
+  currentInstanceRegistry = instances;
+}
 
 /**
  * Reset the constraint context for a new value analysis.
@@ -398,6 +434,8 @@ export type ProtocolInfo = {
   moduleName?: string;
   /** Type parameters (typically just one, e.g., ["a"]) */
   params: string[];
+  /** Superclass constraints (e.g., [Eq a] in "protocol Eq a => Ord a where") */
+  superclassConstraints: Constraint[];
   /** Method signatures with optional default implementations */
   methods: Map<string, ProtocolMethodInfo>;
   /** Source span for error messages */
@@ -742,6 +780,10 @@ export type ValueInfo = {
   type?: Type;
   /** User-annotated protocol constraints from qualified type annotations */
   annotatedConstraints?: Constraint[];
+  /** All constraints collected during type inference (before filtering to polymorphic) */
+  collectedConstraints?: Constraint[];
+  /** Source location for error reporting */
+  span?: Span;
 };
 
 /**
@@ -1804,6 +1846,11 @@ export function analyze(
     types[name] = seeded;
   }
 
+  // Set the instance registry for constraint validation during generalization.
+  // This allows validateConcreteConstraints to check if concrete type constraints
+  // have matching instances.
+  setInstanceRegistry(instances);
+
   // Build dependency graph and compute SCCs for proper mutual recursion handling.
   // SCCs are returned in reverse topological order, so we process dependencies first.
   const depGraph = buildDependencyGraph(values);
@@ -1924,6 +1971,44 @@ export function analyze(
     constructors,
     imports,
     dependencies
+  );
+
+  // ===== PASS 2.5b: Validate implementation method types =====
+  // Validate that each method implementation's type matches the protocol's
+  // declared method signature (with type parameters substituted).
+  validateImplementationMethodTypes(
+    localInstances,
+    protocols,
+    globalScope,
+    substitution,
+    constructors,
+    adts,
+    typeAliases,
+    opaqueTypes,
+    imports,
+    dependencies
+  );
+
+  // ===== PASS 2.5c: Validate instance constraint satisfiability =====
+  // For polymorphic instances with constraints (e.g., `implement Eq a => ExampleProtocol a`),
+  // validate that the constraint protocols have instances that could satisfy the constraint.
+  // This catches cases where a constraint references a protocol with no instances.
+  validateInstanceConstraintSatisfiability(
+    localInstances,
+    instances,
+    protocols,
+    adts
+  );
+
+  // ===== PASS 2.5d: Validate concrete constraint instances exist =====
+  // After type inference, check that any protocol constraints on concrete types
+  // (e.g., `Eq A` when calling a function that requires `Eq a`) have corresponding
+  // instance declarations. This provides early error detection for missing instances.
+  validateConcreteConstraintInstances(
+    values,
+    instances,
+    protocols,
+    substitution
   );
 
   // ===== PASS 2.6: Validate protocol default implementations =====
@@ -2922,12 +3007,11 @@ function registerProtocol(
     } else if (method.defaultImpl) {
       // No explicit type annotation, but has default implementation
       // Infer the type from the default implementation by analyzing it as a lambda
-      const lambdaExpr: Expr = {
-        kind: "Lambda",
-        args: method.defaultImpl.args,
-        body: method.defaultImpl.body,
-        span: method.span,
-      };
+      const lambdaExpr = makeLambda(
+        method.defaultImpl.args,
+        method.defaultImpl.body,
+        method.span
+      );
 
       // Create a temporary scope for type inference
       const tempScope: Scope = { parent: globalScope, symbols: new Map() };
@@ -2979,20 +3063,39 @@ function registerProtocol(
     // Add method to global scope as a polymorphic function with constraint
     // Only add if not already defined (don't override explicit definitions)
     if (!globalScope.symbols.has(method.name)) {
+      // Combine superclass constraints with the protocol's own constraint
+      const allConstraints: Constraint[] = [
+        protocolConstraint,
+        ...decl.constraints.map((c) => ({
+          protocolName: c.protocolName,
+          typeArgs: c.typeArgs.map((ta) =>
+            typeFromAnnotation(ta, sharedTypeVarCtx, adts, typeAliases)
+          ),
+        })),
+      ];
       const scheme: TypeScheme = {
         vars: new Set(quantifiedVars), // Copy to avoid sharing
-        constraints: [protocolConstraint],
+        constraints: allConstraints,
         type: methodType,
       };
       globalScope.symbols.set(method.name, scheme);
     }
   }
 
+  // Convert superclass constraints from AST to internal representation
+  const superclassConstraints: Constraint[] = decl.constraints.map((c) => ({
+    protocolName: c.protocolName,
+    typeArgs: c.typeArgs.map((ta) =>
+      typeFromAnnotation(ta, sharedTypeVarCtx, adts, typeAliases)
+    ),
+  }));
+
   // Register the protocol
   protocols[decl.name] = {
     name: decl.name,
     moduleName,
     params: decl.params,
+    superclassConstraints,
     methods,
     span: decl.span,
   };
@@ -3069,22 +3172,32 @@ function processImplementingClause(
     for (const [methodName, methodInfo] of protocol.methods) {
       if (methodInfo.defaultImpl) {
         // Create a lambda from the default implementation
-        const defaultLambda: Expr = {
-          kind: "Lambda",
-          args: methodInfo.defaultImpl.args,
-          body: methodInfo.defaultImpl.body,
-          span: methodInfo.span,
-        };
+        const defaultLambda = makeLambda(
+          methodInfo.defaultImpl.args,
+          methodInfo.defaultImpl.body,
+          methodInfo.span
+        );
         methods.set(methodName, defaultLambda);
       }
     }
+
+    // Create a temporary instance info for overlap checking
+    const newInstance: InstanceInfo = {
+      protocolName,
+      moduleName,
+      typeArgs,
+      constraints: [], // Synthetic implementations have no extra constraints
+      methods,
+      explicitMethods: new Set(),
+      span: decl.span,
+    };
 
     // Check for overlapping instances
     for (const existing of instances) {
       if (existing.protocolName !== protocolName) continue;
 
-      // Check if type arguments match (simple structural equality check)
-      if (typesOverlap(existing.typeArgs, typeArgs)) {
+      // Check if instances overlap, considering constraints
+      if (instancesOverlap(existing, newInstance, instances)) {
         throw new SemanticError(
           `Overlapping implementation for protocol '${protocolName}' (from 'implementing' clause)`,
           decl.span
@@ -3092,21 +3205,9 @@ function processImplementingClause(
       }
     }
 
-    // Create the synthetic instance
-    // Note: explicitMethods is empty since all methods come from defaults
-    const instanceInfo: InstanceInfo = {
-      protocolName,
-      moduleName,
-      typeArgs,
-      constraints: [], // Synthetic implementations have no extra constraints
-      methods,
-      explicitMethods: new Set(), // No explicit implementations, all from defaults
-      span: decl.span,
-    };
-
     // Register in both global and local instance lists
-    instances.push(instanceInfo);
-    localInstances.push(instanceInfo);
+    instances.push(newInstance);
+    localInstances.push(newInstance);
   }
 }
 
@@ -3188,26 +3289,23 @@ function registerImplementation(
     }
   }
 
-  // Check for overlapping instances
-  // An implementation overlaps if another implementation exists for the same protocol and type
-  for (const existing of instances) {
-    if (existing.protocolName !== decl.protocolName) continue;
-
-    // Check if type arguments match (simple structural equality check)
-    if (typesOverlap(existing.typeArgs, typeArgs)) {
-      throw new SemanticError(
-        `Overlapping implementation for protocol '${decl.protocolName}'`,
-        decl.span
-      );
-    }
-  }
-
   // Convert method implementations to a map
   // For methods not explicitly implemented, use the default implementation from the protocol
   const methods = new Map<string, Expr>();
   const explicitMethods = new Set<string>();
   for (const method of decl.methods) {
-    methods.set(method.name, method.implementation);
+    // If the method has inline pattern arguments, wrap in a lambda
+    // e.g., `toString a = showA a` becomes `\a -> showA a`
+    if (method.args && method.args.length > 0) {
+      const lambda = makeLambda(
+        method.args,
+        method.implementation,
+        method.span
+      );
+      methods.set(method.name, lambda);
+    } else {
+      methods.set(method.name, method.implementation);
+    }
     explicitMethods.add(method.name);
   }
 
@@ -3217,12 +3315,11 @@ function registerImplementation(
     if (!methods.has(methodName) && methodInfo.defaultImpl) {
       // Create a lambda from the default implementation
       // The lambda wraps the args and body from the default
-      const defaultLambda: Expr = {
-        kind: "Lambda",
-        args: methodInfo.defaultImpl.args,
-        body: methodInfo.defaultImpl.body,
-        span: methodInfo.span,
-      };
+      const defaultLambda = makeLambda(
+        methodInfo.defaultImpl.args,
+        methodInfo.defaultImpl.body,
+        methodInfo.span
+      );
       methods.set(methodName, defaultLambda);
     }
   }
@@ -3238,11 +3335,225 @@ function registerImplementation(
     span: decl.span,
   };
 
+  // Check for overlapping instances
+  // An implementation overlaps if another implementation exists for the same protocol and type
+  // AND their constraints don't prevent overlap
+  for (const existing of instances) {
+    if (existing.protocolName !== decl.protocolName) continue;
+
+    // Check if instances overlap, considering constraints
+    if (instancesOverlap(existing, instanceInfo, instances)) {
+      throw new SemanticError(
+        `Overlapping implementation for protocol '${decl.protocolName}'`,
+        decl.span
+      );
+    }
+  }
+
   // Register the instance in both the global list and local list
   // The global list includes imported instances for overlap checking
   // The local list is used for validation (only validate methods in this module)
   instances.push(instanceInfo);
   localInstances.push(instanceInfo);
+}
+
+/**
+ * Validate that all method implementations in protocol instances have types
+ * that match the protocol's declared method signatures.
+ *
+ * For example, if Show declares `toString : a -> String`, and we're implementing
+ * `Show A`, then the implementation must have type `A -> String`, not `String`.
+ */
+function validateImplementationMethodTypes(
+  instances: InstanceInfo[],
+  protocols: Record<string, ProtocolInfo>,
+  globalScope: Scope,
+  substitution: Substitution,
+  constructors: Record<string, ConstructorInfo>,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>
+): void {
+  for (const instance of instances) {
+    const protocol = protocols[instance.protocolName];
+    if (!protocol) continue;
+
+    // Build a substitution from protocol type params to instance type args
+    // e.g., for `implement Show A`, map protocol param 'a' to concrete type 'A'
+    const paramSubstitution = new Map<number, Type>();
+    const paramNameToId = new Map<string, number>();
+
+    // First, create type variables for each protocol parameter
+    for (let i = 0; i < protocol.params.length; i++) {
+      const paramName = protocol.params[i]!;
+      const typeArg = instance.typeArgs[i];
+      if (typeArg) {
+        // Create a fresh type variable ID for the parameter
+        const paramVar = freshType();
+        paramNameToId.set(paramName, paramVar.id);
+        // Map this type variable to the concrete instance type
+        paramSubstitution.set(paramVar.id, typeArg);
+      }
+    }
+
+    // Validate each explicitly implemented method
+    for (const methodName of instance.explicitMethods) {
+      const methodExpr = instance.methods.get(methodName);
+      const protocolMethodInfo = protocol.methods.get(methodName);
+
+      if (!methodExpr || !protocolMethodInfo) continue;
+
+      // Get the expected type from the protocol, substituting type parameters
+      const expectedType = substituteTypeParams(
+        protocolMethodInfo.type,
+        protocol.params,
+        instance.typeArgs
+      );
+
+      // Create a fresh substitution for inference
+      const inferSubstitution: Substitution = new Map(substitution);
+
+      // Infer the type of the implementation expression
+      const tempScope: Scope = { symbols: new Map(), parent: globalScope };
+      const inferredType = analyzeExpr(
+        methodExpr,
+        tempScope,
+        inferSubstitution,
+        globalScope,
+        constructors,
+        adts,
+        typeAliases,
+        opaqueTypes,
+        imports,
+        dependencies
+      );
+
+      // Try to unify the inferred type with the expected type
+      try {
+        unify(inferredType, expectedType, methodExpr.span, inferSubstitution);
+      } catch (e) {
+        if (e instanceof SemanticError) {
+          throw new SemanticError(
+            `Implementation of '${methodName}' for '${
+              instance.protocolName
+            }' has type '${formatType(
+              applySubstitution(inferredType, inferSubstitution)
+            )}' but protocol expects '${formatType(expectedType)}'`,
+            methodExpr.span
+          );
+        }
+        throw e;
+      }
+    }
+  }
+}
+
+/**
+ * Substitute protocol type variables with concrete types.
+ * Used to specialize a method type for a particular instance.
+ *
+ * The strategy is to collect all unique type variable IDs from the method type
+ * and map them to the instance's type arguments by the order they first appear.
+ * This works because the protocol method types use consistent type variable IDs
+ * across all methods for the same protocol parameter.
+ */
+function substituteTypeParams(
+  type: Type,
+  params: string[],
+  typeArgs: Type[]
+): Type {
+  // Collect all unique type variable IDs from the method type in order
+  const varIds: number[] = [];
+  collectTypeVarIdsOrdered(type, varIds, new Set());
+
+  // Build a substitution map from type variable IDs to concrete types
+  // We assume the first N unique type vars correspond to the N protocol params
+  const substitution = new Map<number, Type>();
+  for (let i = 0; i < Math.min(varIds.length, typeArgs.length); i++) {
+    substitution.set(varIds[i]!, typeArgs[i]!);
+  }
+
+  return applyTypeSubstitution(type, substitution);
+}
+
+/**
+ * Collect all unique type variable IDs from a type in order of first occurrence.
+ */
+function collectTypeVarIdsOrdered(
+  type: Type,
+  result: number[],
+  seen: Set<number>
+): void {
+  switch (type.kind) {
+    case "var":
+      if (!seen.has(type.id)) {
+        seen.add(type.id);
+        result.push(type.id);
+      }
+      break;
+    case "con":
+      for (const arg of type.args) {
+        collectTypeVarIdsOrdered(arg, result, seen);
+      }
+      break;
+    case "fun":
+      collectTypeVarIdsOrdered(type.from, result, seen);
+      collectTypeVarIdsOrdered(type.to, result, seen);
+      break;
+    case "tuple":
+      for (const el of type.elements) {
+        collectTypeVarIdsOrdered(el, result, seen);
+      }
+      break;
+    case "record":
+      for (const v of Object.values(type.fields)) {
+        collectTypeVarIdsOrdered(v, result, seen);
+      }
+      break;
+  }
+}
+
+/**
+ * Apply a substitution (type var ID -> Type) to a type.
+ */
+function applyTypeSubstitution(
+  type: Type,
+  substitution: Map<number, Type>
+): Type {
+  switch (type.kind) {
+    case "var": {
+      const mapped = substitution.get(type.id);
+      return mapped ?? type;
+    }
+    case "con":
+      return {
+        kind: "con",
+        name: type.name,
+        args: type.args.map((arg) => applyTypeSubstitution(arg, substitution)),
+      };
+    case "fun":
+      return {
+        kind: "fun",
+        from: applyTypeSubstitution(type.from, substitution),
+        to: applyTypeSubstitution(type.to, substitution),
+      };
+    case "tuple":
+      return {
+        kind: "tuple",
+        elements: type.elements.map((el) =>
+          applyTypeSubstitution(el, substitution)
+        ),
+      };
+    case "record": {
+      const fields: Record<string, Type> = {};
+      for (const [k, v] of Object.entries(type.fields)) {
+        fields[k] = applyTypeSubstitution(v, substitution);
+      }
+      return { kind: "record", fields };
+    }
+  }
 }
 
 /**
@@ -3282,6 +3593,220 @@ function validateImplementationMethodExpressions(
       }
     }
   }
+}
+
+/**
+ * Validate that constraints on polymorphic instances are satisfiable.
+ *
+ * For each instance with constraints (e.g., `implement Eq a => ExampleProtocol a`),
+ * we check that:
+ * 1. The constraint protocol exists
+ *
+ * Note: We don't require instances to exist at this point because they may be
+ * defined in other modules that are imported at the call site. The actual
+ * satisfiability check happens during code generation when we know the concrete types.
+ */
+function validateInstanceConstraintSatisfiability(
+  localInstances: InstanceInfo[],
+  allInstances: InstanceInfo[],
+  protocols: Record<string, ProtocolInfo>,
+  _adts: Record<string, ADTInfo>
+): void {
+  for (const instance of localInstances) {
+    // Skip instances without constraints
+    if (instance.constraints.length === 0) continue;
+
+    for (const constraint of instance.constraints) {
+      // Validate the constraint protocol exists
+      const constraintProtocol = protocols[constraint.protocolName];
+      if (!constraintProtocol) {
+        throw new SemanticError(
+          `Instance constraint references unknown protocol '${constraint.protocolName}'`,
+          instance.span
+        );
+      }
+
+      // Note: We intentionally don't check if instances exist because they may be
+      // defined in other modules. The check happens at code generation time when
+      // the instance is used with concrete types.
+    }
+  }
+}
+
+/**
+ * Validate that concrete-type constraints have corresponding instances.
+ *
+ * When a polymorphic function with constraints (e.g., `Eq a => a -> Bool`) is
+ * called with a concrete type, we need to verify that the concrete type has
+ * an instance of the required protocol.
+ *
+ * For example, if we have:
+ *   implement Eq a => ExampleProtocol a where exampleMethod var = var == var
+ *   main = exampleMethod A  -- where A is a type without Eq instance
+ *
+ * This function detects that `Eq A` is required but no such instance exists.
+ */
+function validateConcreteConstraintInstances(
+  values: Record<string, ValueInfo>,
+  instances: InstanceInfo[],
+  protocols: Record<string, ProtocolInfo>,
+  substitution: Substitution
+): void {
+  for (const [valueName, valueInfo] of Object.entries(values)) {
+    // Skip synthetic values and values without inferred constraints
+    if (valueName.startsWith("$")) continue;
+
+    // For now, we validate by checking that for each constraint on a concrete type
+    // in the value info's collectedConstraints (if available), an instance exists
+    if (valueInfo.collectedConstraints) {
+      for (const constraint of valueInfo.collectedConstraints) {
+        // Apply substitution to get the resolved constraint types
+        const resolvedTypeArgs = constraint.typeArgs.map((t) =>
+          applySubstitution(t, substitution)
+        );
+
+        // Check if any type argument is a concrete type (not a type variable)
+        for (const typeArg of resolvedTypeArgs) {
+          if (typeArg.kind === "con") {
+            // This is a constraint on a concrete type - validate instance exists
+            const hasInstance = findInstanceForTypeInternal(
+              constraint.protocolName,
+              typeArg,
+              instances
+            );
+
+            if (!hasInstance) {
+              const span = valueInfo.span ?? valueInfo.declaration.span;
+              throw new SemanticError(
+                `No instance of '${
+                  constraint.protocolName
+                }' for type '${formatType(typeArg)}'. ` +
+                  `Add an implementation: implement ${
+                    constraint.protocolName
+                  } ${formatType(typeArg)} where ...`,
+                span
+              );
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Result of looking up an instance for a given protocol and concrete type.
+ */
+type InstanceLookupResult =
+  | { found: true }
+  | { found: false; reason: "no-instance" }
+  | {
+      found: false;
+      reason: "unsatisfied-constraint";
+      constraint: string;
+      forType: string;
+    };
+
+/**
+ * Find an instance for a given protocol and concrete type.
+ * Returns detailed information about whether a matching instance exists
+ * and why it might not match.
+ */
+function findInstanceForTypeWithReason(
+  protocolName: string,
+  concreteType: TypeCon,
+  instances: InstanceInfo[]
+): InstanceLookupResult {
+  let hasPolymorphicInstance = false;
+  let firstUnsatisfiedConstraint: {
+    constraint: string;
+    forType: string;
+  } | null = null;
+
+  for (const inst of instances) {
+    if (inst.protocolName !== protocolName) continue;
+
+    const instTypeArg = inst.typeArgs[0];
+    if (!instTypeArg) continue;
+
+    // Exact match: instance for the concrete type
+    if (
+      instTypeArg.kind === "con" &&
+      instTypeArg.name === concreteType.name &&
+      instTypeArg.args.length === concreteType.args.length
+    ) {
+      // Check if type arguments match (for parameterized types like List Int)
+      let argsMatch = true;
+      for (let i = 0; i < instTypeArg.args.length; i++) {
+        if (!typesEqual(instTypeArg.args[i]!, concreteType.args[i]!)) {
+          argsMatch = false;
+          break;
+        }
+      }
+      if (argsMatch) {
+        return { found: true };
+      }
+    }
+
+    // Polymorphic match: instance with type variable that could match
+    // BUT we need to check if the instance's constraints are satisfiable
+    if (instTypeArg.kind === "var") {
+      hasPolymorphicInstance = true;
+      // This is a polymorphic instance - check if constraints are satisfiable
+      if (inst.constraints.length === 0) {
+        return { found: true }; // No constraints, always matches
+      }
+
+      // Check if all constraints can be satisfied for the concrete type
+      let allConstraintsSatisfied = true;
+      for (const constraint of inst.constraints) {
+        // For each constraint like `Eq a`, check if `Eq concreteType` exists
+        const constraintResult = findInstanceForTypeWithReason(
+          constraint.protocolName,
+          concreteType,
+          instances
+        );
+        if (!constraintResult.found) {
+          allConstraintsSatisfied = false;
+          if (!firstUnsatisfiedConstraint) {
+            firstUnsatisfiedConstraint = {
+              constraint: constraint.protocolName,
+              forType: formatType(concreteType),
+            };
+          }
+          break;
+        }
+      }
+
+      if (allConstraintsSatisfied) {
+        return { found: true };
+      }
+    }
+  }
+
+  // If we found a polymorphic instance but constraints weren't satisfied
+  if (hasPolymorphicInstance && firstUnsatisfiedConstraint) {
+    return {
+      found: false,
+      reason: "unsatisfied-constraint",
+      constraint: firstUnsatisfiedConstraint.constraint,
+      forType: firstUnsatisfiedConstraint.forType,
+    };
+  }
+
+  return { found: false, reason: "no-instance" };
+}
+
+/**
+ * Simple boolean version for backward compatibility
+ */
+function findInstanceForTypeInternal(
+  protocolName: string,
+  concreteType: TypeCon,
+  instances: InstanceInfo[]
+): boolean {
+  return findInstanceForTypeWithReason(protocolName, concreteType, instances)
+    .found;
 }
 
 /**
@@ -3859,6 +4384,147 @@ function bindPatternNames(pattern: Pattern, scope: Scope): void {
       }
       return;
   }
+}
+
+/**
+ * Check if two protocol implementations truly overlap.
+ *
+ * Two implementations overlap only if there exists some concrete type that
+ * could match both implementations simultaneously. This means we must consider
+ * constraints: if implementation A has constraint `Eq a` and implementation B
+ * is for `List a`, they only overlap if `List a` can satisfy `Eq`.
+ *
+ * @param inst1 - First implementation to compare
+ * @param inst2 - Second implementation to compare
+ * @param instances - All known instances (for constraint satisfaction checking)
+ * @returns true if the implementations could apply to the same concrete type
+ */
+function instancesOverlap(
+  inst1: InstanceInfo,
+  inst2: InstanceInfo,
+  instances: InstanceInfo[]
+): boolean {
+  // First, check if the type arguments structurally overlap
+  if (!typesOverlap(inst1.typeArgs, inst2.typeArgs)) {
+    return false;
+  }
+
+  // If types structurally overlap, check if constraints allow actual overlap
+  // We need to check both directions:
+  // 1. Can inst1's type satisfy inst2's constraints?
+  // 2. Can inst2's type satisfy inst1's constraints?
+
+  // For each pair of corresponding type arguments, check constraint compatibility
+  for (let i = 0; i < inst1.typeArgs.length; i++) {
+    const type1 = inst1.typeArgs[i]!;
+    const type2 = inst2.typeArgs[i]!;
+
+    // Case 1: type1 is a variable with constraints, type2 is concrete
+    // Check if type2 satisfies all of type1's constraints
+    if (type1.kind === "var" && type2.kind === "con") {
+      const constraintsForVar = inst1.constraints.filter((c) =>
+        c.typeArgs.some((t) => t.kind === "var" && t.id === type1.id)
+      );
+
+      for (const constraint of constraintsForVar) {
+        // Substitute the concrete type for the type variable in the constraint
+        const substitutedType = substituteTypeInConstraint(
+          constraint,
+          type1.id,
+          type2
+        );
+        if (
+          !canSatisfyConstraint(
+            substitutedType,
+            constraint.protocolName,
+            instances
+          )
+        ) {
+          // The concrete type cannot satisfy the constraint, so no overlap
+          return false;
+        }
+      }
+    }
+
+    // Case 2: type2 is a variable with constraints, type1 is concrete
+    // Check if type1 satisfies all of type2's constraints
+    if (type2.kind === "var" && type1.kind === "con") {
+      const constraintsForVar = inst2.constraints.filter((c) =>
+        c.typeArgs.some((t) => t.kind === "var" && t.id === type2.id)
+      );
+
+      for (const constraint of constraintsForVar) {
+        // Substitute the concrete type for the type variable in the constraint
+        const substitutedType = substituteTypeInConstraint(
+          constraint,
+          type2.id,
+          type1
+        );
+        if (
+          !canSatisfyConstraint(
+            substitutedType,
+            constraint.protocolName,
+            instances
+          )
+        ) {
+          // The concrete type cannot satisfy the constraint, so no overlap
+          return false;
+        }
+      }
+    }
+
+    // Case 3: Both are type variables with constraints
+    // This is more complex - we'd need to check if there's any type that could
+    // satisfy both sets of constraints. For now, we conservatively assume overlap
+    // unless the constraints are mutually exclusive (which is hard to determine).
+    // This is the same behavior as before - we assume they could overlap.
+  }
+
+  return true;
+}
+
+/**
+ * Substitute a type variable with a concrete type in a constraint's type arguments.
+ * Returns the resulting concrete type after substitution.
+ */
+function substituteTypeInConstraint(
+  constraint: Constraint,
+  varId: number,
+  replacement: Type
+): Type {
+  // Find the type argument that contains the variable and substitute
+  for (const typeArg of constraint.typeArgs) {
+    if (typeArg.kind === "var" && typeArg.id === varId) {
+      return replacement;
+    }
+    if (typeArg.kind === "con") {
+      // Handle nested type constructors like `List a`
+      const substitutedArgs = typeArg.args.map((arg) =>
+        arg.kind === "var" && arg.id === varId ? replacement : arg
+      );
+      return { kind: "con", name: typeArg.name, args: substitutedArgs };
+    }
+  }
+  return constraint.typeArgs[0] || replacement;
+}
+
+/**
+ * Check if a concrete type can satisfy a protocol constraint.
+ * This checks if there's an instance of the protocol for the given type.
+ */
+function canSatisfyConstraint(
+  concreteType: Type,
+  protocolName: string,
+  instances: InstanceInfo[]
+): boolean {
+  if (concreteType.kind !== "con") {
+    // If it's still a type variable, we can't determine satisfaction
+    // Conservative: assume it could be satisfied
+    return true;
+  }
+
+  // Look for an instance of the protocol for this concrete type
+  return findInstanceForTypeInternal(protocolName, concreteType, instances);
 }
 
 /**
@@ -5817,6 +6483,49 @@ function generalizeWithAnnotatedConstraints(
     rawConstraints,
     substitution
   );
+
+  // Validate concrete constraints - constraints on concrete types must have instances
+  // These are the constraints that will be filtered out during generalization,
+  // but we need to verify they're actually satisfiable.
+  for (const c of resolvedConstraints) {
+    for (const typeArg of c.typeArgs) {
+      const resolved = applySubstitution(typeArg, substitution);
+      // Only validate fully concrete types (no type variables)
+      if (resolved.kind === "con") {
+        const freeVars = getFreeTypeVars(resolved, substitution);
+        if (freeVars.size === 0) {
+          // This is a concrete constraint - validate instance exists
+          const lookupResult = findInstanceForTypeWithReason(
+            c.protocolName,
+            resolved as TypeCon,
+            currentInstanceRegistry
+          );
+          if (!lookupResult.found) {
+            if (lookupResult.reason === "unsatisfied-constraint") {
+              throw new SemanticError(
+                `Type '${formatType(resolved)}' does not satisfy constraint '${
+                  lookupResult.constraint
+                }' ` +
+                  `required by '${c.protocolName}'. ` +
+                  `Add an implementation: implement ${lookupResult.constraint} ${lookupResult.forType} where ...`,
+                span
+              );
+            } else {
+              throw new SemanticError(
+                `No instance of '${c.protocolName}' for type '${formatType(
+                  resolved
+                )}'. ` +
+                  `Add an implementation: implement ${
+                    c.protocolName
+                  } ${formatType(resolved)} where ...`,
+                span
+              );
+            }
+          }
+        }
+      }
+    }
+  }
 
   // Filter inferred constraints to only those involving quantified type variables
   const inferredRelevantConstraints = resolvedConstraints.filter((c) => {

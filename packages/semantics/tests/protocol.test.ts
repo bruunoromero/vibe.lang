@@ -279,6 +279,123 @@ implement Num Float where
 
     expect(result.instances).toHaveLength(2);
   });
+
+  test("allows constrained implementation alongside concrete type that doesn't satisfy constraint", () => {
+    // A constrained implementation (Eq a => Protocol a) should NOT overlap with
+    // a concrete type (Protocol (List a)) when List a doesn't have an Eq instance
+    const source = `
+protocol Eq a where
+  eq : a -> a -> Bool
+
+protocol MyProtocol a where
+  method : a -> Bool
+
+@external "@vibe/runtime" "defaultMethod"
+defaultMethod : a -> Bool
+
+implement Eq a => MyProtocol a where
+  method = defaultMethod
+
+implement MyProtocol (List a) where
+  method _ = False
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // Both implementations should be allowed since List a doesn't satisfy Eq
+    expect(result.instances).toHaveLength(2);
+  });
+
+  test("rejects constrained implementation overlapping with concrete type that satisfies constraint", () => {
+    // If we have `Eq a => Protocol a` and also `Protocol Int`, and Int has Eq,
+    // then they overlap because Int could match both implementations
+    const source = `
+protocol Eq a where
+  eq : a -> a -> Bool
+
+protocol MyProtocol a where
+  method : a -> Bool
+
+@external "@vibe/runtime" "intEq"
+intEq : Int -> Int -> Bool
+
+@external "@vibe/runtime" "defaultMethod"
+defaultMethod : a -> Bool
+
+@external "@vibe/runtime" "intMethod"
+intMethod : Int -> Bool
+
+implement Eq Int where
+  eq = intEq
+
+implement Eq a => MyProtocol a where
+  method = defaultMethod
+
+implement MyProtocol Int where
+  method = intMethod
+`;
+    const program = parse(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow("Overlapping implementation");
+  });
+
+  test("allows multiple constrained implementations with different constraints", () => {
+    // Two constrained implementations with mutually exclusive type structures
+    // should be allowed
+    const source = `
+protocol Eq a where
+  eq : a -> a -> Bool
+
+protocol Show a where
+  show : a -> String
+
+protocol MyProtocol a where
+  method : a -> Bool
+
+@external "@vibe/runtime" "eqMethod"
+eqMethod : a -> Bool
+
+@external "@vibe/runtime" "showMethod"
+showMethod : a -> Bool
+
+implement Eq a => MyProtocol a where
+  method = eqMethod
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // Single constrained implementation should work
+    expect(result.instances).toHaveLength(1);
+  });
+
+  test("allows constrained implementation for List when element doesn't satisfy constraint", () => {
+    // Similar to first test but more explicit about the List case
+    const source = `
+protocol Ord a where
+  compare : a -> a -> Int
+
+protocol Sortable a where
+  sort : a -> a
+
+@external "@vibe/runtime" "sortByOrd"
+sortByOrd : a -> a
+
+@external "@vibe/runtime" "noSort"
+noSort : List a -> List a
+
+implement Ord a => Sortable a where
+  sort = sortByOrd
+
+implement Sortable (List a) where
+  sort = noSort
+`;
+    const program = parse(source);
+    const result = analyze(program);
+
+    // Both should be allowed: List a doesn't automatically have Ord
+    expect(result.instances).toHaveLength(2);
+  });
 });
 
 describe("Implementation with Constraints", () => {
@@ -810,6 +927,9 @@ add x y = plus x y
     const source = `
 protocol Num a where
   (+) : a -> a -> a
+
+implement Num Int where
+  (+) x y = x
 
 addOne x = x + 1
 `;

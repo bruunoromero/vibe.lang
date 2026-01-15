@@ -434,9 +434,16 @@ export function lower(
         hasDefault: methodInfo.defaultImpl !== undefined,
       });
     }
+    // Convert superclass constraints
+    const superclassConstraints: IRConstraint[] =
+      proto.superclassConstraints.map((c) => ({
+        protocolName: c.protocolName,
+        typeArgs: c.typeArgs.map((t) => convertType(t)),
+      }));
     protocols[name] = {
       name: proto.name,
       params: proto.params,
+      superclassConstraints,
       methods,
     };
   }
@@ -466,16 +473,18 @@ export function lower(
         }
         methodsObj[methodName] = parts.join(".");
       } else if (methodExpr.kind === "Lambda") {
-        // Lambda expressions from default implementations need to be lowered
-        // and turned into synthetic top-level values.
-        // Generate a unique name for this default implementation.
-        // Sanitize the method name to ensure it's a valid JS identifier.
+        // Lambda expressions need to be lowered and turned into synthetic top-level values.
+        // Determine if this is an explicit inline implementation or an inherited default:
+        // - Explicit: `implement Show A where toString a = showA a` -> use $impl_ prefix
+        // - Default: method inherited from protocol's default impl -> use $default_ prefix
+        const isExplicit = inst.explicitMethods.has(methodName);
         const typeKey =
           inst.typeArgs.length > 0
             ? formatTypeKey(convertType(inst.typeArgs[0]))
             : "Unknown";
         const sanitizedMethodName = sanitizeOperator(methodName);
-        const syntheticName = `$default_${inst.protocolName}_${typeKey}_${sanitizedMethodName}`;
+        const prefix = isExplicit ? "$impl" : "$default";
+        const syntheticName = `${prefix}_${inst.protocolName}_${typeKey}_${sanitizedMethodName}`;
 
         // Build method substitutions for protocol methods used in the body.
         // For each method in this instance that has a concrete implementation,
@@ -508,12 +517,17 @@ export function lower(
           : { kind: "var" as const, id: -1 };
 
         // Create a synthetic IRValue for this default implementation
+        // Pass instance constraints so the method can accept dictionary parameters
+        const instanceConstraints = inst.constraints.map((c) => ({
+          protocolName: c.protocolName,
+          typeArgs: c.typeArgs.map((t) => convertType(t)),
+        }));
         const syntheticValue: IRValue = {
           name: syntheticName,
           params: [], // Lambda is in the body
           body: irLambda,
           type: methodType,
-          constraints: [],
+          constraints: instanceConstraints,
           isExternal: false,
           span: methodExpr.span,
         };
@@ -521,8 +535,43 @@ export function lower(
         syntheticValues[syntheticName] = syntheticValue;
         methodsObj[methodName] = syntheticName;
       } else {
-        // For other complex expressions, use a placeholder
-        methodsObj[methodName] = `<expr:${methodExpr.kind}>`;
+        // For other expressions (literals, etc.), create a synthetic value
+        // containing the lowered expression
+        const typeKey =
+          inst.typeArgs.length > 0
+            ? formatTypeKey(convertType(inst.typeArgs[0]))
+            : "Unknown";
+        const sanitizedMethodName = sanitizeOperator(methodName);
+        const syntheticName = `$impl_${inst.protocolName}_${typeKey}_${sanitizedMethodName}`;
+
+        // Lower the expression to IR
+        const irExpr = lowerExpr(methodExpr, ctx);
+
+        // Get the method type from the protocol if available
+        const protocol = semantics.protocols[inst.protocolName];
+        const methodInfo = protocol?.methods.get(methodName);
+        const methodType = methodInfo?.type
+          ? convertType(methodInfo.type)
+          : { kind: "var" as const, id: -1 };
+
+        // Create a synthetic IRValue for this implementation
+        // Pass instance constraints so the method can accept dictionary parameters
+        const instanceConstraints = inst.constraints.map((c) => ({
+          protocolName: c.protocolName,
+          typeArgs: c.typeArgs.map((t) => convertType(t)),
+        }));
+        const syntheticValue: IRValue = {
+          name: syntheticName,
+          params: [],
+          body: irExpr,
+          type: methodType,
+          constraints: instanceConstraints,
+          isExternal: false,
+          span: methodExpr.span,
+        };
+
+        syntheticValues[syntheticName] = syntheticValue;
+        methodsObj[methodName] = syntheticName;
       }
     }
     return {
