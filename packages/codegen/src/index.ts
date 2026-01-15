@@ -33,6 +33,35 @@ import type {
 } from "@vibe/ir";
 import { sanitizeOperator } from "@vibe/syntax";
 
+// Import from extracted modules
+import { sanitizeIdentifier } from "./sanitize";
+import {
+  generateExternalImports,
+  generateDependencyImports,
+  calculateReExportPath,
+  type ExternalBindingsMap,
+} from "./imports";
+import {
+  formatTypeKey,
+  isTypeVariable,
+  buildTypeVarSubstitution,
+  resolveDictReference,
+  resolveDictionaryForType,
+  findMatchingInstance,
+  findPolymorphicInstance,
+  getImportAliasForModule,
+  type InstanceContext,
+} from "./instances";
+
+// Re-export for consumers
+export { sanitizeIdentifier } from "./sanitize";
+export {
+  formatTypeKey,
+  isTypeVariable,
+  resolveDictReference,
+  resolveDictionaryForType,
+} from "./instances";
+
 // ============================================================================
 // Code Generation Context
 // ============================================================================
@@ -222,460 +251,60 @@ function freshName(ctx: CodegenContext, base: string): string {
 }
 
 /**
- * Format a type as a key string for instance lookup.
+ * Get the import alias for a module name (wrapper for InstanceContext).
  */
-function formatTypeKey(type: IRType | undefined): string {
-  if (!type) return "unknown";
-
-  switch (type.kind) {
-    case "con":
-      if (type.args.length === 0) return type.name;
-      return `${type.name}_${type.args.map(formatTypeKey).join("_")}`;
-    case "var":
-      return `v${type.id}`;
-    case "fun":
-      return `fn_${formatTypeKey(type.from)}_${formatTypeKey(type.to)}`;
-    case "tuple":
-      return `tuple_${type.elements.map(formatTypeKey).join("_")}`;
-    case "record":
-      return `record`;
-    case "list":
-      return `list_${formatTypeKey(type.element)}`;
-    default:
-      return "unknown";
-  }
+function getImportAliasForModuleCtx(
+  moduleName: string,
+  ctx: CodegenContext
+): string {
+  return getImportAliasForModule(moduleName, ctx.program.importAliases);
 }
 
 /**
- * Check if a type is a type variable (or contains only type variables).
- * Used to determine if a type is concrete enough for dictionary resolution.
+ * Create an InstanceContext from a CodegenContext for use with instance resolution functions.
  */
-function isTypeVariable(type: IRType): boolean {
-  switch (type.kind) {
-    case "var":
-      return true;
-    case "con":
-      return false;
-    case "list":
-      // List with a concrete element is concrete enough
-      return isTypeVariable(type.element);
-    case "tuple":
-      return type.elements.every(isTypeVariable);
-    case "fun":
-      return isTypeVariable(type.from) && isTypeVariable(type.to);
-    case "record":
-      return Object.values(type.fields).every(isTypeVariable);
-    default:
-      return false;
-  }
+function toInstanceContext(ctx: CodegenContext): InstanceContext {
+  return {
+    instances: ctx.instances,
+    instanceDictNames: ctx.instanceDictNames,
+    localInstanceKeys: ctx.localInstanceKeys,
+    instanceModules: ctx.instanceModules,
+    constrainedInstances: ctx.constrainedInstances,
+    importAliases: ctx.program.importAliases,
+    dictParamsInScope: ctx.dictParamsInScope,
+    concreteConstraints: ctx.concreteConstraints,
+    expectedReturnType: ctx.expectedReturnType,
+  };
 }
 
 /**
- * Build a substitution map from type variable IDs to concrete types.
- *
- * Given an instance's type args (which may contain type variables) and
- * the concrete types at a call site, builds a mapping from type variable IDs
- * to their concrete substitutions.
- *
- * @param instanceTypeArgs - The type args from the instance definition
- * @param concreteTypes - The concrete types at the call site
- * @returns Map from type variable ID to concrete type
+ * Wrapper to call resolveDictReference with CodegenContext.
  */
-function buildTypeVarSubstitution(
-  instanceTypeArgs: IRType[],
-  concreteTypes: IRType[]
-): Map<number, IRType> {
-  const subst = new Map<number, IRType>();
-
-  function collectSubst(instType: IRType, concreteType: IRType): void {
-    if (instType.kind === "var") {
-      // Type variable - record the substitution
-      subst.set(instType.id, concreteType);
-    } else if (instType.kind === "con" && concreteType.kind === "con") {
-      // Type constructor - recurse into args
-      for (
-        let i = 0;
-        i < instType.args.length && i < concreteType.args.length;
-        i++
-      ) {
-        collectSubst(instType.args[i]!, concreteType.args[i]!);
-      }
-    } else if (instType.kind === "list" && concreteType.kind === "list") {
-      collectSubst(instType.element, concreteType.element);
-    } else if (instType.kind === "tuple" && concreteType.kind === "tuple") {
-      for (
-        let i = 0;
-        i < instType.elements.length && i < concreteType.elements.length;
-        i++
-      ) {
-        collectSubst(instType.elements[i]!, concreteType.elements[i]!);
-      }
-    } else if (instType.kind === "fun" && concreteType.kind === "fun") {
-      collectSubst(instType.from, concreteType.from);
-      collectSubst(instType.to, concreteType.to);
-    }
-  }
-
-  for (
-    let i = 0;
-    i < instanceTypeArgs.length && i < concreteTypes.length;
-    i++
-  ) {
-    collectSubst(instanceTypeArgs[i]!, concreteTypes[i]!);
-  }
-
-  return subst;
-}
-
-/**
- * Apply a type variable substitution to get the concrete type.
- *
- * @param type - The type (may be a type variable)
- * @param subst - The substitution map from type var IDs to concrete types
- * @returns The substituted concrete type, or the original type if no substitution found
- */
-function applyTypeSubstitution(
-  type: IRType,
-  subst: Map<number, IRType>
-): IRType {
-  if (type.kind === "var") {
-    return subst.get(type.id) ?? type;
-  }
-  return type;
-}
-
-/**
- * Resolve a dictionary reference for a protocol and concrete type.
- *
- * Returns the fully qualified dictionary expression. For simple instances
- * like `implement Num Int`, returns "$dict_Num_Int".
- *
- * For constrained instances like `implement Eq a => ExampleProtocol a`,
- * returns the dictionary function applied to resolved constraint dictionaries,
- * e.g., "$dict_ExampleProtocol_v96($dict_Eq_Int)" when called with concrete type Int.
- *
- * For polymorphic instances (type variable in type args), we find the matching
- * polymorphic instance and apply the constraint dictionaries for the concrete type.
- *
- * @param concreteType - The concrete type we're resolving for (e.g., Int). Used to
- *                       resolve constraint dictionaries for polymorphic instances.
- *                       For single-parameter protocols, this is the first type arg.
- * @param allConcreteTypes - Optional array of ALL concrete type args at the call site.
- *                           Used for multi-parameter protocols to properly resolve constraints.
- */
-function resolveDictReference(
+function resolveDictReferenceCtx(
   protocolName: string,
   typeKey: string,
   ctx: CodegenContext,
   concreteType?: IRType,
   allConcreteTypes?: IRType[]
 ): string {
-  const key = `${protocolName}_${typeKey}`;
-
-  // Get the base dictionary name
-  let dictRef: string | null = null;
-  let instanceKey: string = key;
-
-  // Check if it's defined locally in this module (exact match)
-  if (ctx.localInstanceKeys.has(key)) {
-    dictRef = `$dict_${key}`;
-  } else {
-    // Check if it's in the known instances (from imports)
-    const sourceModule = ctx.instanceModules.get(key);
-    if (sourceModule) {
-      // Use the source module's import alias for the dictionary reference
-      const importAlias = getImportAliasForModule(sourceModule, ctx);
-      dictRef = `${importAlias}.$dict_${key}`;
-    }
-  }
-
-  // If no exact match found, try to find a structurally matching instance
-  // This handles cases like `implement Protocol (List a)` matching `List Int`
-  if (!dictRef && concreteType) {
-    const structuralMatch = findMatchingInstance(
-      protocolName,
-      concreteType,
-      ctx
-    );
-    if (structuralMatch) {
-      instanceKey = structuralMatch.key;
-      if (ctx.localInstanceKeys.has(instanceKey)) {
-        dictRef = `$dict_${instanceKey}`;
-      } else {
-        const sourceModule = ctx.instanceModules.get(instanceKey);
-        if (sourceModule) {
-          const importAlias = getImportAliasForModule(sourceModule, ctx);
-          dictRef = `${importAlias}.$dict_${instanceKey}`;
-        }
-      }
-    }
-  }
-
-  // If still no match, try to find a fully polymorphic instance
-  // A polymorphic instance has a bare type variable (e.g., `implement Eq a => Protocol a`)
-  if (!dictRef) {
-    const polymorphicMatch = findPolymorphicInstance(protocolName, ctx);
-    if (polymorphicMatch) {
-      instanceKey = polymorphicMatch.key;
-      if (ctx.localInstanceKeys.has(instanceKey)) {
-        dictRef = `$dict_${instanceKey}`;
-      } else {
-        const sourceModule = ctx.instanceModules.get(instanceKey);
-        if (sourceModule) {
-          const importAlias = getImportAliasForModule(sourceModule, ctx);
-          dictRef = `${importAlias}.$dict_${instanceKey}`;
-        }
-      }
-    }
-  }
-
-  if (!dictRef) {
-    // No instance found - this is a user error (missing instance declaration)
-    // Format a helpful error message
-    const typeName = typeKey.startsWith("v")
-      ? "a type variable"
-      : `'${typeKey}'`;
-    throw new Error(
-      `No instance of '${protocolName}' found for ${typeName}. ` +
-        `You may need to add: implement ${protocolName} ${typeKey} where ...`
-    );
-  }
-
-  // Check if this instance is constrained (needs dictionary parameters)
-  const constraints = ctx.constrainedInstances.get(instanceKey);
-  const matchedInstance = ctx.instances.find(
-    (inst) =>
-      inst.protocolName === protocolName &&
-      `${protocolName}_${formatTypeKey(inst.typeArgs[0])}` === instanceKey
+  return resolveDictReference(
+    protocolName,
+    typeKey,
+    toInstanceContext(ctx),
+    concreteType,
+    allConcreteTypes
   );
-
-  if (constraints && constraints.length > 0) {
-    // The dictionary is a function - we need to pass constraint dictionaries
-    // For each constraint, resolve the appropriate dictionary based on the correct type arg
-    const constraintDicts: string[] = [];
-    const seenProtocols = new Set<string>();
-
-    // Build type variable substitution if we have all concrete types and the instance
-    const typeVarSubst =
-      allConcreteTypes && matchedInstance
-        ? buildTypeVarSubstitution(matchedInstance.typeArgs, allConcreteTypes)
-        : new Map<number, IRType>();
-
-    for (const constraint of constraints) {
-      if (!seenProtocols.has(constraint.protocolName)) {
-        seenProtocols.add(constraint.protocolName);
-
-        // Get the type variable from the constraint and resolve it using substitution
-        const constraintTypeArg = constraint.typeArgs[0];
-        let resolvedType: IRType | undefined;
-
-        if (constraintTypeArg && constraintTypeArg.kind === "var") {
-          // Use substitution to find the concrete type for this type variable
-          resolvedType = typeVarSubst.get(constraintTypeArg.id);
-          // If substitution didn't find a match, the constraint is on a type variable
-          // that wasn't matched to any concrete operand type - use polymorphic path
-        } else if (constraintTypeArg) {
-          // Already a concrete type
-          resolvedType = constraintTypeArg;
-        }
-
-        // NOTE: We deliberately do NOT fallback to concreteType here.
-        // If we couldn't resolve the type variable, it means the constraint is on
-        // a type parameter that isn't determined by the call's operands.
-        // In this case, we should use the polymorphic path.
-
-        if (resolvedType && resolvedType.kind === "con") {
-          // We have a concrete type - resolve the constraint dictionary for it
-          constraintDicts.push(
-            resolveDictionaryForType(constraint.protocolName, resolvedType, ctx)
-          );
-        } else if (resolvedType && resolvedType.kind === "list") {
-          // Handle list type - resolve Appendable for List
-          constraintDicts.push(
-            resolveDictionaryForType(constraint.protocolName, resolvedType, ctx)
-          );
-        } else {
-          // Polymorphic context - pass through the dictionary parameter
-          constraintDicts.push(`$dict_${constraint.protocolName}`);
-        }
-      }
-    }
-
-    // Apply the dictionary function with constraint dictionaries
-    return `${dictRef}(${constraintDicts.join(", ")})`;
-  }
-
-  return dictRef;
 }
 
 /**
- * Find a polymorphic instance for a protocol.
- *
- * Polymorphic instances have type variables (e.g., `implement Show a => Show (List a)`)
- * instead of concrete types. This function finds such an instance for the given protocol.
- *
- * Returns the instance key (e.g., "ExampleProtocol_v96") or null if not found.
+ * Wrapper to call resolveDictionaryForType with CodegenContext.
  */
-function findPolymorphicInstance(
+function resolveDictionaryForTypeCtx(
   protocolName: string,
-  ctx: CodegenContext
-): { key: string; instance: IRInstance } | null {
-  for (const inst of ctx.instances) {
-    if (inst.protocolName !== protocolName) continue;
-
-    // Check if this instance has a type variable in its first type argument
-    const firstTypeArg = inst.typeArgs[0];
-    if (firstTypeArg && firstTypeArg.kind === "var") {
-      const typeKey = formatTypeKey(firstTypeArg);
-      return {
-        key: `${protocolName}_${typeKey}`,
-        instance: inst,
-      };
-    }
-  }
-  return null;
-}
-
-/**
- * Find an instance that matches a concrete type by structure.
- *
- * This handles parameterized type constructors like `List a`. For example,
- * if we have `implement ExampleProtocol (List a)` and the concrete type is
- * `List Int`, this will find that instance because the type constructor `List`
- * matches, even though the type arguments differ.
- *
- * This function does NOT match bare type variable instances (like `implement Protocol a`).
- * Those are handled by `findPolymorphicInstance` as a fallback.
- *
- * @param protocolName - The protocol to find an instance for
- * @param concreteType - The concrete type we're matching against
- * @param ctx - Codegen context with instance information
- * @returns The matching instance key and instance, or null if not found
- */
-function findMatchingInstance(
-  protocolName: string,
-  concreteType: IRType,
-  ctx: CodegenContext
-): { key: string; instance: IRInstance } | null {
-  for (const inst of ctx.instances) {
-    if (inst.protocolName !== protocolName) continue;
-
-    const instTypeArg = inst.typeArgs[0];
-    if (!instTypeArg) continue;
-
-    // Skip bare type variable instances - those are handled by findPolymorphicInstance
-    // We only want to match instances with concrete type constructors here
-    if (instTypeArg.kind === "var") continue;
-
-    // Check if the instance type structurally matches the concrete type
-    if (typeStructureMatches(instTypeArg, concreteType)) {
-      const typeKey = formatTypeKey(instTypeArg);
-      return {
-        key: `${protocolName}_${typeKey}`,
-        instance: inst,
-      };
-    }
-  }
-  return null;
-}
-
-/**
- * Check if an instance type pattern matches a concrete type by structure.
- *
- * This ignores type variable IDs and just checks that the type constructor
- * structure matches. For example:
- * - `List v97` matches `List Int` (same constructor, different args)
- * - `List v97` matches `List v123` (same constructor, both have variable args)
- * - `v96` matches anything (bare type variable is fully polymorphic)
- * - `Int` only matches `Int` (concrete types must be identical)
- *
- * @param instType - The instance's type pattern (may contain type variables)
- * @param concreteType - The concrete type we're checking against
- * @returns true if the instance type pattern matches the concrete type
- */
-function typeStructureMatches(instType: IRType, concreteType: IRType): boolean {
-  // A type variable in the instance matches anything
-  if (instType.kind === "var") {
-    return true;
-  }
-
-  // Both must be the same kind of type constructor
-  if (instType.kind === "con" && concreteType.kind === "con") {
-    // Type constructor names must match
-    if (instType.name !== concreteType.name) {
-      return false;
-    }
-
-    // Arity must match
-    if (instType.args.length !== concreteType.args.length) {
-      return false;
-    }
-
-    // All type arguments must structurally match
-    for (let i = 0; i < instType.args.length; i++) {
-      if (!typeStructureMatches(instType.args[i]!, concreteType.args[i]!)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  // Handle list type
-  if (instType.kind === "list" && concreteType.kind === "list") {
-    return typeStructureMatches(instType.element, concreteType.element);
-  }
-
-  // Handle tuple types
-  if (instType.kind === "tuple" && concreteType.kind === "tuple") {
-    if (instType.elements.length !== concreteType.elements.length) {
-      return false;
-    }
-    for (let i = 0; i < instType.elements.length; i++) {
-      if (
-        !typeStructureMatches(instType.elements[i]!, concreteType.elements[i]!)
-      ) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  // Handle function types
-  if (instType.kind === "fun" && concreteType.kind === "fun") {
-    return (
-      typeStructureMatches(instType.from, concreteType.from) &&
-      typeStructureMatches(instType.to, concreteType.to)
-    );
-  }
-
-  // Different kinds don't match
-  return false;
-}
-
-/**
- * Get the import alias for a module name.
- *
- * Looks up how the module was imported and returns the alias.
- * For example, if "Vibe.JS" was imported as "JS", returns "JS".
- * If no alias is found, returns the last segment of the module name.
- */
-function getImportAliasForModule(
-  moduleName: string,
+  type: IRType | undefined,
   ctx: CodegenContext
 ): string {
-  // Check the import aliases in the program
-  for (const alias of ctx.program.importAliases) {
-    if (alias.moduleName === moduleName) {
-      return alias.alias;
-    }
-  }
-
-  // Default: use the last segment of the module name
-  // e.g., "Vibe.JS" -> "Vibe" (first segment for prelude modules)
-  // or just "Vibe" -> "Vibe"
-  const segments = moduleName.split(".");
-  return segments[0] || moduleName;
+  return resolveDictionaryForType(protocolName, type, toInstanceContext(ctx));
 }
 
 // ============================================================================
@@ -796,180 +425,7 @@ export function generate(
  * Generate import statements for external (FFI) modules.
  */
 function generateImports(ctx: CodegenContext): string[] {
-  const lines: string[] = [];
-
-  for (const [modulePath, bindings] of ctx.externalBindings) {
-    if (bindings.size > 0) {
-      // Use relative path for @vibe/runtime - it will be bundled
-      const importPath =
-        modulePath === "@vibe/runtime" ? "@vibe/runtime" : modulePath;
-
-      // Generate import specifiers with aliasing where needed
-      // e.g., "intAdd as add" when Vibe name differs from runtime name
-      const importSpecifiers: string[] = [];
-      const sortedEntries = Array.from(bindings.entries()).sort(([a], [b]) =>
-        a.localeCompare(b)
-      );
-
-      for (const [vibeName, runtimeName] of sortedEntries) {
-        const safeVibeName = sanitizeIdentifier(vibeName);
-        if (runtimeName === vibeName || runtimeName === safeVibeName) {
-          // No aliasing needed
-          importSpecifiers.push(runtimeName);
-        } else {
-          // Alias runtime name to Vibe name
-          importSpecifiers.push(`${runtimeName} as ${safeVibeName}`);
-        }
-      }
-
-      lines.push(
-        `import { ${importSpecifiers.join(", ")} } from "${importPath}";`
-      );
-    }
-  }
-
-  return lines;
-}
-
-/**
- * Generate import statements for dependency modules.
- *
- * The import path is calculated based on:
- * - Current module's package and path depth
- * - Imported module's package and path
- *
- * Examples:
- * - ExampleApp/SimpleTest.js importing Vibe/Vibe.js -> ../Vibe/Vibe.js
- * - ExampleApp/Sub/Module.js importing Vibe/Vibe.js -> ../../Vibe/Vibe.js
- * - ExampleApp/SimpleTest.js importing ExampleApp/ExampleApp.js -> ./ExampleApp.js
- */
-function generateDependencyImports(
-  program: IRProgram,
-  modulePackages: Map<string, string>
-): string[] {
-  const lines: string[] = [];
-
-  // Get imports from source program
-  const imports = program.sourceProgram.imports || [];
-  const currentModule = program.moduleName || "Main";
-  const currentPackage = program.packageName || currentModule;
-  const importedModules = new Set<string>();
-
-  // Calculate the depth of the current module within its package
-  // e.g., "SimpleTest" -> 0, "Sub.Module" -> 1
-  const currentDepth = currentModule.split(".").length - 1;
-
-  for (const imp of imports) {
-    const moduleName = imp.moduleName;
-    importedModules.add(moduleName);
-
-    // Get the imported module's package
-    const importedPackage = modulePackages.get(moduleName) || moduleName;
-
-    // Calculate relative import path
-    const importPath = calculateImportPath(
-      currentPackage,
-      currentDepth,
-      importedPackage,
-      moduleName
-    );
-
-    if (imp.exposing?.kind === "All") {
-      // import * as ModuleName from "..."
-      // Use just the base module name (last segment) as the alias
-      const alias = moduleName.split(".").pop() || moduleName;
-      lines.push(`import * as ${alias} from "${importPath}";`);
-    } else if (imp.exposing?.kind === "Explicit") {
-      // Extract names from the export specs
-      const names = imp.exposing.exports
-        .map((spec) => {
-          switch (spec.kind) {
-            case "ExportValue":
-            case "ExportTypeAll":
-              return sanitizeIdentifier(spec.name);
-            case "ExportOperator":
-              return sanitizeOperator(spec.operator);
-            case "ExportTypeSome":
-              // For ExportTypeSome, we import the type constructor and the specific members
-              return sanitizeIdentifier(spec.name);
-            default:
-              return null;
-          }
-        })
-        .filter((name): name is string => name !== null);
-
-      if (names.length > 0) {
-        // import { specific, names } from "..."
-        lines.push(`import { ${names.join(", ")} } from "${importPath}";`);
-      } else {
-        // No explicit imports, import everything (exposing all)
-        const alias = moduleName.split(".").pop() || moduleName;
-        lines.push(`import * as ${alias} from "${importPath}";`);
-      }
-    } else {
-      // Default: import everything (exposing all)
-      const alias = moduleName.split(".").pop() || moduleName;
-      lines.push(`import * as ${alias} from "${importPath}";`);
-    }
-  }
-
-  // Auto-import Vibe if it's a dependency (injected by module resolver)
-  // but not explicitly imported
-  if (currentModule !== "Vibe" && !importedModules.has("Vibe")) {
-    // Check if we have any ADTs/constructors from Vibe
-    const hasVibeDeps = Object.values(program.adts).some(
-      (adt) => adt.moduleName === "Vibe"
-    );
-    if (hasVibeDeps) {
-      const vibePackage = modulePackages.get("Vibe") || "Vibe";
-      const importPath = calculateImportPath(
-        currentPackage,
-        currentDepth,
-        vibePackage,
-        "Vibe"
-      );
-      lines.push(`import * as Vibe from "${importPath}";`);
-    }
-  }
-
-  return lines;
-}
-
-/**
- * Calculate the relative import path between two modules.
- *
- * @param currentPackage - Package of the importing module
- * @param currentDepth - Depth of importing module within its package (0 for top-level)
- * @param importedPackage - Package of the imported module
- * @param importedModule - Full module name of the imported module
- */
-function calculateImportPath(
-  currentPackage: string,
-  currentDepth: number,
-  importedPackage: string,
-  importedModule: string
-): string {
-  // Convert module name to path segments
-  const moduleSegments = importedModule.split(".");
-  const fileName = moduleSegments[moduleSegments.length - 1];
-  const modulePath =
-    moduleSegments.length > 1
-      ? moduleSegments.slice(0, -1).join("/") + `/${fileName}.js`
-      : `${fileName}.js`;
-
-  if (currentPackage === importedPackage) {
-    // Same package - use relative path within package
-    if (currentDepth === 0) {
-      return `./${modulePath}`;
-    } else {
-      const ups = "../".repeat(currentDepth);
-      return `${ups}${modulePath}`;
-    }
-  } else {
-    // Different package - go up to dist, then into imported package
-    const ups = "../".repeat(currentDepth + 1);
-    return `${ups}${importedPackage}/${modulePath}`;
-  }
+  return generateExternalImports(ctx.externalBindings);
 }
 
 // ============================================================================
@@ -1405,7 +861,7 @@ function generateVar(
       if (typeArg && typeArg.kind === "con") {
         const typeKey = formatTypeKey(typeArg);
         // Pass all constraint type args for multi-parameter protocols
-        const dictRef = resolveDictReference(
+        const dictRef = resolveDictReferenceCtx(
           protocolName,
           typeKey,
           ctx,
@@ -1421,7 +877,7 @@ function generateVar(
       const argType = expr.type.from;
       if (argType.kind === "con") {
         const typeKey = formatTypeKey(argType);
-        const dictRef = resolveDictReference(protocolName, typeKey, ctx);
+        const dictRef = resolveDictReferenceCtx(protocolName, typeKey, ctx);
         return `${dictRef}.${sanitizedName}`;
       }
     }
@@ -1430,7 +886,7 @@ function generateVar(
     const constraintType = ctx.concreteConstraints.get(protocolName);
     if (constraintType && constraintType.kind === "con") {
       const typeKey = formatTypeKey(constraintType);
-      const dictRef = resolveDictReference(protocolName, typeKey, ctx);
+      const dictRef = resolveDictReferenceCtx(protocolName, typeKey, ctx);
       return `${dictRef}.${sanitizedName}`;
     }
 
@@ -1438,7 +894,7 @@ function generateVar(
     // This handles cases like `defaultVal : a` when we know the expected type is `List Int`
     if (ctx.expectedReturnType && !isTypeVariable(ctx.expectedReturnType)) {
       const typeKey = formatTypeKey(ctx.expectedReturnType);
-      const dictRef = resolveDictReference(
+      const dictRef = resolveDictReferenceCtx(
         protocolName,
         typeKey,
         ctx,
@@ -1587,7 +1043,7 @@ function generateApply(
           // Try to resolve the constraint to a concrete instance
           // by looking at the type arguments in the constraint
           const typeArg = constraint.typeArgs[0];
-          const dictName = resolveDictionaryForType(
+          const dictName = resolveDictionaryForTypeCtx(
             constraint.protocolName,
             typeArg,
             ctx
@@ -1681,7 +1137,7 @@ function tryGenerateProtocolMethodApply(
   const sanitizedName = sanitizeIdentifier(methodName);
   const typeKey = formatTypeKey(concreteType);
   // Pass concreteType and all operand types so constrained instances can resolve their constraint dicts
-  const dictRef = resolveDictReference(
+  const dictRef = resolveDictReferenceCtx(
     protocolName,
     typeKey,
     ctx,
@@ -1874,44 +1330,6 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
   }
 
   return null;
-}
-
-/**
- * Resolve a protocol constraint to a dictionary reference.
- *
- * If the type is concrete (e.g., Int), we look up the instance dictionary.
- * If the type is a type variable, we pass through $dict_Protocol (polymorphic).
- */
-function resolveDictionaryForType(
-  protocolName: string,
-  type: IRType | undefined,
-  ctx: CodegenContext
-): string {
-  if (!type) {
-    // Unknown type - use polymorphic pass-through
-    return `$dict_${protocolName}`;
-  }
-
-  // If it's a concrete type, look up the instance dictionary
-  if (type.kind === "con") {
-    const typeKey = formatTypeKey(type);
-    // Pass the concrete type so constrained instances can resolve their constraint dicts
-    return resolveDictReference(protocolName, typeKey, ctx, type);
-  }
-
-  // Handle list type - convert to con type for lookup
-  if (type.kind === "list") {
-    const listAsCon: IRType = {
-      kind: "con",
-      name: "List",
-      args: [type.element],
-    };
-    const typeKey = formatTypeKey(listAsCon);
-    return resolveDictReference(protocolName, typeKey, ctx, listAsCon);
-  }
-
-  // Type variable - pass through the polymorphic dictionary
-  return `$dict_${protocolName}`;
 }
 
 /**
@@ -2522,131 +1940,6 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
 
   return lines;
 }
-
-/**
- * Calculate the import path for re-exporting from another module.
- * This mirrors the logic in generateDependencyImports.
- */
-function calculateReExportPath(
-  program: IRProgram,
-  targetModule: string
-): string {
-  const currentModule = program.moduleName || "Main";
-  const currentPackage = program.packageName || currentModule;
-
-  // Calculate the depth of the current module within its package
-  const currentDepth = currentModule.split(".").length - 1;
-
-  // Find the import for this module to get its package info
-  const imports = program.sourceProgram.imports || [];
-  let targetPackage = targetModule; // Default: assume module name is package name
-
-  for (const imp of imports) {
-    if (imp.moduleName === targetModule) {
-      // Could extract package info here if available
-      break;
-    }
-  }
-
-  // Convert module name to path segments
-  const moduleSegments = targetModule.split(".");
-  const fileName = moduleSegments[moduleSegments.length - 1];
-  const modulePath =
-    moduleSegments.length > 1
-      ? moduleSegments.slice(0, -1).join("/") + `/${fileName}.js`
-      : `${fileName}.js`;
-
-  if (currentPackage === targetPackage) {
-    // Same package - use relative path within package
-    if (currentDepth === 0) {
-      return `./${modulePath}`;
-    } else {
-      const ups = "../".repeat(currentDepth);
-      return `${ups}${modulePath}`;
-    }
-  } else {
-    // Different package - go up to dist, then into target package
-    const ups = "../".repeat(currentDepth + 1);
-    return `${ups}${targetPackage}/${modulePath}`;
-  }
-}
-
-// ============================================================================
-// Identifier Sanitization
-// ============================================================================
-
-/**
- * Sanitize an identifier for JavaScript.
- *
- * Vibe allows operator-like identifiers that need to be converted:
- * - (+) -> _PLUS
- * - (&&) -> _AND_AND
- * - etc.
- */
-function sanitizeIdentifier(name: string): string {
-  // Handle parenthesized operators
-  if (name.startsWith("(") && name.endsWith(")")) {
-    name = name.slice(1, -1);
-  }
-
-  // Check for operator characters - use the shared sanitizeOperator from @vibe/syntax
-  if (/^[+\-*/<>=!&|^%:.~$#@?]+$/.test(name)) {
-    return sanitizeOperator(name);
-  }
-
-  // Check for reserved words
-  if (RESERVED_WORDS.has(name)) {
-    return `$${name}`;
-  }
-
-  return name;
-}
-
-/**
- * JavaScript reserved words that need to be escaped.
- */
-const RESERVED_WORDS = new Set([
-  "break",
-  "case",
-  "catch",
-  "class",
-  "const",
-  "continue",
-  "debugger",
-  "default",
-  "delete",
-  "do",
-  "else",
-  "enum",
-  "export",
-  "extends",
-  "false",
-  "finally",
-  "for",
-  "function",
-  "if",
-  "import",
-  "in",
-  "instanceof",
-  "let",
-  "new",
-  "null",
-  "return",
-  "static",
-  "super",
-  "switch",
-  "this",
-  "throw",
-  "true",
-  "try",
-  "typeof",
-  "undefined",
-  "var",
-  "void",
-  "while",
-  "with",
-  "yield",
-]);
 
 // ============================================================================
 // File Writing Utilities
