@@ -124,7 +124,10 @@ export function typesEqual(t1: Type, t2: Type): boolean {
 /**
  * Apply a type substitution, resolving type variables to their bound types.
  */
-export function applySubstitution(type: Type, substitution: Substitution): Type {
+export function applySubstitution(
+  type: Type,
+  substitution: Substitution
+): Type {
   if (type.kind === "var") {
     const replacement = substitution.get(type.id);
     return replacement ? applySubstitution(replacement, substitution) : type;
@@ -183,7 +186,10 @@ export function applySubstitutionToConstraints(
  * - getFreeTypeVars(a -> b) = {a.id, b.id}
  * - getFreeTypeVars([a]) = {a.id}
  */
-export function getFreeTypeVars(type: Type, substitution: Substitution): Set<number> {
+export function getFreeTypeVars(
+  type: Type,
+  substitution: Substitution
+): Set<number> {
   const concrete = applySubstitution(type, substitution);
 
   if (concrete.kind === "var") {
@@ -384,7 +390,10 @@ export function createConstraintContext(): ConstraintContext {
 /**
  * Add a constraint to the context (deduplicating by protocol name and type args).
  */
-export function addConstraint(ctx: ConstraintContext, constraint: Constraint): void {
+export function addConstraint(
+  ctx: ConstraintContext,
+  constraint: Constraint
+): void {
   // Check if we already have this constraint
   const isDuplicate = ctx.constraints.some(
     (c) =>
@@ -417,7 +426,10 @@ export function flattenFunctionParams(type: Type): Type[] {
 /**
  * Apply a type variable substitution (mapping var IDs to new types).
  */
-export function applyVarSubstitution(type: Type, subst: Map<number, Type>): Type {
+export function applyVarSubstitution(
+  type: Type,
+  subst: Map<number, Type>
+): Type {
   switch (type.kind) {
     case "var": {
       const replacement = subst.get(type.id);

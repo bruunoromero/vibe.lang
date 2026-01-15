@@ -277,7 +277,7 @@ function validateConstraintsEagerly(
  * Scope maintains a symbol table mapping names to their type schemes.
  * Type schemes enable let-polymorphism: bindings can be polymorphic,
  * and each use site gets a fresh instantiation of the type.
- * 
+ *
  * NOTE: This local alias is used since Scope is also imported from types.ts
  * but we use it differently in places here. This will be cleaned up in a future refactor.
  */
@@ -7169,4 +7169,3 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
     span
   );
 }
-
