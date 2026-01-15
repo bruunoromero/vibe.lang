@@ -17,7 +17,7 @@ import {
   DiagnosticSeverity,
   SemanticTokens,
   DocumentDiagnosticReportKind,
-} from "vscode-languageserver/node.js";
+} from "vscode-languageserver/node";
 import type {
   InitializeParams,
   InitializeResult,
@@ -26,16 +26,16 @@ import type {
   SemanticTokensRangeParams,
   DocumentDiagnosticParams,
   DocumentDiagnosticReport,
-} from "vscode-languageserver/node.js";
+} from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
 
-import { DocumentManager } from "./document-manager.js";
+import { DocumentManager } from "./document-manager";
 import {
   SEMANTIC_TOKENS_LEGEND,
   provideSemanticTokens,
-} from "./semantic-tokens.js";
-import type { ServerConfig, SymbolInfo } from "./types.js";
-import { SymbolKind, DEFAULT_CONFIG } from "./types.js";
+} from "./semantic-tokens";
+import type { ServerConfig, SymbolInfo } from "./types";
+import { SymbolKind, DEFAULT_CONFIG } from "./types";
 
 // Create server connection (supports stdio, IPC, or socket)
 const connection = createConnection(ProposedFeatures.all);

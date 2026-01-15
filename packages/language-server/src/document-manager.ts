@@ -31,8 +31,8 @@ import type {
   SymbolInfo,
   ModuleInfo,
   ProjectContext,
-} from "./types.js";
-import { SymbolKind } from "./types.js";
+} from "./types";
+import { SymbolKind } from "./types";
 import * as fs from "node:fs";
 import * as path from "node:path";
 

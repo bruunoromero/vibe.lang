@@ -5,10 +5,10 @@
  */
 
 // Re-export types
-export * from "./types.js";
+export * from "./types";
 
 // Re-export document manager
-export { DocumentManager } from "./document-manager.js";
+export { DocumentManager } from "./document-manager";
 
 // Re-export semantic tokens
 export {
@@ -16,6 +16,6 @@ export {
   TOKEN_TYPES,
   TOKEN_MODIFIERS,
   provideSemanticTokens,
-} from "./semantic-tokens.js";
+} from "./semantic-tokens";
 
 // Server is started via server.ts directly (stdio)

@@ -4,7 +4,7 @@ import {
   CHAR_TO_IDENTIFIER,
   sanitizeOperator,
   isOperatorChar,
-} from "../src/operators.js";
+} from "../src/operators";
 
 describe("operators", () => {
   describe("OPERATOR_CHARS", () => {

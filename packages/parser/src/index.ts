@@ -45,7 +45,7 @@ import {
   buildRegistryFromTokens,
   getOperatorInfo as getOperatorInfoFromRegistry,
   InfixParseError,
-} from "./operator-registry.js";
+} from "./operator-registry";
 
 /**
  * Error thrown during parsing when unexpected syntax is encountered

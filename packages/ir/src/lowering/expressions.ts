@@ -1,5 +1,5 @@
 /**
- * IR Lowering Transformations
+ * Expression Lowering
  *
  * This module implements the core transformations from AST expressions to IR:
  *
@@ -11,125 +11,16 @@
  * 6. Module access resolution: Transforms module.field chains into IRModuleAccess nodes
  */
 
-import type {
-  Expr,
-  Pattern,
-  Span,
-  RecordField,
-  ValueDeclaration,
-  ImportDeclaration,
-} from "@vibe/syntax";
-import type { SemanticModule, ConstructorInfo, ADTInfo } from "@vibe/semantics";
+import type { Expr, Pattern, Span, ValueDeclaration } from "@vibe/syntax";
 import type {
   IRExpr,
   IRPattern,
-  IRValue,
-  IRType,
-  IRConstraint,
   IRRecordField,
-  IRConstructorInfo,
   IRModuleAccess,
-} from "./types";
-import { IRError } from "./types";
-
-// ============================================================================
-// Lowering Context
-// ============================================================================
-
-/**
- * Context maintained during lowering transformations.
- */
-export type LoweringContext = {
-  /** Semantic module for type lookups */
-  semantics: SemanticModule;
-
-  /** Lifted bindings accumulated during lowering */
-  liftedBindings: IRValue[];
-
-  /** Counter for generating unique names */
-  nameCounter: number;
-
-  /** Constructor info with tags */
-  constructorTags: Map<string, number>;
-
-  /** Record type field info for desugaring record updates */
-  recordFields: Map<string, string[]>;
-
-  /** Import declarations from the source program */
-  imports: ImportDeclaration[];
-
-  /** Dependency modules for resolving module-qualified accesses */
-  dependencies: Map<string, SemanticModule>;
-};
-
-/**
- * Create a fresh lowering context.
- */
-export function createLoweringContext(
-  semantics: SemanticModule,
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map()
-): LoweringContext {
-  const ctx: LoweringContext = {
-    semantics,
-    liftedBindings: [],
-    nameCounter: 0,
-    constructorTags: new Map(),
-    recordFields: new Map(),
-    imports,
-    dependencies,
-  };
-
-  // Assign tags to constructors
-  assignConstructorTags(ctx);
-
-  // Build record field info from type aliases
-  buildRecordFieldInfo(ctx);
-
-  return ctx;
-}
-
-/**
- * Assign runtime tags to ADT constructors.
- * Tags are assigned per-ADT, starting from 0.
- */
-function assignConstructorTags(ctx: LoweringContext): void {
-  for (const [adtName, adt] of Object.entries(ctx.semantics.adts)) {
-    for (let i = 0; i < adt.constructors.length; i++) {
-      const ctorName = adt.constructors[i];
-      if (ctorName) {
-        ctx.constructorTags.set(ctorName, i);
-      }
-    }
-  }
-}
-
-/**
- * Build record field info from type aliases with record types.
- */
-function buildRecordFieldInfo(ctx: LoweringContext): void {
-  for (const [name, alias] of Object.entries(ctx.semantics.typeAliases)) {
-    if (alias.value.kind === "RecordType") {
-      ctx.recordFields.set(
-        name,
-        alias.value.fields.map((f) => f.name)
-      );
-    }
-  }
-}
-
-/**
- * Generate a unique name for lifted bindings.
- */
-export function freshName(ctx: LoweringContext, base: string): string {
-  const name = `$${base}_${ctx.nameCounter}`;
-  ctx.nameCounter++;
-  return name;
-}
-
-// ============================================================================
-// Expression Lowering
-// ============================================================================
+} from "../types";
+import { IRError } from "../types";
+import type { LoweringContext } from "./context";
+import { lowerPattern } from "./patterns";
 
 /**
  * Lower an AST expression to IR form.
@@ -842,128 +733,4 @@ function lowerInfix(
     args: [right],
     span: expr.span,
   };
-}
-
-// ============================================================================
-// Pattern Lowering
-// ============================================================================
-
-/**
- * Lower an AST pattern to IR form.
- */
-export function lowerPattern(
-  pattern: Pattern,
-  ctx: LoweringContext
-): IRPattern {
-  switch (pattern.kind) {
-    case "VarPattern":
-      return {
-        kind: "IRVarPattern",
-        name: pattern.name,
-        span: pattern.span,
-      };
-
-    case "WildcardPattern":
-      return {
-        kind: "IRWildcardPattern",
-        span: pattern.span,
-      };
-
-    case "ConstructorPattern": {
-      const tag = ctx.constructorTags.get(pattern.name) ?? 0;
-      return {
-        kind: "IRConstructorPattern",
-        name: pattern.name,
-        args: pattern.args.map((p) => lowerPattern(p, ctx)),
-        tag,
-        span: pattern.span,
-      };
-    }
-
-    case "TuplePattern":
-      return {
-        kind: "IRTuplePattern",
-        elements: pattern.elements.map((p) => lowerPattern(p, ctx)),
-        span: pattern.span,
-      };
-
-    case "ListPattern":
-      return {
-        kind: "IRListPattern",
-        elements: pattern.elements.map((p) => lowerPattern(p, ctx)),
-        span: pattern.span,
-      };
-
-    case "ConsPattern":
-      return {
-        kind: "IRConsPattern",
-        head: lowerPattern(pattern.head, ctx),
-        tail: lowerPattern(pattern.tail, ctx),
-        span: pattern.span,
-      };
-
-    case "RecordPattern":
-      return {
-        kind: "IRRecordPattern",
-        fields: pattern.fields.map((f) => ({
-          name: f.name,
-          pattern: f.pattern ? lowerPattern(f.pattern, ctx) : undefined,
-        })),
-        span: pattern.span,
-      };
-
-    default:
-      const _exhaustive: never = pattern;
-      throw new IRError(
-        `Unknown pattern kind: ${(pattern as any).kind}`,
-        (pattern as any).span
-      );
-  }
-}
-
-// ============================================================================
-// Type Conversion
-// ============================================================================
-
-/**
- * Convert a semantic Type to IRType.
- * These are structurally identical, but having separate types allows
- * the packages to evolve independently.
- */
-export function convertType(type: any): IRType {
-  switch (type.kind) {
-    case "var":
-      return { kind: "var", id: type.id };
-    case "con":
-      return { kind: "con", name: type.name, args: type.args.map(convertType) };
-    case "fun":
-      return {
-        kind: "fun",
-        from: convertType(type.from),
-        to: convertType(type.to),
-      };
-    case "tuple":
-      return { kind: "tuple", elements: type.elements.map(convertType) };
-    case "record":
-      const fields: Record<string, IRType> = {};
-      for (const [k, v] of Object.entries(type.fields)) {
-        fields[k] = convertType(v);
-      }
-      return { kind: "record", fields };
-    case "list":
-      return { kind: "list", element: convertType(type.element) };
-    default:
-      // Unknown type kind, return as-is (shouldn't happen)
-      return type;
-  }
-}
-
-/**
- * Convert semantic constraints to IR constraints.
- */
-export function convertConstraints(constraints: any[]): IRConstraint[] {
-  return constraints.map((c) => ({
-    protocolName: c.protocolName,
-    typeArgs: c.typeArgs.map(convertType),
-  }));
 }

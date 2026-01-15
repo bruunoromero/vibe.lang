@@ -20,7 +20,7 @@ import type {
   Span,
 } from "@vibe/syntax";
 import type { SemanticModule, TypeScheme } from "@vibe/semantics";
-import type { DocumentCache } from "./types.js";
+import type { DocumentCache } from "./types";
 
 /**
  * Semantic token types supported by the Vibe language server.

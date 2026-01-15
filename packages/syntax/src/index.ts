@@ -80,7 +80,7 @@ export {
   CHAR_TO_IDENTIFIER,
   sanitizeOperator,
   isOperatorChar,
-} from "./operators.js";
+} from "./operators";
 
 /**
  * Export specification for a single item in an exposing clause.
