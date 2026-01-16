@@ -9,18 +9,6 @@
 // Logical Operations
 // =============================================================================
 
-/** Logical AND with short-circuit evaluation */
-export const and =
-  (a: boolean) =>
-  (b: boolean): boolean =>
-    a && b;
-
-/** Logical OR with short-circuit evaluation */
-export const or =
-  (a: boolean) =>
-  (b: boolean): boolean =>
-    a || b;
-
 /** Logical NOT */
 export const not = (a: boolean): boolean => !a;
 

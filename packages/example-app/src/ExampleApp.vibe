@@ -1,4 +1,4 @@
-
+module ExampleApp exposing (..)
 
 import Vibe exposing (..)
 
@@ -47,6 +47,6 @@ implement Appendable a => ExampleProtocol3 Float a where
 
 -- main = 100
 -- main : List Int
-main = convert3 10.0
+main = True && False
 -- main = showA A ""
 -- main = exampleMethod 100

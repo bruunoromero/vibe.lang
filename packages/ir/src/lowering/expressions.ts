@@ -12,6 +12,11 @@
  */
 
 import type { Expr, Pattern, Span, ValueDeclaration } from "@vibe/syntax";
+import {
+  BUILTIN_MODULE_NAME,
+  BOOL_TYPE_NAME,
+  SHORT_CIRCUIT_OPERATORS,
+} from "@vibe/syntax";
 import type {
   IRExpr,
   IRPattern,
@@ -522,10 +527,10 @@ function isBoolCase(
   const falseCtorInfo = ctx.semantics.constructors["False"];
 
   return (
-    trueCtorInfo?.moduleName === "__builtin__" &&
-    trueCtorInfo?.parentType === "Bool" &&
-    falseCtorInfo?.moduleName === "__builtin__" &&
-    falseCtorInfo?.parentType === "Bool"
+    trueCtorInfo?.moduleName === BUILTIN_MODULE_NAME &&
+    trueCtorInfo?.parentType === BOOL_TYPE_NAME &&
+    falseCtorInfo?.moduleName === BUILTIN_MODULE_NAME &&
+    falseCtorInfo?.parentType === BOOL_TYPE_NAME
   );
 }
 
@@ -705,6 +710,14 @@ function lowerRecordUpdate(
  *
  * a + b becomes: (+) a b
  * Or more precisely: apply (apply (+) a) b
+ *
+ * For short-circuit operators (&& and ||), the right operand is wrapped
+ * in a thunk to enable true short-circuit evaluation:
+ *
+ * a && b becomes: (&&) a (() -> b)
+ *
+ * This allows the runtime to only evaluate b if a is True (for &&)
+ * or False (for ||).
  */
 function lowerInfix(
   expr: Extract<Expr, { kind: "Infix" }>,
@@ -721,6 +734,16 @@ function lowerInfix(
     span: expr.span,
   };
 
+  // For short-circuit operators, wrap the right operand in a thunk
+  const rightArg: IRExpr = SHORT_CIRCUIT_OPERATORS.has(expr.operator)
+    ? {
+        kind: "IRLambda",
+        params: [], // No parameters - this is a thunk () -> Bool
+        body: right,
+        span: expr.right.span,
+      }
+    : right;
+
   // Apply operator to left, then to right (curried)
   return {
     kind: "IRApply",
@@ -730,7 +753,7 @@ function lowerInfix(
       args: [left],
       span: expr.span,
     },
-    args: [right],
+    args: [rightArg],
     span: expr.span,
   };
 }

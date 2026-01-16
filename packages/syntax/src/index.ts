@@ -76,10 +76,20 @@ export function isKeyword(value: string): value is Keyword {
 
 // Re-export operator utilities from dedicated module
 export {
+  // Character utilities
   OPERATOR_CHARS,
   CHAR_TO_IDENTIFIER,
   sanitizeOperator,
   isOperatorChar,
+  // Builtin operator definitions
+  BUILTIN_OPERATORS,
+  BUILTIN_OPERATOR_FIXITY,
+  SHORT_CIRCUIT_OPERATORS,
+  SHORT_CIRCUIT_HELPERS,
+  // Types
+  type OperatorFixity,
+  type ShortCircuitHelper,
+  type BuiltinOperator,
 } from "./operators";
 
 /**
@@ -529,3 +539,23 @@ export type Program = {
   imports: ImportDeclaration[];
   declarations: Declaration[];
 };
+
+// ============================================================
+// Built-in Module and Type Constants
+// ============================================================
+
+/**
+ * The module name used for built-in types (Bool, Unit, Int, etc.)
+ * that are always available without imports.
+ */
+export const BUILTIN_MODULE_NAME = "__builtin__";
+
+/**
+ * The name of the Bool type (compiles to native JavaScript booleans).
+ */
+export const BOOL_TYPE_NAME = "Bool";
+
+/**
+ * The name of the Unit type (compiles to undefined).
+ */
+export const UNIT_TYPE_NAME = "Unit";

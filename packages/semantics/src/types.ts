@@ -340,12 +340,6 @@ export type SemanticModule = {
 export interface AnalyzeOptions {
   /** Pre-analyzed dependency modules to merge into scope */
   dependencies?: Map<string, SemanticModule>;
-  /**
-   * Whether to automatically inject `import Vibe exposing (..)`.
-   * Defaults to true. Set to false for the Vibe module itself
-   * or when testing without prelude.
-   */
-  injectPrelude?: boolean;
 }
 
 /**

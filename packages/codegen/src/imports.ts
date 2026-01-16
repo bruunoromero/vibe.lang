@@ -23,10 +23,6 @@ export function generateExternalImports(
 
   for (const [modulePath, bindings] of externalBindings) {
     if (bindings.size > 0) {
-      // Use relative path for @vibe/runtime - it will be bundled
-      const importPath =
-        modulePath === "@vibe/runtime" ? "@vibe/runtime" : modulePath;
-
       // Generate import specifiers with aliasing where needed
       // e.g., "intAdd as add" when Vibe name differs from runtime name
       const importSpecifiers: string[] = [];
@@ -46,7 +42,7 @@ export function generateExternalImports(
       }
 
       lines.push(
-        `import { ${importSpecifiers.join(", ")} } from "${importPath}";`
+        `import { ${importSpecifiers.join(", ")} } from "${modulePath}";`
       );
     }
   }
@@ -133,25 +129,6 @@ export function generateDependencyImports(
       // Default: import everything (exposing all)
       const alias = moduleName.split(".").pop() || moduleName;
       lines.push(`import * as ${alias} from "${importPath}";`);
-    }
-  }
-
-  // Auto-import Vibe if it's a dependency (injected by module resolver)
-  // but not explicitly imported
-  if (currentModule !== "Vibe" && !importedModules.has("Vibe")) {
-    // Check if we have any ADTs/constructors from Vibe
-    const hasVibeDeps = Object.values(program.adts).some(
-      (adt) => adt.moduleName === "Vibe"
-    );
-    if (hasVibeDeps) {
-      const vibePackage = modulePackages.get("Vibe") || "Vibe";
-      const importPath = calculateImportPath(
-        currentPackage,
-        currentDepth,
-        vibePackage,
-        "Vibe"
-      );
-      lines.push(`import * as Vibe from "${importPath}";`);
     }
   }
 

@@ -1,3 +1,4 @@
+import { BUILTIN_MODULE_NAME } from "@vibe/syntax";
 import type {
   Type,
   TypeScheme,
@@ -34,25 +35,33 @@ export const BUILTIN_CONSTRUCTORS: Record<string, number> = {
 };
 
 /**
- * Built-in operator type signatures are now EMPTY.
+ * Built-in operator type signatures.
  *
- * All operators must be defined via protocols and implementations
- * in user code or the prelude. This enables a clean separation where
- * the compiler handles syntax/semantics while the prelude provides
- * standard operators.
+ * Most operators are defined via protocols and implementations in user code
+ * or the prelude. However, short-circuit operators (&& and ||) are built-in
+ * because they require special evaluation semantics (the second operand must
+ * not be evaluated if the first operand determines the result).
  *
- * Example prelude definitions:
- *   protocol Num a where
- *     (+) : a -> a -> a
- *     (-) : a -> a -> a
- *     (*) : a -> a -> a
- *
- *   implement Num Int where
- *     (+) = intAdd
- *     (-) = intSub
- *     (*) = intMul
+ * The compiler wraps the second operand in a thunk during IR lowering to
+ * enable true short-circuit evaluation.
  */
-export const INFIX_TYPES: Record<string, Type> = {};
+
+const BOOL_TYPE: Type = { kind: "con", name: "Bool", args: [] };
+
+export const INFIX_TYPES: Record<string, Type> = {
+  // Short-circuit logical operators (Bool -> Bool -> Bool)
+  // These are special-cased in IR lowering to wrap the right operand in a thunk
+  "&&": {
+    kind: "fun",
+    from: BOOL_TYPE,
+    to: { kind: "fun", from: BOOL_TYPE, to: BOOL_TYPE },
+  },
+  "||": {
+    kind: "fun",
+    from: BOOL_TYPE,
+    to: { kind: "fun", from: BOOL_TYPE, to: BOOL_TYPE },
+  },
+};
 
 /**
  * Built-in span for synthetic nodes (builtins have no source location).
@@ -82,7 +91,7 @@ export function initializeBuiltinADTs(
     argTypes: [],
     parentType: "Bool",
     parentParams: [],
-    moduleName: "__builtin__",
+    moduleName: BUILTIN_MODULE_NAME,
     span: BUILTIN_SPAN,
   };
   constructorTypes["True"] = {
@@ -95,7 +104,7 @@ export function initializeBuiltinADTs(
     argTypes: [],
     parentType: "Bool",
     parentParams: [],
-    moduleName: "__builtin__",
+    moduleName: BUILTIN_MODULE_NAME,
     span: BUILTIN_SPAN,
   };
   constructorTypes["False"] = {
@@ -123,36 +132,39 @@ export function initializeBuiltinOpaqueTypes(
   // Primitive opaque types - no pattern matching allowed
   opaqueTypes["Unit"] = {
     name: "Unit",
-    moduleName: "__builtin__",
+    moduleName: BUILTIN_MODULE_NAME,
     params: [],
     span: BUILTIN_SPAN,
   };
 
   opaqueTypes["Int"] = {
     name: "Int",
-    moduleName: "__builtin__",
+    moduleName: BUILTIN_MODULE_NAME,
     params: [],
     span: BUILTIN_SPAN,
   };
 
   opaqueTypes["Float"] = {
     name: "Float",
-    moduleName: "__builtin__",
+    moduleName: BUILTIN_MODULE_NAME,
     params: [],
     span: BUILTIN_SPAN,
   };
 
   opaqueTypes["String"] = {
     name: "String",
-    moduleName: "__builtin__",
+    moduleName: BUILTIN_MODULE_NAME,
     params: [],
     span: BUILTIN_SPAN,
   };
 
   opaqueTypes["Char"] = {
     name: "Char",
-    moduleName: "__builtin__",
+    moduleName: BUILTIN_MODULE_NAME,
     params: [],
     span: BUILTIN_SPAN,
   };
 }
+
+// Re-export from @vibe/syntax for backwards compatibility
+export { SHORT_CIRCUIT_OPERATORS, BUILTIN_OPERATOR_FIXITY } from "@vibe/syntax";

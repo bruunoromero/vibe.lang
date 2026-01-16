@@ -22,6 +22,7 @@ import type {
   OperatorInfo,
   OperatorRegistry,
 } from "@vibe/syntax";
+import { BUILTIN_MODULE_NAME } from "@vibe/syntax";
 
 // Re-export errors for external consumers
 export { SemanticError, ImplementingProtocolError } from "./errors";
@@ -112,6 +113,7 @@ import {
   BUILTIN_CONSTRUCTORS,
   INFIX_TYPES,
   BUILTIN_SPAN,
+  BUILTIN_OPERATOR_FIXITY,
   initializeBuiltinADTs,
   initializeBuiltinOpaqueTypes,
 } from "./builtins";
@@ -960,37 +962,10 @@ export function analyze(
   initializeBuiltinADTs(adts, constructors, constructorTypes);
   initializeBuiltinOpaqueTypes(opaqueTypes);
 
-  // ===== Auto-inject Prelude =====
-  // The prelude is NOT injected by default. Users must explicitly import:
-  //   import Vibe exposing (..)
-  // The injectPrelude option is kept for backwards compatibility and special cases.
-  const { dependencies = new Map(), injectPrelude = false } = options;
-  const isPreludeModule = program.module?.name === "Vibe";
-  const hasExplicitPreludeImport = program.imports?.some(
-    (imp) => imp.moduleName === "Vibe"
-  );
+  const { dependencies = new Map() } = options;
 
   // Build the effective imports list
-  let imports: ImportDeclaration[] = program.imports ?? [];
-
-  if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
-    // Create a synthetic import for Vibe
-    const syntheticPreludeImport: ImportDeclaration = {
-      moduleName: "Vibe",
-      exposing: {
-        kind: "All",
-        span: {
-          start: { offset: 0, line: 0, column: 0 },
-          end: { offset: 0, line: 0, column: 0 },
-        },
-      },
-      span: {
-        start: { offset: 0, line: 0, column: 0 },
-        end: { offset: 0, line: 0, column: 0 },
-      },
-    };
-    imports = [syntheticPreludeImport, ...imports];
-  }
+  const imports: ImportDeclaration[] = program.imports ?? [];
 
   validateImports(imports);
 
@@ -1002,9 +977,15 @@ export function analyze(
 
   // Seed built-in operators as functions for prefix/infix symmetry.
   // Built-in operators are monomorphic (not polymorphic).
-  // Note: INFIX_TYPES is now empty; operators come from Vibe.
+  // Short-circuit operators (&& and ||) are now included here.
   for (const [op, ty] of Object.entries(INFIX_TYPES)) {
     globalScope.symbols.set(op, { vars: new Set(), constraints: [], type: ty });
+  }
+
+  // Seed built-in operator fixities (precedence and associativity).
+  // These are for short-circuit operators that are built into the compiler.
+  for (const [op, fixity] of Object.entries(BUILTIN_OPERATOR_FIXITY)) {
+    operators.set(op, fixity);
   }
 
   // Merge types from imported dependency modules
@@ -1176,7 +1157,7 @@ export function analyze(
           // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
           if (
             Object.hasOwn(opaqueTypes, name) &&
-            opaqueTypes[name]!.moduleName !== "__builtin__" &&
+            opaqueTypes[name]!.moduleName !== BUILTIN_MODULE_NAME &&
             opaqueTypes[name]!.moduleName !== imp.moduleName
           ) {
             throw new SemanticError(

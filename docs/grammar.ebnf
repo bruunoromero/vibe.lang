@@ -299,8 +299,8 @@ Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
   Built-in operator precedence levels (0-9, higher binds tighter):
   
   1: |>, <|              (application operators)
-  2: ||                  (logical or)
-  3: &&                  (logical and)
+  2: ||                  (logical or) - BUILTIN, short-circuit
+  3: &&                  (logical and) - BUILTIN, short-circuit
   4: ==, /=, <, <=, >, >= (comparison)
   5: ::, ++              (cons, append) - right associative
   6: +, -                (addition, subtraction)
@@ -315,7 +315,16 @@ Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
     infixr 5 ++    -- right-associative at precedence 5
     infix 4 ==     -- non-associative at precedence 4
     
-  Operators can be defined as regular functions:
+  Short-circuit operators (&& and ||) are BUILT INTO THE COMPILER:
+    - They cannot be redefined as regular functions
+    - They have type: Bool -> Bool -> Bool
+    - The second operand is only evaluated if needed:
+        False && x  =>  False  (x is not evaluated)
+        True || x   =>  True   (x is not evaluated)
+    - The compiler wraps the right operand in a thunk during IR lowering
+    - Generated JavaScript: (a) => (b) => a && b()  (where b is the thunk)
+    
+  Other operators can be defined as regular functions:
     (|>) : a -> (a -> b) -> b
     (|>) x f = f x
     

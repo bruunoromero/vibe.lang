@@ -31,7 +31,14 @@ import type {
   IRModuleAccess,
   SCC,
 } from "@vibe/ir";
-import { sanitizeOperator } from "@vibe/syntax";
+import {
+  sanitizeOperator,
+  BUILTIN_MODULE_NAME,
+  BOOL_TYPE_NAME,
+  UNIT_TYPE_NAME,
+  SHORT_CIRCUIT_OPERATORS,
+  SHORT_CIRCUIT_HELPERS,
+} from "@vibe/syntax";
 
 // Import from extracted modules
 import { sanitizeIdentifier } from "./sanitize";
@@ -161,6 +168,12 @@ export interface CodegenContext {
    * is `List Int`, which helps resolve the `Appendable` constraint.
    */
   expectedReturnType: IRType | undefined;
+
+  /**
+   * Set of short-circuit operators used in this module.
+   * Used to emit helper functions only when needed.
+   */
+  usedShortCircuitOps: Set<string>;
 }
 
 /**
@@ -186,6 +199,7 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     varTypes: new Map(),
     constrainedInstances: new Map(),
     expectedReturnType: undefined,
+    usedShortCircuitOps: new Set(),
   };
 
   // Build protocol method map from protocol definitions
@@ -348,68 +362,84 @@ export function generate(
 ): GeneratedModule {
   const ctx = createCodegenContext(program);
   const { modulePackages = new Map() } = options;
-  const lines: string[] = [];
+  const headerLines: string[] = [];
+  const bodyLines: string[] = [];
 
   // 1. Generate imports for external modules
   const importLines = generateImports(ctx);
   if (importLines.length > 0) {
-    lines.push(...importLines);
-    lines.push("");
+    headerLines.push(...importLines);
+    headerLines.push("");
   }
 
   // 2. Generate imports for dependency modules
   const depImportLines = generateDependencyImports(program, modulePackages);
   if (depImportLines.length > 0) {
-    lines.push(...depImportLines);
-    lines.push("");
+    headerLines.push(...depImportLines);
+    headerLines.push("");
   }
 
   // 3. Generate ADT constructor functions
   const ctorLines = generateConstructors(ctx);
   if (ctorLines.length > 0) {
-    lines.push("// ADT Constructors");
-    lines.push(...ctorLines);
-    lines.push("");
+    bodyLines.push("// ADT Constructors");
+    bodyLines.push(...ctorLines);
+    bodyLines.push("");
   }
 
   // 4. Generate synthetic values for default protocol implementations
   // These must be generated before the dictionaries that reference them.
   if (program.syntheticDefaultImpls.length > 0) {
-    lines.push("// Default Protocol Implementations");
+    bodyLines.push("// Default Protocol Implementations");
     for (const syntheticValue of program.syntheticDefaultImpls) {
       const safeName = sanitizeIdentifier(syntheticValue.name);
       const body = generateValue(syntheticValue, ctx);
-      lines.push(`const ${safeName} = ${body};`);
+      bodyLines.push(`const ${safeName} = ${body};`);
     }
-    lines.push("");
+    bodyLines.push("");
   }
 
   // 5. Generate protocol instance dictionaries
   const dictLines = generateInstanceDictionaries(ctx);
   if (dictLines.length > 0) {
-    lines.push("// Protocol Instance Dictionaries");
-    lines.push(...dictLines);
-    lines.push("");
+    bodyLines.push("// Protocol Instance Dictionaries");
+    bodyLines.push(...dictLines);
+    bodyLines.push("");
   }
 
   // 6. Generate values in dependency order
-  lines.push("// Values");
+  bodyLines.push("// Values");
   for (const scc of program.dependencyOrder) {
     const sccLines = generateSCC(scc, ctx);
-    lines.push(...sccLines);
+    bodyLines.push(...sccLines);
   }
 
   // 7. Generate exports
   const exportLines = generateExports(program, ctx);
   if (exportLines.length > 0) {
-    lines.push("");
-    lines.push(...exportLines);
+    bodyLines.push("");
+    bodyLines.push(...exportLines);
+  }
+
+  // 8. Generate short-circuit helper functions (if used)
+  // These are generated after values so we know which ones are needed,
+  // but they go in the header before the body.
+  const helperLines: string[] = [];
+  if (ctx.usedShortCircuitOps.size > 0) {
+    helperLines.push("// Short-Circuit Operator Helpers");
+    for (const op of ctx.usedShortCircuitOps) {
+      const helper = SHORT_CIRCUIT_HELPERS[op];
+      if (helper) {
+        helperLines.push(`const ${helper.name} = ${helper.impl};`);
+      }
+    }
+    helperLines.push("");
   }
 
   return {
     moduleName: program.moduleName ?? "Main",
     packageName: program.packageName ?? program.moduleName ?? "Main",
-    code: lines.join("\n"),
+    code: [...headerLines, ...helperLines, ...bodyLines].join("\n"),
     imports: ctx.externalBindings,
     exports: Object.keys(program.values).filter(
       (name) => !name.startsWith("$")
@@ -460,17 +490,17 @@ function generateConstructors(ctx: CodegenContext): string[] {
 
   for (const [parentType, ctors] of byParent) {
     // Skip built-in Bool - we use native true/false
-    if (parentType === "Bool") continue;
+    if (parentType === BOOL_TYPE_NAME) continue;
 
     // Skip Unit - we use undefined
-    if (parentType === "Unit") continue;
+    if (parentType === UNIT_TYPE_NAME) continue;
 
     // Check if this ADT belongs to the current module
     const adtInfo = ctx.program.adts[parentType];
     if (
       adtInfo?.moduleName &&
       adtInfo.moduleName !== currentModule &&
-      adtInfo.moduleName !== "__builtin__"
+      adtInfo.moduleName !== BUILTIN_MODULE_NAME
     ) {
       // This ADT comes from a dependency, skip generating its constructors
       continue;
@@ -828,6 +858,9 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
  * 1. In polymorphic context (dictionary param in scope): use the dictionary parameter
  * 2. In monomorphic context: we need type info to resolve the concrete dictionary
  *
+ * Short-circuit operators (&& and ||) are special-cased to use their runtime
+ * function names directly, as they are not protocol methods.
+ *
  * Regular functions and external bindings are referenced directly by name.
  */
 function generateVar(
@@ -835,6 +868,17 @@ function generateVar(
   ctx: CodegenContext
 ): string {
   const currentModule = ctx.program.moduleName;
+
+  // Special handling for short-circuit operators
+  // These use helper functions defined at the top of the module
+  if (SHORT_CIRCUIT_OPERATORS.has(expr.name)) {
+    const helper = SHORT_CIRCUIT_HELPERS[expr.name];
+    if (helper) {
+      // Track that we need this helper function
+      ctx.usedShortCircuitOps.add(expr.name);
+      return helper.name;
+    }
+  }
 
   // Check if this is an external binding
   const value = ctx.program.values[expr.name];
@@ -914,7 +958,7 @@ function generateVar(
     ctorInfo &&
     ctorInfo.moduleName &&
     ctorInfo.moduleName !== currentModule &&
-    ctorInfo.moduleName !== "__builtin__"
+    ctorInfo.moduleName !== BUILTIN_MODULE_NAME
   ) {
     // Reference constructor from its defining module
     return `${ctorInfo.moduleName}.${sanitizeIdentifier(expr.name)}`;
@@ -979,12 +1023,20 @@ function generateLiteral(expr: Extract<IRExpr, { kind: "IRLiteral" }>): string {
 
 /**
  * Generate a lambda expression.
+ *
+ * Handles both regular curried lambdas and thunks (zero-parameter lambdas).
+ * Thunks are used for short-circuit operators to delay evaluation.
  */
 function generateLambda(
   expr: Extract<IRExpr, { kind: "IRLambda" }>,
   ctx: CodegenContext
 ): string {
   const body = generateExpr(expr.body, ctx);
+
+  // Handle thunks (zero-parameter lambdas) used for short-circuit operators
+  if (expr.params.length === 0) {
+    return `() => ${body}`;
+  }
 
   // Build curried function
   let result = body;
@@ -1431,7 +1483,7 @@ function generateBranchCode(
         const ctor = ctx.constructors[pat.name];
 
         // Special case: Bool constructors
-        if (ctor?.parentType === "Bool") {
+        if (ctor?.parentType === BOOL_TYPE_NAME) {
           const boolValue = pat.name === "True" ? "true" : "false";
           return `${accessor} === ${boolValue}`;
         }
@@ -1652,7 +1704,7 @@ function generateConstructorExpr(
   const currentModule = ctx.program.moduleName;
 
   // Special case: Bool constructors compile to native true/false
-  if (ctor?.parentType === "Bool") {
+  if (ctor?.parentType === BOOL_TYPE_NAME) {
     return expr.name === "True" ? "true" : "false";
   }
 
@@ -1660,7 +1712,7 @@ function generateConstructorExpr(
   if (
     ctor?.moduleName &&
     ctor.moduleName !== currentModule &&
-    ctor.moduleName !== "__builtin__"
+    ctor.moduleName !== BUILTIN_MODULE_NAME
   ) {
     const ctorName = sanitizeIdentifier(expr.name);
     if (expr.args.length === 0) {
@@ -1805,7 +1857,7 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
     if (
       ctor.moduleName &&
       ctor.moduleName !== currentModule &&
-      ctor.moduleName !== "__builtin__"
+      ctor.moduleName !== BUILTIN_MODULE_NAME
     ) {
       // Re-export from the source module
       addReExport(ctor.moduleName, ctorName);
@@ -1846,14 +1898,18 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
     // Export all constructors that belong to this module
     for (const [ctorName, ctor] of Object.entries(program.constructors)) {
       // Skip built-in Bool and Unit
-      if (ctor.parentType === "Bool" || ctor.parentType === "Unit") continue;
+      if (
+        ctor.parentType === BOOL_TYPE_NAME ||
+        ctor.parentType === UNIT_TYPE_NAME
+      )
+        continue;
 
       // Check if this constructor belongs to the current module
       const adtInfo = program.adts[ctor.parentType];
       if (
         adtInfo?.moduleName &&
         adtInfo.moduleName !== currentModule &&
-        adtInfo.moduleName !== "__builtin__"
+        adtInfo.moduleName !== BUILTIN_MODULE_NAME
       ) {
         continue;
       }

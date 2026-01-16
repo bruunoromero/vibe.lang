@@ -188,11 +188,6 @@ export interface DiscoverOptions {
    * Whether to prefer dist directories over src directories.
    */
   preferDist?: boolean;
-
-  /**
-   * Whether to auto-inject the Vibe prelude as a dependency.
-   */
-  injectPrelude?: boolean;
 }
 
 /**
@@ -244,16 +239,14 @@ export function discoverModuleGraph(
   config: ResolvedVibeConfig,
   entryModuleName: string,
   parseFunction: (source: string) => Program,
-  preferDist?: boolean,
-  injectPrelude?: boolean
+  preferDist?: boolean
 ): ModuleGraph;
 
 export function discoverModuleGraph(
   config: ResolvedVibeConfig,
   entryModuleName: string,
   optionsOrParseFunction: DiscoverOptions | ((source: string) => Program),
-  preferDistArg = false,
-  injectPreludeArg = false
+  preferDistArg = false
 ): ModuleGraph {
   // Handle both old and new API signatures
   let options: DiscoverOptions;
@@ -264,7 +257,6 @@ export function discoverModuleGraph(
       collectInfixDeclarations: () => ({ registry: new Map() }),
       parseFunction,
       preferDist: preferDistArg,
-      injectPrelude: injectPreludeArg,
     };
   } else {
     options = optionsOrParseFunction;
@@ -274,7 +266,6 @@ export function discoverModuleGraph(
     collectInfixDeclarations,
     parseFunction,
     preferDist = false,
-    injectPrelude = false,
   } = options;
 
   // ============================================================
@@ -325,21 +316,6 @@ export function discoverModuleGraph(
     const dependencies = new Set<string>();
     for (const imp of ast.imports) {
       dependencies.add(imp.moduleName);
-    }
-
-    // Auto-inject Vibe dependency if enabled and this is not Vibe itself
-    const isPreludeModule = moduleName === "Vibe";
-    const hasExplicitPreludeImport = ast.imports?.some(
-      (imp) => imp.moduleName === "Vibe"
-    );
-
-    if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
-      try {
-        resolveModule({ config, moduleName: "Vibe", preferDist });
-        dependencies.add("Vibe");
-      } catch {
-        // Vibe not found - OK, builtin types are available
-      }
     }
 
     // Recursively discover dependencies BEFORE storing this module
@@ -518,17 +494,12 @@ export function discoverAllModules(
       collectInfixDeclarations: () => ({ registry: new Map() }),
       parseFunction,
       preferDist: false,
-      injectPrelude: false,
     };
   } else {
     options = optionsOrParseFunction;
   }
 
-  const {
-    collectInfixDeclarations,
-    parseFunction,
-    injectPrelude = false,
-  } = options;
+  const { collectInfixDeclarations, parseFunction } = options;
 
   // First, discover all source modules in the config's source directory
   const sourceModules = discoverSourceModules(config.srcDir);
@@ -578,21 +549,6 @@ export function discoverAllModules(
     const dependencies = new Set<string>();
     for (const imp of ast.imports) {
       dependencies.add(imp.moduleName);
-    }
-
-    // Auto-inject Vibe dependency if this is not Vibe itself
-    const isPreludeModule = moduleName === "Vibe";
-    const hasExplicitPreludeImport = ast.imports?.some(
-      (imp) => imp.moduleName === "Vibe"
-    );
-
-    if (injectPrelude && !isPreludeModule && !hasExplicitPreludeImport) {
-      try {
-        resolveModule({ config, moduleName: "Vibe" });
-        dependencies.add("Vibe");
-      } catch {
-        // Vibe not found - OK, builtin types are available
-      }
     }
 
     // Recursively discover dependencies

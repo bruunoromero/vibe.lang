@@ -26,7 +26,6 @@ function createDiscoverOptions(
     collectInfixDeclarations,
     parseFunction: parse,
     preferDist: false,
-    injectPrelude: false,
     ...overrides,
   };
 }

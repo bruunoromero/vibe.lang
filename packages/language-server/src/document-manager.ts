@@ -216,7 +216,6 @@ export class DocumentManager {
       // Analyze with the loaded dependencies
       const analyzed = analyze(program, {
         dependencies: moduleDeps,
-        injectPrelude: false,
       });
 
       // Cache it
@@ -315,16 +314,11 @@ export class DocumentManager {
     // Phase 3: Semantic Analysis
     if (cache.parseResult?.ast) {
       try {
-        // Check if this is the Vibe prelude itself
-        const isPreludeModule = cache.parseResult.ast.module?.name === "Vibe";
-
         // Load all dependencies for this module
         const dependencies = this.loadDependencies(cache.parseResult.ast);
 
         // Build analysis options
         const analyzeOptions: AnalyzeOptions = {
-          // Prelude is not auto-injected; user must explicitly import Vibe
-          injectPrelude: false,
           dependencies,
         };
 

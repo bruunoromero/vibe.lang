@@ -4,7 +4,6 @@ import { analyze, SemanticError } from "../src/index.ts";
 
 /**
  * Helper to expect an error during analysis.
- * Tests run with injectPrelude: false since we don't provide prelude as a dependency.
  * Adds OPERATOR_PREAMBLE (which includes types and operators) so literals and operators work.
  * For sources starting with 'module' or 'import', inserts OPERATOR_PREAMBLE after those declarations.
  */
@@ -33,13 +32,11 @@ const expectError = (source: string, message: string) => {
   } else {
     fullSource = OPERATOR_PREAMBLE + "\n" + source;
   }
-  expect(() => analyze(parse(fullSource), { injectPrelude: false })).toThrow(
-    message
-  );
+  expect(() => analyze(parse(fullSource))).toThrow(message);
 };
 
 /**
- * Helper to analyze without prelude injection.
+ * Helper to analyze code.
  * Adds TYPE_PREAMBLE automatically so literals work. For sources starting with 'module' or 'import',
  * inserts TYPE_PREAMBLE after those declarations.
  */
@@ -68,14 +65,13 @@ const analyzeNoPrelude = (source: string) => {
   } else {
     fullSource = TYPE_PREAMBLE + "\n" + source;
   }
-  return analyze(parse(fullSource), { injectPrelude: false });
+  return analyze(parse(fullSource));
 };
 
 /**
  * Type definitions preamble for tests.
- * Since tests run with injectPrelude: false, we only need to define
- * the ADTs that are not builtin (Maybe in this case).
- * Bool, Unit, Int, Float, String, and Char are now builtin to the compiler.
+ * We need to define ADTs that are not builtin (Maybe in this case).
+ * Bool, Unit, Int, Float, String, and Char are builtin to the compiler.
  */
 const TYPE_PREAMBLE = `
 type Maybe a = Just a | Nothing
@@ -83,7 +79,7 @@ type Maybe a = Just a | Nothing
 
 /**
  * Operator preamble for tests that need arithmetic/comparison operators.
- * This defines the operators locally since we don't inject prelude.
+ * This defines the operators locally since we don't have prelude.
  */
 const OPERATOR_PREAMBLE = `
 ${TYPE_PREAMBLE}
@@ -300,7 +296,7 @@ f x = x`,
   test("infers simple identity function", () => {
     const program = parse(`${TYPE_PREAMBLE}
 id x = x`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.id).toBeDefined();
   });
 
@@ -315,7 +311,7 @@ id x = x`);
 id x = x
 useAtNumber = id 42
 useAtString = id "hello"`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     // All three bindings should infer successfully
     expect(result.types.id).toBeDefined();
@@ -334,7 +330,7 @@ f =
     id x = x
   in
     (id 1, id "hi")`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.f).toBeDefined();
   });
 
@@ -352,7 +348,7 @@ f =
       c = const 1 "ignored"
     in
       (a, b, c)`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.f).toBeDefined();
   });
 
@@ -363,7 +359,7 @@ f =
 const x y = x
 n = const 1 "ignored"
 s = const "hi" 42`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.const).toBeDefined();
     expect(result.types.n).toBeDefined();
     expect(result.types.s).toBeDefined();
@@ -376,7 +372,7 @@ compose f g x = f (g x)
 addOne n = n + 1
 double n = n * 2
 addThree = compose addOne double`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.compose).toBeDefined();
     expect(result.types.addThree).toBeDefined();
   });
@@ -397,7 +393,7 @@ p1 = pair 1 "hi"
 p2 = pair 2 ()
 n = fst p1
 s = snd p1`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.pair).toBeDefined();
     expect(result.types.fst).toBeDefined();
     expect(result.types.snd).toBeDefined();
@@ -411,7 +407,7 @@ s = snd p1`);
 singleton x = [x]
 nums = singleton 42
 strs = singleton "hi"`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.singleton).toBeDefined();
     expect(result.types.nums).toBeDefined();
     expect(result.types.strs).toBeDefined();
@@ -425,7 +421,7 @@ isEmpty xs =
     [] -> True
     (x :: rest) -> False
 `);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.isEmpty).toBeDefined();
   });
 
@@ -438,7 +434,7 @@ length xs =
     [] -> 0
     (x :: rest) -> 1 + length rest
 `);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.length).toBeDefined();
   });
 
@@ -455,7 +451,7 @@ infixl 4 ==
 @external "@vibe/runtime" "intEq"
 (==) : Int -> Int -> Bool
 `);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.isEven).toBeDefined();
     expect(result.types.isOdd).toBeDefined();
   });
@@ -481,7 +477,7 @@ apply f x = f x
 
 n = apply (\\x -> x + 1) 42
 s = apply (\\x -> x ++ "!") "hi"`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.apply).toBeDefined();
     expect(result.types.n).toBeDefined();
     expect(result.types.s).toBeDefined();
@@ -498,7 +494,7 @@ const x y = x
 
 flip : (a -> b -> c) -> b -> a -> c
 flip f y x = f x y`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.id).toBeDefined();
     expect(result.types.const).toBeDefined();
     expect(result.types.flip).toBeDefined();
@@ -512,7 +508,7 @@ toInt x = 42
 
 toStr : a -> String
 toStr x = "hi"`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.toInt).toBeDefined();
     expect(result.types.toStr).toBeDefined();
   });
@@ -525,7 +521,7 @@ head xs = 42
 
 length : List a -> Int
 length xs = 0`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.head).toBeDefined();
     expect(result.types.length).toBeDefined();
   });
@@ -552,7 +548,7 @@ container = ["hello", "world"]
 -- Nested List
 nested : List (List Int)
 nested = [[1, 2], [3, 4]]`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.nums).toBeDefined();
     expect(result.types.myList).toBeDefined();
     expect(result.types.container).toBeDefined();
@@ -569,7 +565,7 @@ compose f g x = f (g x)
 
 twice : (a -> a) -> a -> a
 twice f x = f (f x)`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.compose).toBeDefined();
     expect(result.types.twice).toBeDefined();
   });
@@ -594,7 +590,7 @@ outer =
     f y = x + y
   in
     f 1`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.outer).toBeDefined();
   });
 
@@ -603,7 +599,7 @@ outer =
   test("registers ADT declaration", () => {
     const program = parse(`${TYPE_PREAMBLE}
 type MyBool = MyTrue | MyFalse`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     // Check ADT is registered
     expect(result.adts.MyBool).toBeDefined();
@@ -622,7 +618,7 @@ type MyBool = MyTrue | MyFalse`);
   test("registers parameterized ADT", () => {
     const program = parse(`${TYPE_PREAMBLE}
 type Option a = Some a | None`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.adts.Option).toBeDefined();
     expect(result.adts.Option?.params).toEqual(["a"]);
@@ -639,7 +635,7 @@ type Option a = Some a | None
 
 wrapped = Some 42
 nothing = None`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.types.wrapped).toBeDefined();
     expect(result.types.nothing).toBeDefined();
@@ -653,7 +649,7 @@ unwrap opt default =
   case opt of
     Some x -> x
     None -> default`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.types.unwrap).toBeDefined();
   });
@@ -668,7 +664,7 @@ describe color =
     Red -> "red"
     Green -> "green"
     Blue -> "blue"`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.describe).toBeDefined();
   });
 
@@ -752,7 +748,7 @@ type MyList a = Cons a (MyList a) | Nil
 empty = Nil
 single = Cons 1 Nil
 double = Cons 1 (Cons 2 Nil)`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.adts.MyList).toBeDefined();
     expect(result.constructors.Cons?.arity).toBe(2);
@@ -770,7 +766,7 @@ length xs =
   case xs of
     Nil -> 0
     Cons _ tail -> 1 + length tail`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.length).toBeDefined();
   });
 
@@ -786,7 +782,7 @@ map f opt =
 
 addOne n = n + 1
 result = map addOne (Some 42)`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.map).toBeDefined();
     expect(result.types.result).toBeDefined();
   });
@@ -802,7 +798,7 @@ getRight e default =
   case e of
     Left _ -> default
     Right x -> x`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.adts.Either?.params).toEqual(["a", "b"]);
     expect(result.types.example1).toBeDefined();
     expect(result.types.example2).toBeDefined();
@@ -814,7 +810,7 @@ getRight e default =
   test("registers type alias", () => {
     const program = parse(`${TYPE_PREAMBLE}
 type alias UserId = Int`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.UserId).toBeDefined();
     expect(result.typeAliases.UserId?.params).toEqual([]);
@@ -823,7 +819,7 @@ type alias UserId = Int`);
   test("registers parameterized type alias", () => {
     const program = parse(`${TYPE_PREAMBLE}
 type alias Pair a b = (a, b)`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Pair).toBeDefined();
     expect(result.typeAliases.Pair?.params).toEqual(["a", "b"]);
@@ -846,7 +842,7 @@ type alias UserId = String`,
   test("type alias with record type", () => {
     const program = parse(`${TYPE_PREAMBLE}
 type alias Point = { x : Int, y : Int }`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Point).toBeDefined();
     expect(result.typeAliases.Point?.params).toEqual([]);
@@ -857,7 +853,7 @@ type alias Point = { x : Int, y : Int }`);
     const program = parse(`${OPERATOR_PREAMBLE}
 distance : { x : Int, y : Int } -> Int
 distance point = point.x + point.y`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.types.distance).toBeDefined();
     expect(result.values.distance?.annotation?.kind).toBe("FunctionType");
@@ -871,7 +867,7 @@ origin : Point
 origin = { x = 0, y = 0 }`);
 
     // Should not throw - record literal matches type
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
     expect(result.types.origin).toBeDefined();
   });
 
@@ -881,7 +877,7 @@ type alias Empty = {}
 
 empty : Empty
 empty = {}`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Empty).toBeDefined();
     expect(result.types.empty).toBeDefined();
@@ -895,7 +891,7 @@ type alias Container a = { value : a, count : Int }
 intContainer : Container Int
 intContainer = { value = 42, count = 1 }`
     );
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Container).toBeDefined();
     expect(result.typeAliases.Container?.params).toEqual(["a"]);
@@ -910,7 +906,7 @@ type alias Model = { count : Int, increment : Int -> Int }
 model : Model
 model = { count = 0, increment = \\x -> x + 1 }`
     );
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Model).toBeDefined();
     expect(result.types.model).toBeDefined();
@@ -924,7 +920,7 @@ type alias Outer = { inner : { value : Int } }
 nested : Outer
 nested = { inner = { value = 5 } }`
     );
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Outer).toBeDefined();
     expect(result.types.nested).toBeDefined();
@@ -937,7 +933,7 @@ type alias Pair a b = { first : a, second : b }
 pair : Pair string number
 pair = { first = "hello", second = 42 }`);
 
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Pair).toBeDefined();
     expect(result.typeAliases.Pair?.params).toEqual(["a", "b"]);
@@ -951,7 +947,7 @@ type alias ListBox a = { items : List a, count : Int }
 stringBox : ListBox String
 stringBox = { items = ["a", "b"], count = 2 }`);
 
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.ListBox).toBeDefined();
     expect(result.typeAliases.ListBox?.params).toEqual(["a"]);
@@ -965,7 +961,7 @@ type alias Response a = { data : a, metadata : { code : Int, message : String } 
 response : Response String
 response = { data = "ok", metadata = { code = 200, message = "Success" } }`);
 
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Response).toBeDefined();
     expect(result.typeAliases.Response?.params).toEqual(["a"]);
@@ -979,7 +975,7 @@ type alias Handler a = { process : a -> String, callback : String -> a }
 handler : Handler Int
 handler = { process = \\n -> "result", callback = \\s -> 0 }`);
 
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Handler).toBeDefined();
     expect(result.typeAliases.Handler?.params).toEqual(["a"]);
@@ -1001,7 +997,7 @@ p = { first = 5, second = 3 }
 w : Wrapper (List Int)
 w = { wrapped = [1, 2, 3] }`);
 
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Container).toBeDefined();
     expect(result.typeAliases.Pair).toBeDefined();
@@ -1019,7 +1015,7 @@ type alias Pair a b = { left : a, right : b }
 nested : Pair (Box String) (Box Int)
 nested = { left = { contents = "text" }, right = { contents = 42 } }`);
 
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Box).toBeDefined();
     expect(result.typeAliases.Pair).toBeDefined();
@@ -1034,7 +1030,7 @@ type Option a = Some a | None
 type alias MaybeInt = Option Int
 
 wrapped = Some 42`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.adts.Option).toBeDefined();
     expect(result.typeAliases.MaybeInt).toBeDefined();
@@ -1067,7 +1063,7 @@ wrapped = Some 42`);
   test("accepts valid type parameter in type alias", () => {
     const program = parse(`${TYPE_PREAMBLE}
 type alias Container a = { value : a }`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Container).toBeDefined();
     expect(result.typeAliases.Container?.params).toEqual(["a"]);
@@ -1095,7 +1091,7 @@ type alias Container a = { value : a }`);
     const program = parse(`module TestModule exposing (..)
 ${TYPE_PREAMBLE}
 type alias Point = { x : Int, y : Int }`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.typeAliases.Point).toBeDefined();
     expect(result.typeAliases.Point?.moduleName).toBe("TestModule");
@@ -1105,7 +1101,7 @@ type alias Point = { x : Int, y : Int }`);
     const program = parse(`module TestModule exposing (..)
 ${TYPE_PREAMBLE}
 type MyOption a = MySome a | MyNone`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.adts.MyOption).toBeDefined();
     expect(result.adts.MyOption?.moduleName).toBe("TestModule");
@@ -1119,7 +1115,7 @@ ${TYPE_PREAMBLE}
 type MyOption a = MySome a | MyNone
 foo x = x
 bar y = y`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.exportsAll).toBe(true);
     expect(result.exports.values.has("foo")).toBe(true);
@@ -1133,7 +1129,7 @@ bar y = y`);
 ${TYPE_PREAMBLE}
 foo x = x
 bar y = y`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.exportsAll).toBe(false);
     expect(result.exports.values.has("foo")).toBe(true);
@@ -1144,7 +1140,7 @@ bar y = y`);
     const program = parse(`module TestModule exposing (MyOption(..))
 ${TYPE_PREAMBLE}
 type MyOption a = MySome a | MyNone`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.types.has("MyOption")).toBe(true);
     const typeExport = result.exports.types.get("MyOption");
@@ -1157,7 +1153,7 @@ type MyOption a = MySome a | MyNone`);
     const program = parse(`module TestModule exposing (MyOption(MySome))
 ${TYPE_PREAMBLE}
 type MyOption a = MySome a | MyNone`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.types.has("MyOption")).toBe(true);
     const typeExport = result.exports.types.get("MyOption");
@@ -1170,7 +1166,7 @@ type MyOption a = MySome a | MyNone`);
     const program = parse(`module TestModule exposing (Opaque)
 ${TYPE_PREAMBLE}
 type Opaque a`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.types.has("Opaque")).toBe(true);
     expect(result.exports.types.get("Opaque")?.allConstructors).toBe(false);
@@ -1182,7 +1178,7 @@ ${TYPE_PREAMBLE}
 protocol MyProtocol a where
   foo : a -> a
   bar : a -> Int`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.protocols.has("MyProtocol")).toBe(true);
     const protocolExport = result.exports.protocols.get("MyProtocol");
@@ -1197,7 +1193,7 @@ ${TYPE_PREAMBLE}
 protocol MyProtocol a where
   foo : a -> a
   bar : a -> Int`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.protocols.has("MyProtocol")).toBe(true);
     const protocolExport = result.exports.protocols.get("MyProtocol");
@@ -1260,7 +1256,7 @@ protocol MyProtocol a where
 foo x = x
 bar y = y
 baz z = z`);
-    const result = analyze(program, { injectPrelude: false });
+    const result = analyze(program);
 
     expect(result.exports.exportsAll).toBe(false);
     expect(result.exports.values.has("foo")).toBe(true);

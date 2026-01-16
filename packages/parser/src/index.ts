@@ -45,7 +45,12 @@ import {
   buildRegistryFromTokens,
   getOperatorInfo as getOperatorInfoFromRegistry,
   InfixParseError,
+  BUILTIN_OPERATOR_REGISTRY,
+  mergeRegistries,
 } from "./operator-registry";
+
+// Re-export BUILTIN_OPERATOR_REGISTRY for use by other packages
+export { BUILTIN_OPERATOR_REGISTRY } from "./operator-registry";
 
 /**
  * Error thrown during parsing when unexpected syntax is encountered
@@ -118,8 +123,10 @@ export function parseWithInfix(source: string): {
   infixErrors: ParseError[];
 } {
   const { registry, errors } = collectInfixDeclarations(source);
-  const program = parse(source, registry);
-  return { program, operatorRegistry: registry, infixErrors: errors };
+  // Merge with builtin operators to ensure && and || have correct precedence
+  const mergedRegistry = mergeRegistries(BUILTIN_OPERATOR_REGISTRY, registry);
+  const program = parse(source, mergedRegistry);
+  return { program, operatorRegistry: mergedRegistry, infixErrors: errors };
 }
 
 /**
@@ -140,7 +147,10 @@ class Parser {
     private readonly tokens: Token[],
     operatorRegistry?: OperatorRegistry
   ) {
-    this.operatorRegistry = operatorRegistry ?? new Map();
+    // Start with builtin operators (&&, ||) and merge any provided registry on top
+    this.operatorRegistry = operatorRegistry
+      ? mergeRegistries(BUILTIN_OPERATOR_REGISTRY, operatorRegistry)
+      : BUILTIN_OPERATOR_REGISTRY;
   }
 
   /**

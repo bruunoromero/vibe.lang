@@ -17,6 +17,7 @@ import {
   type InfixDeclaration,
   type OperatorInfo,
   type OperatorRegistry,
+  BUILTIN_OPERATOR_FIXITY,
 } from "@vibe/syntax";
 
 /**
@@ -211,6 +212,23 @@ export function mergeRegistries(
 export function createEmptyRegistry(): OperatorRegistry {
   return new Map();
 }
+
+/**
+ * Builtin operator registry.
+ *
+ * Contains operators that are built into the compiler and cannot be
+ * redefined by user code. These are:
+ * - && (logical AND with short-circuit evaluation)
+ * - || (logical OR with short-circuit evaluation)
+ *
+ * The parser uses this as the base registry, and user-defined operator
+ * declarations are merged on top.
+ *
+ * Built from BUILTIN_OPERATOR_FIXITY in @vibe/syntax.
+ */
+export const BUILTIN_OPERATOR_REGISTRY: OperatorRegistry = new Map(
+  Object.entries(BUILTIN_OPERATOR_FIXITY)
+);
 
 // Re-export types for convenience
 export type { OperatorInfo, OperatorRegistry, InfixDeclaration };

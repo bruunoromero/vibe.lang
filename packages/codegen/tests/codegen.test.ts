@@ -317,3 +317,108 @@ multiParam a b c = gen c
     expect(code).toContain("$dict_Appendable_List");
   });
 });
+
+// ============================================================================
+// Short-Circuit Operator Tests
+// ============================================================================
+
+describe("Short-Circuit Operators", () => {
+  test("&& operator generates helper function and uses it with thunk", () => {
+    const source = `
+module Test exposing (..)
+
+test1 : Bool
+test1 = True && False
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should generate helper function at top of file
+    expect(code).toContain("const _AMP_AMP = (a) => (b) => a && b();");
+    // Should use the helper with a thunk for the right operand
+    expect(code).toContain("_AMP_AMP(true)(() => false)");
+  });
+
+  test("|| operator generates helper function and uses it with thunk", () => {
+    const source = `
+module Test exposing (..)
+
+test1 : Bool
+test1 = False || True
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should generate helper function at top of file
+    expect(code).toContain("const _PIPE_PIPE = (a) => (b) => a || b();");
+    // Should use the helper with a thunk for the right operand
+    expect(code).toContain("_PIPE_PIPE(false)(() => true)");
+  });
+
+  test("chained && operators generate single helper used multiple times", () => {
+    const source = `
+module Test exposing (..)
+
+test1 : Bool
+test1 = True && True && False
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should have exactly one helper function definition
+    expect(code).toContain("const _AMP_AMP = (a) => (b) => a && b();");
+    // With right-associativity, True && True && False becomes:
+    // True && (True && False) => nested calls to _AMP_AMP
+    expect(code).toContain("_AMP_AMP(true)(() => _AMP_AMP(true)(() => false))");
+  });
+
+  test("chained || operators generate single helper used multiple times", () => {
+    const source = `
+module Test exposing (..)
+
+test1 : Bool
+test1 = False || False || True
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should have exactly one helper function definition
+    expect(code).toContain("const _PIPE_PIPE = (a) => (b) => a || b();");
+    // With right-associativity, False || False || True becomes:
+    // False || (False || True) => nested calls to _PIPE_PIPE
+    expect(code).toContain(
+      "_PIPE_PIPE(false)(() => _PIPE_PIPE(false)(() => true))"
+    );
+  });
+
+  test("mixed && and || operators generate both helpers", () => {
+    const source = `
+module Test exposing (..)
+
+test1 : Bool
+test1 = True || False && True
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should contain both helper functions
+    expect(code).toContain("const _PIPE_PIPE = (a) => (b) => a || b();");
+    expect(code).toContain("const _AMP_AMP = (a) => (b) => a && b();");
+  });
+
+  test("short-circuit operators work with variables", () => {
+    const source = `
+module Test exposing (..)
+
+test1 : Bool -> Bool -> Bool
+test1 x y = x && y
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should generate helper function
+    expect(code).toContain("const _AMP_AMP = (a) => (b) => a && b();");
+    // The right operand (y) should be wrapped in a thunk
+    expect(code).toContain("_AMP_AMP(x)(() => y)");
+  });
+});
