@@ -6481,16 +6481,49 @@ function generalizeWithAnnotatedConstraints(
     }
   }
 
-  // Filter inferred constraints to only those involving quantified type variables
-  const inferredRelevantConstraints = resolvedConstraints.filter((c) => {
-    return c.typeArgs.some((t) => {
+  // Filter inferred constraints to only those involving quantified type variables.
+  // However, we need to catch ambiguous type variables: constraints with type variables
+  // that are NOT quantified (i.e., don't appear in the final type).
+  const inferredRelevantConstraints: Constraint[] = [];
+  for (const c of resolvedConstraints) {
+    const typeArgFreeVars: number[] = [];
+    for (const t of c.typeArgs) {
       const freeVars = getFreeTypeVars(t, substitution);
       for (const v of freeVars) {
-        if (quantified.has(v)) return true;
+        typeArgFreeVars.push(v);
       }
-      return false;
-    });
-  });
+    }
+
+    // Check if any free var is quantified
+    const hasQuantifiedVar = typeArgFreeVars.some((v) => quantified.has(v));
+
+    // Check if any free var is NOT quantified (ambiguous)
+    const hasUnquantifiedVar = typeArgFreeVars.some((v) => !quantified.has(v));
+
+    if (typeArgFreeVars.length === 0) {
+      // No type variables - constraint is fully concrete, skip it
+      // (it was already validated above)
+      continue;
+    }
+
+    if (hasUnquantifiedVar && !hasQuantifiedVar) {
+      // All type variables are unquantified - this is ambiguous!
+      // The constraint references type variables that don't appear in the final type.
+      const typeArgsStr = c.typeArgs.map((t) => formatType(t)).join(", ");
+      throw new SemanticError(
+        `Ambiguous type variable in '${c.protocolName}' constraint. ` +
+          `The type '${typeArgsStr}' contains type variable(s) that do not appear ` +
+          `in the expression's type, so they cannot be determined. ` +
+          `Consider adding a type annotation to make the type concrete.`,
+        span,
+      );
+    }
+
+    // Keep constraints that have at least one quantified variable
+    if (hasQuantifiedVar) {
+      inferredRelevantConstraints.push(c);
+    }
+  }
 
   // Process user-annotated constraints
   let allConstraints = [...inferredRelevantConstraints];
@@ -6624,6 +6657,34 @@ function generalizeWithAnnotatedConstraints(
 
   // Apply the updated substitution to the type
   const finalType = applySubstitution(type, substitution);
+
+  // Check for ambiguous type variables: constraints on type variables that don't appear
+  // in the final type. For example, in `[] == []`, the type is `Bool` but we have a
+  // constraint `Eq a` where `a` doesn't appear in `Bool`. This is an error because
+  // there's no way to determine what `a` should be.
+  const finalTypeFreeVars = getFreeTypeVars(finalType, substitution);
+  for (const c of finalConstraints) {
+    for (const typeArg of c.typeArgs) {
+      // Apply substitution to get the resolved type arg
+      const resolvedTypeArg = applySubstitution(typeArg, substitution);
+      const constraintFreeVars = getFreeTypeVars(resolvedTypeArg, substitution);
+      for (const v of constraintFreeVars) {
+        // If this type variable appears in the constraint but NOT in the final type,
+        // then it's ambiguous - there's no way to determine what type it should be.
+        // This catches cases like `[] == []` where the result is Bool but the
+        // constraint is `Eq a` and `a` doesn't appear anywhere in the result type.
+        if (!finalTypeFreeVars.has(v)) {
+          throw new SemanticError(
+            `Ambiguous type variable in '${c.protocolName}' constraint. ` +
+              `The type variable does not appear in the expression's type, ` +
+              `so it cannot be determined. Consider adding a type annotation ` +
+              `to make the type concrete.`,
+            span,
+          );
+        }
+      }
+    }
+  }
 
   return { vars: quantified, constraints: finalConstraints, type: finalType };
 }

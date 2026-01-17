@@ -1396,3 +1396,69 @@ main = show MyType
     expect(() => analyze(program)).toThrow("No instance of");
   });
 });
+
+describe("Ambiguous Type Variable Detection", () => {
+  test("rejects empty list equality due to ambiguous type variable", () => {
+    // In `[] == []`, both lists have type `List a` for some unknown `a`.
+    // The result type is `Bool`, which doesn't mention `a`.
+    // This means there's no way to determine what type `a` should be,
+    // making the `Eq` constraint ambiguous.
+    const source = `
+infix 4 ==
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+
+implement Eq a => Eq (List a) where
+  (==) xs ys = True
+
+main = [] == []
+`;
+    const program = parseTest(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow(/[Aa]mbiguous/);
+  });
+
+  test("accepts list equality when type is concrete", () => {
+    // When the list type is known (List Int), there's no ambiguity
+    const source = `
+infix 4 ==
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+
+implement Eq Int where
+  (==) x y = True
+
+implement Eq a => Eq (List a) where
+  (==) xs ys = True
+
+xs : List Int
+xs = []
+
+main = xs == []
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+    expect(result.values.main).toBeDefined();
+  });
+
+  test("accepts polymorphic function with constraint in result type", () => {
+    // When the type variable appears in the result type, it's not ambiguous
+    const source = `
+infix 4 ==
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+
+-- This is fine because 'a' appears in the result type (a -> a -> Bool)
+-- so callers can determine what type 'a' should be
+eq : Eq a => a -> a -> Bool
+eq x y = x == y
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+    expect(result.values.eq).toBeDefined();
+  });
+});

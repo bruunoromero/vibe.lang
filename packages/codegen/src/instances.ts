@@ -104,7 +104,7 @@ export function isTypeVariable(type: IRType): boolean {
  */
 export function buildTypeVarSubstitution(
   instanceTypeArgs: IRType[],
-  concreteTypes: IRType[]
+  concreteTypes: IRType[],
 ): Map<number, IRType> {
   const subst = new Map<number, IRType>();
 
@@ -157,7 +157,7 @@ export function buildTypeVarSubstitution(
  */
 export function applyTypeSubstitution(
   type: IRType,
-  subst: Map<number, IRType>
+  subst: Map<number, IRType>,
 ): IRType {
   if (type.kind === "var") {
     return subst.get(type.id) ?? type;
@@ -181,7 +181,7 @@ export function applyTypeSubstitution(
  */
 export function typeStructureMatches(
   instType: IRType,
-  concreteType: IRType
+  concreteType: IRType,
 ): boolean {
   // A type variable in the instance matches anything
   if (instType.kind === "var") {
@@ -252,7 +252,7 @@ export function typeStructureMatches(
  */
 export function findPolymorphicInstance(
   protocolName: string,
-  instances: IRInstance[]
+  instances: IRInstance[],
 ): { key: string; instance: IRInstance } | null {
   for (const inst of instances) {
     if (inst.protocolName !== protocolName) continue;
@@ -289,7 +289,7 @@ export function findPolymorphicInstance(
 export function findMatchingInstance(
   protocolName: string,
   concreteType: IRType,
-  instances: IRInstance[]
+  instances: IRInstance[],
 ): { key: string; instance: IRInstance } | null {
   for (const inst of instances) {
     if (inst.protocolName !== protocolName) continue;
@@ -322,7 +322,7 @@ export function findMatchingInstance(
  */
 export function getImportAliasForModule(
   moduleName: string,
-  importAliases: { moduleName: string; alias: string }[]
+  importAliases: { moduleName: string; alias: string }[],
 ): string {
   // Check the import aliases in the program
   for (const alias of importAliases) {
@@ -365,7 +365,7 @@ export function resolveDictReference(
   typeKey: string,
   ctx: InstanceContext,
   concreteType?: IRType,
-  allConcreteTypes?: IRType[]
+  allConcreteTypes?: IRType[],
 ): string {
   const key = `${protocolName}_${typeKey}`;
 
@@ -383,7 +383,7 @@ export function resolveDictReference(
       // Use the source module's import alias for the dictionary reference
       const importAlias = getImportAliasForModule(
         sourceModule,
-        ctx.importAliases
+        ctx.importAliases,
       );
       dictRef = `${importAlias}.$dict_${key}`;
     }
@@ -395,7 +395,7 @@ export function resolveDictReference(
     const structuralMatch = findMatchingInstance(
       protocolName,
       concreteType,
-      ctx.instances
+      ctx.instances,
     );
     if (structuralMatch) {
       instanceKey = structuralMatch.key;
@@ -406,7 +406,7 @@ export function resolveDictReference(
         if (sourceModule) {
           const importAlias = getImportAliasForModule(
             sourceModule,
-            ctx.importAliases
+            ctx.importAliases,
           );
           dictRef = `${importAlias}.$dict_${instanceKey}`;
         }
@@ -419,7 +419,7 @@ export function resolveDictReference(
   if (!dictRef) {
     const polymorphicMatch = findPolymorphicInstance(
       protocolName,
-      ctx.instances
+      ctx.instances,
     );
     if (polymorphicMatch) {
       instanceKey = polymorphicMatch.key;
@@ -430,7 +430,7 @@ export function resolveDictReference(
         if (sourceModule) {
           const importAlias = getImportAliasForModule(
             sourceModule,
-            ctx.importAliases
+            ctx.importAliases,
           );
           dictRef = `${importAlias}.$dict_${instanceKey}`;
         }
@@ -446,7 +446,7 @@ export function resolveDictReference(
       : `'${typeKey}'`;
     throw new Error(
       `No instance of '${protocolName}' found for ${typeName}. ` +
-        `You may need to add: implement ${protocolName} ${typeKey} where ...`
+        `You may need to add: implement ${protocolName} ${typeKey} where ...`,
     );
   }
 
@@ -455,7 +455,7 @@ export function resolveDictReference(
   const matchedInstance = ctx.instances.find(
     (inst) =>
       inst.protocolName === protocolName &&
-      `${protocolName}_${formatTypeKey(inst.typeArgs[0])}` === instanceKey
+      `${protocolName}_${formatTypeKey(inst.typeArgs[0])}` === instanceKey,
   );
 
   if (constraints && constraints.length > 0) {
@@ -496,15 +496,24 @@ export function resolveDictReference(
         if (resolvedType && resolvedType.kind === "con") {
           // We have a concrete type - resolve the constraint dictionary for it
           constraintDicts.push(
-            resolveDictionaryForType(constraint.protocolName, resolvedType, ctx)
+            resolveDictionaryForType(
+              constraint.protocolName,
+              resolvedType,
+              ctx,
+            ),
           );
         } else if (resolvedType && resolvedType.kind === "list") {
           // Handle list type - resolve Appendable for List
           constraintDicts.push(
-            resolveDictionaryForType(constraint.protocolName, resolvedType, ctx)
+            resolveDictionaryForType(
+              constraint.protocolName,
+              resolvedType,
+              ctx,
+            ),
           );
         } else {
-          // Polymorphic context - pass through the dictionary parameter
+          // Polymorphic context - pass through the dictionary parameter.
+          // The semantic analyzer should have caught any truly ambiguous cases.
           constraintDicts.push(`$dict_${constraint.protocolName}`);
         }
       }
@@ -526,7 +535,7 @@ export function resolveDictReference(
 export function resolveDictionaryForType(
   protocolName: string,
   type: IRType | undefined,
-  ctx: InstanceContext
+  ctx: InstanceContext,
 ): string {
   if (!type) {
     // Unknown type - use polymorphic pass-through
@@ -551,6 +560,7 @@ export function resolveDictionaryForType(
     return resolveDictReference(protocolName, typeKey, ctx, listAsCon);
   }
 
-  // Type variable - pass through the polymorphic dictionary
+  // Type variable - pass through the polymorphic dictionary.
+  // The semantic analyzer should have caught any truly ambiguous cases.
   return `$dict_${protocolName}`;
 }

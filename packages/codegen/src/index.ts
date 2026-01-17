@@ -949,7 +949,9 @@ function generateVar(
 
     // Fallback: use the dictionary parameter (should have been passed)
     // This handles polymorphic usage where the dict param is expected
-    return `${dictParam}.${sanitizedName}`;
+    throw new Error(
+      `Cannot resolve protocol method '${expr.name}' in monomorphic context without type info.`,
+    );
   }
 
   // Check if this is a constructor from another module

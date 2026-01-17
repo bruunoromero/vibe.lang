@@ -422,3 +422,103 @@ test1 x y = x && y
     expect(code).toContain("_AMP_AMP(x)(() => y)");
   });
 });
+
+// ============================================================================
+// Default Protocol Implementation Resolution Tests
+// ============================================================================
+
+describe("Default Protocol Implementation Resolution", () => {
+  test("resolves protocol methods in default implementations for concrete types", () => {
+    // This tests the bug fix where default protocol implementations like `/=`
+    // need to call other methods (like `==`) with proper dictionary resolution.
+    // For concrete types, the synthetic default impl needs to resolve the
+    // protocol constraint from the synthetic value name, not from constraints.
+    const source = `
+module Test exposing (..)
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+    (==) : a -> a -> Bool
+    (/=) : a -> a -> Bool
+    (/=) x y = not (x == y)
+
+implement Eq Int where
+    (==) x y = True
+
+not : Bool -> Bool
+not b = if b then False else True
+
+main = 1 == 1
+`;
+
+    const { code } = compileToJS(source);
+
+    // The default /= implementation should resolve == to $dict_Eq_Int
+    expect(code).toContain("$default_Eq_Int__SLASH_EQ");
+    // It should reference the Int dictionary, not an undefined $dict_Eq
+    expect(code).toContain("$dict_Eq_Int._EQ_EQ");
+    // The dictionary should be properly constructed
+    expect(code).toContain("const $dict_Eq_Int");
+  });
+
+  test("resolves protocol methods in default implementations for Unit type", () => {
+    // Verify Unit type also works with default implementations
+    const source = `
+module Test exposing (..)
+
+infix 4 ==
+infix 4 /=
+
+type Unit = Unit
+
+protocol Eq a where
+    (==) : a -> a -> Bool
+    (/=) : a -> a -> Bool
+    (/=) x y = not (x == y)
+
+implement Eq Unit where
+    (==) _ _ = True
+
+not : Bool -> Bool
+not b = if b then False else True
+
+main = Unit == Unit
+`;
+
+    const { code } = compileToJS(source);
+
+    // The default /= implementation should reference the Unit dictionary
+    expect(code).toContain("$default_Eq_Unit__SLASH_EQ");
+    expect(code).toContain("$dict_Eq_Unit._EQ_EQ");
+  });
+
+  test("handles polymorphic instance default implementations", () => {
+    // Polymorphic instances like `Eq (List a)` should pass dictionary parameters
+    const source = `
+module Test exposing (..)
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+    (==) : a -> a -> Bool
+    (/=) : a -> a -> Bool
+    (/=) x y = not (x == y)
+
+implement Eq a => Eq (List a) where
+    (==) xs ys = True
+
+not : Bool -> Bool
+not b = if b then False else True
+`;
+
+    const { code } = compileToJS(source);
+
+    // The default /= for List should receive a dictionary parameter
+    expect(code).toContain("$default_Eq_List");
+    // It should use the passed-in dictionary, not reference a concrete one
+    expect(code).toMatch(/\$default_Eq_List[^=]+=\s*\(\$dict_Eq\)/);
+  });
+});

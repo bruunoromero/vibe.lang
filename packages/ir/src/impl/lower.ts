@@ -343,6 +343,15 @@ export function lower(
           typeArgs: c.typeArgs.map((t) => convertType(t)),
         }));
 
+        // Add the self-constraint: the instance's own protocol with its type args.
+        // This is needed for default implementations to resolve protocol methods.
+        // E.g., for `implement Eq Int`, the default `/=` needs `Eq Int` constraint
+        // to resolve `==` to `$dict_Eq_Int._EQ_EQ`.
+        const selfConstraint: IRConstraint = {
+          protocolName: inst.protocolName,
+          typeArgs: inst.typeArgs.map((t) => convertType(t)),
+        };
+
         // Add superclass constraints from the protocol, substituted with instance type args
         // E.g., for `protocol Eq a => Ord a`, when implementing `Ord Int`,
         // we need to include `Eq Int` as a constraint for default implementations
@@ -375,8 +384,9 @@ export function lower(
           }
         }
 
-        // Combine instance constraints with superclass constraints
+        // Combine all constraints: self + instance constraints + superclass constraints
         const allConstraints = [
+          selfConstraint,
           ...instanceConstraints,
           ...superclassConstraints,
         ];
@@ -421,6 +431,15 @@ export function lower(
           typeArgs: c.typeArgs.map((t) => convertType(t)),
         }));
 
+        // Add the self-constraint: the instance's own protocol with its type args.
+        // This is needed for implementations to resolve protocol methods.
+        // E.g., for `implement Eq Int`, the methods need `Eq Int` constraint
+        // to resolve other Eq methods to `$dict_Eq_Int.*`.
+        const selfConstraint2: IRConstraint = {
+          protocolName: inst.protocolName,
+          typeArgs: inst.typeArgs.map((t) => convertType(t)),
+        };
+
         // Add superclass constraints from the protocol, substituted with instance type args
         const superclassConstraints2: IRConstraint[] = [];
         if (protocol?.superclassConstraints) {
@@ -447,7 +466,9 @@ export function lower(
           }
         }
 
+        // Combine all constraints: self + instance constraints + superclass constraints
         const allConstraints2 = [
+          selfConstraint2,
           ...instanceConstraints,
           ...superclassConstraints2,
         ];

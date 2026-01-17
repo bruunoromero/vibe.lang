@@ -49,8 +49,7 @@ export const composeBackward =
 /** Cons: prepend element to list */
 export const listCons =
   <A>(head: A) =>
-  (tail: A[]): A[] =>
-    [head, ...tail];
+  (tail: A[]): A[] => [head, ...tail];
 
 /** Append: concatenate two lists (exported as 'append' for prelude (++) operator) */
 export const listAppend =
@@ -189,6 +188,46 @@ export const intPow =
   (base: number) =>
   (exp: number): number =>
     floatPow(base)(exp) | 0;
+
+// =============================================================================
+// Generic Operations
+// =============================================================================
+
+export const deepEqual =
+  <A>(a: A) =>
+  (b: A): boolean => {
+    // Handle primitives and null/undefined
+    if (a === b) return true;
+
+    // Handle null/undefined cases
+    if (a == null || b == null) return false;
+
+    // Handle arrays
+    if (Array.isArray(a) && Array.isArray(b)) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (!deepEqual(a[i])(b[i])) return false;
+      }
+      return true;
+    }
+
+    // Handle objects
+    if (typeof a === "object" && typeof b === "object") {
+      const keysA = Object.keys(a);
+      const keysB = Object.keys(b);
+
+      if (keysA.length !== keysB.length) return false;
+
+      for (const key of keysA) {
+        if (!(key in b)) return false;
+        if (!deepEqual((a as any)[key])((b as any)[key])) return false;
+      }
+
+      return true;
+    }
+
+    return false;
+  };
 
 // =============================================================================
 // Debug / Development
