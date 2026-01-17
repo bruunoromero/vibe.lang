@@ -1,13 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import { parse } from "../src/index";
 
+/**
+ * Helper to parse test sources.
+ * Adds "module Test exposing (..)" if the source doesn't start with a module declaration.
+ */
+const parseTest = (source: string) => {
+  const trimmed = source.trim();
+  if (trimmed.startsWith("module ")) {
+    return parse(source);
+  }
+  return parse(`module Test exposing (..)\n${source}`);
+};
+
 describe("Protocol Declaration Parsing", () => {
   test("parses simple protocol with one method", () => {
     const source = `
 protocol Show a where
   show : a -> String
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -29,7 +41,7 @@ protocol Num a where
   minus : a -> a -> a
   times : a -> a -> a
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -53,7 +65,7 @@ protocol Num a where
 protocol Eq a => Ord a where
   compare : a -> a -> Int
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -72,7 +84,7 @@ protocol Eq a => Ord a where
 protocol (Eq a, Show a) => Printable a where
   printValue : a -> String
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -92,7 +104,7 @@ protocol (Eq a, Show a) => Printable a where
 protocol GlobalConfig where
   getConfig : String
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -112,7 +124,7 @@ protocol Convertible a b where
   convert : a -> b
   convertBack : b -> a
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -134,7 +146,7 @@ implement Num Int where
   minus = intMinus
   times = intTimes
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -157,7 +169,7 @@ implement Num Int where
 implement Show A where
   toString a = showA a
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -183,7 +195,7 @@ implement Num MyInt where
   minus a b = subMyInt a b
   times m n = mulMyInt m n
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -206,7 +218,7 @@ implement Eq MyType where
   (==) x y = eqMyType x y
   (/=) a b = not (a == b)
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -230,7 +242,7 @@ implement Eq MyType where
   (==) = eqMyType
   (/=) a b = not (a == b)
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -255,7 +267,7 @@ implement Eq MyType where
 implement Show (Pair a b) where
   toString (x, y) = "(" ++ show x ++ ", " ++ show y ++ ")"
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -276,7 +288,7 @@ implement Show (Pair a b) where
 implement Show a => Show (List a) where
   show = showList
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -294,7 +306,7 @@ implement Show a => Show (List a) where
 implement (Num a, Show a) => Show (Pair a a) where
   show = showPair
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -313,7 +325,7 @@ implement (Num a, Show a) => Show (Pair a a) where
 implement GlobalConfig where
   getConfig = "default"
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -333,7 +345,7 @@ implement Convertible Float Int where
   convert = floatToInt
   convertBack = intToFloat
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -367,7 +379,7 @@ protocol Eq a where
   neq : a -> a -> Bool
   neq x y = not (eq x y)
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -397,7 +409,7 @@ protocol Describable a where
   longDescription : a -> String
   longDescription x = describe x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -411,7 +423,7 @@ protocol Describable a where
       expect(decl.methods[0]?.name).toBe("describe");
       expect(decl.methods[0]?.defaultImpl).toBeDefined();
       expect(decl.methods[0]?.defaultImpl?.args[0]?.kind).toBe(
-        "WildcardPattern"
+        "WildcardPattern",
       );
 
       // longDescription has default referencing describe
@@ -427,7 +439,7 @@ protocol Eq a where
   (/=) : a -> a -> Bool
   (/=) x y = not (x == y)
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -453,7 +465,7 @@ protocol Helper a where
   show : a -> String
   debug x = "Debug: " ++ show x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -482,7 +494,7 @@ protocol Defaulted a where
   foo x = x
   bar x y = foo x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -519,7 +531,7 @@ describe("Type Declaration with implementing Parsing", () => {
 type Color = Red | Green | Blue
   implementing Show
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -536,7 +548,7 @@ type Color = Red | Green | Blue
 type Person = Person String Int
   implementing Show, Eq, Describable
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -552,7 +564,7 @@ type Person = Person String Int
     const source = `
 type Maybe a = Just a | Nothing
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(1);
 
     const decl = program.declarations[0];
@@ -571,7 +583,7 @@ describe("Qualified Type Parsing", () => {
 add : Num a => a -> a -> a
 add x y = x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(2);
 
     const annDecl = program.declarations[0];
@@ -593,7 +605,7 @@ add x y = x
 showSum : (Num a, Show a) => a -> a -> String
 showSum x y = "result"
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations).toHaveLength(2);
 
     const annDecl = program.declarations[0];

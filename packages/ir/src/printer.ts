@@ -49,16 +49,14 @@ const defaultOptions: Required<PrettyPrintOptions> = {
  */
 export function printProgram(
   program: IRProgram,
-  options: PrettyPrintOptions = {}
+  options: PrettyPrintOptions = {},
 ): string {
   const opts = { ...defaultOptions, ...options };
   const lines: string[] = [];
 
   // Module header
-  if (program.moduleName) {
-    lines.push(`module ${program.moduleName}`);
-    lines.push("");
-  }
+  lines.push(`module ${program.moduleName}`);
+  lines.push("");
 
   // External imports
   if (program.externalImports.size > 0) {
@@ -96,7 +94,7 @@ export function printProgram(
         const def = method.hasDefault ? " {default}" : "";
         if (opts.showTypes) {
           lines.push(
-            `${opts.indent}${method.name} : ${printType(method.type)}${def}`
+            `${opts.indent}${method.name} : ${printType(method.type)}${def}`,
           );
         } else {
           lines.push(`${opts.indent}${method.name}${def}`);
@@ -116,7 +114,7 @@ export function printProgram(
           ? `(${inst.constraints.map(printConstraint).join(", ")}) => `
           : "";
       lines.push(
-        `implement ${constraints}${inst.protocolName} ${typeArgs} where`
+        `implement ${constraints}${inst.protocolName} ${typeArgs} where`,
       );
       for (const [method, impl] of Object.entries(inst.methods)) {
         lines.push(`${opts.indent}${method} = ${impl}`);
@@ -157,7 +155,7 @@ export function printProgram(
  */
 export function printValue(
   value: IRValue,
-  options: PrettyPrintOptions = {}
+  options: PrettyPrintOptions = {},
 ): string {
   const opts = { ...defaultOptions, ...options };
   const lines: string[] = [];
@@ -176,7 +174,7 @@ export function printValue(
   // External marker
   if (value.isExternal && value.externalTarget) {
     lines.push(
-      `@external "${value.externalTarget.modulePath}" "${value.externalTarget.exportName}"`
+      `@external "${value.externalTarget.modulePath}" "${value.externalTarget.exportName}"`,
     );
   }
 
@@ -203,7 +201,7 @@ export function printValue(
 export function printExpr(
   expr: IRExpr,
   indent: string = "  ",
-  depth: number = 0
+  depth: number = 0,
 ): string {
   const ind = indent.repeat(depth);
   const ind1 = indent.repeat(depth + 1);
@@ -291,7 +289,7 @@ export function printExpr(
 
     case "IRRecord": {
       const fields = expr.fields.map(
-        (f) => `${f.name} = ${printExpr(f.value, indent, 0)}`
+        (f) => `${f.name} = ${printExpr(f.value, indent, 0)}`,
       );
       return `{ ${fields.join(", ")} }`;
     }
@@ -299,7 +297,7 @@ export function printExpr(
     case "IRRecordUpdate": {
       const base = printExpr(expr.base, indent, 0);
       const updates = expr.updates.map(
-        (f) => `${f.name} = ${printExpr(f.value, indent, 0)}`
+        (f) => `${f.name} = ${printExpr(f.value, indent, 0)}`,
       );
       return `{ ${base} | ${updates.join(", ")} }`;
     }

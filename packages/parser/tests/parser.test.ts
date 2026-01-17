@@ -6,6 +6,18 @@ import {
 } from "../src/index.ts";
 import type { ValueDeclaration } from "@vibe/syntax";
 
+/**
+ * Helper to parse test sources.
+ * Adds "module Test exposing (..)" if the source doesn't start with a module declaration.
+ */
+const parseTest = (source: string) => {
+  const trimmed = source.trim();
+  if (trimmed.startsWith("module ")) {
+    return parse(source);
+  }
+  return parse(`module Test exposing (..)\n${source}`);
+};
+
 describe("parser", () => {
   test("parses module headers, imports, and declarations", () => {
     const source = `module Main exposing (..)
@@ -22,7 +34,7 @@ main =
 custom x y = x <+> y
 `;
 
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(program.module?.name).toBe("Main");
     expect(program.module?.exposing?.kind).toBe("All");
@@ -35,7 +47,7 @@ custom x y = x <+> y
     const [mainType, mainValue, custom] = program.declarations as [
       any,
       ValueDeclaration,
-      ValueDeclaration
+      ValueDeclaration,
     ];
 
     expect(mainType.kind).toBe("TypeAnnotationDeclaration");
@@ -51,7 +63,7 @@ custom x y = x <+> y
   });
 
   test("allows custom operators in expressions", () => {
-    const program = parse("value = a <*> b");
+    const program = parseTest("value = a <*> b");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Infix");
     if (decl.body.kind === "Infix") {
@@ -60,7 +72,7 @@ custom x y = x <+> y
   });
 
   test("parses tuples, records, list ranges, and field access", () => {
-    const program = parse(`value = (1, 2, 3)
+    const program = parseTest(`value = (1, 2, 3)
 rec = { a = 1, b = 2 }
 up = { rec | b = 3 }
 xs = [1..10]
@@ -85,7 +97,8 @@ y = rec.b`);
   test("honors operator precedence and associativity", () => {
     // With infix declarations, operators have explicit precedence.
     // Without declarations, all operators use default precedence (5, left-assoc).
-    const source = `
+    const source = `module Test exposing (..)
+
 infixl 1 |>
 infixr 1 <|
 infixl 6 +
@@ -96,7 +109,7 @@ infixr 9 <<
 result = 1 + 2 * 3 ^ 2 |> f <| g << h`;
     const { program } = parseWithInfix(source);
     const decl = program.declarations.find(
-      (d) => d.kind === "ValueDeclaration" && d.name === "result"
+      (d) => d.kind === "ValueDeclaration" && d.name === "result",
     ) as ValueDeclaration;
     expect(decl).toBeDefined();
     expect(decl.body.kind).toBe("Infix");
@@ -107,14 +120,14 @@ result = 1 + 2 * 3 ^ 2 |> f <| g << h`;
   });
 
   test("supports operator declarations", () => {
-    const program = parse(
-      "(<+>) : number -> number -> number\n(<+>) a b = a + b"
+    const program = parseTest(
+      "(<+>) : number -> number -> number\n(<+>) a b = a + b",
     );
     expect(program.declarations.length).toBe(2);
   });
 
   test("parses external declarations", () => {
-    const program = parse(`@external "@scope/pkg/sub/path" "makeWidget"
+    const program = parseTest(`@external "@scope/pkg/sub/path" "makeWidget"
 widget : number -> number`);
 
     expect(program.declarations.length).toBe(1);
@@ -132,7 +145,7 @@ widget : number -> number`);
   });
 
   test("parses external with empty tuple type annotation", () => {
-    const program = parse(`@external "@vibe/runtime" "myList2"
+    const program = parseTest(`@external "@vibe/runtime" "myList2"
 myList2 : () -> MyList`);
 
     expect(program.declarations.length).toBe(1);
@@ -155,7 +168,7 @@ myList2 : () -> MyList`);
   });
 
   test("parses multiple externals in a module", () => {
-    const program = parse(`@external "@vibe/runtime" "myList"
+    const program = parseTest(`@external "@vibe/runtime" "myList"
 myList : Bool -> Bool -> Bool
 
 type MyList a
@@ -180,7 +193,7 @@ myList2 : () -> MyList`);
   });
 
   test("respects indentation for multi-line applications", () => {
-    const program = parse(`main =
+    const program = parseTest(`main =
   view model
   |> Html.map msg
 
@@ -194,7 +207,7 @@ next = 1`);
   });
 
   test("respects indentation for record fields and nested applications", () => {
-    const program = parse(`config =
+    const program = parseTest(`config =
   { a = 1
   , b = foo
       bar
@@ -213,7 +226,7 @@ next = 2`);
   });
 
   test("respects indentation inside tuples", () => {
-    const program = parse(`value =
+    const program = parseTest(`value =
   ( one
   , two
   )
@@ -226,7 +239,7 @@ next = 3`);
   });
 
   test("let bindings respect offside rule", () => {
-    const program = parse(`main =
+    const program = parseTest(`main =
   let
     a = 1
     b =
@@ -245,7 +258,7 @@ next = 4`);
   });
 
   test("case branches respect offside rule", () => {
-    const program = parse(`main =
+    const program = parseTest(`main =
   case x of
     Just a ->
       a
@@ -263,37 +276,43 @@ next = 5`);
 
   test("reports case branch misaligned to 'of' column", () => {
     expect(() =>
-      parse(`main =
+      parse(`module Test exposing (..)
+
+main =
   case x of
   Just a -> a
 
-next = 5`)
+next = 5`),
     ).toThrow("Case branches must be indented to at least column");
   });
 
   test("reports early dedent in let bindings", () => {
     expect(() =>
-      parse(`main =
+      parse(`module Test exposing (..)
+
+main =
   let
     a = 1
   b = 2
   in
-    a`)
+    a`),
     ).toThrow("Expected 'in' to close let");
   });
 
   test("requires case branches", () => {
     expect(() =>
-      parse(`main = case x of
+      parse(`module Test exposing (..)
 
-next = 6`)
+main = case x of
+
+next = 6`),
     ).toThrow("Case branches must be indented");
   });
 
   // ===== Algebraic Data Type (ADT) Declaration Tests =====
 
   test("parses simple ADT with nullary constructors", () => {
-    const program = parse(`type Bool = True | False`);
+    const program = parseTest(`type Bool = True | False`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeDeclaration");
@@ -309,7 +328,7 @@ next = 6`)
   });
 
   test("parses parameterized ADT (Maybe)", () => {
-    const program = parse(`type Maybe a = Just a | Nothing`);
+    const program = parseTest(`type Maybe a = Just a | Nothing`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeDeclaration");
@@ -330,7 +349,7 @@ next = 6`)
   });
 
   test("parses ADT with multiple type parameters (Result)", () => {
-    const program = parse(`type Result e v = Ok v | Err e`);
+    const program = parseTest(`type Result e v = Ok v | Err e`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeDeclaration");
@@ -350,7 +369,7 @@ next = 6`)
   });
 
   test("parses recursive ADT (List)", () => {
-    const program = parse(`type List a = Cons a (List a) | Nil`);
+    const program = parseTest(`type List a = Cons a (List a) | Nil`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeDeclaration");
@@ -370,7 +389,7 @@ next = 6`)
   });
 
   test("parses ADT with function type argument", () => {
-    const program = parse(`type Handler a = Handler (a -> a)`);
+    const program = parseTest(`type Handler a = Handler (a -> a)`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeDeclaration");
@@ -386,7 +405,7 @@ next = 6`)
   // ===== Type Alias Tests =====
 
   test("parses simple type alias", () => {
-    const program = parse(`type alias UserId = number`);
+    const program = parseTest(`type alias UserId = number`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -398,7 +417,7 @@ next = 6`)
   });
 
   test("parses parameterized type alias", () => {
-    const program = parse(`type alias Pair a b = (a, b)`);
+    const program = parseTest(`type alias Pair a b = (a, b)`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -410,7 +429,7 @@ next = 6`)
   });
 
   test("parses type alias with function type", () => {
-    const program = parse(`type alias Handler msg = msg -> Model -> Model`);
+    const program = parseTest(`type alias Handler msg = msg -> Model -> Model`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -422,7 +441,7 @@ next = 6`)
   });
 
   test("parses type alias with parameterized type", () => {
-    const program = parse(`type alias MaybeString = Maybe string`);
+    const program = parseTest(`type alias MaybeString = Maybe string`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -438,7 +457,7 @@ next = 6`)
   });
 
   test("parses multiple type declarations", () => {
-    const program = parse(`type Bool = True | False
+    const program = parseTest(`type Bool = True | False
 
 type Maybe a = Just a | Nothing
 
@@ -455,7 +474,7 @@ value = 42`);
   // ===== Record Type Annotation Tests =====
 
   test("parses type alias with record type", () => {
-    const program = parse(`type alias Point = { x : number, y : number }`);
+    const program = parseTest(`type alias Point = { x : number, y : number }`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -475,7 +494,7 @@ value = 42`);
   });
 
   test("parses empty record type", () => {
-    const program = parse(`type alias Empty = {}`);
+    const program = parseTest(`type alias Empty = {}`);
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -488,8 +507,8 @@ value = 42`);
   });
 
   test("parses record type with function fields", () => {
-    const program = parse(
-      `type alias Model = { count : number, increment : number -> number }`
+    const program = parseTest(
+      `type alias Model = { count : number, increment : number -> number }`,
     );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
@@ -507,7 +526,7 @@ value = 42`);
   });
 
   test("parses multiline record type", () => {
-    const program = parse(`type alias Person =
+    const program = parseTest(`type alias Person =
   { name : string
   , age : number
   , email : string
@@ -528,8 +547,8 @@ value = 42`);
   });
 
   test("parses parameterized record type", () => {
-    const program = parse(
-      `type alias Container a = { value : a, count : number }`
+    const program = parseTest(
+      `type alias Container a = { value : a, count : number }`,
     );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
@@ -550,7 +569,9 @@ value = 42`);
   });
 
   test("parses record type in function signature", () => {
-    const program = parse(`distance : { x : number, y : number } -> number`);
+    const program = parseTest(
+      `distance : { x : number, y : number } -> number`,
+    );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAnnotationDeclaration");
@@ -566,7 +587,9 @@ value = 42`);
   });
 
   test("parses nested record types", () => {
-    const program = parse(`type alias Nested = { outer : { inner : number } }`);
+    const program = parseTest(
+      `type alias Nested = { outer : { inner : number } }`,
+    );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -581,7 +604,9 @@ value = 42`);
   });
 
   test("parses record type alias with multiple type parameters", () => {
-    const program = parse(`type alias Pair a b = { first : a, second : b }`);
+    const program = parseTest(
+      `type alias Pair a b = { first : a, second : b }`,
+    );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("TypeAliasDeclaration");
@@ -607,8 +632,8 @@ value = 42`);
   });
 
   test("parses record type with parameterized field types", () => {
-    const program = parse(
-      `type alias ListContainer a = { items : List a, size : number }`
+    const program = parseTest(
+      `type alias ListContainer a = { items : List a, size : number }`,
     );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
@@ -631,8 +656,8 @@ value = 42`);
   });
 
   test("parses record type with nested record type parameter", () => {
-    const program = parse(
-      `type alias Response a = { data : a, metadata : { code : number, message : string } }`
+    const program = parseTest(
+      `type alias Response a = { data : a, metadata : { code : number, message : string } }`,
     );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
@@ -655,8 +680,8 @@ value = 42`);
   });
 
   test("parses record type with function type field using parameters", () => {
-    const program = parse(
-      `type alias Handler a = { process : a -> string, callback : string -> a }`
+    const program = parseTest(
+      `type alias Handler a = { process : a -> string, callback : string -> a }`,
     );
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
@@ -677,7 +702,7 @@ value = 42`);
   });
 
   test("parses multiline record type with multiple parameters", () => {
-    const program = parse(`type alias State a b =
+    const program = parseTest(`type alias State a b =
   { value : a
   , next : b
   , count : number
@@ -702,7 +727,7 @@ value = 42`);
 
 describe("infix declarations", () => {
   test("parses infixl declaration with bare operator", () => {
-    const program = parse("infixl 6 +");
+    const program = parseTest("infixl 6 +");
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("InfixDeclaration");
@@ -714,7 +739,7 @@ describe("infix declarations", () => {
   });
 
   test("parses infixr declaration with parenthesized operator", () => {
-    const program = parse("infixr 5 (++)");
+    const program = parseTest("infixr 5 (++)");
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("InfixDeclaration");
@@ -726,7 +751,7 @@ describe("infix declarations", () => {
   });
 
   test("parses infix (non-associative) declaration", () => {
-    const program = parse("infix 4 ==");
+    const program = parseTest("infix 4 ==");
     expect(program.declarations.length).toBe(1);
     const decl = program.declarations[0];
     expect(decl?.kind).toBe("InfixDeclaration");
@@ -742,11 +767,11 @@ describe("infix declarations", () => {
 infixl 6 -
 infixl 7 *
 infixr 5 ++`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations.length).toBe(4);
 
     const ops = program.declarations.map((d) =>
-      d.kind === "InfixDeclaration" ? d.operator : null
+      d.kind === "InfixDeclaration" ? d.operator : null,
     );
     expect(ops).toEqual(["+", "-", "*", "++"]);
   });
@@ -756,7 +781,7 @@ infixr 5 ++`;
 
 add : number -> number -> number
 add x y = x + y`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations.length).toBe(3);
     expect(program.declarations[0]?.kind).toBe("InfixDeclaration");
     expect(program.declarations[1]?.kind).toBe("TypeAnnotationDeclaration");
@@ -768,7 +793,7 @@ add x y = x + y`;
 
 (|>) : a -> (a -> b) -> b
 (|>) x f = f x`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations.length).toBe(3);
 
     const infixDecl = program.declarations[0];
@@ -836,7 +861,9 @@ foo x = x + 1`;
 
 describe("parseWithInfix", () => {
   test("parses with custom operator precedence", () => {
-    const source = `infixl 7 <*>
+    const source = `module Test exposing (..)
+
+infixl 7 <*>
 infixl 6 <+>
 
 result = a <+> b <*> c`;
@@ -855,7 +882,7 @@ result = a <+> b <*> c`;
 
     // With <*> at precedence 7 and <+> at 6, expression parses as: a <+> (b <*> c)
     const valueDecl = program.declarations.find(
-      (d) => d.kind === "ValueDeclaration"
+      (d) => d.kind === "ValueDeclaration",
     );
     expect(valueDecl?.kind).toBe("ValueDeclaration");
     if (valueDecl?.kind === "ValueDeclaration") {
@@ -878,7 +905,7 @@ describe("operator protocol methods", () => {
   (==) : a -> a -> bool
   (/=) : a -> a -> bool`;
 
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations.length).toBe(1);
 
     const protocol = program.declarations[0];
@@ -898,7 +925,7 @@ describe("operator protocol methods", () => {
   (-) : a -> a -> a
   negate : a -> a`;
 
-    const program = parse(source);
+    const program = parseTest(source);
     const protocol = program.declarations[0];
     expect(protocol?.kind).toBe("ProtocolDeclaration");
     if (protocol?.kind === "ProtocolDeclaration") {
@@ -914,7 +941,7 @@ describe("operator protocol methods", () => {
   (==) = intEq
   (/=) = intNeq`;
 
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.declarations.length).toBe(1);
 
     const impl = program.declarations[0];
@@ -931,27 +958,27 @@ describe("operator protocol methods", () => {
 describe("module export syntax", () => {
   test("parses exposing all (..)", () => {
     const source = `module Main exposing (..)`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("All");
   });
 
   test("parses simple value exports", () => {
     const source = `module Main exposing (foo, bar, baz)`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("Explicit");
     if (program.module?.exposing?.kind === "Explicit") {
       expect(program.module.exposing.exports.length).toBe(3);
       expect(program.module.exposing.exports[0]?.kind).toBe("ExportValue");
       expect(
         program.module.exposing.exports[0]?.kind === "ExportValue" &&
-          program.module.exposing.exports[0].name
+          program.module.exposing.exports[0].name,
       ).toBe("foo");
     }
   });
 
   test("parses operator exports", () => {
     const source = `module Main exposing ((++), (<$>), (|>))`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("Explicit");
     if (program.module?.exposing?.kind === "Explicit") {
       const exports = program.module.exposing.exports;
@@ -971,7 +998,7 @@ describe("module export syntax", () => {
 
   test("parses type export with all constructors", () => {
     const source = `module Main exposing (Maybe(..), Result(..))`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("Explicit");
     if (program.module?.exposing?.kind === "Explicit") {
       const exports = program.module.exposing.exports;
@@ -988,7 +1015,7 @@ describe("module export syntax", () => {
 
   test("parses type export with specific constructors", () => {
     const source = `module Main exposing (Result(Ok, Err), Bool(True, False))`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("Explicit");
     if (program.module?.exposing?.kind === "Explicit") {
       const exports = program.module.exposing.exports;
@@ -1007,7 +1034,7 @@ describe("module export syntax", () => {
 
   test("parses protocol export with all methods", () => {
     const source = `module Main exposing (Num(..), Eq(..))`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("Explicit");
     if (program.module?.exposing?.kind === "Explicit") {
       const exports = program.module.exposing.exports;
@@ -1020,7 +1047,7 @@ describe("module export syntax", () => {
 
   test("parses protocol export with specific methods", () => {
     const source = `module Main exposing (Num((+), (-)), Eq(eq, neq))`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("Explicit");
     if (program.module?.exposing?.kind === "Explicit") {
       const exports = program.module.exposing.exports;
@@ -1046,7 +1073,7 @@ describe("module export syntax", () => {
       , (++), (<|)
       , Functor(..)
       )`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.module?.exposing?.kind).toBe("Explicit");
     if (program.module?.exposing?.kind === "Explicit") {
       const exports = program.module.exposing.exports;
@@ -1083,7 +1110,7 @@ describe("module export syntax", () => {
 
   test("parses import with explicit export specs", () => {
     const source = `import Html exposing (div, span, text)`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.imports[0]?.exposing?.kind).toBe("Explicit");
     if (program.imports[0]?.exposing?.kind === "Explicit") {
       const exports = program.imports[0].exposing.exports;
@@ -1094,7 +1121,7 @@ describe("module export syntax", () => {
 
   test("parses import with type and constructor specs", () => {
     const source = `import Data.Maybe exposing (Maybe(..))`;
-    const program = parse(source);
+    const program = parseTest(source);
     expect(program.imports[0]?.exposing?.kind).toBe("Explicit");
     if (program.imports[0]?.exposing?.kind === "Explicit") {
       const exports = program.imports[0].exposing.exports;
@@ -1109,7 +1136,7 @@ describe("module export syntax", () => {
   // ===== Unary Negation Tests =====
 
   test("parses unary negation of variable", () => {
-    const program = parse("y = -x");
+    const program = parseTest("y = -x");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Unary");
     if (decl.body.kind === "Unary") {
@@ -1122,7 +1149,7 @@ describe("module export syntax", () => {
   });
 
   test("parses unary negation of number literal", () => {
-    const program = parse("y = -10");
+    const program = parseTest("y = -10");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Unary");
     if (decl.body.kind === "Unary") {
@@ -1135,7 +1162,7 @@ describe("module export syntax", () => {
   });
 
   test("parses unary negation of parenthesized expression", () => {
-    const program = parse("y = -(x + 1)");
+    const program = parseTest("y = -(x + 1)");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Unary");
     if (decl.body.kind === "Unary") {
@@ -1148,7 +1175,7 @@ describe("module export syntax", () => {
   });
 
   test("parses double negation with grouping", () => {
-    const program = parse("y = -(-10)");
+    const program = parseTest("y = -(-10)");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Unary");
     if (decl.body.kind === "Unary") {
@@ -1161,7 +1188,7 @@ describe("module export syntax", () => {
   });
 
   test("parses unary negation in binary expression", () => {
-    const program = parse("y = 5 + -x");
+    const program = parseTest("y = 5 + -x");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Infix");
     if (decl.body.kind === "Infix") {
@@ -1174,7 +1201,7 @@ describe("module export syntax", () => {
   });
 
   test("parses unary negation with higher precedence than binary", () => {
-    const program = parse("y = -x * 2");
+    const program = parseTest("y = -x * 2");
     const decl = program.declarations[0] as ValueDeclaration;
     // -x * 2 should parse as (-x) * 2
     expect(decl.body.kind).toBe("Infix");
@@ -1185,7 +1212,7 @@ describe("module export syntax", () => {
   });
 
   test("binary minus is not parsed as unary", () => {
-    const program = parse("y = x - 1");
+    const program = parseTest("y = x - 1");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Infix");
     if (decl.body.kind === "Infix") {
@@ -1196,7 +1223,7 @@ describe("module export syntax", () => {
   });
 
   test("parses negation of constructor", () => {
-    const program = parse("y = -SomeValue");
+    const program = parseTest("y = -SomeValue");
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Unary");
     if (decl.body.kind === "Unary") {

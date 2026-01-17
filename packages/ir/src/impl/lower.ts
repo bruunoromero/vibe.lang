@@ -31,6 +31,81 @@ import {
   validateTopologicalOrder,
 } from "../dependency";
 import { formatTypeKey, substituteProtocolMethods } from "../internal/helpers";
+import type { Type, Constraint } from "@vibe/semantics";
+
+/**
+ * Substitute type variables in a semantic Type based on protocol param names.
+ * Used to map protocol superclass constraint type args to instance type args.
+ *
+ * For example, given `protocol Eq a => Ord a` and `implement Ord Int`:
+ * - paramSubst maps "a" -> Int (as a Type)
+ * - substituteTypeArg({ kind: "var", ... }, paramSubst) should substitute any
+ *   type variables that came from the protocol param "a" with Int
+ *
+ * Note: This is tricky because semantic Types use numeric IDs, not string names.
+ * The superclassConstraints are created with types that reference the protocol's
+ * type parameter context. We need to match by finding which type vars correspond
+ * to which param names.
+ */
+function substituteTypeArg(typeArg: Type, paramSubst: Map<string, Type>): Type {
+  // For now, we handle the common case where the constraint's type arg is
+  // a type variable that corresponds to a protocol parameter.
+  // The superclassConstraints were built using the same shared type variable context
+  // as the protocol parameters, so we need to match by position/structure.
+
+  // If the type arg is directly a type variable, we substitute it if there's a match
+  // We use position-based matching since we don't have name info on type vars
+  if (typeArg.kind === "var") {
+    // Get the first value from paramSubst since single-param protocols are common
+    // For multi-param protocols, we'd need to track which position this var is
+    const values = Array.from(paramSubst.values());
+    if (values.length === 1) {
+      return values[0]!;
+    }
+    // For multi-param cases, return as-is (might need more sophisticated handling)
+    return typeArg;
+  }
+
+  // For type constructors, recursively substitute in args
+  if (typeArg.kind === "con") {
+    return {
+      kind: "con",
+      name: typeArg.name,
+      args: typeArg.args.map((arg) => substituteTypeArg(arg, paramSubst)),
+    };
+  }
+
+  // For function types, substitute in both parts
+  if (typeArg.kind === "fun") {
+    return {
+      kind: "fun",
+      from: substituteTypeArg(typeArg.from, paramSubst),
+      to: substituteTypeArg(typeArg.to, paramSubst),
+    };
+  }
+
+  // For tuple types, substitute in elements
+  if (typeArg.kind === "tuple") {
+    return {
+      kind: "tuple",
+      elements: typeArg.elements.map((el) => substituteTypeArg(el, paramSubst)),
+    };
+  }
+
+  // For record types, substitute in field types
+  if (typeArg.kind === "record") {
+    const newFields: Record<string, Type> = {};
+    for (const [key, val] of Object.entries(typeArg.fields)) {
+      newFields[key] = substituteTypeArg(val, paramSubst);
+    }
+    return {
+      kind: "record",
+      fields: newFields,
+    };
+  }
+
+  return typeArg;
+}
 
 /**
  * Options for IR lowering.
@@ -73,7 +148,7 @@ export interface LowerOptions {
 export function lower(
   program: Program,
   semantics: SemanticModule,
-  options: LowerOptions = {}
+  options: LowerOptions = {},
 ): IRProgram {
   const imports = program.imports || [];
   const dependencies =
@@ -247,7 +322,7 @@ export function lower(
         // Apply substitutions to the lambda expression before lowering
         const substitutedExpr = substituteProtocolMethods(
           methodExpr,
-          methodSubstitutions
+          methodSubstitutions,
         );
 
         // Lower the substituted lambda to IR
@@ -262,16 +337,56 @@ export function lower(
 
         // Create a synthetic IRValue for this default implementation
         // Pass instance constraints so the method can accept dictionary parameters
+        // Include both explicit instance constraints AND protocol superclass constraints
         const instanceConstraints = inst.constraints.map((c) => ({
           protocolName: c.protocolName,
           typeArgs: c.typeArgs.map((t) => convertType(t)),
         }));
+
+        // Add superclass constraints from the protocol, substituted with instance type args
+        // E.g., for `protocol Eq a => Ord a`, when implementing `Ord Int`,
+        // we need to include `Eq Int` as a constraint for default implementations
+        const superclassConstraints: IRConstraint[] = [];
+        if (protocol?.superclassConstraints) {
+          // Build a mapping from protocol params to instance type args
+          const paramSubst = new Map<string, import("@vibe/semantics").Type>();
+          for (let i = 0; i < protocol.params.length; i++) {
+            const param = protocol.params[i];
+            const instTypeArg = inst.typeArgs[i];
+            if (param && instTypeArg) {
+              paramSubst.set(param, instTypeArg);
+            }
+          }
+
+          for (const superConstraint of protocol.superclassConstraints) {
+            // Substitute the type args with the instance's type args
+            const substitutedTypeArgs = superConstraint.typeArgs.map(
+              (typeArg) => {
+                // If the type arg is a type variable matching a protocol param,
+                // substitute it with the corresponding instance type arg
+                const substituted = substituteTypeArg(typeArg, paramSubst);
+                return convertType(substituted);
+              },
+            );
+            superclassConstraints.push({
+              protocolName: superConstraint.protocolName,
+              typeArgs: substitutedTypeArgs,
+            });
+          }
+        }
+
+        // Combine instance constraints with superclass constraints
+        const allConstraints = [
+          ...instanceConstraints,
+          ...superclassConstraints,
+        ];
+
         const syntheticValue: IRValue = {
           name: syntheticName,
           params: [], // Lambda is in the body
           body: irLambda,
           type: methodType,
-          constraints: instanceConstraints,
+          constraints: allConstraints,
           isExternal: false,
           span: methodExpr.span,
         };
@@ -300,16 +415,49 @@ export function lower(
 
         // Create a synthetic IRValue for this implementation
         // Pass instance constraints so the method can accept dictionary parameters
+        // Include both explicit instance constraints AND protocol superclass constraints
         const instanceConstraints = inst.constraints.map((c) => ({
           protocolName: c.protocolName,
           typeArgs: c.typeArgs.map((t) => convertType(t)),
         }));
+
+        // Add superclass constraints from the protocol, substituted with instance type args
+        const superclassConstraints2: IRConstraint[] = [];
+        if (protocol?.superclassConstraints) {
+          const paramSubst = new Map<string, Type>();
+          for (let i = 0; i < protocol.params.length; i++) {
+            const param = protocol.params[i];
+            const instTypeArg = inst.typeArgs[i];
+            if (param && instTypeArg) {
+              paramSubst.set(param, instTypeArg);
+            }
+          }
+
+          for (const superConstraint of protocol.superclassConstraints) {
+            const substitutedTypeArgs = superConstraint.typeArgs.map(
+              (typeArg) => {
+                const substituted = substituteTypeArg(typeArg, paramSubst);
+                return convertType(substituted);
+              },
+            );
+            superclassConstraints2.push({
+              protocolName: superConstraint.protocolName,
+              typeArgs: substitutedTypeArgs,
+            });
+          }
+        }
+
+        const allConstraints2 = [
+          ...instanceConstraints,
+          ...superclassConstraints2,
+        ];
+
         const syntheticValue: IRValue = {
           name: syntheticName,
           params: [],
           body: irExpr,
           type: methodType,
-          constraints: instanceConstraints,
+          constraints: allConstraints2,
           isExternal: false,
           span: methodExpr.span,
         };
@@ -359,8 +507,13 @@ export function lower(
     });
   }
 
+  // Package name comes from options, or defaults to first segment of module name
+  const packageName: string =
+    options.packageName ?? semantics.module.name.split(".")[0]!;
+
   return {
-    moduleName: semantics.module?.name,
+    moduleName: semantics.module.name,
+    packageName,
     values,
     dependencyOrder: sccs,
     liftedBindings: ctx.liftedBindings,
@@ -374,7 +527,6 @@ export function lower(
     importAliases,
     sourceModule: semantics,
     sourceProgram: program,
-    packageName: options.packageName,
     exports: semantics.exports,
   };
 }

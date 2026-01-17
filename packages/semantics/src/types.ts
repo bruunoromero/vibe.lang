@@ -303,14 +303,14 @@ export type ExportInfo = {
  * - opaqueTypes: Opaque type declarations (for JS interop)
  * - protocols: Protocol (type class) definitions
  * - instances: Instance implementations
- * - module: Module declaration (if any)
+ * - module: Module declaration (always present)
  * - imports: Import declarations
  * - exports: Computed export information
  */
 export type SemanticModule = {
   values: Record<string, ValueInfo>;
   annotations: Record<string, import("@vibe/syntax").TypeAnnotationDeclaration>;
-  module?: ModuleDeclaration;
+  module: ModuleDeclaration;
   imports: ImportDeclaration[];
   types: Record<string, Type>;
   /** Type schemes with constraints for each value (for dictionary-passing) */
@@ -340,6 +340,19 @@ export type SemanticModule = {
 export interface AnalyzeOptions {
   /** Pre-analyzed dependency modules to merge into scope */
   dependencies?: Map<string, SemanticModule>;
+
+  /**
+   * File path context for module declaration validation.
+   * When provided, the semantic analyzer validates that:
+   * 1. The file has a module declaration
+   * 2. The declared module name matches the expected name derived from the file path
+   */
+  fileContext?: {
+    /** Absolute path to the source file being analyzed */
+    filePath: string;
+    /** Absolute path to the src directory (from vibe.json) */
+    srcDir: string;
+  };
 }
 
 /**

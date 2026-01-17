@@ -190,11 +190,15 @@ protocol Eq a where
     Typically, implementing `compare` is sufficient, but we expose
     individual operators for flexibility.
 -}
-protocol Ord a where
+protocol Eq a => Ord a where
     (<) : a -> a -> Bool
-    (<=) : a -> a -> Bool
     (>) : a -> a -> Bool
+
+    (<=) : a -> a -> Bool
+    (<=) x y = x < y || x == y
+
     (>=) : a -> a -> Bool
+    (>=) x y = x > y || x == y
 
 protocol Appendable a where
     (++) : a -> a -> a
@@ -333,17 +337,27 @@ implement Eq Int where
 implement Eq Float where
     (==) = Float.eq
 
+implement Eq Bool where
+    (==) = Bool.eq
+
+implement Eq Unit where
+    (==) _ _ = True
+
 implement Ord Int where
     (<) = Int.lt
-    (<=) = Int.lte
     (>) = Int.gt
-    (>=) = Int.gte
 
 implement Ord Float where
     (<) = Float.lt
-    (<=) = Float.lte
     (>) = Float.gt
-    (>=) = Float.gte
+
+implement Eq a => Eq (List a) where
+    (==) xs ys =
+        case (xs, ys) of
+            ([], []) -> True
+            (x :: xtail, y :: ytail) ->
+                x == y && xtail == ytail
+            _ -> False
 
 implement Appendable (List a) where
     (++) = List.append

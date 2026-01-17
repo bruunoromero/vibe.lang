@@ -535,7 +535,8 @@ export type ModuleDeclaration = {
 };
 
 export type Program = {
-  module?: ModuleDeclaration;
+  /** Every Vibe file must have a module declaration as the first statement */
+  module: ModuleDeclaration;
   imports: ImportDeclaration[];
   declarations: Declaration[];
 };

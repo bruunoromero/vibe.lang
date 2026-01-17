@@ -2,6 +2,16 @@ import { describe, expect, test } from "bun:test";
 import { parse } from "@vibe/parser";
 import { analyze, SemanticError } from "../src/index";
 
+/**
+ * Helper to parse test source with module declaration.
+ */
+function parseTest(source: string) {
+  const fullSource = source.trim().startsWith("module ")
+    ? source
+    : `module Test exposing (..)\n\n${source}`;
+  return parse(fullSource);
+}
+
 describe("Protocol Registration", () => {
   test("registers protocol with methods", () => {
     const source = `
@@ -9,7 +19,7 @@ protocol Num a where
   plus : a -> a -> a
   minus : a -> a -> a
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.protocols.Num).toBeDefined();
@@ -28,7 +38,7 @@ protocol Show a where
 protocol Show a where
   display : a -> String
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("Duplicate protocol");
@@ -39,8 +49,8 @@ protocol Show a where
 protocol Empty a where
 `;
     // The parser will reject this with "Expected at least one method signature"
-    expect(() => parse(source)).toThrow(
-      "Expected at least one method signature"
+    expect(() => parseTest(source)).toThrow(
+      "Expected at least one method signature",
     );
   });
 
@@ -50,7 +60,7 @@ protocol Bad a where
   foo : a -> a
   foo : a -> String
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("Duplicate method");
@@ -69,7 +79,7 @@ intPlus : Int -> Int -> Int
 implement Num Int where
   plus = intPlus
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -84,11 +94,11 @@ protocol Num a where
 implement Num Int where
   plus = undefinedFunction
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow(
-      "Undefined name 'undefinedFunction'"
+      "Undefined name 'undefinedFunction'",
     );
   });
 
@@ -100,7 +110,7 @@ module Vibe.Int exposing (add)
 @external "@vibe/runtime" "intAdd"
 add : Int -> Int -> Int
 `;
-    const intProgram = parse(intModuleSource);
+    const intProgram = parseTest(intModuleSource);
     const intModule = analyze(intProgram);
 
     // Create the main module that imports and uses the function
@@ -113,7 +123,7 @@ protocol Num a where
 implement Num Int where
   (+) = Int.add
 `;
-    const mainProgram = parse(mainSource);
+    const mainProgram = parseTest(mainSource);
     const dependencies = new Map([["Vibe.Int", intModule]]);
 
     // Should succeed since Int.add exists and is exported
@@ -129,7 +139,7 @@ module Vibe.Int exposing (sub)
 @external "@vibe/runtime" "intSub"
 sub : Int -> Int -> Int
 `;
-    const intProgram = parse(intModuleSource);
+    const intProgram = parseTest(intModuleSource);
     const intModule = analyze(intProgram);
 
     // Create the main module that tries to use a non-existent function
@@ -142,12 +152,12 @@ protocol Num a where
 implement Num Int where
   (+) = Int.add
 `;
-    const mainProgram = parse(mainSource);
+    const mainProgram = parseTest(mainSource);
     const dependencies = new Map([["Vibe.Int", intModule]]);
 
     expect(() => analyze(mainProgram, { dependencies })).toThrow(SemanticError);
     expect(() => analyze(mainProgram, { dependencies })).toThrow(
-      "'add' is not defined in module 'Vibe.Int'"
+      "'add' is not defined in module 'Vibe.Int'",
     );
   });
 
@@ -162,7 +172,7 @@ add : Int -> Int -> Int
 @external "@vibe/runtime" "intSub"
 sub : Int -> Int -> Int
 `;
-    const intProgram = parse(intModuleSource);
+    const intProgram = parseTest(intModuleSource);
     const intModule = analyze(intProgram);
 
     // Create the main module that tries to use the non-exported function
@@ -175,12 +185,12 @@ protocol Num a where
 implement Num Int where
   (+) = Int.add
 `;
-    const mainProgram = parse(mainSource);
+    const mainProgram = parseTest(mainSource);
     const dependencies = new Map([["Vibe.Int", intModule]]);
 
     expect(() => analyze(mainProgram, { dependencies })).toThrow(SemanticError);
     expect(() => analyze(mainProgram, { dependencies })).toThrow(
-      "'add' is not exported from module 'Vibe.Int'"
+      "'add' is not exported from module 'Vibe.Int'",
     );
   });
 
@@ -189,7 +199,7 @@ implement Num Int where
 implement NonExistent Int where
   foo = bar
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("Unknown protocol");
@@ -207,7 +217,7 @@ intPlus : Int -> Int -> Int
 implement Num Int where
   plus = intPlus
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("missing implementation for method");
@@ -228,7 +238,7 @@ implement Num Int where
   plus = intPlus
   extra = extraImpl
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("not part of protocol");
@@ -251,7 +261,7 @@ implement Num Int where
 implement Num Int where
   plus = intPlus2
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("Overlapping implementation");
@@ -274,7 +284,7 @@ implement Num Int where
 implement Num Float where
   plus = floatPlus
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(2);
@@ -299,7 +309,7 @@ implement Eq a => MyProtocol a where
 implement MyProtocol (List a) where
   method _ = False
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Both implementations should be allowed since List a doesn't satisfy Eq
@@ -334,7 +344,7 @@ implement Eq a => MyProtocol a where
 implement MyProtocol Int where
   method = intMethod
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("Overlapping implementation");
@@ -362,7 +372,7 @@ showMethod : a -> Bool
 implement Eq a => MyProtocol a where
   method = eqMethod
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Single constrained implementation should work
@@ -390,7 +400,7 @@ implement Ord a => Sortable a where
 implement Sortable (List a) where
   sort = noSort
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Both should be allowed: List a doesn't automatically have Ord
@@ -410,7 +420,7 @@ showList : List a -> String
 implement Show a => Show (List a) where
   show = showList
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -434,7 +444,7 @@ showPair : Pair a a -> String
 implement (Num a, Show a) => Show (Pair a a) where
   show = showPair
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -451,7 +461,7 @@ module Dep exposing (..)
 protocol Num a where
   plus : a -> a -> a
 `;
-    const depProgram = parse(depSource);
+    const depProgram = parseTest(depSource);
     const depModule = analyze(depProgram);
 
     // Create a module that imports the dependency
@@ -464,7 +474,7 @@ intPlus : Int -> Int -> Int
 implement Num Int where
   plus = intPlus
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program, {
       dependencies: new Map([["Dep", depModule]]),
     });
@@ -486,7 +496,7 @@ protocol Eq a where
   neq : a -> a -> Bool
   neq x y = not (eq x y)
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.protocols.Eq).toBeDefined();
@@ -515,7 +525,7 @@ intEqual : Int -> Int -> Bool
 implement Eq Int where
   eq = intEqual
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -545,7 +555,7 @@ implement Eq Int where
   eq = intEqual
   neq = intNotEqual
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -568,7 +578,7 @@ intNotEqual : Int -> Int -> Bool
 implement Eq Int where
   neq = intNotEqual
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     // Should error because eq has no default and isn't implemented
     expect(() => analyze(program)).toThrow(SemanticError);
@@ -583,7 +593,7 @@ protocol Describable a where
   longDescription : a -> String
   longDescription x = describe x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.protocols.Describable).toBeDefined();
@@ -621,7 +631,7 @@ showInt : Int -> String
 implement Describable Int where
   describe = showInt
 `;
-    const program = parse(source2);
+    const program = parseTest(source2);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -640,7 +650,7 @@ protocol Describable a where
 type Color = Red | Green | Blue
   implementing Describable
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Should have created a synthetic implementation
@@ -657,7 +667,7 @@ protocol Show a where
 type Color = Red | Green | Blue
   implementing Show
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow("Cannot use 'implementing'");
     expect(() => analyze(program)).toThrow("Missing defaults for: show");
@@ -676,7 +686,7 @@ protocol Tagged a where
 type Color = Red | Green | Blue
   implementing Describable, Tagged
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Should have two synthetic implementations
@@ -690,7 +700,7 @@ type Color = Red | Green | Blue
 type Color = Red | Green | Blue
   implementing NonExistent
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("Unknown protocol");
@@ -706,7 +716,7 @@ protocol Eq a where
 type Color = Red | Green | Blue
   implementing Eq
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     try {
       analyze(program);
@@ -733,7 +743,7 @@ type Color = Red | Green | Blue
 implement Describable Color where
   describe = showColor
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow("Overlapping implementation");
   });
@@ -753,7 +763,7 @@ showInt : Int -> String
 implement Show Int where
   show = showInt
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -776,7 +786,7 @@ protocol Describable a where
 type Color = Red | Green | Blue
   implementing Describable
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -809,7 +819,7 @@ implement Eq Int where
   eq = intEqual
   allEqual = customAllEqual
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -834,7 +844,7 @@ type Foo = Foo
 type Bar = Bar
   implementing Default
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(2);
@@ -849,7 +859,7 @@ protocol Helper a where
   show : a -> String
   debug x = show x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.protocols.Helper).toBeDefined();
@@ -870,7 +880,7 @@ protocol Defaulted a where
   foo x = x
   bar x y = foo x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.protocols.Defaulted).toBeDefined();
@@ -895,7 +905,7 @@ intToString : Int -> String
 implement Showable Int where
   show = intToString
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.instances).toHaveLength(1);
@@ -913,7 +923,7 @@ protocol Num a where
 
 add x y = plus x y
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // The function 'add' uses 'plus' which is a protocol method
@@ -933,7 +943,7 @@ implement Num Int where
 
 addOne x = x + 1
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Using + operator should collect Num constraint
@@ -949,7 +959,7 @@ protocol Num a where
 add x y = plus x y
 double x = add x x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Both 'add' and 'double' should have Num constraints
@@ -957,7 +967,7 @@ double x = add x x
     expect(result.typeSchemes.double).toBeDefined();
     // Since double calls add, and add requires Num, double should have Num constraint
     expect(
-      result.typeSchemes.add?.constraints.some((c) => c.protocolName === "Num")
+      result.typeSchemes.add?.constraints.some((c) => c.protocolName === "Num"),
     ).toBe(true);
   });
 
@@ -976,7 +986,7 @@ implement Num Int where
 concreteAdd : Int -> Int -> Int
 concreteAdd x y = plus x y
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // With concrete types, the constraint should be resolved
@@ -992,7 +1002,7 @@ protocol Eq a where
 
 isEqual x y = eq x y
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // typeSchemes should be populated
@@ -1012,14 +1022,14 @@ protocol Num a where
 add : Num a => a -> a -> a
 add x y = plus x y
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // The constraint from the annotation should be included in the type scheme
     expect(result.typeSchemes.add).toBeDefined();
     expect(result.typeSchemes.add?.constraints.length).toBeGreaterThan(0);
     expect(
-      result.typeSchemes.add?.constraints.some((c) => c.protocolName === "Num")
+      result.typeSchemes.add?.constraints.some((c) => c.protocolName === "Num"),
     ).toBe(true);
   });
 
@@ -1034,7 +1044,7 @@ protocol Eq a where
 addIfEq : (Num a, Eq a) => a -> a -> a -> a
 addIfEq x y z = plus x y
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     expect(result.typeSchemes.addIfEq).toBeDefined();
@@ -1048,7 +1058,7 @@ addIfEq x y z = plus x y
 foo : Unknown a => a -> a
 foo x = x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("Unknown protocol 'Unknown'");
@@ -1062,7 +1072,7 @@ protocol Num a where
 foo : Num a b => a -> a
 foo x = x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("expects 1 type argument");
@@ -1076,7 +1086,7 @@ protocol Num a where
 foo : Num Int => Int -> Int
 foo x = x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("must be applied to type variables");
@@ -1090,7 +1100,7 @@ protocol Show a where
 display : Show a => a -> String
 display x = show x
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Check that annotated constraints are stored
@@ -1098,7 +1108,7 @@ display x = show x
     expect(result.values.display?.annotatedConstraints).toBeDefined();
     expect(result.values.display?.annotatedConstraints?.length).toBe(1);
     expect(result.values.display?.annotatedConstraints?.[0]?.protocolName).toBe(
-      "Show"
+      "Show",
     );
   });
 
@@ -1114,7 +1124,7 @@ protocol Eq a where
 compute : (Num a, Eq a) => a -> a -> a
 compute x y = plus x y
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Both Num (from inference) and Eq (from annotation) should be in the scheme
@@ -1131,7 +1141,7 @@ protocol Num a where
 @external "math" "jsAdd"
 jsAdd : Num a => a -> a -> a
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // External declaration should have the constraint from annotation
@@ -1139,7 +1149,7 @@ jsAdd : Num a => a -> a -> a
     expect(result.values.jsAdd?.annotatedConstraints).toBeDefined();
     expect(result.values.jsAdd?.annotatedConstraints?.length).toBe(1);
     expect(result.values.jsAdd?.annotatedConstraints?.[0]?.protocolName).toBe(
-      "Num"
+      "Num",
     );
   });
 
@@ -1152,13 +1162,13 @@ protocol Num a where
 add : Num a => a -> a -> a
 add x y = plus x y
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // Should only have one Num constraint, not duplicates
     const numConstraints =
       result.typeSchemes.add?.constraints.filter(
-        (c) => c.protocolName === "Num"
+        (c) => c.protocolName === "Num",
       ) ?? [];
     expect(numConstraints.length).toBe(1);
   });
@@ -1183,7 +1193,7 @@ implement Appendable (List a) where
 implement Appendable b => Convert Int b where
   convert _ = []
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     // Should not throw - List is Appendable
     const result = analyze(program);
     expect(result.instances.length).toBe(2);
@@ -1203,7 +1213,7 @@ protocol Convert a b where
 implement Appendable b => Convert Float b where
   convert _ = 10
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow(/Appendable/);
@@ -1222,7 +1232,7 @@ protocol Transform a b where
 implement Eq a => Transform a Int where
   transform x = 42
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     // Should pass - transform takes an Eq a and returns Int
     const result = analyze(program);
     expect(result.instances.length).toBe(1);
@@ -1243,7 +1253,7 @@ implement Appendable (List a) where
 implement Appendable b => Convert String b where
   convert _ = []
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
     expect(result.instances.length).toBe(2);
   });
@@ -1260,7 +1270,7 @@ protocol Convert a b where
 implement Appendable b => Convert Int b where
   convert _ = "hello"
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow(/Appendable/);
@@ -1281,7 +1291,7 @@ implement Show (List a) where
 implement Show b => Wrap Int b where
   wrap _ = []
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
     expect(result.instances.length).toBe(2);
   });
@@ -1308,13 +1318,13 @@ implement Appendable a => ExampleProtocol3 Float a where
 
 main = convert3 10.0
 `;
-    const program = parse(source);
+    const program = parseTest(source);
     const result = analyze(program);
 
     // The instance for ExampleProtocol3 should have typeArgs [Float, List Int]
     // after concretization, not [Float, a] with Appendable a constraint
     const ep3Instance = result.instances.find(
-      (i) => i.protocolName === "ExampleProtocol3"
+      (i) => i.protocolName === "ExampleProtocol3",
     );
     expect(ep3Instance).toBeDefined();
     expect(ep3Instance!.typeArgs.length).toBe(2);
@@ -1362,7 +1372,7 @@ implement Appendable a => ExampleProtocol3 Float a where
 
 main = convert3 10.0 []
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     // The error should be a type mismatch, not a missing instance error
@@ -1380,7 +1390,7 @@ type MyType = MyType
 -- No Show instance for MyType
 main = show MyType
 `;
-    const program = parse(source);
+    const program = parseTest(source);
 
     expect(() => analyze(program)).toThrow(SemanticError);
     expect(() => analyze(program)).toThrow("No instance of");

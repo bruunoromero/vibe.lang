@@ -56,7 +56,10 @@ export { BUILTIN_OPERATOR_REGISTRY } from "./operator-registry";
  * Error thrown during parsing when unexpected syntax is encountered
  */
 export class ParseError extends Error {
-  constructor(message: string, public readonly span: Span) {
+  constructor(
+    message: string,
+    public readonly span: Span,
+  ) {
     super(message);
   }
 }
@@ -72,7 +75,7 @@ export class ParseError extends Error {
  */
 export function parse(
   source: string,
-  operatorRegistry?: OperatorRegistry
+  operatorRegistry?: OperatorRegistry,
 ): Program {
   // Step 1: Tokenize the source code
   const tokens = lex(source);
@@ -145,7 +148,7 @@ class Parser {
 
   constructor(
     private readonly tokens: Token[],
-    operatorRegistry?: OperatorRegistry
+    operatorRegistry?: OperatorRegistry,
   ) {
     // Start with builtin operators (&&, ||) and merge any provided registry on top
     this.operatorRegistry = operatorRegistry
@@ -170,15 +173,21 @@ class Parser {
   }
 
   /**
-   * Parse complete program: optional module header, imports, and declarations
+   * Parse complete program: module header (required), imports, and declarations
    *
-   * Grammar: Program = [ModuleDeclaration], {ImportDeclaration}, {Declaration}
+   * Grammar: Program = ModuleDeclaration, {ImportDeclaration}, {Declaration}
    */
   parseProgram(): Program {
-    // Parse optional module declaration (e.g., "module Main exposing (..)")
-    const module = this.peekKeyword("module")
-      ? this.parseModuleDeclaration()
-      : undefined;
+    // Parse module declaration (required - every Vibe file must start with one)
+    if (!this.peekKeyword("module")) {
+      const currentToken = this.current();
+      throw new ParseError(
+        `Every Vibe file must begin with a module declaration.\n` +
+          `Expected: module <ModuleName> exposing (..)`,
+        currentToken.span,
+      );
+    }
+    const module = this.parseModuleDeclaration();
 
     // Parse all import declarations
     const imports: ImportDeclaration[] = [];
@@ -254,8 +263,8 @@ class Parser {
     const last = exposing
       ? exposing.span.end
       : alias
-      ? this.previousSpan().end
-      : moduleEnd;
+        ? this.previousSpan().end
+        : moduleEnd;
     return {
       moduleName,
       alias,
@@ -339,7 +348,7 @@ class Parser {
 
       const end = this.expect(
         TokenKind.RParen,
-        "closing paren for operator export"
+        "closing paren for operator export",
       ).span.end;
 
       return { kind: "ExportOperator", operator, span: { start, end } };
@@ -369,7 +378,7 @@ class Parser {
         if (this.match(TokenKind.Range)) {
           const end = this.expect(
             TokenKind.RParen,
-            "closing paren for type/protocol export"
+            "closing paren for type/protocol export",
           ).span.end;
           return { kind: "ExportTypeAll", name, span: { start, end } };
         }
@@ -387,7 +396,7 @@ class Parser {
             this.advance(); // consume (
             const opToken = this.expect(
               TokenKind.Operator,
-              "operator in member list"
+              "operator in member list",
             );
             members.push(opToken.lexeme);
             this.expect(TokenKind.RParen, "closing paren for operator member");
@@ -400,7 +409,7 @@ class Parser {
           } else {
             throw new ParseError(
               `Expected constructor name, method name, or operator in export list, got ${memberCurrent.kind}`,
-              memberCurrent.span
+              memberCurrent.span,
             );
           }
 
@@ -413,7 +422,7 @@ class Parser {
 
         const end = this.expect(
           TokenKind.RParen,
-          "closing paren for type/protocol export"
+          "closing paren for type/protocol export",
         ).span.end;
         return { kind: "ExportTypeSome", name, members, span: { start, end } };
       }
@@ -425,7 +434,7 @@ class Parser {
 
     throw new ParseError(
       `Expected export specification, got ${current.kind}`,
-      current.span
+      current.span,
     );
   }
 
@@ -567,7 +576,7 @@ class Parser {
         "Record types must use 'type alias' syntax: type alias " +
           name +
           " = { ... }",
-        { start: typeToken.span.start, end: this.current().span.end }
+        { start: typeToken.span.start, end: this.current().span.end },
       );
     }
 
@@ -592,7 +601,7 @@ class Parser {
       // Parse comma-separated list of protocol names
       const protocolName = this.expect(
         TokenKind.UpperIdentifier,
-        "protocol name after 'implementing'"
+        "protocol name after 'implementing'",
       );
       implementing.push(protocolName.lexeme);
       endSpan = protocolName.span.end;
@@ -600,7 +609,7 @@ class Parser {
       while (this.match(TokenKind.Comma)) {
         const nextProtocol = this.expect(
           TokenKind.UpperIdentifier,
-          "protocol name"
+          "protocol name",
         );
         implementing.push(nextProtocol.lexeme);
         endSpan = nextProtocol.span.end;
@@ -637,7 +646,7 @@ class Parser {
     // Parse constructor name (must be uppercase)
     const nameToken = this.expect(
       TokenKind.UpperIdentifier,
-      "constructor name"
+      "constructor name",
     );
     const name = nameToken.lexeme;
 
@@ -782,7 +791,7 @@ class Parser {
     if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
       throw new ParseError(
         "Expected at least one method signature in protocol",
-        this.currentSpan()
+        this.currentSpan(),
       );
     }
 
@@ -809,7 +818,7 @@ class Parser {
         // Operator method: (==), (+), etc.
         const opToken = this.expect(
           TokenKind.Operator,
-          "operator in protocol method"
+          "operator in protocol method",
         );
         methodName = opToken.lexeme;
         this.expect(TokenKind.RParen, "close paren after operator");
@@ -904,7 +913,7 @@ class Parser {
       } else {
         throw new ParseError(
           `Protocol method '${methodName}' must have either a type annotation or a default implementation`,
-          this.currentSpan()
+          this.currentSpan(),
         );
       }
 
@@ -984,7 +993,7 @@ class Parser {
     // Parse protocol name
     const protocolNameToken = this.expect(
       TokenKind.UpperIdentifier,
-      "protocol name in implementation"
+      "protocol name in implementation",
     );
     const protocolName = protocolNameToken.lexeme;
 
@@ -1007,7 +1016,7 @@ class Parser {
     if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
       throw new ParseError(
         "Expected at least one method implementation in implementation",
-        this.currentSpan()
+        this.currentSpan(),
       );
     }
 
@@ -1081,7 +1090,7 @@ class Parser {
     ) {
       throw new ParseError(
         "Expected 'infix', 'infixl', or 'infixr'",
-        this.currentSpan()
+        this.currentSpan(),
       );
     }
     const fixity = fixityToken.lexeme as "infix" | "infixl" | "infixr";
@@ -1094,7 +1103,7 @@ class Parser {
     if (precedence < 0 || precedence > 9) {
       throw new ParseError(
         `Precedence must be between 0 and 9, got ${precedence}`,
-        precedenceToken.span
+        precedenceToken.span,
       );
     }
 
@@ -1116,7 +1125,7 @@ class Parser {
     } else {
       throw new ParseError(
         "Expected operator after precedence in infix declaration",
-        this.currentSpan()
+        this.currentSpan(),
       );
     }
 
@@ -1138,7 +1147,7 @@ class Parser {
     // Parse protocol name
     const protocolToken = this.expect(
       TokenKind.UpperIdentifier,
-      "protocol name in constraint"
+      "protocol name in constraint",
     );
     const protocolName = protocolToken.lexeme;
 
@@ -1151,7 +1160,7 @@ class Parser {
     if (typeArgs.length === 0) {
       throw new ParseError(
         "Expected at least one type argument in constraint",
-        this.currentSpan()
+        this.currentSpan(),
       );
     }
 
@@ -1374,7 +1383,7 @@ class Parser {
       // Parse first field
       const firstName = this.expect(
         TokenKind.LowerIdentifier,
-        "record field name"
+        "record field name",
       );
       this.expect(TokenKind.Colon, "':' after field name");
       const firstType = this.parseTypeExpression();
@@ -1391,7 +1400,7 @@ class Parser {
 
         const fieldName = this.expect(
           TokenKind.LowerIdentifier,
-          "record field name"
+          "record field name",
         );
         this.expect(TokenKind.Colon, "':' after field name");
         const fieldType = this.parseTypeExpression();
@@ -1507,7 +1516,7 @@ class Parser {
       // Parse first field
       const firstName = this.expect(
         TokenKind.LowerIdentifier,
-        "record field name"
+        "record field name",
       );
       this.expect(TokenKind.Colon, "':' after field name");
       const firstType = this.parseTypeExpression();
@@ -1524,7 +1533,7 @@ class Parser {
 
         const fieldName = this.expect(
           TokenKind.LowerIdentifier,
-          "record field name"
+          "record field name",
         );
         this.expect(TokenKind.Colon, "':' after field name");
         const fieldType = this.parseTypeExpression();
@@ -1781,7 +1790,7 @@ class Parser {
    */
   private parseBinaryExpression(
     minPrecedence: number,
-    baseIndentFloor?: number
+    baseIndentFloor?: number,
   ): Expr {
     // Parse left operand (a unary expression, which may be an application)
     let left = this.parseUnary(baseIndentFloor);
@@ -1799,7 +1808,7 @@ class Parser {
 
       // Get precedence and associativity for this operator
       const { precedence, associativity } = this.getOperatorInfo(
-        operatorToken.lexeme
+        operatorToken.lexeme,
       );
 
       // Stop if precedence too low
@@ -2106,12 +2115,12 @@ class Parser {
 
       const head = this.expect(
         TokenKind.LowerIdentifier,
-        "record field or base"
+        "record field or base",
       );
       if (this.match(TokenKind.Pipe)) {
         const fields = this.parseRecordFields(
           undefined,
-          head.span.start.column
+          head.span.start.column,
         );
         this.expect(TokenKind.RBrace, "close record update");
         return {
@@ -2136,7 +2145,7 @@ class Parser {
 
   private parseRecordFields(
     firstFieldToken?: Token,
-    providedBaseIndent?: number
+    providedBaseIndent?: number,
   ): RecordField[] {
     const fields: RecordField[] = [];
 
@@ -2164,7 +2173,7 @@ class Parser {
       this.advance();
       currentFieldToken = this.expect(
         TokenKind.LowerIdentifier,
-        "record field name"
+        "record field name",
       );
     }
 
@@ -2240,7 +2249,7 @@ class Parser {
     if (exitedLayoutEarly) {
       throw new ParseError(
         `Expected 'in' to close let at column ${layoutIndent} or beyond`,
-        this.current().span
+        this.current().span,
       );
     }
 
@@ -2302,7 +2311,7 @@ class Parser {
           } relative to 'of'), but found column ${
             firstAfterOf.span.start.column
           }`,
-          firstAfterOf.span
+          firstAfterOf.span,
         );
       }
 
@@ -2321,7 +2330,7 @@ class Parser {
             `Case branch must be indented to at least column ${layoutIndent} (or column ${
               ofColumn + 1
             } relative to 'of'), but found column ${next.span.start.column}`,
-            next.span
+            next.span,
           );
         }
 
@@ -2367,7 +2376,7 @@ class Parser {
     while (this.match(TokenKind.Dot)) {
       const next = this.expect(
         TokenKind.UpperIdentifier,
-        "module name segment"
+        "module name segment",
       );
       parts.push(next.lexeme);
       end = next.span.end;
@@ -2422,7 +2431,7 @@ class Parser {
     const atToken = this.expectOperator("@");
     const externalToken = this.expect(
       TokenKind.LowerIdentifier,
-      "external tag"
+      "external tag",
     );
     if (externalToken.lexeme !== "external") {
       throw this.error("external tag", externalToken);
@@ -2685,7 +2694,7 @@ class Parser {
       // First field
       const fieldName = this.expect(
         TokenKind.LowerIdentifier,
-        "record field name"
+        "record field name",
       );
       let fieldPattern: Pattern | undefined;
 
@@ -2702,7 +2711,7 @@ class Parser {
 
         const nextFieldName = this.expect(
           TokenKind.LowerIdentifier,
-          "record field name"
+          "record field name",
         );
         let nextFieldPattern: Pattern | undefined;
 
@@ -2729,7 +2738,7 @@ class Parser {
         `List patterns are not allowed in function parameters. ` +
           `Use a case expression in the function body instead: ` +
           `\`fn x = case x of [a, b] -> ...\``,
-        token.span
+        token.span,
       );
     }
 
@@ -2761,7 +2770,7 @@ class Parser {
         `Constructor patterns are not allowed in function parameters. ` +
           `Use a case expression in the function body instead: ` +
           `\`fn x = case x of ${token.lexeme} ... -> ...\``,
-        token.span
+        token.span,
       );
     }
     if (token.kind === TokenKind.LParen) {
@@ -2769,7 +2778,7 @@ class Parser {
         `Tuple patterns are not allowed in function parameters. ` +
           `Use a case expression in the function body instead: ` +
           `\`fn x = case x of (a, b) -> ...\``,
-        token.span
+        token.span,
       );
     }
     if (token.kind === TokenKind.LBracket) {
@@ -2777,7 +2786,7 @@ class Parser {
         `List patterns are not allowed in function parameters. ` +
           `Use a case expression in the function body instead: ` +
           `\`fn x = case x of [a, b] -> ...\``,
-        token.span
+        token.span,
       );
     }
 
@@ -2940,7 +2949,7 @@ class Parser {
   private continuesLayout(
     baseIndent: number,
     lastEnd: Span["end"],
-    next: Token
+    next: Token,
   ): boolean {
     // Same line always continues
     if (next.span.start.line === lastEnd.line) return true;
@@ -2955,7 +2964,7 @@ class Parser {
   private error(label: string, token: Token): ParseError {
     return new ParseError(
       `Expected ${label} but found ${token.kind} '${token.lexeme}'`,
-      token.span
+      token.span,
     );
   }
 }

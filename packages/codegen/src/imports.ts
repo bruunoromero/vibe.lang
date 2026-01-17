@@ -17,7 +17,7 @@ export type ExternalBindingsMap = Map<string, Map<string, string>>;
  * Generate import statements for external (FFI) modules.
  */
 export function generateExternalImports(
-  externalBindings: ExternalBindingsMap
+  externalBindings: ExternalBindingsMap,
 ): string[] {
   const lines: string[] = [];
 
@@ -27,7 +27,7 @@ export function generateExternalImports(
       // e.g., "intAdd as add" when Vibe name differs from runtime name
       const importSpecifiers: string[] = [];
       const sortedEntries = Array.from(bindings.entries()).sort(([a], [b]) =>
-        a.localeCompare(b)
+        a.localeCompare(b),
       );
 
       for (const [vibeName, runtimeName] of sortedEntries) {
@@ -42,7 +42,7 @@ export function generateExternalImports(
       }
 
       lines.push(
-        `import { ${importSpecifiers.join(", ")} } from "${modulePath}";`
+        `import { ${importSpecifiers.join(", ")} } from "${modulePath}";`,
       );
     }
   }
@@ -64,14 +64,14 @@ export function generateExternalImports(
  */
 export function generateDependencyImports(
   program: IRProgram,
-  modulePackages: Map<string, string>
+  modulePackages: Map<string, string>,
 ): string[] {
   const lines: string[] = [];
 
   // Get imports from source program
   const imports = program.sourceProgram.imports || [];
-  const currentModule = program.moduleName || "Main";
-  const currentPackage = program.packageName || currentModule;
+  const currentModule = program.moduleName;
+  const currentPackage = program.packageName;
   const importedModules = new Set<string>();
 
   // Calculate the depth of the current module within its package
@@ -90,7 +90,7 @@ export function generateDependencyImports(
       currentPackage,
       currentDepth,
       importedPackage,
-      moduleName
+      moduleName,
     );
 
     if (imp.exposing?.kind === "All") {
@@ -147,7 +147,7 @@ export function calculateImportPath(
   currentPackage: string,
   currentDepth: number,
   importedPackage: string,
-  importedModule: string
+  importedModule: string,
 ): string {
   // Convert module name to path segments
   const moduleSegments = importedModule.split(".");
@@ -178,10 +178,10 @@ export function calculateImportPath(
  */
 export function calculateReExportPath(
   program: IRProgram,
-  targetModule: string
+  targetModule: string,
 ): string {
-  const currentModule = program.moduleName || "Main";
-  const currentPackage = program.packageName || currentModule;
+  const currentModule = program.moduleName;
+  const currentPackage = program.packageName;
 
   // Calculate the depth of the current module within its package
   const currentDepth = currentModule.split(".").length - 1;

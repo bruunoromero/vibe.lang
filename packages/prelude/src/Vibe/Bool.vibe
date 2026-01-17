@@ -1,6 +1,7 @@
 module Vibe.Bool exposing
   ( toString
   , not
+  , eq
   )
 
 toString : Bool -> String
@@ -11,3 +12,9 @@ toString x =
 
 @external "@vibe/runtime" "not"
 not : Bool -> Bool
+
+eq x y =
+  case (x, y) of
+    (True, True) -> True
+    (False, False) -> True
+    _ -> False

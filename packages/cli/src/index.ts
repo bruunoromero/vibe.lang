@@ -20,7 +20,7 @@ import { generate, writeModule, type GeneratedModule } from "@vibe/codegen";
  * to properly handle operator precedence across modules.
  */
 function createDiscoverOptions(
-  overrides: Partial<DiscoverOptions> = {}
+  overrides: Partial<DiscoverOptions> = {},
 ): DiscoverOptions {
   return {
     collectInfixDeclarations,
@@ -62,7 +62,7 @@ let isHandled = false;
 
 export async function run(
   args: string[],
-  options: CliOptions = {}
+  options: CliOptions = {},
 ): Promise<number> {
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
@@ -77,7 +77,7 @@ export async function run(
     .option(
       "-p, --pretty <n>",
       "Pretty-print JSON output with <n> spaces",
-      "2"
+      "2",
     );
 
   program
@@ -115,11 +115,11 @@ export async function run(
     .action(
       (
         module: string | undefined,
-        opts: CommandOptions & { json?: boolean }
+        opts: CommandOptions & { json?: boolean },
       ) => {
         isHandled = true;
         handleCommand("ir", module, { ...opts, cwd, stdout, stderr });
-      }
+      },
     );
 
   program
@@ -148,7 +148,7 @@ function handleCommand(
     stdout: NodeJS.WritableStream;
     stderr: NodeJS.WritableStream;
     json?: boolean;
-  }
+  },
 ): void {
   const {
     cwd,
@@ -181,7 +181,7 @@ function handleCommand(
         pretty: prettySpaces,
         json,
       },
-      { cwd, stdout, stderr }
+      { cwd, stdout, stderr },
     );
   } else {
     exitCode = executeCommand(
@@ -192,14 +192,14 @@ function handleCommand(
         pretty: prettySpaces,
         json,
       } as ExecuteCommandOptions,
-      { cwd, stdout, stderr }
+      { cwd, stdout, stderr },
     );
   }
 }
 
 function executeCommand(
   opts: ExecuteCommandOptions,
-  exec: ExecuteOptions
+  exec: ExecuteOptions,
 ): number {
   const { command, moduleName, configPath, pretty, json } = opts;
   const { cwd, stdout, stderr } = exec;
@@ -231,7 +231,7 @@ function executeCommand(
       const moduleGraph = discoverModuleGraph(
         config,
         moduleName,
-        createDiscoverOptions()
+        createDiscoverOptions(),
       );
       const moduleNode = moduleGraph.modules.get(moduleName);
       if (!moduleNode) {
@@ -246,7 +246,7 @@ function executeCommand(
       const moduleGraph = discoverModuleGraph(
         config,
         moduleName,
-        createDiscoverOptions()
+        createDiscoverOptions(),
       );
 
       // Analyze modules in topological order
@@ -258,9 +258,13 @@ function executeCommand(
           throw new Error(`Module "${currentModuleName}" not found in graph`);
         }
 
-        // Analyze with pre-analyzed dependencies
+        // Analyze with pre-analyzed dependencies and file context for module validation
         const semantic = analyze(moduleNode.ast, {
           dependencies: analyzedModules,
+          fileContext: {
+            filePath: moduleNode.filePath,
+            srcDir: moduleNode.srcDir,
+          },
         });
 
         analyzedModules.set(currentModuleName, semantic);
@@ -322,6 +326,10 @@ function executeCommand(
 
         const semantic = analyze(moduleNode.ast, {
           dependencies: analyzedModules,
+          fileContext: {
+            filePath: moduleNode.filePath,
+            srcDir: moduleNode.srcDir,
+          },
         });
 
         analyzedModules.set(currentModuleName, semantic);
@@ -368,7 +376,7 @@ function executeCommand(
       }
 
       stdout.write(
-        `\n✅ Build complete: ${generatedFiles.length} module(s) compiled to ${distDir}\n`
+        `\n✅ Build complete: ${generatedFiles.length} module(s) compiled to ${distDir}\n`,
       );
       return 0;
     }
@@ -384,7 +392,7 @@ function formatAndWriteError(
   error: unknown,
   filePath: string,
   source: string,
-  stderr: NodeJS.WritableStream
+  stderr: NodeJS.WritableStream,
 ): void {
   if (
     error instanceof ParseError ||
@@ -396,7 +404,7 @@ function formatAndWriteError(
     const line = lines[span.start.line - 1] || "";
 
     stderr.write(
-      `${filePath}:${span.start.line}:${span.start.column}: error: ${message}\n`
+      `${filePath}:${span.start.line}:${span.start.column}: error: ${message}\n`,
     );
     stderr.write(`${line}\n`);
 
@@ -436,7 +444,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
 
       if (eventType === "change") {
         stderr.write(
-          `\n📝 ${new Date().toLocaleTimeString()} - File changed\n`
+          `\n📝 ${new Date().toLocaleTimeString()} - File changed\n`,
         );
 
         try {
@@ -447,7 +455,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
             const moduleGraph = discoverModuleGraph(
               config,
               opts.moduleName,
-              createDiscoverOptions()
+              createDiscoverOptions(),
             );
             const analyzedModules = new Map<string, SemanticModule>();
 
@@ -455,12 +463,16 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
               const moduleNode = moduleGraph.modules.get(currentModuleName);
               if (!moduleNode) {
                 throw new Error(
-                  `Module "${currentModuleName}" not found in graph`
+                  `Module "${currentModuleName}" not found in graph`,
                 );
               }
 
               const semantic = analyze(moduleNode.ast, {
                 dependencies: analyzedModules,
+                fileContext: {
+                  filePath: moduleNode.filePath,
+                  srcDir: moduleNode.srcDir,
+                },
               });
 
               analyzedModules.set(currentModuleName, semantic);
@@ -472,7 +484,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
             const moduleGraph = discoverModuleGraph(
               config,
               opts.moduleName,
-              createDiscoverOptions()
+              createDiscoverOptions(),
             );
             const moduleNode = moduleGraph.modules.get(opts.moduleName);
             if (moduleNode) {
@@ -499,7 +511,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
         const moduleGraph = discoverModuleGraph(
           config,
           opts.moduleName,
-          createDiscoverOptions()
+          createDiscoverOptions(),
         );
         const analyzedModules = new Map<string, SemanticModule>();
 
@@ -511,6 +523,10 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
 
           const semantic = analyze(moduleNode.ast, {
             dependencies: analyzedModules,
+            fileContext: {
+              filePath: moduleNode.filePath,
+              srcDir: moduleNode.srcDir,
+            },
           });
 
           analyzedModules.set(currentModuleName, semantic);
@@ -522,7 +538,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
         const moduleGraph = discoverModuleGraph(
           config,
           opts.moduleName,
-          createDiscoverOptions()
+          createDiscoverOptions(),
         );
         const moduleNode = moduleGraph.modules.get(opts.moduleName);
         if (moduleNode) {

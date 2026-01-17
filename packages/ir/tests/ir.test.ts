@@ -35,7 +35,11 @@ import {
  * Parse and analyze a Vibe source string, returning the IR.
  */
 function compileToIR(source: string): IRProgram {
-  const ast = parse(source);
+  // Prepend module declaration if not present
+  const fullSource = source.trim().startsWith("module ")
+    ? source
+    : `module Test exposing (..)\n\n${source}`;
+  const ast = parse(fullSource);
   const semantics = analyze(ast, { injectPrelude: false });
   return lower(ast, semantics);
 }
@@ -71,7 +75,7 @@ function stringifyExpr(expr: IRExpr): string {
         .join(" ")})`;
     case "IRIf":
       return `(if ${stringifyExpr(expr.condition)} then ${stringifyExpr(
-        expr.thenBranch
+        expr.thenBranch,
       )} else ${stringifyExpr(expr.elseBranch)})`;
     case "IRCase":
       return `(case ${stringifyExpr(expr.discriminant)} of ...)`;
@@ -261,7 +265,7 @@ moveX p =
     // Record updates can be either IRRecord (if type known) or IRRecordUpdate (if type unknown)
     // Currently, parameter types aren't tracked through to IR lowering, so we get IRRecordUpdate
     expect(
-      value.body.kind === "IRRecord" || value.body.kind === "IRRecordUpdate"
+      value.body.kind === "IRRecord" || value.body.kind === "IRRecordUpdate",
     ).toBe(true);
   });
 
@@ -354,10 +358,10 @@ a = 1
 
     // a should come before b in dependency order
     const aIndex = ir.dependencyOrder.findIndex((scc) =>
-      scc.values.includes("a")
+      scc.values.includes("a"),
     );
     const bIndex = ir.dependencyOrder.findIndex((scc) =>
-      scc.values.includes("b")
+      scc.values.includes("b"),
     );
     expect(aIndex).toBeLessThan(bIndex);
   });
@@ -371,7 +375,7 @@ g x = f x
 
     // f and g should be in the same SCC
     const fgScc = ir.dependencyOrder.find(
-      (scc) => scc.values.includes("f") && scc.values.includes("g")
+      (scc) => scc.values.includes("f") && scc.values.includes("g"),
     );
     expect(fgScc).toBeDefined();
     expect(fgScc!.isMutuallyRecursive).toBe(true);
@@ -421,7 +425,7 @@ h x = f x
       (s) =>
         s.values.includes("f") &&
         s.values.includes("g") &&
-        s.values.includes("h")
+        s.values.includes("h"),
     );
     expect(scc).toBeDefined();
     expect(scc!.isMutuallyRecursive).toBe(true);
@@ -804,5 +808,149 @@ concat : String -> String -> String
 
     expect(ir.externalImports.has("./math")).toBe(true);
     expect(ir.externalImports.has("./strings")).toBe(true);
+  });
+});
+
+// ============================================================================
+// Protocol Superclass Constraint Tests
+// ============================================================================
+
+describe("Protocol superclass constraints", () => {
+  test("protocol superclass constraints are included in IR", () => {
+    const source = `
+protocol Eq a where
+    (==) : a -> a -> Bool
+
+protocol Eq a => Ord a where
+    (<) : a -> a -> Bool
+`;
+    const ir = compileToIR(source);
+
+    // Ord should have Eq as a superclass constraint
+    const ordProtocol = ir.protocols["Ord"];
+    expect(ordProtocol).toBeDefined();
+    expect(ordProtocol?.superclassConstraints.length).toBe(1);
+    expect(ordProtocol?.superclassConstraints[0]?.protocolName).toBe("Eq");
+  });
+
+  test("default implementations inherit superclass constraints", () => {
+    // This test verifies the fix for the bug where default implementations
+    // using superclass methods (like `==` from Eq in Ord's `<=` default)
+    // would fail because the superclass constraints weren't propagated.
+    const source = `
+protocol Eq a where
+    (==) : a -> a -> Bool
+
+@external "./int" "intEq"
+intEq : Int -> Int -> Bool
+
+implement Eq Int where
+    (==) = intEq
+
+protocol Eq a => Ord a where
+    (<) : a -> a -> Bool
+
+    (<=) : a -> a -> Bool
+    (<=) x y = x < y || x == y
+
+@external "./int" "intLt"
+intLt : Int -> Int -> Bool
+
+implement Ord Int where
+    (<) = intLt
+`;
+    const ir = compileToIR(source);
+
+    // The synthetic default implementation for `<=` should exist
+    // and have the Eq constraint from the protocol's superclass
+    const leqSynthetic = ir.syntheticDefaultImpls.find(
+      (v) => v.name.includes("_LEQ") || v.name.includes("_LTE"),
+    );
+
+    // If the fix works, we should have a synthetic default impl
+    // The exact name format may vary, but it should exist
+    const hasDefaultImpl = ir.syntheticDefaultImpls.some(
+      (v) =>
+        v.name.includes("Ord") &&
+        v.name.includes("Int") &&
+        (v.name.includes("_LTE") ||
+          v.name.includes("_LEQ") ||
+          v.name.includes("_LT_EQ")),
+    );
+
+    expect(hasDefaultImpl).toBe(true);
+
+    // The synthetic impl should have Eq Int as a constraint (from superclass)
+    const defaultImpl = ir.syntheticDefaultImpls.find(
+      (v) =>
+        v.name.includes("Ord") &&
+        v.name.includes("Int") &&
+        (v.name.includes("_LTE") ||
+          v.name.includes("_LEQ") ||
+          v.name.includes("_LT_EQ")),
+    );
+
+    if (defaultImpl) {
+      // Should have Eq constraint from superclass
+      const hasEqConstraint = defaultImpl.constraints.some(
+        (c) => c.protocolName === "Eq",
+      );
+      expect(hasEqConstraint).toBe(true);
+    }
+  });
+
+  test("concrete instance default impl has concrete superclass constraint", () => {
+    // When implementing Ord for a concrete type like Int,
+    // the superclass constraint Eq a becomes Eq Int
+    const source = `
+protocol Eq a where
+    (==) : a -> a -> Bool
+
+@external "./int" "intEq"
+intEq : Int -> Int -> Bool
+
+implement Eq Int where
+    (==) = intEq
+
+protocol Eq a => Ord a where
+    (<) : a -> a -> Bool
+    (<=) : a -> a -> Bool
+    (<=) x y = x < y || x == y
+
+@external "./int" "intLt"
+intLt : Int -> Int -> Bool
+
+implement Ord Int where
+    (<) = intLt
+`;
+    const ir = compileToIR(source);
+
+    // Find the default impl for <=
+    const defaultImpl = ir.syntheticDefaultImpls.find(
+      (v) =>
+        v.name.includes("Ord") &&
+        v.name.includes("Int") &&
+        (v.name.includes("_LTE") ||
+          v.name.includes("_LEQ") ||
+          v.name.includes("_LT_EQ")),
+    );
+
+    expect(defaultImpl).toBeDefined();
+
+    if (defaultImpl) {
+      // The Eq constraint should be present
+      const eqConstraint = defaultImpl.constraints.find(
+        (c) => c.protocolName === "Eq",
+      );
+      expect(eqConstraint).toBeDefined();
+
+      // And it should be for Int (a concrete type), not a type variable
+      if (eqConstraint && eqConstraint.typeArgs[0]) {
+        expect(eqConstraint.typeArgs[0].kind).toBe("con");
+        if (eqConstraint.typeArgs[0].kind === "con") {
+          expect(eqConstraint.typeArgs[0].name).toBe("Int");
+        }
+      }
+    }
   });
 });

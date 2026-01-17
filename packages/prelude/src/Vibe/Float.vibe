@@ -8,9 +8,7 @@ module Vibe.Float exposing
   , eq
   , neq
   , lt
-  , lte
   , gt
-  , gte
   )
 
 @external "@vibe/runtime" "floatAdd"
@@ -37,14 +35,8 @@ neq: Float -> Float -> Bool
 @external "@vibe/runtime" "numLt"
 lt: Float -> Float -> Bool
 
-@external "@vibe/runtime" "numLte"
-lte: Float -> Float -> Bool
-
 @external "@vibe/runtime" "numGt"
 gt: Float -> Float -> Bool
-
-@external "@vibe/runtime" "numGte"
-gte: Float -> Float -> Bool
 
 negate: Float -> Float
 negate x = -x

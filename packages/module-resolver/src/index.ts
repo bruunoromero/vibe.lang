@@ -17,6 +17,8 @@ export interface ResolvedModule {
   moduleName: string;
   packageName: string;
   filePath: string;
+  /** The source directory this module was resolved from (for module declaration validation) */
+  srcDir: string;
 }
 
 /**
@@ -27,6 +29,8 @@ export interface ModuleNode {
   moduleName: string;
   packageName: string;
   filePath: string;
+  /** The source directory this module was resolved from (for module declaration validation) */
+  srcDir: string;
   source: string;
   ast: Program;
   /** Module names this module imports */
@@ -49,10 +53,15 @@ export function resolveModule(input: ResolveModuleInput): ResolvedModule {
   const { config, moduleName, preferDist = false } = input;
   const relativePath = moduleNameToRelativePath(moduleName);
 
-  const candidates: Array<{ packageName: string; baseDir: string }> = [
+  const candidates: Array<{
+    packageName: string;
+    baseDir: string;
+    srcDir: string;
+  }> = [
     {
       packageName: config.name,
       baseDir: preferDist ? config.distDir : config.srcDir,
+      srcDir: config.srcDir,
     },
   ];
 
@@ -78,6 +87,7 @@ export function resolveModule(input: ResolveModuleInput): ResolvedModule {
     candidates.push({
       packageName: vibePackageName,
       baseDir: preferDist ? pkgDistDir : pkgSrcDir,
+      srcDir: pkgSrcDir,
     });
   }
 
@@ -88,6 +98,7 @@ export function resolveModule(input: ResolveModuleInput): ResolvedModule {
         moduleName,
         packageName: candidate.packageName,
         filePath: fullPath,
+        srcDir: candidate.srcDir,
       };
     }
   }
@@ -104,7 +115,7 @@ export function moduleNameToRelativePath(moduleName: string): string {
   for (const segment of segments) {
     if (!/^[A-Z][A-Za-z0-9_]*$/.test(segment)) {
       throw new Error(
-        `Invalid module segment "${segment}" in module name "${moduleName}"`
+        `Invalid module segment "${segment}" in module name "${moduleName}"`,
       );
     }
   }
@@ -126,7 +137,7 @@ function resolvePackageRoot(pkgName: string, startDir: string): string | null {
   const workspaceRoot = findWorkspaceRoot(startDir);
   if (workspaceRoot) {
     const folderName = pkgName.includes("/")
-      ? pkgName.split("/").at(-1) ?? pkgName
+      ? (pkgName.split("/").at(-1) ?? pkgName)
       : pkgName;
     const candidate = path.join(workspaceRoot, "packages", folderName);
     if (fs.existsSync(path.join(candidate, "package.json"))) {
@@ -148,7 +159,7 @@ function findWorkspaceRoot(startDir: string): string | null {
 
 function findUpward(
   startDir: string,
-  matcher: (dir: string) => string | null
+  matcher: (dir: string) => string | null,
 ): string | null {
   let dir = path.resolve(startDir);
   while (true) {
@@ -181,7 +192,7 @@ export interface DiscoverOptions {
    */
   parseFunction: (
     source: string,
-    operatorRegistry?: OperatorRegistry
+    operatorRegistry?: OperatorRegistry,
   ) => Program;
 
   /**
@@ -229,7 +240,7 @@ export function mergeOperatorRegistries(
 export function discoverModuleGraph(
   config: ResolvedVibeConfig,
   entryModuleName: string,
-  options: DiscoverOptions
+  options: DiscoverOptions,
 ): ModuleGraph;
 
 /**
@@ -239,14 +250,14 @@ export function discoverModuleGraph(
   config: ResolvedVibeConfig,
   entryModuleName: string,
   parseFunction: (source: string) => Program,
-  preferDist?: boolean
+  preferDist?: boolean,
 ): ModuleGraph;
 
 export function discoverModuleGraph(
   config: ResolvedVibeConfig,
   entryModuleName: string,
   optionsOrParseFunction: DiscoverOptions | ((source: string) => Program),
-  preferDistArg = false
+  preferDistArg = false,
 ): ModuleGraph {
   // Handle both old and new API signatures
   let options: DiscoverOptions;
@@ -278,6 +289,7 @@ export function discoverModuleGraph(
     moduleName: string;
     packageName: string;
     filePath: string;
+    srcDir: string;
     source: string;
     dependencies: Set<string>;
     operatorRegistry: OperatorRegistry;
@@ -294,8 +306,8 @@ export function discoverModuleGraph(
     if (visiting.has(moduleName)) {
       throw new Error(
         `Circular dependency detected: ${[...visiting, moduleName].join(
-          " -> "
-        )}`
+          " -> ",
+        )}`,
       );
     }
 
@@ -327,6 +339,7 @@ export function discoverModuleGraph(
       moduleName,
       packageName: resolved.packageName,
       filePath: resolved.filePath,
+      srcDir: resolved.srcDir,
       source,
       dependencies,
       operatorRegistry,
@@ -363,7 +376,7 @@ export function discoverModuleGraph(
     // Combined registry: dependencies first, then module's own (can override)
     const combinedRegistry = mergeOperatorRegistries(
       ...dependencyRegistries,
-      preliminary.operatorRegistry
+      preliminary.operatorRegistry,
     );
 
     // Re-parse with combined operator registry for correct precedence
@@ -373,6 +386,7 @@ export function discoverModuleGraph(
       moduleName: preliminary.moduleName,
       packageName: preliminary.packageName,
       filePath: preliminary.filePath,
+      srcDir: preliminary.srcDir,
       source: preliminary.source,
       ast,
       dependencies: preliminary.dependencies,
@@ -390,7 +404,7 @@ export function discoverModuleGraph(
  * Helper for topological sort on preliminary modules
  */
 function topologicalSortPreliminary(
-  modules: Map<string, { moduleName: string; dependencies: Set<string> }>
+  modules: Map<string, { moduleName: string; dependencies: Set<string> }>,
 ): string[] {
   const sorted: string[] = [];
   const visited = new Set<string>();
@@ -470,7 +484,7 @@ export function discoverSourceModules(srcDir: string): string[] {
  */
 export function discoverAllModules(
   config: ResolvedVibeConfig,
-  options: DiscoverOptions
+  options: DiscoverOptions,
 ): ModuleGraph;
 
 /**
@@ -478,12 +492,12 @@ export function discoverAllModules(
  */
 export function discoverAllModules(
   config: ResolvedVibeConfig,
-  parseFunction: (source: string) => Program
+  parseFunction: (source: string) => Program,
 ): ModuleGraph;
 
 export function discoverAllModules(
   config: ResolvedVibeConfig,
-  optionsOrParseFunction: DiscoverOptions | ((source: string) => Program)
+  optionsOrParseFunction: DiscoverOptions | ((source: string) => Program),
 ): ModuleGraph {
   // Handle both old and new API signatures
   let options: DiscoverOptions;
@@ -512,6 +526,7 @@ export function discoverAllModules(
     moduleName: string;
     packageName: string;
     filePath: string;
+    srcDir: string;
     source: string;
     dependencies: Set<string>;
     operatorRegistry: OperatorRegistry;
@@ -528,8 +543,8 @@ export function discoverAllModules(
     if (visiting.has(moduleName)) {
       throw new Error(
         `Circular dependency detected: ${[...visiting, moduleName].join(
-          " -> "
-        )}`
+          " -> ",
+        )}`,
       );
     }
 
@@ -560,6 +575,7 @@ export function discoverAllModules(
       moduleName,
       packageName: resolved.packageName,
       filePath: resolved.filePath,
+      srcDir: resolved.srcDir,
       source,
       dependencies,
       operatorRegistry,
@@ -597,7 +613,7 @@ export function discoverAllModules(
     // Combined registry: dependencies first, then module's own (can override)
     const combinedRegistry = mergeOperatorRegistries(
       ...dependencyRegistries,
-      preliminary.operatorRegistry
+      preliminary.operatorRegistry,
     );
 
     // Re-parse with combined operator registry for correct precedence
@@ -607,6 +623,7 @@ export function discoverAllModules(
       moduleName: preliminary.moduleName,
       packageName: preliminary.packageName,
       filePath: preliminary.filePath,
+      srcDir: preliminary.srcDir,
       source: preliminary.source,
       ast,
       dependencies: preliminary.dependencies,

@@ -269,7 +269,7 @@ function freshName(ctx: CodegenContext, base: string): string {
  */
 function getImportAliasForModuleCtx(
   moduleName: string,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   return getImportAliasForModule(moduleName, ctx.program.importAliases);
 }
@@ -299,14 +299,14 @@ function resolveDictReferenceCtx(
   typeKey: string,
   ctx: CodegenContext,
   concreteType?: IRType,
-  allConcreteTypes?: IRType[]
+  allConcreteTypes?: IRType[],
 ): string {
   return resolveDictReference(
     protocolName,
     typeKey,
     toInstanceContext(ctx),
     concreteType,
-    allConcreteTypes
+    allConcreteTypes,
   );
 }
 
@@ -316,7 +316,7 @@ function resolveDictReferenceCtx(
 function resolveDictionaryForTypeCtx(
   protocolName: string,
   type: IRType | undefined,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   return resolveDictionaryForType(protocolName, type, toInstanceContext(ctx));
 }
@@ -358,7 +358,7 @@ export interface GenerateOptions {
  */
 export function generate(
   program: IRProgram,
-  options: GenerateOptions = {}
+  options: GenerateOptions = {},
 ): GeneratedModule {
   const ctx = createCodegenContext(program);
   const { modulePackages = new Map() } = options;
@@ -437,12 +437,12 @@ export function generate(
   }
 
   return {
-    moduleName: program.moduleName ?? "Main",
-    packageName: program.packageName ?? program.moduleName ?? "Main",
+    moduleName: program.moduleName,
+    packageName: program.packageName,
     code: [...headerLines, ...helperLines, ...bodyLines].join("\n"),
     imports: ctx.externalBindings,
     exports: Object.keys(program.values).filter(
-      (name) => !name.startsWith("$")
+      (name) => !name.startsWith("$"),
     ),
   };
 }
@@ -865,7 +865,7 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
  */
 function generateVar(
   expr: Extract<IRExpr, { kind: "IRVar" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const currentModule = ctx.program.moduleName;
 
@@ -910,7 +910,7 @@ function generateVar(
           typeKey,
           ctx,
           typeArg,
-          expr.constraint.typeArgs
+          expr.constraint.typeArgs,
         );
         return `${dictRef}.${sanitizedName}`;
       }
@@ -942,7 +942,7 @@ function generateVar(
         protocolName,
         typeKey,
         ctx,
-        ctx.expectedReturnType
+        ctx.expectedReturnType,
       );
       return `${dictRef}.${sanitizedName}`;
     }
@@ -984,7 +984,7 @@ function generateVar(
  */
 function generateModuleAccess(
   expr: IRModuleAccess,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   // Use the Vibe-level value name, not the external/runtime name
   const valueName = sanitizeIdentifier(expr.valueName);
@@ -1029,7 +1029,7 @@ function generateLiteral(expr: Extract<IRExpr, { kind: "IRLiteral" }>): string {
  */
 function generateLambda(
   expr: Extract<IRExpr, { kind: "IRLambda" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const body = generateExpr(expr.body, ctx);
 
@@ -1064,7 +1064,7 @@ function generateLambda(
  */
 function generateApply(
   expr: Extract<IRExpr, { kind: "IRApply" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   // Special handling for protocol method applications in monomorphic context
   // When we have Apply(Apply(protocolMethod, arg1), arg2), we need to resolve
@@ -1098,7 +1098,7 @@ function generateApply(
           const dictName = resolveDictionaryForTypeCtx(
             constraint.protocolName,
             typeArg,
-            ctx
+            ctx,
           );
           dictPasses.push(dictName);
         }
@@ -1137,7 +1137,7 @@ function generateApply(
  */
 function tryGenerateProtocolMethodApply(
   expr: Extract<IRExpr, { kind: "IRApply" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string | null {
   // Extract the root method and all operands from nested applies
   const { methodName, operands } = extractMethodAndOperands(expr);
@@ -1194,7 +1194,7 @@ function tryGenerateProtocolMethodApply(
     typeKey,
     ctx,
     concreteType,
-    allOperandTypes.length > 0 ? allOperandTypes : undefined
+    allOperandTypes.length > 0 ? allOperandTypes : undefined,
   );
 
   // Generate: dict.method(arg1)(arg2)...
@@ -1242,7 +1242,7 @@ function extractMethodAndOperands(expr: Extract<IRExpr, { kind: "IRApply" }>): {
  */
 function inferConcreteTypeFromOperands(
   operands: IRExpr[],
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): IRType | null {
   for (const operand of operands) {
     const type = inferExprType(operand, ctx);
@@ -1261,7 +1261,7 @@ function inferConcreteTypeFromOperands(
  */
 function inferAllTypesFromOperands(
   operands: IRExpr[],
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): IRType[] {
   const types: IRType[] = [];
   for (const operand of operands) {
@@ -1389,7 +1389,7 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
  */
 function generateIf(
   expr: Extract<IRExpr, { kind: "IRIf" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const cond = generateExpr(expr.condition, ctx);
   const then_ = generateExpr(expr.thenBranch, ctx);
@@ -1415,7 +1415,7 @@ function generateIf(
  */
 function generateCase(
   expr: Extract<IRExpr, { kind: "IRCase" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const matchName = freshName(ctx, "match");
   const discriminant = generateExpr(expr.discriminant, ctx);
@@ -1427,7 +1427,7 @@ function generateCase(
       branch.pattern,
       matchName,
       branch.body,
-      ctx
+      ctx,
     );
 
     let code = "";
@@ -1459,13 +1459,13 @@ function generateBranchCode(
   pattern: IRPattern,
   matchName: string,
   body: IRExpr,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): { condition: string | null; bindings: string[]; body: string } {
   const bindings: string[] = [];
 
   function buildConditionAndBindings(
     pat: IRPattern,
-    accessor: string
+    accessor: string,
   ): string | null {
     switch (pat.kind) {
       case "IRVarPattern":
@@ -1514,7 +1514,7 @@ function generateBranchCode(
           const elemAccessor = `${accessor}[${i}]`;
           const elemCondition = buildConditionAndBindings(
             elemPat,
-            elemAccessor
+            elemAccessor,
           );
           if (elemCondition) {
             conditions.push(elemCondition);
@@ -1540,7 +1540,7 @@ function generateBranchCode(
           const elemAccessor = `${accessor}[${i}]`;
           const elemCondition = buildConditionAndBindings(
             elemPat,
-            elemAccessor
+            elemAccessor,
           );
           if (elemCondition) {
             conditions.push(elemCondition);
@@ -1559,7 +1559,7 @@ function generateBranchCode(
         // Head binds to first element
         const headCondition = buildConditionAndBindings(
           pat.head,
-          `${accessor}[0]`
+          `${accessor}[0]`,
         );
         if (headCondition) {
           conditions.push(headCondition);
@@ -1568,7 +1568,7 @@ function generateBranchCode(
         // Tail binds to rest of the array (slice)
         const tailCondition = buildConditionAndBindings(
           pat.tail,
-          `${accessor}.slice(1)`
+          `${accessor}.slice(1)`,
         );
         if (tailCondition) {
           conditions.push(tailCondition);
@@ -1586,7 +1586,7 @@ function generateBranchCode(
             // Nested pattern matching on the field
             const fieldCondition = buildConditionAndBindings(
               field.pattern,
-              fieldAccessor
+              fieldAccessor,
             );
             if (fieldCondition) {
               conditions.push(fieldCondition);
@@ -1616,7 +1616,7 @@ function generateBranchCode(
  * Generate the JavaScript value for a literal pattern.
  */
 function generateLiteralPatternValue(
-  pat: Extract<IRPattern, { kind: "IRLiteralPattern" }>
+  pat: Extract<IRPattern, { kind: "IRLiteralPattern" }>,
 ): string {
   switch (pat.literalType) {
     case "int":
@@ -1635,7 +1635,7 @@ function generateLiteralPatternValue(
  */
 function generateTuple(
   expr: Extract<IRExpr, { kind: "IRTuple" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const elements = expr.elements.map((e) => generateExpr(e, ctx));
   return `[${elements.join(", ")}]`;
@@ -1646,7 +1646,7 @@ function generateTuple(
  */
 function generateList(
   expr: Extract<IRExpr, { kind: "IRList" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const elements = expr.elements.map((e) => generateExpr(e, ctx));
   return `[${elements.join(", ")}]`;
@@ -1657,7 +1657,7 @@ function generateList(
  */
 function generateRecord(
   expr: Extract<IRExpr, { kind: "IRRecord" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const fields = expr.fields.map((f) => {
     const value = generateExpr(f.value, ctx);
@@ -1672,7 +1672,7 @@ function generateRecord(
  */
 function generateRecordUpdate(
   expr: Extract<IRExpr, { kind: "IRRecordUpdate" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const base = generateExpr(expr.base, ctx);
   const updates = expr.updates.map((f) => {
@@ -1687,7 +1687,7 @@ function generateRecordUpdate(
  */
 function generateFieldAccess(
   expr: Extract<IRExpr, { kind: "IRFieldAccess" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const target = generateExpr(expr.target, ctx);
   return `${target}.${expr.field}`;
@@ -1698,7 +1698,7 @@ function generateFieldAccess(
  */
 function generateConstructorExpr(
   expr: Extract<IRExpr, { kind: "IRConstructor" }>,
-  ctx: CodegenContext
+  ctx: CodegenContext,
 ): string {
   const ctor = ctx.constructors[expr.name];
   const currentModule = ctx.program.moduleName;
@@ -1874,7 +1874,7 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
   function addValueExport(
     name: string,
     value: IRValue | undefined,
-    checkLocal: boolean = true
+    checkLocal: boolean = true,
   ): void {
     if (!value && checkLocal) return;
 
@@ -2026,7 +2026,7 @@ export interface WriteOptions {
  */
 export function writeModule(
   module: GeneratedModule,
-  options: WriteOptions
+  options: WriteOptions,
 ): string {
   const { distDir, packageName, createDirs = true } = options;
 
@@ -2039,7 +2039,7 @@ export function writeModule(
   const moduleDir = path.join(
     distDir,
     packageName,
-    ...moduleSegments.slice(0, -1)
+    ...moduleSegments.slice(0, -1),
   );
   const filePath = path.join(moduleDir, `${fileName}.js`);
 
@@ -2068,7 +2068,7 @@ export interface BuildResult {
  */
 export function buildProject(
   programs: IRProgram[],
-  options: WriteOptions
+  options: WriteOptions,
 ): BuildResult {
   const outputs = new Map<string, string>();
   const errors: Error[] = [];

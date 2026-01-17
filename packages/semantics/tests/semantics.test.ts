@@ -5,13 +5,16 @@ import { analyze, SemanticError } from "../src/index.ts";
 /**
  * Helper to expect an error during analysis.
  * Adds OPERATOR_PREAMBLE (which includes types and operators) so literals and operators work.
- * For sources starting with 'module' or 'import', inserts OPERATOR_PREAMBLE after those declarations.
+ * For sources starting with 'module', inserts OPERATOR_PREAMBLE after module/import declarations.
+ * For sources starting with 'import' (without module), adds module declaration first.
+ * For sources without module or import, adds "module Test exposing (..)" at the start.
  */
 const expectError = (source: string, message: string) => {
   let fullSource = source;
   const trimmed = source.trim();
-  if (trimmed.startsWith("module") || trimmed.startsWith("import")) {
-    // Insert OPERATOR_PREAMBLE after imports/module declarations
+
+  if (trimmed.startsWith("module")) {
+    // Has module declaration - insert OPERATOR_PREAMBLE after module/imports
     const lines = source.split("\n");
     let insertIndex = 0;
     for (let i = 0; i < lines.length; i++) {
@@ -29,22 +32,31 @@ const expectError = (source: string, message: string) => {
       OPERATOR_PREAMBLE +
       "\n" +
       lines.slice(insertIndex).join("\n");
+  } else if (trimmed.startsWith("import")) {
+    // Has imports but no module - add module declaration first
+    fullSource =
+      "module Test exposing (..)\n" + source + "\n" + OPERATOR_PREAMBLE;
   } else {
-    fullSource = OPERATOR_PREAMBLE + "\n" + source;
+    // No module or imports - add module declaration
+    fullSource =
+      "module Test exposing (..)\n" + OPERATOR_PREAMBLE + "\n" + source;
   }
   expect(() => analyze(parse(fullSource))).toThrow(message);
 };
 
 /**
  * Helper to analyze code.
- * Adds TYPE_PREAMBLE automatically so literals work. For sources starting with 'module' or 'import',
- * inserts TYPE_PREAMBLE after those declarations.
+ * Adds TYPE_PREAMBLE automatically so literals work.
+ * For sources starting with 'module', inserts TYPE_PREAMBLE after module/import declarations.
+ * For sources starting with 'import' (without module), adds module declaration first.
+ * For sources without module or import, adds "module Test exposing (..)" at the start.
  */
 const analyzeNoPrelude = (source: string) => {
   let fullSource = source;
   const trimmed = source.trim();
-  if (trimmed.startsWith("module") || trimmed.startsWith("import")) {
-    // Insert TYPE_PREAMBLE after imports/module declarations
+
+  if (trimmed.startsWith("module")) {
+    // Has module declaration - insert TYPE_PREAMBLE after module/imports
     const lines = source.split("\n");
     let insertIndex = 0;
     for (let i = 0; i < lines.length; i++) {
@@ -62,8 +74,12 @@ const analyzeNoPrelude = (source: string) => {
       TYPE_PREAMBLE +
       "\n" +
       lines.slice(insertIndex).join("\n");
+  } else if (trimmed.startsWith("import")) {
+    // Has imports but no module - add module declaration first
+    fullSource = "module Test exposing (..)\n" + source + "\n" + TYPE_PREAMBLE;
   } else {
-    fullSource = TYPE_PREAMBLE + "\n" + source;
+    // No module or imports - add module declaration
+    fullSource = "module Test exposing (..)\n" + TYPE_PREAMBLE + "\n" + source;
   }
   return analyze(parse(fullSource));
 };
@@ -118,7 +134,7 @@ value = 1`);
     expectError(
       `a = 1
 a = 2`,
-      "Duplicate definition"
+      "Duplicate definition",
     );
   });
 
@@ -131,10 +147,10 @@ a = 2`,
 ffiCompute : Int -> Int`);
     expect(result.values.ffiCompute).toBeDefined();
     expect(result.values.ffiCompute?.externalTarget?.modulePath).toBe(
-      "./lib.js"
+      "./lib.js",
     );
     expect(result.values.ffiCompute?.externalTarget?.exportName).toBe(
-      "compute"
+      "compute",
     );
     expect(result.values.ffiCompute?.annotation?.kind).toBe("FunctionType");
   });
@@ -144,7 +160,7 @@ ffiCompute : Int -> Int`);
     expectError(
       `@external "./lib.js" "compute"
 ffiCompute : UndefinedType -> Int`,
-      "Type 'UndefinedType' is not defined"
+      "Type 'UndefinedType' is not defined",
     );
   });
 
@@ -153,7 +169,7 @@ ffiCompute : UndefinedType -> Int`,
     expectError(
       `foo : UndefinedType -> Int
 foo x = 1`,
-      "Type 'UndefinedType' is not defined"
+      "Type 'UndefinedType' is not defined",
     );
   });
 
@@ -162,7 +178,7 @@ foo x = 1`,
     expectError(
       `@external "./lib.js" "compute"
 ffiCompute : List Undefined -> Int`,
-      "Type 'Undefined' is not defined"
+      "Type 'Undefined' is not defined",
     );
   });
 
@@ -170,7 +186,7 @@ ffiCompute : List Undefined -> Int`,
     expectError(
       `foo : List Undefined -> Int
 foo x = 1`,
-      "Type 'Undefined' is not defined"
+      "Type 'Undefined' is not defined",
     );
   });
 
@@ -193,7 +209,7 @@ ffiCompute : Maybe Int -> Int`);
       `@external "./lib.js" "compute"
 ffiCompute : Int -> Int
 ffiCompute : Int -> Int`,
-      "already includes a type annotation"
+      "already includes a type annotation",
     );
   });
 
@@ -201,7 +217,7 @@ ffiCompute : Int -> Int`,
     expectError(
       `module Main exposing (foo)
 bar = 1`,
-      "Module exposes 'foo'"
+      "Module exposes 'foo'",
     );
   });
 
@@ -215,7 +231,7 @@ bar = 1`);
     expectError(
       `import Foo
 import Foo`,
-      "Duplicate import of module 'Foo'"
+      "Duplicate import of module 'Foo'",
     );
   });
 
@@ -223,7 +239,7 @@ import Foo`,
     expectError(
       `import Foo as A
 import Bar as A`,
-      "Duplicate import alias 'A'"
+      "Duplicate import alias 'A'",
     );
   });
 
@@ -241,7 +257,7 @@ import Bar as A`,
     expectError(
       `f : Int
 f x = x`,
-      "Type mismatch"
+      "Type mismatch",
     );
   });
 
@@ -253,7 +269,7 @@ f x = x`,
     x = 2
   in
     x`,
-      "Duplicate let-binding 'x'"
+      "Duplicate let-binding 'x'",
     );
   });
 
@@ -262,7 +278,7 @@ f x = x`,
       `f x =
   case x of
     True -> 1`,
-      "Non-exhaustive case expression"
+      "Non-exhaustive case expression",
     );
   });
 
@@ -271,7 +287,7 @@ f x = x`,
       `f x =
   case x of
     Just -> 1`,
-      "Constructor 'Just' expects 1 argument(s)"
+      "Constructor 'Just' expects 1 argument(s)",
     );
   });
 
@@ -281,7 +297,7 @@ f x = x`,
   case x of
     _ -> 1
     True -> 2`,
-      "Wildcard pattern makes following branches unreachable"
+      "Wildcard pattern makes following branches unreachable",
     );
   });
 
@@ -294,7 +310,9 @@ f x = x`,
   });
 
   test("infers simple identity function", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 id x = x`);
     const result = analyze(program);
     expect(result.types.id).toBeDefined();
@@ -307,7 +325,9 @@ id x = x`);
   test("polymorphic identity function can be used at multiple types", () => {
     // The identity function 'id x = x' should be inferred as polymorphic: forall a. a -> a
     // This allows it to be used at both number and string types
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 id x = x
 useAtNumber = id 42
 useAtString = id "hello"`);
@@ -324,7 +344,9 @@ useAtString = id "hello"`);
 
   test("polymorphic function in let-binding", () => {
     // Let-bound polymorphic functions should be instantiated freshly at each use
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 f =
   let
     id x = x
@@ -336,7 +358,9 @@ f =
 
   test("nested let-polymorphism", () => {
     // Test that nested let-bindings properly generalize
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 f =
   let
     id x = x
@@ -355,7 +379,9 @@ f =
   test("polymorphic const function", () => {
     // const : forall a b. a -> b -> a
     // Returns first argument, ignoring second
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 const x y = x
 n = const 1 "ignored"
 s = const "hi" 42`);
@@ -367,7 +393,9 @@ s = const "hi" 42`);
 
   test("polymorphic compose function", () => {
     // compose : forall a b c. (b -> c) -> (a -> b) -> a -> c
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 compose f g x = f (g x)
 addOne n = n + 1
 double n = n * 2
@@ -380,7 +408,9 @@ addThree = compose addOne double`);
   test("polymorphic pair constructor and accessors", () => {
     // Note: Tuple pattern matching works because tuples are built-in syntax
     // This is different from user-defined ADTs which we'll need later
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 pair x y = (x, y)
 fst p =
   case p of
@@ -403,7 +433,9 @@ s = snd p1`);
 
   test("polymorphic list functions", () => {
     // Test polymorphism with list types
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 singleton x = [x]
 nums = singleton 42
 strs = singleton "hi"`);
@@ -415,7 +447,9 @@ strs = singleton "hi"`);
 
   test("list pattern matching - empty and cons patterns", () => {
     // Basic list pattern matching without polymorphism
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 isEmpty xs =
   case xs of
     [] -> True
@@ -428,7 +462,9 @@ isEmpty xs =
   test("polymorphic recursion - length function", () => {
     // length : forall a. [a] -> Int
     // Polymorphic recursive functions should work
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 length xs =
   case xs of
     [] -> 0
@@ -440,7 +476,9 @@ length xs =
 
   test("mutual recursion - even/odd", () => {
     // Mutually recursive functions should be typed correctly
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 isEven n =
   if n == 0 then True else isOdd (n - 1)
 
@@ -471,7 +509,9 @@ infixl 4 ==
   test("polymorphic function with type annotation", () => {
     // Type variables in annotations: lowercase identifiers like 'a', 'b'
     // should be recognized as polymorphic type variables
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 apply : (a -> b) -> a -> b
 apply f x = f x
 
@@ -485,7 +525,9 @@ s = apply (\\x -> x ++ "!") "hi"`);
 
   test("type annotations with single-letter type variables", () => {
     // Single lowercase letters (a, b, c, etc.) are type variables
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 id : a -> a
 id x = x
 
@@ -502,7 +544,9 @@ flip f y x = f x y`);
 
   test("type annotations distinguish type variables from concrete types", () => {
     // Single letters = type variables, known words = concrete types
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 toInt : a -> Int
 toInt x = 42
 
@@ -515,7 +559,9 @@ toStr x = "hi"`);
 
   test("type annotations with List type constructor", () => {
     // List is a type constructor that takes a type argument
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 head : List a -> a
 head xs = 42
 
@@ -528,7 +574,9 @@ length xs = 0`);
 
   test("List type in various contexts", () => {
     // Test List as builtin ADT in type annotations, type aliases, and literals
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 -- Direct List type annotation
 nums : List Int
 nums = [1, 2, 3]
@@ -559,7 +607,9 @@ nested = [[1, 2], [3, 4]]`);
 
   test("complex nested type annotations", () => {
     // Test deeply nested function types with type variables
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 compose : (b -> c) -> (a -> b) -> a -> c
 compose f g x = f (g x)
 
@@ -577,13 +627,15 @@ twice f x = f (f x)`);
 f x = x
 n = f 42
 s = f "hi"`,
-      "Type mismatch"
+      "Type mismatch",
     );
   });
 
   test("generalization respects scope", () => {
     // Variables free in the outer scope should not be generalized
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 outer =
   let
     x = 42
@@ -597,7 +649,9 @@ outer =
   // ===== Algebraic Data Type (ADT) Tests =====
 
   test("registers ADT declaration", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type MyBool = MyTrue | MyFalse`);
     const result = analyze(program);
 
@@ -616,7 +670,9 @@ type MyBool = MyTrue | MyFalse`);
   });
 
   test("registers parameterized ADT", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type Option a = Some a | None`);
     const result = analyze(program);
 
@@ -630,7 +686,9 @@ type Option a = Some a | None`);
 
   test("uses ADT constructors as values", () => {
     // Constructors should be usable as values with proper types
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type Option a = Some a | None
 
 wrapped = Some 42
@@ -642,7 +700,9 @@ nothing = None`);
   });
 
   test("pattern matches on user-defined ADT", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type Option a = Some a | None
 
 unwrap opt default =
@@ -656,7 +716,9 @@ unwrap opt default =
 
   test("ADT exhaustiveness checking - complete", () => {
     // Should pass - all constructors covered
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type Color = Red | Green | Blue
 
 describe color =
@@ -677,7 +739,7 @@ describe color =
   case color of
     Red -> "red"
     Blue -> "blue"`,
-      "Non-exhaustive case expression"
+      "Non-exhaustive case expression",
     );
   });
 
@@ -685,15 +747,17 @@ describe color =
     // The error message should include the missing constructor
     expect(() =>
       analyze(
-        parse(`${TYPE_PREAMBLE}
+        parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type Status = Pending | Running | Completed | Failed
 
 process status =
   case status of
     Pending -> "waiting"
     Completed -> "done"`),
-        { injectPrelude: false }
-      )
+        { injectPrelude: false },
+      ),
     ).toThrow(/missing.*Running.*Failed|Non-exhaustive/);
   });
 
@@ -701,7 +765,7 @@ process status =
     expectError(
       `type MyBool = MyTrue | MyFalse
 type MyBool = MyYes | MyNo`,
-      "Duplicate type declaration"
+      "Duplicate type declaration",
     );
   });
 
@@ -709,7 +773,7 @@ type MyBool = MyYes | MyNo`,
     expectError(
       `type A = Ctor | Other
 type B = Ctor | Another`,
-      "Duplicate constructor 'Ctor'"
+      "Duplicate constructor 'Ctor'",
     );
   });
 
@@ -725,7 +789,7 @@ f opt =
   case opt of
     Some -> 1
     None -> 0`,
-      "expects 1 argument"
+      "expects 1 argument",
     );
   });
 
@@ -737,12 +801,14 @@ f opt =
   case opt of
     Some x y -> 1
     None -> 0`,
-      "expects 1 argument"
+      "expects 1 argument",
     );
   });
 
   test("recursive ADT - MyList", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type MyList a = Cons a (MyList a) | Nil
 
 empty = Nil
@@ -759,7 +825,9 @@ double = Cons 1 (Cons 2 Nil)`);
   });
 
   test("recursive ADT pattern matching", () => {
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 type MyList a = Cons a (MyList a) | Nil
 
 length xs =
@@ -772,7 +840,9 @@ length xs =
 
   test("polymorphic ADT map function", () => {
     // This is the test that was previously skipped
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 type Option a = Some a | None
 
 map f opt =
@@ -788,7 +858,9 @@ result = map addOne (Some 42)`);
   });
 
   test("ADT with multiple type parameters", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type Either a b = Left a | Right b
 
 example1 = Left 42
@@ -808,7 +880,9 @@ getRight e default =
   // ===== Type Alias Tests =====
 
   test("registers type alias", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias UserId = Int`);
     const result = analyze(program);
 
@@ -817,7 +891,9 @@ type alias UserId = Int`);
   });
 
   test("registers parameterized type alias", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Pair a b = (a, b)`);
     const result = analyze(program);
 
@@ -829,7 +905,7 @@ type alias Pair a b = (a, b)`);
     expectError(
       `type alias UserId = Int
 type alias UserId = String`,
-      "Duplicate type alias"
+      "Duplicate type alias",
     );
   });
 
@@ -840,7 +916,9 @@ type alias UserId = String`,
   // ===== Record Type Annotation Tests =====
 
   test("type alias with record type", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Point = { x : Int, y : Int }`);
     const result = analyze(program);
 
@@ -850,7 +928,9 @@ type alias Point = { x : Int, y : Int }`);
   });
 
   test("function with record type annotation", () => {
-    const program = parse(`${OPERATOR_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 distance : { x : Int, y : Int } -> Int
 distance point = point.x + point.y`);
     const result = analyze(program);
@@ -860,7 +940,9 @@ distance point = point.x + point.y`);
   });
 
   test("record type fields are type-checked correctly", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Point = { x : Int, y : Int }
 
 origin : Point
@@ -872,7 +954,9 @@ origin = { x = 0, y = 0 }`);
   });
 
   test("empty record type", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Empty = {}
 
 empty : Empty
@@ -885,11 +969,13 @@ empty = {}`);
 
   test("parameterized record type", () => {
     const program = parse(
-      `${TYPE_PREAMBLE}
+      `module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Container a = { value : a, count : Int }
 
 intContainer : Container Int
-intContainer = { value = 42, count = 1 }`
+intContainer = { value = 42, count = 1 }`,
     );
     const result = analyze(program);
 
@@ -900,11 +986,13 @@ intContainer = { value = 42, count = 1 }`
 
   test("record type with function fields", () => {
     const program = parse(
-      `${OPERATOR_PREAMBLE}
+      `module Test exposing (..)
+
+${OPERATOR_PREAMBLE}
 type alias Model = { count : Int, increment : Int -> Int }
 
 model : Model
-model = { count = 0, increment = \\x -> x + 1 }`
+model = { count = 0, increment = \\x -> x + 1 }`,
     );
     const result = analyze(program);
 
@@ -914,11 +1002,13 @@ model = { count = 0, increment = \\x -> x + 1 }`
 
   test("nested record types", () => {
     const program = parse(
-      `${TYPE_PREAMBLE}
+      `module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Outer = { inner : { value : Int } }
 
 nested : Outer
-nested = { inner = { value = 5 } }`
+nested = { inner = { value = 5 } }`,
     );
     const result = analyze(program);
 
@@ -927,7 +1017,9 @@ nested = { inner = { value = 5 } }`
   });
 
   test("record type alias with multiple type parameters", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Pair a b = { first : a, second : b }
 
 pair : Pair string number
@@ -941,7 +1033,9 @@ pair = { first = "hello", second = 42 }`);
   });
 
   test("record type alias with parameterized field type", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias ListBox a = { items : List a, count : Int }
 
 stringBox : ListBox String
@@ -955,7 +1049,9 @@ stringBox = { items = ["a", "b"], count = 2 }`);
   });
 
   test("record type with nested record type parameter", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Response a = { data : a, metadata : { code : Int, message : String } }
 
 response : Response String
@@ -969,7 +1065,9 @@ response = { data = "ok", metadata = { code = 200, message = "Success" } }`);
   });
 
   test("record type with function field using type parameter", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Handler a = { process : a -> String, callback : String -> a }
 
 handler : Handler Int
@@ -983,7 +1081,9 @@ handler = { process = \\n -> "result", callback = \\s -> 0 }`);
   });
 
   test("multiple parameterized record type aliases coexist", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Container a = { value : a, count : Int }
 type alias Pair a b = { first : a, second : b }
 type alias Wrapper a = { wrapped : a }
@@ -1008,7 +1108,9 @@ w = { wrapped = [1, 2, 3] }`);
   });
 
   test("parameterized record alias in record field", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Box a = { contents : a }
 type alias Pair a b = { left : a, right : b }
 
@@ -1025,7 +1127,9 @@ nested = { left = { contents = "text" }, right = { contents = 42 } }`);
   // ===== Combined ADT and Type Alias Tests =====
 
   test("type alias and ADT can coexist", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type Option a = Some a | None
 type alias MaybeInt = Option Int
 
@@ -1042,26 +1146,28 @@ wrapped = Some 42`);
   test("rejects lowercase type name in type alias (suggests capitalization)", () => {
     expectError(
       `type alias Point = { x : Int, y : int }`,
-      "Type 'int' is not defined. Did you mean 'Int'?"
+      "Type 'int' is not defined. Did you mean 'Int'?",
     );
   });
 
   test("rejects undefined type in type alias", () => {
     expectError(
       `type alias Point = { x : Int, y : Foo }`,
-      "Type 'Foo' is not defined"
+      "Type 'Foo' is not defined",
     );
   });
 
   test("rejects undefined type variable in type alias", () => {
     expectError(
       `type alias Container = { value : a }`,
-      "Type variable 'a' is not defined in this context"
+      "Type variable 'a' is not defined in this context",
     );
   });
 
   test("accepts valid type parameter in type alias", () => {
-    const program = parse(`${TYPE_PREAMBLE}
+    const program = parse(`module Test exposing (..)
+
+${TYPE_PREAMBLE}
 type alias Container a = { value : a }`);
     const result = analyze(program);
 
@@ -1072,7 +1178,7 @@ type alias Container a = { value : a }`);
   test("rejects nested undefined type in type alias", () => {
     expectError(
       `type alias Nested = { inner : { value : foo } }`,
-      "Type 'foo' is not defined"
+      "Type 'foo' is not defined",
     );
   });
 
@@ -1083,7 +1189,7 @@ type alias Container a = { value : a }`);
   test("rejects undefined type in tuple type alias", () => {
     expectError(
       `type alias MyTuple = (Int, foo, String)`,
-      "Type 'foo' is not defined"
+      "Type 'foo' is not defined",
     );
   });
 
@@ -1206,7 +1312,7 @@ protocol MyProtocol a where
     expectError(
       `module TestModule exposing (undefined)
 foo x = x`,
-      "Module exposes 'undefined' which is not defined"
+      "Module exposes 'undefined' which is not defined",
     );
   });
 
@@ -1214,7 +1320,7 @@ foo x = x`,
     expectError(
       `module TestModule exposing (UndefinedType(..))
 foo x = x`,
-      "Module exposes 'UndefinedType(..)' but 'UndefinedType' is not a type or protocol"
+      "Module exposes 'UndefinedType(..)' but 'UndefinedType' is not a type or protocol",
     );
   });
 
@@ -1222,7 +1328,7 @@ foo x = x`,
     expectError(
       `module TestModule exposing (MyAlias(..))
 type alias MyAlias = Int`,
-      "Type alias 'MyAlias' cannot use (..) syntax - type aliases have no constructors"
+      "Type alias 'MyAlias' cannot use (..) syntax - type aliases have no constructors",
     );
   });
 
@@ -1230,7 +1336,7 @@ type alias MyAlias = Int`,
     expectError(
       `module TestModule exposing (MyOption(Invalid))
 type MyOption a = MySome a | MyNone`,
-      "Constructor 'Invalid' is not defined in type 'MyOption'"
+      "Constructor 'Invalid' is not defined in type 'MyOption'",
     );
   });
 
@@ -1239,7 +1345,7 @@ type MyOption a = MySome a | MyNone`,
       `module TestModule exposing (MyProtocol(invalid))
 protocol MyProtocol a where
   foo : a -> a`,
-      "Method 'invalid' is not defined in protocol 'MyProtocol'"
+      "Method 'invalid' is not defined in protocol 'MyProtocol'",
     );
   });
 
@@ -1267,10 +1373,10 @@ baz z = z`);
     expect(result.exports.protocols.has("MyProtocol")).toBe(true);
     expect(result.exports.protocols.get("MyProtocol")?.allMethods).toBe(false);
     expect(
-      result.exports.protocols.get("MyProtocol")?.methods?.has("methodA")
+      result.exports.protocols.get("MyProtocol")?.methods?.has("methodA"),
     ).toBe(true);
     expect(
-      result.exports.protocols.get("MyProtocol")?.methods?.has("methodB")
+      result.exports.protocols.get("MyProtocol")?.methods?.has("methodB"),
     ).toBe(false);
   });
 });
@@ -1324,7 +1430,7 @@ x = "hello"
 
 y = -x
 `,
-      "Unary negation is only allowed for Int and Float"
+      "Unary negation is only allowed for Int and Float",
     );
   });
 
@@ -1335,7 +1441,7 @@ x = True
 
 y = -x
 `,
-      "Unary negation is only allowed for Int and Float"
+      "Unary negation is only allowed for Int and Float",
     );
   });
 
@@ -1344,7 +1450,138 @@ y = -x
       `
 negate x = -x
 `,
-      "Unary negation requires a concrete numeric type"
+      "Unary negation requires a concrete numeric type",
     );
+  });
+});
+describe("module declaration validation", () => {
+  test("rejects file without module declaration (parse error)", () => {
+    const source = `
+${TYPE_PREAMBLE}
+main = 1
+`;
+
+    // Parser should throw before we even reach semantic analysis
+    expect(() => parse(source)).toThrow(
+      "Every Vibe file must begin with a module declaration",
+    );
+  });
+
+  test("rejects module name that doesn't match file path", () => {
+    const source = `module WrongName exposing (..)
+${TYPE_PREAMBLE}
+main = 1
+`;
+    const program = parse(source);
+
+    expect(() =>
+      analyze(program, {
+        fileContext: {
+          filePath: "/project/src/Main.vibe",
+          srcDir: "/project/src",
+        },
+      }),
+    ).toThrow("does not match file path");
+  });
+
+  test("accepts matching module declaration for simple module", () => {
+    const source = `module Main exposing (..)
+${TYPE_PREAMBLE}
+main = 1
+`;
+    const program = parse(source);
+
+    // Should not throw
+    const result = analyze(program, {
+      fileContext: {
+        filePath: "/project/src/Main.vibe",
+        srcDir: "/project/src",
+      },
+    });
+    expect(result.module?.name).toBe("Main");
+  });
+
+  test("accepts matching module declaration for nested module", () => {
+    const source = `module Data.List exposing (..)
+${TYPE_PREAMBLE}
+empty = True
+`;
+    const program = parse(source);
+
+    // Should not throw
+    const result = analyze(program, {
+      fileContext: {
+        filePath: "/project/src/Data/List.vibe",
+        srcDir: "/project/src",
+      },
+    });
+    expect(result.module?.name).toBe("Data.List");
+  });
+
+  test("accepts matching module declaration for deeply nested module", () => {
+    const source = `module Vibe.Internal.Utils exposing (..)
+${TYPE_PREAMBLE}
+helper = True
+`;
+    const program = parse(source);
+
+    // Should not throw
+    const result = analyze(program, {
+      fileContext: {
+        filePath: "/project/src/Vibe/Internal/Utils.vibe",
+        srcDir: "/project/src",
+      },
+    });
+    expect(result.module?.name).toBe("Vibe.Internal.Utils");
+  });
+
+  test("error message suggests correct module name", () => {
+    const source = `
+module Test exposing (..)
+
+${TYPE_PREAMBLE}
+main = 1
+`;
+    const program = parse(source);
+
+    expect(() =>
+      analyze(program, {
+        fileContext: {
+          filePath: "/project/src/Data/List.vibe",
+          srcDir: "/project/src",
+        },
+      }),
+    ).toThrow("Expected: module Data.List exposing (..)");
+  });
+
+  test("error for mismatched module includes expected name", () => {
+    const source = `module Wrong.Module exposing (..)
+${TYPE_PREAMBLE}
+main = 1
+`;
+    const program = parse(source);
+
+    expect(() =>
+      analyze(program, {
+        fileContext: {
+          filePath: "/project/src/Correct/Module.vibe",
+          srcDir: "/project/src",
+        },
+      }),
+    ).toThrow("Expected: module Correct.Module exposing (..)");
+  });
+
+  test("allows any module name when fileContext is not provided (backward compatibility)", () => {
+    // Without fileContext, only path validation is skipped
+    // Module declaration itself is still required by the parser
+    const source = `module AnyName exposing (..)
+${TYPE_PREAMBLE}
+main = 1
+`;
+    const program = parse(source);
+
+    // Should not throw even though module name doesn't match any file path
+    const result = analyze(program);
+    expect(result.module.name).toBe("AnyName");
   });
 });

@@ -429,11 +429,11 @@ export type IRImportAlias = {
  * The complete IR program representation.
  */
 export type IRProgram = {
-  /** Module name (if declared) */
-  moduleName?: string;
+  /** Module name (always present) */
+  moduleName: string;
 
   /** Package name this module belongs to */
-  packageName?: string;
+  packageName: string;
 
   /** All lowered value bindings, indexed by name */
   values: Record<string, IRValue>;
@@ -500,7 +500,10 @@ export type IRProgram = {
  * Error thrown during IR lowering.
  */
 export class IRError extends Error {
-  constructor(message: string, public readonly span: Span) {
+  constructor(
+    message: string,
+    public readonly span: Span,
+  ) {
     super(message);
     this.name = "IRError";
   }

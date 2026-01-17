@@ -198,7 +198,7 @@ function getCollectedConstraints(): Constraint[] {
 function validateConstraintsEagerly(
   substitution: Substitution,
   span: Span,
-  expectedNonFunctionType?: Type
+  expectedNonFunctionType?: Type,
 ): void {
   const constraints = getCollectedConstraints();
   if (constraints.length === 0) return;
@@ -206,7 +206,7 @@ function validateConstraintsEagerly(
   for (const c of constraints) {
     // Apply substitution to get the current resolved type args
     const resolvedTypeArgs = c.typeArgs.map((t) =>
-      applySubstitution(t, substitution)
+      applySubstitution(t, substitution),
     );
 
     // Check if any type arg has become a concrete non-variable type
@@ -239,7 +239,7 @@ function validateConstraintsEagerly(
 
     const satisfiability = checkConstraintSatisfiability(
       resolvedConstraint,
-      currentInstanceRegistry
+      currentInstanceRegistry,
     );
 
     if (!satisfiability.possible) {
@@ -259,9 +259,9 @@ function validateConstraintsEagerly(
           // to use it as (a function type).
           throw new SemanticError(
             `Type mismatch: cannot unify '${formatType(
-              typeArg.from
+              typeArg.from,
             )}' with '${formatType(typeArg)}'`,
-            span
+            span,
           );
         }
       }
@@ -269,7 +269,7 @@ function validateConstraintsEagerly(
       const typeArgsStr = resolvedTypeArgs.map((t) => formatType(t)).join(", ");
       throw new SemanticError(
         `Type mismatch: expression cannot be used as a function (constraint '${c.protocolName}' on '${typeArgsStr}' cannot be satisfied)`,
-        span
+        span,
       );
     }
   }
@@ -297,11 +297,35 @@ function validateConstraintsEagerly(
 // This enables proper type checking and exhaustiveness analysis.
 
 /**
- * Helper to create a qualified name for display in error messages.
- * Returns "ModuleName::SymbolName" or just "SymbolName" if no module.
+ * Compute the expected module name from a file path and source directory.
+ *
+ * For example:
+ * - filePath: /project/src/Main.vibe, srcDir: /project/src -> "Main"
+ * - filePath: /project/src/Data/List.vibe, srcDir: /project/src -> "Data.List"
+ *
+ * @param filePath - Absolute path to the source file
+ * @param srcDir - Absolute path to the source directory
+ * @returns Expected module name
  */
-function qualifiedName(name: string, moduleName?: string): string {
-  return moduleName ? `${moduleName}::${name}` : name;
+function computeExpectedModuleName(filePath: string, srcDir: string): string {
+  // Normalize paths to handle different separators
+  const normalizedFilePath = filePath.replace(/\\/g, "/");
+  const normalizedSrcDir = srcDir.replace(/\\/g, "/").replace(/\/$/, "");
+
+  // Get relative path from srcDir
+  if (!normalizedFilePath.startsWith(normalizedSrcDir + "/")) {
+    // Fallback: extract from file name only
+    const fileName = normalizedFilePath.split("/").pop() ?? "";
+    return fileName.replace(/\.vibe$/, "");
+  }
+
+  // Remove srcDir prefix and .vibe extension
+  const relativePath = normalizedFilePath
+    .slice(normalizedSrcDir.length + 1) // +1 for the trailing slash
+    .replace(/\.vibe$/, "");
+
+  // Convert path separators to dots for module name
+  return relativePath.replace(/\//g, ".");
 }
 
 /**
@@ -313,7 +337,7 @@ function checkTypeCollision(
   importingFrom: string,
   existing: { moduleName?: string } | undefined,
   span: Span,
-  kind: "type" | "type alias" | "protocol"
+  kind: "type" | "type alias" | "protocol",
 ): void {
   if (!existing) return;
 
@@ -328,12 +352,12 @@ function checkTypeCollision(
         kind === "type"
           ? "Type"
           : kind === "type alias"
-          ? "Type alias"
-          : "Protocol"
+            ? "Type alias"
+            : "Protocol"
       } '${name}' conflicts with ${kind} from module '${
         existing.moduleName
       }'. ` + `Consider using qualified imports or aliasing one of them.`,
-      span
+      span,
     );
   }
 }
@@ -348,7 +372,7 @@ function checkTypeCollision(
  */
 function collectFreeVars(
   expr: Expr,
-  bound: Set<string> = new Set()
+  bound: Set<string> = new Set(),
 ): Set<string> {
   const free = new Set<string>();
 
@@ -472,7 +496,7 @@ function collectPatternVars(pattern: Pattern, bound: Set<string>): void {
  * Returns a map from each name to the set of names it references.
  */
 function buildDependencyGraph(
-  values: Record<string, ValueInfo>
+  values: Record<string, ValueInfo>,
 ): Map<string, Set<string>> {
   const graph = new Map<string, Set<string>>();
   const valueNames = new Set(Object.keys(values));
@@ -584,7 +608,7 @@ function isExportedFromModule(
     | "type"
     | "constructor"
     | "protocol"
-    | "method"
+    | "method",
 ): boolean {
   const exports = depModule.exports;
 
@@ -640,7 +664,7 @@ function importExportSpec(
   protocols: Record<string, ProtocolInfo>,
   operators: OperatorRegistry,
   importedValues: Map<string, string>,
-  typeSchemes: Record<string, TypeScheme>
+  typeSchemes: Record<string, TypeScheme>,
 ): void {
   switch (spec.kind) {
     case "ExportValue": {
@@ -660,7 +684,7 @@ function importExportSpec(
             imp.moduleName,
             adts[name],
             imp.span,
-            "type"
+            "type",
           );
           adts[name] = depADT;
           return;
@@ -671,7 +695,7 @@ function importExportSpec(
             imp.moduleName,
             typeAliases[name],
             imp.span,
-            "type alias"
+            "type alias",
           );
           typeAliases[name] = depModule.typeAliases[name]!;
           return;
@@ -690,7 +714,7 @@ function importExportSpec(
             imp.moduleName,
             protocols[name],
             imp.span,
-            "protocol"
+            "protocol",
           );
           protocols[name] = depModule.protocols[name]!;
           return;
@@ -698,7 +722,7 @@ function importExportSpec(
         // If nothing matched, the item is not exported
         throw new SemanticError(
           `Cannot import '${name}' from module '${imp.moduleName}' - it is not exported`,
-          spec.span
+          spec.span,
         );
       }
 
@@ -734,7 +758,7 @@ function importExportSpec(
       if (!isExportedFromModule(depModule, op, "operator")) {
         throw new SemanticError(
           `Cannot import operator '${op}' from module '${imp.moduleName}' - it is not exported`,
-          spec.span
+          spec.span,
         );
       }
 
@@ -763,7 +787,7 @@ function importExportSpec(
         if (!isExportedFromModule(depModule, name, "type")) {
           throw new SemanticError(
             `Cannot import type '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
-            spec.span
+            spec.span,
           );
         }
 
@@ -791,7 +815,7 @@ function importExportSpec(
         if (!isExportedFromModule(depModule, name, "protocol")) {
           throw new SemanticError(
             `Cannot import protocol '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
-            spec.span
+            spec.span,
           );
         }
 
@@ -800,14 +824,14 @@ function importExportSpec(
           imp.moduleName,
           protocols[name],
           imp.span,
-          "protocol"
+          "protocol",
         );
         protocols[name] = depProtocol;
 
         // Add all protocol methods to scope
         const methodSchemes = addProtocolMethodsToScope(
           depProtocol,
-          globalScope
+          globalScope,
         );
         // Store in typeSchemes for LSP hover/completion
         for (const [methodName, scheme] of methodSchemes) {
@@ -818,7 +842,7 @@ function importExportSpec(
 
       throw new SemanticError(
         `Cannot import '${name}(..)' from module '${imp.moduleName}' - it is not a type or protocol`,
-        spec.span
+        spec.span,
       );
     }
 
@@ -832,7 +856,7 @@ function importExportSpec(
         if (!isExportedFromModule(depModule, name, "type")) {
           throw new SemanticError(
             `Cannot import type '${name}' from module '${imp.moduleName}' - it is not exported`,
-            spec.span
+            spec.span,
           );
         }
 
@@ -844,7 +868,7 @@ function importExportSpec(
           if (!depADT.constructors.includes(ctorName)) {
             throw new SemanticError(
               `Constructor '${ctorName}' is not defined in type '${name}'`,
-              spec.span
+              spec.span,
             );
           }
           const ctor = depModule.constructors[ctorName];
@@ -866,7 +890,7 @@ function importExportSpec(
         if (!isExportedFromModule(depModule, name, "protocol")) {
           throw new SemanticError(
             `Cannot import protocol '${name}' from module '${imp.moduleName}' - it is not exported`,
-            spec.span
+            spec.span,
           );
         }
 
@@ -875,7 +899,7 @@ function importExportSpec(
           imp.moduleName,
           protocols[name],
           imp.span,
-          "protocol"
+          "protocol",
         );
         protocols[name] = depProtocol;
 
@@ -885,7 +909,7 @@ function importExportSpec(
           if (!methodInfo) {
             throw new SemanticError(
               `Method '${methodName}' is not defined in protocol '${name}'`,
-              spec.span
+              spec.span,
             );
           }
 
@@ -908,7 +932,7 @@ function importExportSpec(
 
       throw new SemanticError(
         `Cannot import '${name}(...)' from module '${imp.moduleName}' - it is not a type or protocol`,
-        spec.span
+        spec.span,
       );
     }
   }
@@ -916,8 +940,30 @@ function importExportSpec(
 
 export function analyze(
   program: Program,
-  options: AnalyzeOptions = {}
+  options: AnalyzeOptions = {},
 ): SemanticModule {
+  const { fileContext } = options;
+
+  // ===== Module Declaration Validation =====
+  // Every Vibe file MUST have a module declaration as the first statement (enforced by parser).
+  // When fileContext is provided, validate that the declared module name matches the file's path.
+  if (fileContext) {
+    const { filePath, srcDir } = fileContext;
+
+    // Compute expected module name from file path
+    const expectedModuleName = computeExpectedModuleName(filePath, srcDir);
+
+    const declaredModuleName = program.module.name;
+    if (declaredModuleName !== expectedModuleName) {
+      throw new SemanticError(
+        `Module name '${declaredModuleName}' does not match file path.\n` +
+          `Expected: module ${expectedModuleName} exposing (..)\n` +
+          `File path: ${filePath}`,
+        program.module.span,
+      );
+    }
+  }
+
   const values: Record<string, ValueInfo> = {};
   const annotations: Record<string, TypeAnnotationDeclaration> = {};
   const types: Record<string, Type> = {};
@@ -1010,7 +1056,7 @@ export function analyze(
     // This matches Haskell's behavior where type class instances are always visible
     for (const [name, protocol] of Object.entries(depModule.protocols) as [
       string,
-      ProtocolInfo
+      ProtocolInfo,
     ][]) {
       protocols[name] = protocol;
 
@@ -1073,7 +1119,7 @@ export function analyze(
           protocols,
           operators,
           importedValues,
-          typeSchemes
+          typeSchemes,
         );
       }
     }
@@ -1083,7 +1129,7 @@ export function analyze(
       // Import all exported values
       for (const [name, depValue] of Object.entries(depModule.values) as [
         string,
-        ValueInfo
+        ValueInfo,
       ][]) {
         if (depValue.type && isExportedFromModule(depModule, name, "value")) {
           const importedType = depValue.type;
@@ -1097,7 +1143,7 @@ export function analyze(
       // Import all exported constructors
       for (const [name, ctor] of Object.entries(depModule.constructors) as [
         string,
-        ConstructorInfo
+        ConstructorInfo,
       ][]) {
         if (isExportedFromModule(depModule, name, "constructor")) {
           constructors[name] = ctor;
@@ -1113,7 +1159,7 @@ export function analyze(
       // Import all exported ADTs
       for (const [name, adt] of Object.entries(depModule.adts) as [
         string,
-        ADTInfo
+        ADTInfo,
       ][]) {
         if (isExportedFromModule(depModule, name, "type")) {
           // Check for collision with existing ADT from different module
@@ -1122,7 +1168,7 @@ export function analyze(
             imp.moduleName,
             adts[name],
             imp.span,
-            "type"
+            "type",
           );
           adts[name] = adt;
         }
@@ -1131,7 +1177,7 @@ export function analyze(
       // Import all exported type aliases
       for (const [name, alias] of Object.entries(depModule.typeAliases) as [
         string,
-        TypeAliasInfo
+        TypeAliasInfo,
       ][]) {
         if (isExportedFromModule(depModule, name, "type")) {
           // Check for collision with existing type alias from different module
@@ -1140,7 +1186,7 @@ export function analyze(
             imp.moduleName,
             typeAliases[name],
             imp.span,
-            "type alias"
+            "type alias",
           );
           typeAliases[name] = alias;
         }
@@ -1149,7 +1195,7 @@ export function analyze(
       // Import all exported opaque types
       for (const [name, opaque] of Object.entries(depModule.opaqueTypes) as [
         string,
-        OpaqueTypeInfo
+        OpaqueTypeInfo,
       ][]) {
         if (isExportedFromModule(depModule, name, "type")) {
           // Check for collision with existing opaque type from different module
@@ -1164,7 +1210,7 @@ export function analyze(
               `Opaque type '${name}' conflicts with opaque type from module '${
                 opaqueTypes[name]!.moduleName
               }'. ` + `Consider using a different name or qualified imports.`,
-              imp.span
+              imp.span,
             );
           }
           opaqueTypes[name] = opaque;
@@ -1174,7 +1220,7 @@ export function analyze(
       // Import all exported protocols
       for (const [name, protocol] of Object.entries(depModule.protocols) as [
         string,
-        ProtocolInfo
+        ProtocolInfo,
       ][]) {
         if (isExportedFromModule(depModule, name, "protocol")) {
           // Check for collision with existing protocol from different module
@@ -1183,14 +1229,14 @@ export function analyze(
             imp.moduleName,
             protocols[name],
             imp.span,
-            "protocol"
+            "protocol",
           );
           protocols[name] = protocol;
 
           // Add protocol methods to scope so they can be called directly
           const methodSchemes = addProtocolMethodsToScope(
             protocol,
-            globalScope
+            globalScope,
           );
           // Store in typeSchemes for LSP hover/completion
           for (const [methodName, scheme] of methodSchemes) {
@@ -1235,7 +1281,7 @@ export function analyze(
         constructors,
         constructorTypes,
         globalScope,
-        currentModuleName
+        currentModuleName,
       );
       continue;
     }
@@ -1282,7 +1328,7 @@ export function analyze(
         substitution,
         currentModuleName,
         imports,
-        dependencies
+        dependencies,
       );
       continue;
     }
@@ -1300,7 +1346,7 @@ export function analyze(
         localInstances,
         adts,
         typeAliases,
-        currentModuleName
+        currentModuleName,
       );
     }
   }
@@ -1317,7 +1363,7 @@ export function analyze(
         protocols,
         adts,
         typeAliases,
-        currentModuleName
+        currentModuleName,
       );
       continue;
     }
@@ -1338,7 +1384,7 @@ export function analyze(
       if (Object.hasOwn(annotations, decl.name)) {
         throw new SemanticError(
           `Duplicate type annotation for '${decl.name}'`,
-          decl.span
+          decl.span,
         );
       }
       annotations[decl.name] = decl;
@@ -1350,14 +1396,14 @@ export function analyze(
     if (!Object.hasOwn(values, name)) {
       throw new SemanticError(
         `Type annotation for '${name}' has no matching definition`,
-        ann.span
+        ann.span,
       );
     }
     const value = values[name]!;
     if (value.declaration.kind === "ExternalDeclaration") {
       throw new SemanticError(
         `External declaration '${name}' already includes a type annotation`,
-        ann.span
+        ann.span,
       );
     }
     value.annotation = ann.annotation;
@@ -1391,7 +1437,7 @@ export function analyze(
         adts,
         typeAliases,
         info.declaration.span,
-        opaqueTypes
+        opaqueTypes,
       );
 
       if (validationErrors.length > 0) {
@@ -1407,7 +1453,7 @@ export function analyze(
         new Map(),
         adts,
         typeAliases,
-        protocols
+        protocols,
       );
       annotationType = result.type;
       annotatedConstraints =
@@ -1426,7 +1472,7 @@ export function analyze(
       globalScope,
       name,
       { vars: new Set(), constraints: [], type: seeded },
-      info.declaration.span
+      info.declaration.span,
     );
     types[name] = seeded;
   }
@@ -1452,7 +1498,7 @@ export function analyze(
     typeAliases,
     opaqueTypes,
     imports,
-    dependencies
+    dependencies,
   );
 
   // Build dependency graph and compute SCCs for proper mutual recursion handling.
@@ -1487,7 +1533,7 @@ export function analyze(
           new Map(),
           adts,
           typeAliases,
-          protocols
+          protocols,
         );
         info.type = result.type;
 
@@ -1538,7 +1584,7 @@ export function analyze(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
+          dependencies,
         );
 
         inferredTypes.set(name, inferred);
@@ -1556,7 +1602,7 @@ export function analyze(
           { symbols: new Map(), parent: globalScope.parent },
           substitution,
           info.annotatedConstraints,
-          info.declaration.span
+          info.declaration.span,
         );
         globalScope.symbols.set(name, generalizedScheme);
         // Store the type scheme with constraints for dictionary-passing
@@ -1574,7 +1620,7 @@ export function analyze(
     globalScope,
     constructors,
     imports,
-    dependencies
+    dependencies,
   );
 
   // ===== PASS 2.5b: Validate implementation method types =====
@@ -1591,7 +1637,7 @@ export function analyze(
     typeAliases,
     opaqueTypes,
     imports,
-    dependencies
+    dependencies,
   );
 
   // ===== PASS 2.5c: Validate instance constraint satisfiability =====
@@ -1602,7 +1648,7 @@ export function analyze(
     localInstances,
     instances,
     protocols,
-    adts
+    adts,
   );
 
   // ===== PASS 2.5d: Validate concrete constraint instances exist =====
@@ -1613,7 +1659,7 @@ export function analyze(
     values,
     instances,
     protocols,
-    substitution
+    substitution,
   );
 
   // ===== PASS 2.6: Validate protocol default implementations =====
@@ -1625,7 +1671,7 @@ export function analyze(
     constructors,
     imports,
     dependencies,
-    currentModuleName
+    currentModuleName,
   );
 
   // Compute export information for this module
@@ -1638,7 +1684,7 @@ export function analyze(
     opaqueTypes,
     protocols,
     operators,
-    importedValues
+    importedValues,
   );
 
   return {
@@ -1663,13 +1709,13 @@ export function analyze(
 
 function registerValue(
   values: Record<string, ValueInfo>,
-  decl: ValueDeclaration | ExternalDeclaration
+  decl: ValueDeclaration | ExternalDeclaration,
 ) {
   // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
   if (Object.hasOwn(values, decl.name)) {
     throw new SemanticError(
       `Duplicate definition for '${decl.name}'`,
-      decl.span
+      decl.span,
     );
   }
   values[decl.name] = {
@@ -1705,7 +1751,7 @@ function registerTypeDeclaration(
   constructors: Record<string, ConstructorInfo>,
   constructorTypes: Record<string, TypeScheme>,
   globalScope: Scope,
-  moduleName?: string
+  moduleName?: string,
 ) {
   // Check for duplicate type name
   const existingADT = adts[decl.name];
@@ -1715,12 +1761,12 @@ function registerTypeDeclaration(
       throw new SemanticError(
         `Type '${decl.name}' conflicts with type from module '${existingADT.moduleName}'. ` +
           `Consider using a different name or qualified imports.`,
-        decl.span
+        decl.span,
       );
     }
     throw new SemanticError(
       `Duplicate type declaration for '${decl.name}'`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -1730,7 +1776,7 @@ function registerTypeDeclaration(
     if (paramSet.has(param)) {
       throw new SemanticError(
         `Duplicate type parameter '${param}' in type '${decl.name}'`,
-        decl.span
+        decl.span,
       );
     }
     paramSet.add(param);
@@ -1740,7 +1786,7 @@ function registerTypeDeclaration(
   if (decl.constructors.length === 0) {
     throw new SemanticError(
       `Type '${decl.name}' must have at least one constructor`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -1777,7 +1823,7 @@ function registerTypeDeclaration(
     if (existingCtor && existingCtor.moduleName === moduleName) {
       throw new SemanticError(
         `Duplicate constructor '${ctor.name}' (constructor names must be unique within a module)`,
-        ctor.span
+        ctor.span,
       );
     }
 
@@ -1840,7 +1886,7 @@ function registerTypeDeclaration(
 function buildConstructorType(
   ctor: ConstructorVariant,
   resultType: TypeCon,
-  paramTypeVars: Map<string, TypeVar>
+  paramTypeVars: Map<string, TypeVar>,
 ): Type {
   if (ctor.args.length === 0) {
     // Nullary constructor: just return the result type
@@ -1849,7 +1895,7 @@ function buildConstructorType(
 
   // Convert each argument TypeExpr to internal Type
   const argTypes: Type[] = ctor.args.map((argExpr) =>
-    constructorArgToType(argExpr, paramTypeVars)
+    constructorArgToType(argExpr, paramTypeVars),
   );
 
   // Build function type: arg1 -> arg2 -> ... -> ResultType
@@ -1866,7 +1912,7 @@ function buildConstructorType(
  */
 function constructorArgToType(
   expr: TypeExpr,
-  paramTypeVars: Map<string, TypeVar>
+  paramTypeVars: Map<string, TypeVar>,
 ): Type {
   switch (expr.kind) {
     case "TypeRef": {
@@ -1879,7 +1925,7 @@ function constructorArgToType(
       // Otherwise it's a type constructor
       // Recursively convert arguments
       const args = expr.args.map((arg) =>
-        constructorArgToType(arg, paramTypeVars)
+        constructorArgToType(arg, paramTypeVars),
       );
       return {
         kind: "con",
@@ -1898,14 +1944,14 @@ function constructorArgToType(
       return {
         kind: "tuple",
         elements: expr.elements.map((el) =>
-          constructorArgToType(el, paramTypeVars)
+          constructorArgToType(el, paramTypeVars),
         ),
       };
     }
     case "RecordType": {
       // Convert record type annotation to internal record type
       const sortedFields = [...expr.fields].sort((a, b) =>
-        a.name.localeCompare(b.name)
+        a.name.localeCompare(b.name),
       );
       const fields: Record<string, Type> = {};
       for (const field of sortedFields) {
@@ -1921,7 +1967,7 @@ function constructorArgToType(
       // (constraints only make sense at the top level of function signatures)
       throw new SemanticError(
         "Constructor arguments cannot have constraints",
-        expr.span
+        expr.span,
       );
     }
   }
@@ -1997,7 +2043,7 @@ function validateTypeExpr(
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
   parentSpan: Span,
-  opaqueTypes: Record<string, OpaqueTypeInfo> = {}
+  opaqueTypes: Record<string, OpaqueTypeInfo> = {},
 ): TypeValidationError[] {
   const errors: TypeValidationError[] = [];
 
@@ -2151,7 +2197,7 @@ function validateTypeExpr(
 function registerTypeAliasWithoutValidation(
   decl: TypeAliasDeclaration,
   typeAliases: Record<string, TypeAliasInfo>,
-  moduleName?: string
+  moduleName?: string,
 ) {
   // Check for duplicate alias name
   const existingAlias = typeAliases[decl.name];
@@ -2161,7 +2207,7 @@ function registerTypeAliasWithoutValidation(
       throw new SemanticError(
         `Type alias '${decl.name}' conflicts with type alias from module '${existingAlias.moduleName}'. ` +
           `Consider using a different name or qualified imports.`,
-        decl.span
+        decl.span,
       );
     }
     throw new SemanticError(`Duplicate type alias '${decl.name}'`, decl.span);
@@ -2173,7 +2219,7 @@ function registerTypeAliasWithoutValidation(
     if (paramSet.has(param)) {
       throw new SemanticError(
         `Duplicate type parameter '${param}' in type alias '${decl.name}'`,
-        decl.span
+        decl.span,
       );
     }
     paramSet.add(param);
@@ -2197,7 +2243,7 @@ function validateTypeAliasReferences(
   decl: TypeAliasDeclaration,
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo> = {}
+  opaqueTypes: Record<string, OpaqueTypeInfo> = {},
 ) {
   const paramSet = new Set<string>(decl.params);
 
@@ -2207,7 +2253,7 @@ function validateTypeAliasReferences(
     adts,
     typeAliases,
     decl.span,
-    opaqueTypes
+    opaqueTypes,
   );
 
   if (validationErrors.length > 0) {
@@ -2232,7 +2278,7 @@ function validateTypeAliasReferences(
 function registerOpaqueType(
   decl: OpaqueTypeDeclaration,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
-  moduleName?: string
+  moduleName?: string,
 ) {
   // Check for duplicate type name
   // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
@@ -2242,12 +2288,12 @@ function registerOpaqueType(
       throw new SemanticError(
         `Opaque type '${decl.name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
           `Consider using a different name or qualified imports.`,
-        decl.span
+        decl.span,
       );
     }
     throw new SemanticError(
       `Duplicate opaque type declaration for '${decl.name}'`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -2257,7 +2303,7 @@ function registerOpaqueType(
     if (paramSet.has(param)) {
       throw new SemanticError(
         `Duplicate type parameter '${param}' in opaque type '${decl.name}'`,
-        decl.span
+        decl.span,
       );
     }
     paramSet.add(param);
@@ -2287,7 +2333,7 @@ function registerTypeAlias(
   decl: TypeAliasDeclaration,
   typeAliases: Record<string, TypeAliasInfo>,
   adts: Record<string, ADTInfo>,
-  moduleName?: string
+  moduleName?: string,
 ) {
   registerTypeAliasWithoutValidation(decl, typeAliases, moduleName);
   validateTypeAliasReferences(decl, adts, typeAliases);
@@ -2300,13 +2346,13 @@ function registerTypeAlias(
 function registerInfixDeclaration(
   decl: InfixDeclaration,
   operators: OperatorRegistry,
-  infixDeclarations: InfixDeclaration[]
+  infixDeclarations: InfixDeclaration[],
 ) {
   // Check for duplicate operator declaration
   if (operators.has(decl.operator)) {
     throw new SemanticError(
       `Duplicate infix declaration for operator '${decl.operator}'`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -2315,14 +2361,14 @@ function registerInfixDeclaration(
     decl.fixity === "infixl"
       ? "left"
       : decl.fixity === "infixr"
-      ? "right"
-      : "none";
+        ? "right"
+        : "none";
 
   // Validate precedence range (0-9)
   if (decl.precedence < 0 || decl.precedence > 9) {
     throw new SemanticError(
       `Precedence must be between 0 and 9, got ${decl.precedence}`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -2419,7 +2465,7 @@ function refreshType(type: Type, newVarMap: Map<string, TypeVar>): Type {
  */
 function substituteProtocolVars(
   type: Type,
-  protocolVarCtx: Map<string, TypeVar>
+  protocolVarCtx: Map<string, TypeVar>,
 ): Type {
   // For now, just return the type as-is
   // In a more sophisticated implementation, we could try to unify
@@ -2443,7 +2489,7 @@ function registerProtocol(
   substitution: Substitution,
   moduleName?: string,
   imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map()
+  dependencies: Map<string, SemanticModule> = new Map(),
 ) {
   // Check for duplicate protocol name
   const existingProtocol = protocols[decl.name];
@@ -2456,7 +2502,7 @@ function registerProtocol(
       throw new SemanticError(
         `Protocol '${decl.name}' conflicts with protocol from module '${existingProtocol.moduleName}'. ` +
           `Consider using a different name or qualified imports.`,
-        decl.span
+        decl.span,
       );
     }
     throw new SemanticError(`Duplicate protocol '${decl.name}'`, decl.span);
@@ -2468,7 +2514,7 @@ function registerProtocol(
     if (paramSet.has(param)) {
       throw new SemanticError(
         `Duplicate type parameter '${param}' in protocol '${decl.name}'`,
-        decl.span
+        decl.span,
       );
     }
     paramSet.add(param);
@@ -2478,7 +2524,7 @@ function registerProtocol(
   if (decl.methods.length === 0) {
     throw new SemanticError(
       `Protocol '${decl.name}' must have at least one method`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -2510,7 +2556,7 @@ function registerProtocol(
     if (methodNames.has(method.name)) {
       throw new SemanticError(
         `Duplicate method '${method.name}' in protocol '${decl.name}'`,
-        method.span
+        method.span,
       );
     }
     methodNames.add(method.name);
@@ -2524,7 +2570,7 @@ function registerProtocol(
         method.type,
         sharedTypeVarCtx,
         adts,
-        typeAliases
+        typeAliases,
       );
     } else if (method.defaultImpl) {
       // No explicit type annotation, but has default implementation
@@ -2532,7 +2578,7 @@ function registerProtocol(
       const lambdaExpr = makeLambda(
         method.defaultImpl.args,
         method.defaultImpl.body,
-        method.span
+        method.span,
       );
 
       // Create a temporary scope for type inference
@@ -2549,7 +2595,7 @@ function registerProtocol(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
 
       // Apply substitutions to get the final type
@@ -2562,7 +2608,7 @@ function registerProtocol(
       // Neither type annotation nor default implementation
       throw new SemanticError(
         `Protocol method '${method.name}' must have either a type annotation or a default implementation`,
-        method.span
+        method.span,
       );
     }
 
@@ -2591,7 +2637,7 @@ function registerProtocol(
         ...decl.constraints.map((c) => ({
           protocolName: c.protocolName,
           typeArgs: c.typeArgs.map((ta) =>
-            typeFromAnnotation(ta, sharedTypeVarCtx, adts, typeAliases)
+            typeFromAnnotation(ta, sharedTypeVarCtx, adts, typeAliases),
           ),
         })),
       ];
@@ -2608,7 +2654,7 @@ function registerProtocol(
   const superclassConstraints: Constraint[] = decl.constraints.map((c) => ({
     protocolName: c.protocolName,
     typeArgs: c.typeArgs.map((ta) =>
-      typeFromAnnotation(ta, sharedTypeVarCtx, adts, typeAliases)
+      typeFromAnnotation(ta, sharedTypeVarCtx, adts, typeAliases),
     ),
   }));
 
@@ -2635,7 +2681,7 @@ function processImplementingClause(
   localInstances: InstanceInfo[],
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
-  moduleName?: string
+  moduleName?: string,
 ) {
   if (!decl.implementing) return;
 
@@ -2646,7 +2692,7 @@ function processImplementingClause(
     if (!protocol) {
       throw new SemanticError(
         `Unknown protocol '${protocolName}' in 'implementing' clause`,
-        decl.span
+        decl.span,
       );
     }
 
@@ -2669,7 +2715,7 @@ function processImplementingClause(
         protocolName,
         methodsWithoutDefaults,
         methodsWithDefaults,
-        decl.span
+        decl.span,
       );
     }
 
@@ -2684,7 +2730,7 @@ function processImplementingClause(
           (param): TypeVar => ({
             kind: "var",
             id: freshType().id,
-          })
+          }),
         ),
       },
     ];
@@ -2697,7 +2743,7 @@ function processImplementingClause(
         const defaultLambda = makeLambda(
           methodInfo.defaultImpl.args,
           methodInfo.defaultImpl.body,
-          methodInfo.span
+          methodInfo.span,
         );
         methods.set(methodName, defaultLambda);
       }
@@ -2722,7 +2768,7 @@ function processImplementingClause(
       if (instancesOverlap(existing, newInstance, instances)) {
         throw new SemanticError(
           `Overlapping implementation for protocol '${protocolName}' (from 'implementing' clause)`,
-          decl.span
+          decl.span,
         );
       }
     }
@@ -2743,14 +2789,14 @@ function registerImplementation(
   protocols: Record<string, ProtocolInfo>,
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
-  moduleName?: string
+  moduleName?: string,
 ) {
   // Check that the protocol exists
   const protocol = protocols[decl.protocolName];
   if (!protocol) {
     throw new SemanticError(
       `Unknown protocol '${decl.protocolName}'`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -2758,7 +2804,7 @@ function registerImplementation(
   if (decl.typeArgs.length !== protocol.params.length) {
     throw new SemanticError(
       `Protocol '${decl.protocolName}' expects ${protocol.params.length} type argument(s), but got ${decl.typeArgs.length}`,
-      decl.span
+      decl.span,
     );
   }
 
@@ -2777,7 +2823,7 @@ function registerImplementation(
     const constraintTypeArgs: Type[] = [];
     for (const typeArg of astConstraint.typeArgs) {
       constraintTypeArgs.push(
-        typeFromAnnotation(typeArg, typeVarCtx, adts, typeAliases)
+        typeFromAnnotation(typeArg, typeVarCtx, adts, typeAliases),
       );
     }
     constraints.push({
@@ -2796,7 +2842,7 @@ function registerImplementation(
     if (!implementedMethods.has(methodName) && !methodInfo.defaultImpl) {
       throw new SemanticError(
         `Instance is missing implementation for method '${methodName}'`,
-        decl.span
+        decl.span,
       );
     }
   }
@@ -2806,7 +2852,7 @@ function registerImplementation(
     if (!allMethods.has(implemented)) {
       throw new SemanticError(
         `Method '${implemented}' is not part of protocol '${decl.protocolName}'`,
-        decl.span
+        decl.span,
       );
     }
   }
@@ -2822,7 +2868,7 @@ function registerImplementation(
       const lambda = makeLambda(
         method.args,
         method.implementation,
-        method.span
+        method.span,
       );
       methods.set(method.name, lambda);
     } else {
@@ -2840,7 +2886,7 @@ function registerImplementation(
       const defaultLambda = makeLambda(
         methodInfo.defaultImpl.args,
         methodInfo.defaultImpl.body,
-        methodInfo.span
+        methodInfo.span,
       );
       methods.set(methodName, defaultLambda);
     }
@@ -2867,7 +2913,7 @@ function registerImplementation(
     if (instancesOverlap(existing, instanceInfo, instances)) {
       throw new SemanticError(
         `Overlapping implementation for protocol '${decl.protocolName}'`,
-        decl.span
+        decl.span,
       );
     }
   }
@@ -2900,7 +2946,7 @@ function concretizeInstanceTypeArgs(
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>
+  dependencies: Map<string, SemanticModule>,
 ): void {
   for (const instance of localInstances) {
     const protocol = protocols[instance.protocolName];
@@ -2921,7 +2967,7 @@ function concretizeInstanceTypeArgs(
       const expectedType = substituteTypeParams(
         protocolMethodInfo.type,
         protocol.params,
-        instance.typeArgs
+        instance.typeArgs,
       );
 
       // Create a fresh substitution for inference
@@ -2940,7 +2986,7 @@ function concretizeInstanceTypeArgs(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
+          dependencies,
         );
 
         // Unify to get concrete types
@@ -2978,7 +3024,7 @@ function concretizeInstanceTypeArgs(
             const isSatisfied = findInstanceForConstraint(
               constraint.protocolName,
               constraint.typeArgs,
-              allInstances
+              allInstances,
             );
             if (isSatisfied) {
               constraintsToRemove.push(constraint);
@@ -3006,7 +3052,7 @@ function concretizeInstanceTypeArgs(
 function findInstanceForConstraint(
   protocolName: string,
   typeArgs: Type[],
-  instances: InstanceInfo[]
+  instances: InstanceInfo[],
 ): boolean {
   for (const inst of instances) {
     if (inst.protocolName !== protocolName) continue;
@@ -3043,7 +3089,7 @@ function validateImplementationMethodTypes(
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>
+  dependencies: Map<string, SemanticModule>,
 ): void {
   for (const instance of localInstances) {
     const protocol = protocols[instance.protocolName];
@@ -3078,7 +3124,7 @@ function validateImplementationMethodTypes(
       const expectedType = substituteTypeParams(
         protocolMethodInfo.type,
         protocol.params,
-        instance.typeArgs
+        instance.typeArgs,
       );
 
       // Create a fresh substitution for inference
@@ -3096,7 +3142,7 @@ function validateImplementationMethodTypes(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
 
       // Try to unify the inferred type with the expected type
@@ -3108,9 +3154,9 @@ function validateImplementationMethodTypes(
             `Implementation of '${methodName}' for '${
               instance.protocolName
             }' has type '${formatType(
-              applySubstitution(inferredType, inferSubstitution)
+              applySubstitution(inferredType, inferSubstitution),
             )}' but protocol expects '${formatType(expectedType)}'`,
-            methodExpr.span
+            methodExpr.span,
           );
         }
         throw e;
@@ -3125,7 +3171,7 @@ function validateImplementationMethodTypes(
           // Apply the substitution to see what the constraint type arg resolves to
           const resolvedType = applySubstitution(
             constraintTypeArg,
-            inferSubstitution
+            inferSubstitution,
           );
 
           // If it resolved to a concrete type, check that an instance exists
@@ -3133,17 +3179,17 @@ function validateImplementationMethodTypes(
             const hasInstance = findInstanceForTypeInternal(
               constraint.protocolName,
               resolvedType,
-              allInstances
+              allInstances,
             );
             if (!hasInstance) {
               throw new SemanticError(
                 `Implementation of '${methodName}' for '${instance.protocolName}' ` +
                   `requires '${constraint.protocolName}' constraint on type parameter, ` +
                   `but the implementation uses type '${formatType(
-                    resolvedType
+                    resolvedType,
                   )}' ` +
                   `which does not implement '${constraint.protocolName}'`,
-                methodExpr.span
+                methodExpr.span,
               );
             }
           }
@@ -3191,7 +3237,7 @@ function validateImplementationMethodTypes(
 function substituteTypeParams(
   type: Type,
   params: string[],
-  typeArgs: Type[]
+  typeArgs: Type[],
 ): Type {
   // Collect all unique type variable IDs from the method type in order
   const varIds: number[] = [];
@@ -3224,7 +3270,7 @@ function validateImplementationMethodExpressions(
   globalScope: Scope,
   constructors: Record<string, ConstructorInfo>,
   imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>
+  dependencies: Map<string, SemanticModule>,
 ): void {
   for (const instance of instances) {
     // Only validate methods that were explicitly provided in the implement block
@@ -3239,7 +3285,7 @@ function validateImplementationMethodExpressions(
           instance.protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
     }
@@ -3261,7 +3307,7 @@ function validateInstanceConstraintSatisfiability(
   localInstances: InstanceInfo[],
   allInstances: InstanceInfo[],
   protocols: Record<string, ProtocolInfo>,
-  _adts: Record<string, ADTInfo>
+  _adts: Record<string, ADTInfo>,
 ): void {
   for (const instance of localInstances) {
     // Skip instances without constraints
@@ -3273,7 +3319,7 @@ function validateInstanceConstraintSatisfiability(
       if (!constraintProtocol) {
         throw new SemanticError(
           `Instance constraint references unknown protocol '${constraint.protocolName}'`,
-          instance.span
+          instance.span,
         );
       }
 
@@ -3301,7 +3347,7 @@ function validateConcreteConstraintInstances(
   values: Record<string, ValueInfo>,
   instances: InstanceInfo[],
   protocols: Record<string, ProtocolInfo>,
-  substitution: Substitution
+  substitution: Substitution,
 ): void {
   for (const [valueName, valueInfo] of Object.entries(values)) {
     // Skip synthetic values and values without inferred constraints
@@ -3313,7 +3359,7 @@ function validateConcreteConstraintInstances(
       for (const constraint of valueInfo.collectedConstraints) {
         // Apply substitution to get the resolved constraint types
         const resolvedTypeArgs = constraint.typeArgs.map((t) =>
-          applySubstitution(t, substitution)
+          applySubstitution(t, substitution),
         );
 
         // Check if any type argument is a concrete type (not a type variable)
@@ -3323,7 +3369,7 @@ function validateConcreteConstraintInstances(
             const hasInstance = findInstanceForTypeInternal(
               constraint.protocolName,
               typeArg,
-              instances
+              instances,
             );
 
             if (!hasInstance) {
@@ -3335,7 +3381,7 @@ function validateConcreteConstraintInstances(
                   `Add an implementation: implement ${
                     constraint.protocolName
                   } ${formatType(typeArg)} where ...`,
-                span
+                span,
               );
             }
           }
@@ -3438,7 +3484,7 @@ function instanceTypeMatches(instType: Type, concreteType: Type): boolean {
  */
 function checkConstraintSatisfiability(
   constraint: Constraint,
-  instances: InstanceInfo[]
+  instances: InstanceInfo[],
 ): { possible: boolean } {
   // If all type args are fully concrete, do a full validation
   const hasFreeVars = constraint.typeArgs.some((t) => {
@@ -3480,7 +3526,7 @@ function checkConstraintSatisfiability(
       const hasTupleInstance = instances.some((inst) => {
         if (inst.protocolName !== constraint.protocolName) return false;
         return inst.typeArgs.some(
-          (t) => t.kind === "tuple" || t.kind === "var"
+          (t) => t.kind === "tuple" || t.kind === "var",
         );
       });
 
@@ -3494,7 +3540,7 @@ function checkConstraintSatisfiability(
       const hasRecordInstance = instances.some((inst) => {
         if (inst.protocolName !== constraint.protocolName) return false;
         return inst.typeArgs.some(
-          (t) => t.kind === "record" || t.kind === "var"
+          (t) => t.kind === "record" || t.kind === "var",
         );
       });
 
@@ -3509,7 +3555,7 @@ function checkConstraintSatisfiability(
         if (inst.protocolName !== constraint.protocolName) return false;
         return inst.typeArgs.some(
           (t) =>
-            t.kind === "var" || (t.kind === "con" && t.name === typeArg.name)
+            t.kind === "var" || (t.kind === "con" && t.name === typeArg.name),
         );
       });
 
@@ -3557,7 +3603,7 @@ function getTypeShape(type: Type): "var" | "con" | "fun" | "tuple" | "record" {
  */
 function validateConstraintSatisfiable(
   constraint: Constraint,
-  instances: InstanceInfo[]
+  instances: InstanceInfo[],
 ): InstanceLookupResult {
   let firstUnsatisfiedConstraint: {
     constraint: string;
@@ -3599,7 +3645,7 @@ function validateConstraintSatisfiable(
       // e.g., if instance has `Appendable a` and we matched a -> List Int,
       // we need to check if `Appendable (List Int)` holds
       const substitutedTypeArgs = instConstraint.typeArgs.map((t) =>
-        applySubstitution(t, instSubstitution)
+        applySubstitution(t, instSubstitution),
       );
 
       const substitutedConstraint: Constraint = {
@@ -3612,7 +3658,7 @@ function validateConstraintSatisfiable(
       // might never have an instance for certain protocols
       const canBeSatisfied = checkConstraintSatisfiability(
         substitutedConstraint,
-        instances
+        instances,
       );
 
       if (!canBeSatisfied.possible) {
@@ -3654,7 +3700,7 @@ function validateConstraintSatisfiable(
 function matchTypeArgForInstance(
   instArg: Type,
   constraintArg: Type,
-  substitution: Map<number, Type>
+  substitution: Map<number, Type>,
 ): boolean {
   // If instance arg is a type variable, it can match anything
   // Record the mapping for constraint validation
@@ -3686,7 +3732,7 @@ function matchTypeArgForInstance(
         !matchTypeArgForInstance(
           instArg.args[i]!,
           constraintArg.args[i]!,
-          substitution
+          substitution,
         )
       ) {
         return false;
@@ -3713,7 +3759,7 @@ function matchTypeArgForInstance(
 function findInstanceForTypeWithReason(
   protocolName: string,
   concreteType: TypeCon,
-  instances: InstanceInfo[]
+  instances: InstanceInfo[],
 ): InstanceLookupResult {
   let hasPolymorphicInstance = false;
   let firstUnsatisfiedConstraint: {
@@ -3763,7 +3809,7 @@ function findInstanceForTypeWithReason(
         const constraintResult = findInstanceForTypeWithReason(
           constraint.protocolName,
           concreteType,
-          instances
+          instances,
         );
         if (!constraintResult.found) {
           allConstraintsSatisfied = false;
@@ -3802,7 +3848,7 @@ function findInstanceForTypeWithReason(
 function findInstanceForTypeInternal(
   protocolName: string,
   concreteType: TypeCon,
-  instances: InstanceInfo[]
+  instances: InstanceInfo[],
 ): boolean {
   return findInstanceForTypeWithReason(protocolName, concreteType, instances)
     .found;
@@ -3822,7 +3868,7 @@ function validateProtocolDefaultImplementations(
   constructors: Record<string, ConstructorInfo>,
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
-  currentModuleName?: string
+  currentModuleName?: string,
 ): void {
   for (const [protocolName, protocol] of Object.entries(protocols)) {
     // Only validate protocols defined in this module
@@ -3844,7 +3890,7 @@ function validateProtocolDefaultImplementations(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
     }
@@ -3870,7 +3916,7 @@ function validateExpressionIdentifiers(
   protocolName: string,
   methodName: string,
   imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>
+  dependencies: Map<string, SemanticModule>,
 ): void {
   switch (expr.kind) {
     case "Var": {
@@ -3883,7 +3929,7 @@ function validateExpressionIdentifiers(
       if (!symbolExists(scope, name)) {
         throw new SemanticError(
           `Undefined name '${name}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span
+          expr.span,
         );
       }
       return;
@@ -3901,7 +3947,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       return;
     }
@@ -3913,7 +3959,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       for (const arg of expr.args) {
         validateExpressionIdentifiers(
@@ -3923,7 +3969,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return;
@@ -3936,7 +3982,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       validateExpressionIdentifiers(
         expr.thenBranch,
@@ -3945,7 +3991,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       validateExpressionIdentifiers(
         expr.elseBranch,
@@ -3954,7 +4000,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       return;
     }
@@ -3970,7 +4016,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
         // Then add the binding name to the child scope
         childScope.symbols.set(binding.name, {
@@ -3986,7 +4032,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       return;
     }
@@ -3998,7 +4044,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       for (const branch of expr.branches) {
         // Create a child scope with pattern bindings
@@ -4011,7 +4057,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return;
@@ -4022,7 +4068,7 @@ function validateExpressionIdentifiers(
       if (!symbolExists(scope, expr.operator)) {
         throw new SemanticError(
           `Undefined operator '${expr.operator}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span
+          expr.span,
         );
       }
       validateExpressionIdentifiers(
@@ -4032,7 +4078,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       validateExpressionIdentifiers(
         expr.right,
@@ -4041,7 +4087,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       return;
     }
@@ -4053,7 +4099,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       return;
     }
@@ -4065,7 +4111,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       return;
     }
@@ -4078,7 +4124,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return;
@@ -4092,7 +4138,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return;
@@ -4105,7 +4151,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       validateExpressionIdentifiers(
         expr.end,
@@ -4114,7 +4160,7 @@ function validateExpressionIdentifiers(
         protocolName,
         methodName,
         imports,
-        dependencies
+        dependencies,
       );
       return;
     }
@@ -4127,7 +4173,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return;
@@ -4137,7 +4183,7 @@ function validateExpressionIdentifiers(
       if (!symbolExists(scope, expr.base)) {
         throw new SemanticError(
           `Undefined name '${expr.base}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span
+          expr.span,
         );
       }
       for (const field of expr.fields) {
@@ -4148,7 +4194,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return;
@@ -4161,7 +4207,7 @@ function validateExpressionIdentifiers(
         imports,
         dependencies,
         protocolName,
-        methodName
+        methodName,
       );
       if (!resolved) {
         // Not a module access, validate the target expression normally
@@ -4172,7 +4218,7 @@ function validateExpressionIdentifiers(
           protocolName,
           methodName,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return;
@@ -4196,7 +4242,7 @@ function validateModuleFieldAccess(
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
   protocolName: string,
-  methodName: string
+  methodName: string,
 ): boolean {
   // Collect the chain of field accesses to reconstruct the module path
   const parts: string[] = [];
@@ -4225,7 +4271,7 @@ function validateModuleFieldAccess(
       if (!depModule) {
         throw new SemanticError(
           `Module '${imp.moduleName}' (aliased as '${imp.alias}') not found in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span
+          expr.span,
         );
       }
 
@@ -4239,7 +4285,7 @@ function validateModuleFieldAccess(
         if (!isExportedFromModule(depModule, fieldName, "value")) {
           throw new SemanticError(
             `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span
+            expr.span,
           );
         }
         return true;
@@ -4251,7 +4297,7 @@ function validateModuleFieldAccess(
         if (!isExportedFromModule(depModule, fieldName, "constructor")) {
           throw new SemanticError(
             `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span
+            expr.span,
           );
         }
         return true;
@@ -4260,7 +4306,7 @@ function validateModuleFieldAccess(
       // Field not found in the module
       throw new SemanticError(
         `'${fieldName}' is not defined in module '${imp.moduleName}' (aliased as '${imp.alias}') in implementation of '${methodName}' for protocol '${protocolName}'`,
-        expr.span
+        expr.span,
       );
     }
 
@@ -4280,7 +4326,7 @@ function validateModuleFieldAccess(
         if (!depModule) {
           throw new SemanticError(
             `Module '${imp.moduleName}' not found in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span
+            expr.span,
           );
         }
 
@@ -4296,7 +4342,7 @@ function validateModuleFieldAccess(
             if (!isExportedFromModule(depModule, fieldName, "value")) {
               throw new SemanticError(
                 `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-                expr.span
+                expr.span,
               );
             }
             return true;
@@ -4308,7 +4354,7 @@ function validateModuleFieldAccess(
             if (!isExportedFromModule(depModule, fieldName, "constructor")) {
               throw new SemanticError(
                 `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-                expr.span
+                expr.span,
               );
             }
             return true;
@@ -4317,7 +4363,7 @@ function validateModuleFieldAccess(
           // Field not found in the module
           throw new SemanticError(
             `'${fieldName}' is not defined in module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span
+            expr.span,
           );
         }
       }
@@ -4401,7 +4447,7 @@ function bindPatternNames(pattern: Pattern, scope: Scope): void {
 function instancesOverlap(
   inst1: InstanceInfo,
   inst2: InstanceInfo,
-  instances: InstanceInfo[]
+  instances: InstanceInfo[],
 ): boolean {
   // First, check if the type arguments structurally overlap
   if (!typesOverlap(inst1.typeArgs, inst2.typeArgs)) {
@@ -4422,7 +4468,7 @@ function instancesOverlap(
     // Check if type2 satisfies all of type1's constraints
     if (type1.kind === "var" && type2.kind === "con") {
       const constraintsForVar = inst1.constraints.filter((c) =>
-        c.typeArgs.some((t) => t.kind === "var" && t.id === type1.id)
+        c.typeArgs.some((t) => t.kind === "var" && t.id === type1.id),
       );
 
       for (const constraint of constraintsForVar) {
@@ -4430,13 +4476,13 @@ function instancesOverlap(
         const substitutedType = substituteTypeInConstraint(
           constraint,
           type1.id,
-          type2
+          type2,
         );
         if (
           !canSatisfyConstraint(
             substitutedType,
             constraint.protocolName,
-            instances
+            instances,
           )
         ) {
           // The concrete type cannot satisfy the constraint, so no overlap
@@ -4449,7 +4495,7 @@ function instancesOverlap(
     // Check if type1 satisfies all of type2's constraints
     if (type2.kind === "var" && type1.kind === "con") {
       const constraintsForVar = inst2.constraints.filter((c) =>
-        c.typeArgs.some((t) => t.kind === "var" && t.id === type2.id)
+        c.typeArgs.some((t) => t.kind === "var" && t.id === type2.id),
       );
 
       for (const constraint of constraintsForVar) {
@@ -4457,13 +4503,13 @@ function instancesOverlap(
         const substitutedType = substituteTypeInConstraint(
           constraint,
           type2.id,
-          type1
+          type1,
         );
         if (
           !canSatisfyConstraint(
             substitutedType,
             constraint.protocolName,
-            instances
+            instances,
           )
         ) {
           // The concrete type cannot satisfy the constraint, so no overlap
@@ -4489,7 +4535,7 @@ function instancesOverlap(
 function substituteTypeInConstraint(
   constraint: Constraint,
   varId: number,
-  replacement: Type
+  replacement: Type,
 ): Type {
   // Find the type argument that contains the variable and substitute
   for (const typeArg of constraint.typeArgs) {
@@ -4499,7 +4545,7 @@ function substituteTypeInConstraint(
     if (typeArg.kind === "con") {
       // Handle nested type constructors like `List a`
       const substitutedArgs = typeArg.args.map((arg) =>
-        arg.kind === "var" && arg.id === varId ? replacement : arg
+        arg.kind === "var" && arg.id === varId ? replacement : arg,
       );
       return { kind: "con", name: typeArg.name, args: substitutedArgs };
     }
@@ -4514,7 +4560,7 @@ function substituteTypeInConstraint(
 function canSatisfyConstraint(
   concreteType: Type,
   protocolName: string,
-  instances: InstanceInfo[]
+  instances: InstanceInfo[],
 ): boolean {
   if (concreteType.kind !== "con") {
     // If it's still a type variable, we can't determine satisfaction
@@ -4603,7 +4649,7 @@ function computeModuleExports(
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   protocols: Record<string, ProtocolInfo>,
   operators: OperatorRegistry,
-  importedValues: Map<string, string> = new Map()
+  importedValues: Map<string, string> = new Map(),
 ): ExportInfo {
   // Default: empty exports
   const exports: ExportInfo = {
@@ -4711,7 +4757,7 @@ function computeModuleExports(
 
         throw new SemanticError(
           `Module exposes '${name}' which is not defined`,
-          spec.span
+          spec.span,
         );
       }
 
@@ -4722,7 +4768,7 @@ function computeModuleExports(
         if (!values[op] && !operators.has(op) && !importedValues.has(op)) {
           throw new SemanticError(
             `Module exposes operator '${op}' which is not defined`,
-            spec.span
+            spec.span,
           );
         }
 
@@ -4765,19 +4811,19 @@ function computeModuleExports(
         if (typeAliases[name]) {
           throw new SemanticError(
             `Type alias '${name}' cannot use (..) syntax - type aliases have no constructors`,
-            spec.span
+            spec.span,
           );
         }
         if (opaqueTypes[name]) {
           throw new SemanticError(
             `Opaque type '${name}' cannot use (..) syntax - opaque types have no constructors`,
-            spec.span
+            spec.span,
           );
         }
 
         throw new SemanticError(
           `Module exposes '${name}(..)' but '${name}' is not a type or protocol`,
-          spec.span
+          spec.span,
         );
       }
 
@@ -4794,7 +4840,7 @@ function computeModuleExports(
             if (!adt.constructors.includes(memberName)) {
               throw new SemanticError(
                 `Constructor '${memberName}' is not defined in type '${name}'`,
-                spec.span
+                spec.span,
               );
             }
             exportedCtors.add(memberName);
@@ -4816,7 +4862,7 @@ function computeModuleExports(
             if (!protocol.methods.has(memberName)) {
               throw new SemanticError(
                 `Method '${memberName}' is not defined in protocol '${name}'`,
-                spec.span
+                spec.span,
               );
             }
             exportedMethods.add(memberName);
@@ -4833,7 +4879,7 @@ function computeModuleExports(
 
         throw new SemanticError(
           `Module exposes '${name}(...)' but '${name}' is not a type or protocol`,
-          spec.span
+          spec.span,
         );
       }
     }
@@ -4851,7 +4897,7 @@ function validateImports(imports: ImportDeclaration[]) {
     if (duplicateModule) {
       throw new SemanticError(
         `Duplicate import of module '${imp.moduleName}'`,
-        imp.span
+        imp.span,
       );
     }
     byModule.set(imp.moduleName, imp);
@@ -4861,7 +4907,7 @@ function validateImports(imports: ImportDeclaration[]) {
       if (duplicateAlias) {
         throw new SemanticError(
           `Duplicate import alias '${imp.alias}'`,
-          imp.span
+          imp.span,
         );
       }
       byAlias.set(imp.alias, imp);
@@ -4880,7 +4926,7 @@ function analyzeValueDeclaration(
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map()
+  dependencies: Map<string, SemanticModule> = new Map(),
 ): Type {
   // Validate function parameter patterns (single-constructor ADTs, tuples, records)
   validateFunctionParamPatterns(decl.args, constructors, adts);
@@ -4902,7 +4948,7 @@ function analyzeValueDeclaration(
     paramTypes,
     substitution,
     constructors,
-    adts
+    adts,
   );
 
   const bodyType = analyzeExpr(
@@ -4915,7 +4961,7 @@ function analyzeValueDeclaration(
     typeAliases,
     opaqueTypes,
     imports,
-    dependencies
+    dependencies,
   );
   unify(bodyType, returnType, decl.body.span, substitution);
 
@@ -4929,7 +4975,7 @@ function analyzeValueDeclaration(
 function tryResolveModuleFieldAccess(
   expr: Extract<Expr, { kind: "FieldAccess" }>,
   imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>
+  dependencies: Map<string, SemanticModule>,
 ): Type | null {
   // Collect the chain of field accesses to reconstruct the module path
   const parts: string[] = [];
@@ -5048,7 +5094,7 @@ function analyzeExpr(
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo> = {},
   imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map()
+  dependencies: Map<string, SemanticModule> = new Map(),
 ): Type {
   switch (expr.kind) {
     case "Var": {
@@ -5057,7 +5103,7 @@ function analyzeExpr(
         scope,
         expr.name,
         expr.span,
-        substitution
+        substitution,
       );
       // Add any constraints from the symbol to the current context
       for (const constraint of constraints) {
@@ -5073,7 +5119,7 @@ function analyzeExpr(
       if (!opaque && !adts[typeName]) {
         throw new SemanticError(
           `Type '${typeName}' not found. Make sure the prelude is imported.`,
-          expr.span
+          expr.span,
         );
       }
       return { kind: "con", name: typeName, args: [] };
@@ -5083,7 +5129,7 @@ function analyzeExpr(
       if (!opaque && !adts["String"]) {
         throw new SemanticError(
           "Type 'String' not found. Make sure the prelude is imported.",
-          expr.span
+          expr.span,
         );
       }
       return { kind: "con", name: "String", args: [] };
@@ -5093,7 +5139,7 @@ function analyzeExpr(
       if (!opaque && !adts["Char"]) {
         throw new SemanticError(
           "Type 'Char' not found. Make sure the prelude is imported.",
-          expr.span
+          expr.span,
         );
       }
       return { kind: "con", name: "Char", args: [] };
@@ -5104,7 +5150,7 @@ function analyzeExpr(
       if (!opaque && !adts["Unit"]) {
         throw new SemanticError(
           "Type 'Unit' not found. Make sure the prelude is imported.",
-          expr.span
+          expr.span,
         );
       }
       return { kind: "con", name: "Unit", args: [] };
@@ -5121,8 +5167,8 @@ function analyzeExpr(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
-        )
+          dependencies,
+        ),
       );
       return { kind: "tuple", elements };
     }
@@ -5140,7 +5186,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       for (const el of expr.elements.slice(1)) {
         const elType = analyzeExpr(
@@ -5153,7 +5199,7 @@ function analyzeExpr(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
+          dependencies,
         );
         unify(first, elType, el.span, substitution);
       }
@@ -5170,7 +5216,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       const endType = analyzeExpr(
         expr.end,
@@ -5182,7 +5228,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       unify(startType, endType, expr.span, substitution);
       return listType(applySubstitution(startType, substitution));
@@ -5194,7 +5240,7 @@ function analyzeExpr(
         if (Object.hasOwn(fields, field.name)) {
           throw new SemanticError(
             `Duplicate record field '${field.name}'`,
-            field.span
+            field.span,
           );
         }
         fields[field.name] = analyzeExpr(
@@ -5207,7 +5253,7 @@ function analyzeExpr(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
+          dependencies,
         );
       }
       return { kind: "record", fields };
@@ -5218,7 +5264,7 @@ function analyzeExpr(
       if (concreteBase.kind !== "record") {
         throw new SemanticError(
           `Cannot update non-record '${expr.base}'`,
-          expr.span
+          expr.span,
         );
       }
       const updatedFields: Record<string, Type> = { ...concreteBase.fields };
@@ -5226,7 +5272,7 @@ function analyzeExpr(
         if (!updatedFields[field.name]) {
           throw new SemanticError(
             `Record '${expr.base}' has no field '${field.name}'`,
-            field.span
+            field.span,
           );
         }
         const fieldType = analyzeExpr(
@@ -5239,12 +5285,12 @@ function analyzeExpr(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
+          dependencies,
         );
         unify(updatedFields[field.name]!, fieldType, field.span, substitution);
         updatedFields[field.name] = applySubstitution(
           updatedFields[field.name]!,
-          substitution
+          substitution,
         );
       }
       return { kind: "record", fields: updatedFields };
@@ -5254,7 +5300,7 @@ function analyzeExpr(
       const moduleAccess = tryResolveModuleFieldAccess(
         expr,
         imports,
-        dependencies
+        dependencies,
       );
       if (moduleAccess) {
         return moduleAccess;
@@ -5271,20 +5317,20 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       const concrete = applySubstitution(targetType, substitution);
       if (concrete.kind !== "record") {
         throw new SemanticError(
           `Cannot access field '${expr.field}' on non-record value`,
-          expr.span
+          expr.span,
         );
       }
       const fieldType = concrete.fields[expr.field];
       if (!fieldType) {
         throw new SemanticError(
           `Record has no field '${expr.field}'`,
-          expr.span
+          expr.span,
         );
       }
       return applySubstitution(fieldType, substitution);
@@ -5298,7 +5344,7 @@ function analyzeExpr(
         paramTypes,
         substitution,
         constructors,
-        adts
+        adts,
       );
       const bodyType = analyzeExpr(
         expr.body,
@@ -5310,7 +5356,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       return fnChain(paramTypes, bodyType);
     }
@@ -5325,7 +5371,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       for (const arg of expr.args) {
         const argType = analyzeExpr(
@@ -5338,7 +5384,7 @@ function analyzeExpr(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
+          dependencies,
         );
         const resultType = freshType();
         unify(calleeType, fn(argType, resultType), expr.span, substitution);
@@ -5361,14 +5407,14 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       // Bool type must be defined in the prelude
       const boolAdt = adts["Bool"];
       if (!boolAdt) {
         throw new SemanticError(
           "Type 'Bool' not found. Make sure the prelude is imported.",
-          expr.condition.span
+          expr.condition.span,
         );
       }
       const tBool: Type = { kind: "con", name: "Bool", args: [] };
@@ -5383,7 +5429,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       const elseType = analyzeExpr(
         expr.elseBranch,
@@ -5395,7 +5441,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       unify(thenType, elseType, expr.span, substitution);
       return applySubstitution(thenType, substitution);
@@ -5408,7 +5454,7 @@ function analyzeExpr(
         if (letScope.symbols.has(binding.name)) {
           throw new SemanticError(
             `Duplicate let-binding '${binding.name}'`,
-            binding.span
+            binding.span,
           );
         }
         const seeded = seedValueType(binding, adts, typeAliases);
@@ -5417,7 +5463,7 @@ function analyzeExpr(
           letScope,
           binding.name,
           { vars: new Set(), constraints: [], type: seeded },
-          binding.span
+          binding.span,
         );
       }
 
@@ -5428,7 +5474,7 @@ function analyzeExpr(
           letScope,
           binding.name,
           binding.span,
-          substitution
+          substitution,
         );
         const inferred = analyzeValueDeclaration(
           binding,
@@ -5439,7 +5485,7 @@ function analyzeExpr(
           constructors,
           adts,
           typeAliases,
-          opaqueTypes
+          opaqueTypes,
         );
         // Generalize the inferred type for polymorphic let-bindings
         // Note: We generalize with respect to the parent scope, not letScope,
@@ -5458,7 +5504,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
     }
     case "Case": {
@@ -5472,7 +5518,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       const branchTypes: Type[] = [];
       let hasWildcard = false;
@@ -5489,7 +5535,7 @@ function analyzeExpr(
           new Set(),
           freshType(),
           constructors,
-          adts
+          adts,
         );
         unify(discriminantType, patternType, branch.pattern.span, substitution);
         const bodyType = analyzeExpr(
@@ -5502,7 +5548,7 @@ function analyzeExpr(
           typeAliases,
           opaqueTypes,
           imports,
-          dependencies
+          dependencies,
         );
         branchTypes.push(bodyType);
 
@@ -5511,7 +5557,7 @@ function analyzeExpr(
           if (index !== expr.branches.length - 1) {
             throw new SemanticError(
               "Wildcard pattern makes following branches unreachable",
-              branch.pattern.span
+              branch.pattern.span,
             );
           }
         }
@@ -5547,7 +5593,7 @@ function analyzeExpr(
           constructors,
           adts,
           discriminantType,
-          substitution
+          substitution,
         );
         if (!coverage.exhaustive) {
           const missingMsg =
@@ -5556,7 +5602,7 @@ function analyzeExpr(
               : "";
           throw new SemanticError(
             `Non-exhaustive case expression${missingMsg}`,
-            expr.span
+            expr.span,
           );
         }
       }
@@ -5574,7 +5620,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       const rightType = analyzeExpr(
         expr.right,
@@ -5586,7 +5632,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       const opType = INFIX_TYPES[expr.operator];
 
@@ -5600,7 +5646,7 @@ function analyzeExpr(
         unify(params[1]!, rightType, expr.right.span, substitution);
         return applySubstitution(
           extractAnnotationReturn(expected, 2),
-          substitution
+          substitution,
         );
       }
 
@@ -5626,7 +5672,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
     }
     case "Paren":
@@ -5640,7 +5686,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
     case "Unary": {
       // Unary negation: only allowed for Int and Float
@@ -5654,7 +5700,7 @@ function analyzeExpr(
         typeAliases,
         opaqueTypes,
         imports,
-        dependencies
+        dependencies,
       );
       const concreteType = applySubstitution(operandType, substitution);
 
@@ -5670,22 +5716,22 @@ function analyzeExpr(
       if (concreteType.kind === "var") {
         throw new SemanticError(
           `Unary negation requires a concrete numeric type (Int or Float), but got an unknown type. Add a type annotation to disambiguate.`,
-          expr.span
+          expr.span,
         );
       }
 
       throw new SemanticError(
         `Unary negation is only allowed for Int and Float, but got '${formatType(
-          concreteType
+          concreteType,
         )}'`,
-        expr.span
+        expr.span,
       );
     }
     default: {
       const _exhaustive: never = expr;
       throw new SemanticError(
         "Unsupported expression",
-        (expr as { span: Span }).span
+        (expr as { span: Span }).span,
       );
     }
   }
@@ -5714,7 +5760,7 @@ function constructorCoverage(
   constructorsRegistry: Record<string, ConstructorInfo>,
   adts: Record<string, ADTInfo>,
   discriminantType: Type,
-  substitution: Substitution
+  substitution: Substitution,
 ): { exhaustive: boolean; missing?: string[] } {
   // First, try to determine the ADT from the used constructors
   let adtName: string | undefined;
@@ -5787,7 +5833,7 @@ function constructorCoverage(
 function validateFunctionParamPatterns(
   patterns: Pattern[],
   constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>
+  adts: Record<string, ADTInfo>,
 ): void {
   for (const pattern of patterns) {
     validateFunctionParamPattern(pattern, constructors, adts);
@@ -5800,7 +5846,7 @@ function validateFunctionParamPatterns(
 function validateFunctionParamPattern(
   pattern: Pattern,
   constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>
+  adts: Record<string, ADTInfo>,
 ): void {
   switch (pattern.kind) {
     case "VarPattern":
@@ -5846,7 +5892,7 @@ function validateFunctionParamPattern(
           `Constructor pattern '${pattern.name}' is not allowed in function parameters. ` +
             `The type '${ctorInfo.parentType}' has multiple constructors (${constructorNames}). ` +
             `Use a case expression in the function body instead.`,
-          pattern.span
+          pattern.span,
         );
       }
 
@@ -5863,7 +5909,7 @@ function validateFunctionParamPattern(
       throw new SemanticError(
         `List patterns are not allowed in function parameters. ` +
           `Use a case expression in the function body instead.`,
-        pattern.span
+        pattern.span,
       );
   }
 }
@@ -5874,7 +5920,7 @@ function bindPatterns(
   paramTypes: Type[],
   substitution: Substitution,
   constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>
+  adts: Record<string, ADTInfo>,
 ) {
   if (patterns.length !== paramTypes.length) {
     throw new Error("Internal arity mismatch during pattern binding");
@@ -5889,7 +5935,7 @@ function bindPatterns(
       seen,
       paramType,
       constructors,
-      adts
+      adts,
     );
     if (pattern.kind === "VarPattern") {
       // Pattern variables are monomorphic
@@ -5921,14 +5967,14 @@ function bindPattern(
   seen: Set<string>,
   expected: Type,
   constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>
+  adts: Record<string, ADTInfo>,
 ): Type {
   switch (pattern.kind) {
     case "VarPattern": {
       if (seen.has(pattern.name)) {
         throw new SemanticError(
           `Duplicate pattern variable '${pattern.name}'`,
-          pattern.span
+          pattern.span,
         );
       }
       seen.add(pattern.name);
@@ -5938,7 +5984,7 @@ function bindPattern(
         scope,
         pattern.name,
         { vars: new Set(), constraints: [], type: expected },
-        pattern.span
+        pattern.span,
       );
       return expected;
     }
@@ -5950,7 +5996,7 @@ function bindPattern(
         { kind: "tuple", elements: subTypes },
         expected,
         pattern.span,
-        substitution
+        substitution,
       );
       pattern.elements.forEach((el, idx) =>
         bindPattern(
@@ -5960,12 +6006,12 @@ function bindPattern(
           seen,
           subTypes[idx]!,
           constructors,
-          adts
-        )
+          adts,
+        ),
       );
       return applySubstitution(
         { kind: "tuple", elements: subTypes },
-        substitution
+        substitution,
       );
     }
     case "ConstructorPattern": {
@@ -5992,7 +6038,7 @@ function bindPattern(
 
         // Build types for constructor arguments
         const argTypes: Type[] = ctorInfo.argTypes.map((argExpr) =>
-          constructorArgToType(argExpr, paramTypeVars)
+          constructorArgToType(argExpr, paramTypeVars),
         );
 
         // Unify the result type with the expected type to bind type parameters
@@ -6002,7 +6048,7 @@ function bindPattern(
         if (pattern.args.length !== argTypes.length) {
           throw new SemanticError(
             `Constructor '${pattern.name}' expects ${argTypes.length} argument(s), got ${pattern.args.length}`,
-            pattern.span
+            pattern.span,
           );
         }
 
@@ -6016,7 +6062,7 @@ function bindPattern(
             seen,
             argType,
             constructors,
-            adts
+            adts,
           );
         });
 
@@ -6034,8 +6080,8 @@ function bindPattern(
             seen,
             argTypes[idx]!,
             constructors,
-            adts
-          )
+            adts,
+          ),
         );
         return applySubstitution(expected, substitution);
       }
@@ -6056,8 +6102,8 @@ function bindPattern(
           seen,
           applySubstitution(elemType, substitution),
           constructors,
-          adts
-        )
+          adts,
+        ),
       );
       return applySubstitution(lt, substitution);
     }
@@ -6076,7 +6122,7 @@ function bindPattern(
         seen,
         applySubstitution(elemType, substitution),
         constructors,
-        adts
+        adts,
       );
 
       // Tail pattern binds to list type
@@ -6087,7 +6133,7 @@ function bindPattern(
         seen,
         applySubstitution(lt, substitution),
         constructors,
-        adts
+        adts,
       );
 
       return applySubstitution(lt, substitution);
@@ -6123,14 +6169,14 @@ function bindPattern(
             seen,
             appliedFieldType,
             constructors,
-            adts
+            adts,
           );
         } else {
           // Field without pattern becomes a variable: { x } === { x = x }
           if (seen.has(field.name)) {
             throw new SemanticError(
               `Duplicate pattern variable '${field.name}'`,
-              pattern.span
+              pattern.span,
             );
           }
           seen.add(field.name);
@@ -6138,7 +6184,7 @@ function bindPattern(
             scope,
             field.name,
             { vars: new Set(), constraints: [], type: appliedFieldType },
-            pattern.span
+            pattern.span,
           );
         }
       }
@@ -6158,7 +6204,7 @@ function bindPattern(
  */
 function validateConstructorArity(
   pattern: Extract<Pattern, { kind: "ConstructorPattern" }>,
-  constructors: Record<string, ConstructorInfo>
+  constructors: Record<string, ConstructorInfo>,
 ) {
   // First check user-defined constructors
   const ctorInfo = constructors[pattern.name];
@@ -6166,7 +6212,7 @@ function validateConstructorArity(
     if (ctorInfo.arity !== pattern.args.length) {
       throw new SemanticError(
         `Constructor '${pattern.name}' expects ${ctorInfo.arity} argument(s), got ${pattern.args.length}`,
-        pattern.span
+        pattern.span,
       );
     }
     return;
@@ -6177,7 +6223,7 @@ function validateConstructorArity(
   if (expected !== undefined && expected !== pattern.args.length) {
     throw new SemanticError(
       `Constructor '${pattern.name}' expects ${expected} argument(s)`,
-      pattern.span
+      pattern.span,
     );
   }
 }
@@ -6191,7 +6237,7 @@ function declareSymbol(
   scope: Scope,
   name: string,
   scheme: TypeScheme,
-  span: Span
+  span: Span,
 ) {
   if (scope.symbols.has(name)) {
     throw new SemanticError(`Duplicate definition for '${name}'`, span);
@@ -6216,14 +6262,14 @@ function lookupSymbolWithConstraints(
   scope: Scope,
   name: string,
   span: Span,
-  substitution: Substitution
+  substitution: Substitution,
 ): LookupResult {
   if (scope.symbols.has(name)) {
     const scheme = scope.symbols.get(name)!;
     // Instantiate the scheme to get a fresh type for this use site
     const { type, constraints } = instantiateWithConstraints(
       scheme,
-      substitution
+      substitution,
     );
     return { type, constraints };
   }
@@ -6246,7 +6292,7 @@ function lookupSymbol(
   scope: Scope,
   name: string,
   span: Span,
-  substitution: Substitution
+  substitution: Substitution,
 ): Type {
   return lookupSymbolWithConstraints(scope, name, span, substitution).type;
 }
@@ -6254,7 +6300,7 @@ function lookupSymbol(
 function seedValueType(
   decl: ValueDeclaration | ExternalDeclaration,
   adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>
+  typeAliases: Record<string, TypeAliasInfo>,
 ): Type {
   if (decl.kind === "ExternalDeclaration") {
     return typeFromAnnotation(decl.annotation, new Map(), adts, typeAliases);
@@ -6285,7 +6331,7 @@ function seedValueType(
 function generalize(
   type: Type,
   scope: Scope,
-  substitution: Substitution
+  substitution: Substitution,
 ): TypeScheme {
   const typeFreeVars = getFreeTypeVars(type, substitution);
   const scopeFreeVars = getFreeTypeVarsInScope(scope, substitution);
@@ -6302,7 +6348,7 @@ function generalize(
   const rawConstraints = getCollectedConstraints();
   const resolvedConstraints = applySubstitutionToConstraints(
     rawConstraints,
-    substitution
+    substitution,
   );
 
   // Filter constraints to only those involving quantified type variables
@@ -6326,7 +6372,7 @@ function generalize(
       (uc) =>
         uc.protocolName === c.protocolName &&
         uc.typeArgs.length === c.typeArgs.length &&
-        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!))
+        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!)),
     );
     if (!isDuplicate) {
       uniqueConstraints.push(c);
@@ -6359,7 +6405,7 @@ function generalizeWithAnnotatedConstraints(
   scope: Scope,
   substitution: Substitution,
   annotatedConstraints: Constraint[] | undefined,
-  span: Span
+  span: Span,
 ): TypeScheme {
   const typeFreeVars = getFreeTypeVars(type, substitution);
   const scopeFreeVars = getFreeTypeVarsInScope(scope, substitution);
@@ -6376,7 +6422,7 @@ function generalizeWithAnnotatedConstraints(
   const rawConstraints = getCollectedConstraints();
   const resolvedConstraints = applySubstitutionToConstraints(
     rawConstraints,
-    substitution
+    substitution,
   );
 
   // Validate constraints that are not purely polymorphic.
@@ -6386,7 +6432,7 @@ function generalizeWithAnnotatedConstraints(
   for (const c of resolvedConstraints) {
     // Apply substitution to all type args
     const resolvedTypeArgs = c.typeArgs.map((t) =>
-      applySubstitution(t, substitution)
+      applySubstitution(t, substitution),
     );
 
     // Check if the constraint involves ONLY quantified type variables at the top level
@@ -6411,7 +6457,7 @@ function generalizeWithAnnotatedConstraints(
     // Validate that an instance exists (or could exist) for this constraint
     const lookupResult = validateConstraintSatisfiable(
       resolvedConstraint,
-      currentInstanceRegistry
+      currentInstanceRegistry,
     );
 
     if (!lookupResult.found) {
@@ -6423,13 +6469,13 @@ function generalizeWithAnnotatedConstraints(
           `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
             `The instance requires '${lookupResult.constraint}' for '${lookupResult.forType}', ` +
             `but no such instance exists.`,
-          span
+          span,
         );
       } else {
         throw new SemanticError(
           `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
             `Add an implementation: implement ${c.protocolName} ${typeArgsStr} where ...`,
-          span
+          span,
         );
       }
     }
@@ -6453,7 +6499,7 @@ function generalizeWithAnnotatedConstraints(
     // Apply substitution to annotated constraints
     const resolvedAnnotated = applySubstitutionToConstraints(
       annotatedConstraints,
-      substitution
+      substitution,
     );
 
     // Validate each annotated constraint
@@ -6471,7 +6517,7 @@ function generalizeWithAnnotatedConstraints(
         if (freeVars.size === 0) {
           throw new SemanticError(
             `Constraint '${c.protocolName}' is on a concrete type, which is not allowed in type annotations`,
-            span
+            span,
           );
         }
         // If the constraint references a type variable not in the function's type,
@@ -6479,7 +6525,7 @@ function generalizeWithAnnotatedConstraints(
         if (!hasQuantifiedVar) {
           throw new SemanticError(
             `Constraint '${c.protocolName}' references type variables not used in the function type`,
-            span
+            span,
           );
         }
       }
@@ -6496,7 +6542,7 @@ function generalizeWithAnnotatedConstraints(
       (uc) =>
         uc.protocolName === c.protocolName &&
         uc.typeArgs.length === c.typeArgs.length &&
-        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!))
+        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!)),
     );
     if (!isDuplicate) {
       uniqueConstraints.push(c);
@@ -6512,7 +6558,7 @@ function generalizeWithAnnotatedConstraints(
   for (const c of uniqueConstraints) {
     // Check if any type arg is a quantified type variable
     const resolvedTypeArgs = c.typeArgs.map((t) =>
-      applySubstitution(t, substitution)
+      applySubstitution(t, substitution),
     );
 
     // Find all type variable positions and concrete positions
@@ -6573,7 +6619,7 @@ function generalizeWithAnnotatedConstraints(
 
   // Remove fully resolved constraints
   const finalConstraints = uniqueConstraints.filter(
-    (c) => !constraintsToRemove.includes(c)
+    (c) => !constraintsToRemove.includes(c),
   );
 
   // Apply the updated substitution to the type
@@ -6607,7 +6653,7 @@ type InstantiationResult = {
  */
 function instantiateWithConstraints(
   scheme: TypeScheme,
-  substitution: Substitution
+  substitution: Substitution,
 ): InstantiationResult {
   // If no variables are quantified, the type is monomorphic - return as-is
   if (scheme.vars.size === 0) {
@@ -6624,14 +6670,14 @@ function instantiateWithConstraints(
   const instantiatedType = instantiateType(
     scheme.type,
     instantiationMap,
-    substitution
+    substitution,
   );
 
   // Also instantiate the constraints with the same mapping
   const instantiatedConstraints = scheme.constraints.map((c) => ({
     protocolName: c.protocolName,
     typeArgs: c.typeArgs.map((t) =>
-      instantiateType(t, instantiationMap, substitution)
+      instantiateType(t, instantiationMap, substitution),
     ),
   }));
 
@@ -6664,7 +6710,7 @@ function instantiate(scheme: TypeScheme, substitution: Substitution): Type {
 function instantiateType(
   type: Type,
   instantiationMap: Map<number, Type>,
-  substitution: Substitution
+  substitution: Substitution,
 ): Type {
   const concrete = applySubstitution(type, substitution);
 
@@ -6682,7 +6728,7 @@ function instantiateType(
       kind: "con",
       name: concrete.name,
       args: concrete.args.map((arg) =>
-        instantiateType(arg, instantiationMap, substitution)
+        instantiateType(arg, instantiationMap, substitution),
       ),
     };
   }
@@ -6699,7 +6745,7 @@ function instantiateType(
     return {
       kind: "tuple",
       elements: concrete.elements.map((el) =>
-        instantiateType(el, instantiationMap, substitution)
+        instantiateType(el, instantiationMap, substitution),
       ),
     };
   }
@@ -6719,13 +6765,13 @@ function validateAnnotationArity(
   annotation: TypeExpr,
   argCount: number,
   span: Span,
-  name: string
+  name: string,
 ) {
   const paramCount = countAnnotationParams(annotation);
   if (paramCount !== argCount) {
     throw new SemanticError(
       `Type annotation for '${name}' does not match its argument count`,
-      span
+      span,
     );
   }
 }
@@ -6733,7 +6779,7 @@ function validateAnnotationArity(
 function extractAnnotationParams(
   annotation: Type,
   argCount: number,
-  span: Span
+  span: Span,
 ): Type[] {
   // Extract params from annotation. If the annotation has fewer params than
   // argCount, fill in fresh type variables for the rest. The type system
@@ -6841,7 +6887,7 @@ function typeFromAnnotationWithConstraints(
   context: TypeVarContext = new Map(),
   adts: Record<string, ADTInfo> = {},
   typeAliases: Record<string, TypeAliasInfo> = {},
-  protocols: Record<string, ProtocolInfo> = {}
+  protocols: Record<string, ProtocolInfo> = {},
 ): AnnotationResult {
   // Handle QualifiedType at the top level to extract constraints
   if (annotation.kind === "QualifiedType") {
@@ -6854,7 +6900,7 @@ function typeFromAnnotationWithConstraints(
       if (!protocol) {
         throw new SemanticError(
           `Unknown protocol '${astConstraint.protocolName}' in type constraint`,
-          astConstraint.span
+          astConstraint.span,
         );
       }
 
@@ -6862,7 +6908,7 @@ function typeFromAnnotationWithConstraints(
       if (astConstraint.typeArgs.length !== protocol.params.length) {
         throw new SemanticError(
           `Protocol '${astConstraint.protocolName}' expects ${protocol.params.length} type argument(s), but constraint has ${astConstraint.typeArgs.length}`,
-          astConstraint.span
+          astConstraint.span,
         );
       }
 
@@ -6870,7 +6916,7 @@ function typeFromAnnotationWithConstraints(
       const constraintTypeArgs: Type[] = [];
       for (const typeArg of astConstraint.typeArgs) {
         constraintTypeArgs.push(
-          typeFromAnnotation(typeArg, context, adts, typeAliases)
+          typeFromAnnotation(typeArg, context, adts, typeAliases),
         );
       }
 
@@ -6881,7 +6927,7 @@ function typeFromAnnotationWithConstraints(
         if (typeArg.kind !== "var") {
           throw new SemanticError(
             `Constraint '${astConstraint.protocolName}' must be applied to type variables, not concrete types`,
-            astConstraint.span
+            astConstraint.span,
           );
         }
       }
@@ -6898,7 +6944,7 @@ function typeFromAnnotationWithConstraints(
       context,
       adts,
       typeAliases,
-      protocols
+      protocols,
     );
 
     // Merge constraints from nested qualified types
@@ -6936,7 +6982,7 @@ function typeFromAnnotation(
   annotation: TypeExpr,
   context: TypeVarContext = new Map(),
   adts: Record<string, ADTInfo> = {},
-  typeAliases: Record<string, TypeAliasInfo> = {}
+  typeAliases: Record<string, TypeAliasInfo> = {},
 ): Type {
   switch (annotation.kind) {
     case "TypeRef": {
@@ -6972,7 +7018,7 @@ function typeFromAnnotation(
               annotation.args[i]!,
               context,
               adts,
-              typeAliases
+              typeAliases,
             );
             argTypes.push(argType);
           }
@@ -6994,7 +7040,7 @@ function typeFromAnnotation(
             aliasInfo.value,
             aliasContext,
             adts,
-            typeAliases
+            typeAliases,
           );
 
           // Apply substitution to replace fresh vars with actual argument types
@@ -7008,7 +7054,7 @@ function typeFromAnnotation(
         kind: "con",
         name: annotation.name,
         args: annotation.args.map((arg) =>
-          typeFromAnnotation(arg, context, adts, typeAliases)
+          typeFromAnnotation(arg, context, adts, typeAliases),
         ),
       };
     }
@@ -7017,7 +7063,7 @@ function typeFromAnnotation(
         annotation.from,
         context,
         adts,
-        typeAliases
+        typeAliases,
       );
       const to = typeFromAnnotation(annotation.to, context, adts, typeAliases);
       return fn(from, to);
@@ -7026,7 +7072,7 @@ function typeFromAnnotation(
       return {
         kind: "tuple",
         elements: annotation.elements.map((el) =>
-          typeFromAnnotation(el, context, adts, typeAliases)
+          typeFromAnnotation(el, context, adts, typeAliases),
         ),
       };
     }
@@ -7034,7 +7080,7 @@ function typeFromAnnotation(
       // Convert record type annotation to internal record type
       // Sort fields alphabetically for consistent comparison
       const sortedFields = [...annotation.fields].sort((a, b) =>
-        a.name.localeCompare(b.name)
+        a.name.localeCompare(b.name),
       );
       const fields: Record<string, Type> = {};
       for (const field of sortedFields) {
@@ -7042,7 +7088,7 @@ function typeFromAnnotation(
           field.type,
           context,
           adts,
-          typeAliases
+          typeAliases,
         );
       }
       return {
@@ -7074,7 +7120,7 @@ function occursIn(id: number, type: Type, substitution: Substitution): boolean {
       return concrete.elements.some((t) => occursIn(id, t, substitution));
     case "record":
       return Object.values(concrete.fields).some((t) =>
-        occursIn(id, t, substitution)
+        occursIn(id, t, substitution),
       );
     case "con":
       return concrete.args.some((t) => occursIn(id, t, substitution));
@@ -7105,13 +7151,13 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
     if (left.name !== right.name || left.args.length !== right.args.length) {
       throw new SemanticError(
         `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
-          right
+          right,
         )}'`,
-        span
+        span,
       );
     }
     left.args.forEach((arg, idx) =>
-      unify(arg, right.args[idx]!, span, substitution)
+      unify(arg, right.args[idx]!, span, substitution),
     );
     return;
   }
@@ -7127,14 +7173,14 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
       throw new SemanticError("Tuple length mismatch", span);
     }
     left.elements.forEach((el, idx) =>
-      unify(el, right.elements[idx]!, span, substitution)
+      unify(el, right.elements[idx]!, span, substitution),
     );
     return;
   }
 
   if (left.kind === "record" && right.kind === "record") {
     const shared = Object.keys(left.fields).filter(
-      (k) => right.fields[k] !== undefined
+      (k) => right.fields[k] !== undefined,
     );
     for (const key of shared) {
       unify(left.fields[key]!, right.fields[key]!, span, substitution);
@@ -7145,8 +7191,8 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
 
   throw new SemanticError(
     `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
-      right
+      right,
     )}'`,
-    span
+    span,
   );
 }
