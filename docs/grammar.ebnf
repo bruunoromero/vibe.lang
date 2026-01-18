@@ -112,7 +112,7 @@ InfixDeclaration = ("infix" | "infixl" | "infixr"), Number, Operator
 (* Type declarations have three forms: *)
 (*   1. ADT: type Name params = Constructor1 | Constructor2 *)
 (*   2. Opaque: type Name params (no equals sign - for JS interop) *)
-TypeDeclaration = "type", UpperIdentifier, {LowerIdentifier}, "=", ConstructorDef, {"|", ConstructorDef} ;
+TypeDeclaration = "type", [Constraints, "=>"], UpperIdentifier, {LowerIdentifier}, "=", ConstructorDef, {"|", ConstructorDef} ;
 
 (* Opaque type declarations - abstract types for JS interop *)
 OpaqueTypeDeclaration = "type", UpperIdentifier, {LowerIdentifier} ;
@@ -123,7 +123,7 @@ ConstructorDef = UpperIdentifier, {TypeTerm} ;
 (* Examples: *)
 (*   type alias Point = { x : Int, y : Int }  (Record) *)
 (*   type alias UserId = Int                   (Simple alias) *)
-TypeAliasDeclaration = "type", "alias", UpperIdentifier, {LowerIdentifier}, "=", TypeExpr ;
+TypeAliasDeclaration = "type", "alias", [Constraints, "=>"], UpperIdentifier, {LowerIdentifier}, "=", TypeExpr ;
 
 
 

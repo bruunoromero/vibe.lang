@@ -375,11 +375,11 @@ next = 6`),
     if (decl?.kind === "TypeDeclaration") {
       expect(decl.name).toBe("Bool");
       expect(decl.params).toEqual([]);
-      expect(decl.constructors.length).toBe(2);
-      expect(decl.constructors[0]?.name).toBe("True");
-      expect(decl.constructors[0]?.args.length).toBe(0);
-      expect(decl.constructors[1]?.name).toBe("False");
-      expect(decl.constructors[1]?.args.length).toBe(0);
+      expect(decl.constructors?.length).toBe(2);
+      expect(decl.constructors?.[0]?.name).toBe("True");
+      expect(decl.constructors?.[0]?.args.length).toBe(0);
+      expect(decl.constructors?.[1]?.name).toBe("False");
+      expect(decl.constructors?.[1]?.args.length).toBe(0);
     }
   });
 
@@ -391,16 +391,16 @@ next = 6`),
     if (decl?.kind === "TypeDeclaration") {
       expect(decl.name).toBe("Maybe");
       expect(decl.params).toEqual(["a"]);
-      expect(decl.constructors.length).toBe(2);
+      expect(decl.constructors?.length).toBe(2);
 
       // Just a
-      expect(decl.constructors[0]?.name).toBe("Just");
-      expect(decl.constructors[0]?.args.length).toBe(1);
-      expect(decl.constructors[0]?.args[0]?.kind).toBe("TypeRef");
+      expect(decl.constructors?.[0]?.name).toBe("Just");
+      expect(decl.constructors?.[0]?.args.length).toBe(1);
+      expect(decl.constructors?.[0]?.args[0]?.kind).toBe("TypeRef");
 
       // Nothing
-      expect(decl.constructors[1]?.name).toBe("Nothing");
-      expect(decl.constructors[1]?.args.length).toBe(0);
+      expect(decl.constructors?.[1]?.name).toBe("Nothing");
+      expect(decl.constructors?.[1]?.args.length).toBe(0);
     }
   });
 
@@ -412,15 +412,15 @@ next = 6`),
     if (decl?.kind === "TypeDeclaration") {
       expect(decl.name).toBe("Result");
       expect(decl.params).toEqual(["e", "v"]);
-      expect(decl.constructors.length).toBe(2);
+      expect(decl.constructors?.length).toBe(2);
 
       // Ok v
-      expect(decl.constructors[0]?.name).toBe("Ok");
-      expect(decl.constructors[0]?.args.length).toBe(1);
+      expect(decl.constructors?.[0]?.name).toBe("Ok");
+      expect(decl.constructors?.[0]?.args.length).toBe(1);
 
       // Err e
-      expect(decl.constructors[1]?.name).toBe("Err");
-      expect(decl.constructors[1]?.args.length).toBe(1);
+      expect(decl.constructors?.[1]?.name).toBe("Err");
+      expect(decl.constructors?.[1]?.args.length).toBe(1);
     }
   });
 
@@ -432,15 +432,15 @@ next = 6`),
     if (decl?.kind === "TypeDeclaration") {
       expect(decl.name).toBe("List");
       expect(decl.params).toEqual(["a"]);
-      expect(decl.constructors.length).toBe(2);
+      expect(decl.constructors?.length).toBe(2);
 
       // Cons a (List a)
-      expect(decl.constructors[0]?.name).toBe("Cons");
-      expect(decl.constructors[0]?.args.length).toBe(2);
+      expect(decl.constructors?.[0]?.name).toBe("Cons");
+      expect(decl.constructors?.[0]?.args.length).toBe(2);
 
       // Nil
-      expect(decl.constructors[1]?.name).toBe("Nil");
-      expect(decl.constructors[1]?.args.length).toBe(0);
+      expect(decl.constructors?.[1]?.name).toBe("Nil");
+      expect(decl.constructors?.[1]?.args.length).toBe(0);
     }
   });
 
@@ -451,9 +451,9 @@ next = 6`),
     expect(decl?.kind).toBe("TypeDeclaration");
     if (decl?.kind === "TypeDeclaration") {
       expect(decl.name).toBe("Handler");
-      expect(decl.constructors[0]?.args.length).toBe(1);
+      expect(decl.constructors?.[0]?.args.length).toBe(1);
       // The argument should be a function type wrapped in parens
-      const arg = decl.constructors[0]?.args[0];
+      const arg = decl.constructors?.[0]?.args[0];
       expect(arg?.kind).toBe("FunctionType");
     }
   });

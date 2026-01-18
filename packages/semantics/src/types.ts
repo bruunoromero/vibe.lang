@@ -114,6 +114,41 @@ export type ADTInfo = {
 };
 
 /**
+ * Information about a field in a record type.
+ */
+export type RecordFieldInfo = {
+  /** Field name */
+  name: string;
+  /** Field type expression (AST node for proper type parameter resolution) */
+  typeExpr: TypeExpr;
+  /** Source span for error messages */
+  span: Span;
+};
+
+/**
+ * Information about a named record type.
+ *
+ * For example, `type Person = { name : String, age : Int }` becomes:
+ * {
+ *   name: "Person",
+ *   params: [],
+ *   fields: [{ name: "name", type: ... }, { name: "age", type: ... }]
+ * }
+ */
+export type RecordInfo = {
+  /** The record type name (e.g., "Person", "Point") */
+  name: string;
+  /** The module that defines this record type */
+  moduleName?: string;
+  /** Type parameters (e.g., ["a"] for Container a) */
+  params: string[];
+  /** Record field definitions */
+  fields: RecordFieldInfo[];
+  /** Source span for error messages */
+  span: Span;
+};
+
+/**
  * Information about a type alias.
  *
  * For example, `type alias UserId = number` becomes:
@@ -323,6 +358,8 @@ export type SemanticModule = {
   constructorTypes: Record<string, TypeScheme>;
   /** Registry of type aliases */
   typeAliases: Record<string, TypeAliasInfo>;
+  /** Registry of named record types */
+  records: Record<string, RecordInfo>;
   /** Registry of opaque types (for JS interop) */
   opaqueTypes: Record<string, OpaqueTypeInfo>;
   /** Registry of protocols (type classes) */

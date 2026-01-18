@@ -912,37 +912,40 @@ type alias UserId = String`,
     expectError(`type alias Bad a a = (a, a)`, "Duplicate type parameter 'a'");
   });
 
-  // ===== Record Type Annotation Tests =====
+  // ===== Record Type Declaration Tests =====
 
-  test("type alias with record type", () => {
+  test("type declaration with record type", () => {
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Point = { x : Int, y : Int }`);
+type Point = { x : Int, y : Int }`);
     const result = analyze(program);
 
-    expect(result.typeAliases.Point).toBeDefined();
-    expect(result.typeAliases.Point?.params).toEqual([]);
-    expect(result.typeAliases.Point?.value.kind).toBe("RecordType");
+    expect(result.records.Point).toBeDefined();
+    expect(result.records.Point?.params).toEqual([]);
+    expect(result.records.Point?.fields.length).toBe(2);
   });
 
-  test("function with record type annotation", () => {
-    const program = parse(`module Test exposing (..)
+  test("rejects type alias with bare record type", () => {
+    expectError(
+      `type alias Point = { x : Int, y : Int }`,
+      "Type alias 'Point' cannot directly define a record type",
+    );
+  });
 
-${OPERATOR_PREAMBLE}
-distance : { x : Int, y : Int } -> Int
-distance point = point.x + point.y`);
-    const result = analyze(program);
-
-    expect(result.types.distance).toBeDefined();
-    expect(result.values.distance?.annotation?.kind).toBe("FunctionType");
+  test("rejects floating record type in function annotation", () => {
+    expectError(
+      `distance : { x : Int, y : Int } -> Int
+distance point = point.x + point.y`,
+      "Record types cannot be used directly in type annotations",
+    );
   });
 
   test("record type fields are type-checked correctly", () => {
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Point = { x : Int, y : Int }
+type Point = { x : Int, y : Int }
 
 origin : Point
 origin = { x = 0, y = 0 }`);
@@ -956,13 +959,13 @@ origin = { x = 0, y = 0 }`);
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Empty = {}
+type Empty = {}
 
 empty : Empty
 empty = {}`);
     const result = analyze(program);
 
-    expect(result.typeAliases.Empty).toBeDefined();
+    expect(result.records.Empty).toBeDefined();
     expect(result.types.empty).toBeDefined();
   });
 
@@ -971,15 +974,15 @@ empty = {}`);
       `module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Container a = { value : a, count : Int }
+type Container a = { value : a, count : Int }
 
 intContainer : Container Int
 intContainer = { value = 42, count = 1 }`,
     );
     const result = analyze(program);
 
-    expect(result.typeAliases.Container).toBeDefined();
-    expect(result.typeAliases.Container?.params).toEqual(["a"]);
+    expect(result.records.Container).toBeDefined();
+    expect(result.records.Container?.params).toEqual(["a"]);
     expect(result.types.intContainer).toBeDefined();
   });
 
@@ -988,104 +991,86 @@ intContainer = { value = 42, count = 1 }`,
       `module Test exposing (..)
 
 ${OPERATOR_PREAMBLE}
-type alias Model = { count : Int, increment : Int -> Int }
+type Model = { count : Int, increment : Int -> Int }
 
 model : Model
 model = { count = 0, increment = \\x -> x + 1 }`,
     );
     const result = analyze(program);
 
-    expect(result.typeAliases.Model).toBeDefined();
+    expect(result.records.Model).toBeDefined();
     expect(result.types.model).toBeDefined();
   });
 
-  test("nested record types", () => {
-    const program = parse(
-      `module Test exposing (..)
-
-${TYPE_PREAMBLE}
-type alias Outer = { inner : { value : Int } }
-
-nested : Outer
-nested = { inner = { value = 5 } }`,
+  test("rejects nested floating record types in type declaration", () => {
+    expectError(
+      `type Outer = { inner : { value : Int } }`,
+      "Record types cannot be used directly in type annotations",
     );
-    const result = analyze(program);
-
-    expect(result.typeAliases.Outer).toBeDefined();
-    expect(result.types.nested).toBeDefined();
   });
 
-  test("record type alias with multiple type parameters", () => {
+  test("record type with multiple type parameters", () => {
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Pair a b = { first : a, second : b }
+type Pair a b = { first : a, second : b }
 
 pair : Pair string number
 pair = { first = "hello", second = 42 }`);
 
     const result = analyze(program);
 
-    expect(result.typeAliases.Pair).toBeDefined();
-    expect(result.typeAliases.Pair?.params).toEqual(["a", "b"]);
+    expect(result.records.Pair).toBeDefined();
+    expect(result.records.Pair?.params).toEqual(["a", "b"]);
     expect(result.types.pair).toBeDefined();
   });
 
-  test("record type alias with parameterized field type", () => {
+  test("record type with parameterized field type", () => {
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias ListBox a = { items : List a, count : Int }
+type ListBox a = { items : List a, count : Int }
 
 stringBox : ListBox String
 stringBox = { items = ["a", "b"], count = 2 }`);
 
     const result = analyze(program);
 
-    expect(result.typeAliases.ListBox).toBeDefined();
-    expect(result.typeAliases.ListBox?.params).toEqual(["a"]);
+    expect(result.records.ListBox).toBeDefined();
+    expect(result.records.ListBox?.params).toEqual(["a"]);
     expect(result.types.stringBox).toBeDefined();
   });
 
-  test("record type with nested record type parameter", () => {
-    const program = parse(`module Test exposing (..)
-
-${TYPE_PREAMBLE}
-type alias Response a = { data : a, metadata : { code : Int, message : String } }
-
-response : Response String
-response = { data = "ok", metadata = { code = 200, message = "Success" } }`);
-
-    const result = analyze(program);
-
-    expect(result.typeAliases.Response).toBeDefined();
-    expect(result.typeAliases.Response?.params).toEqual(["a"]);
-    expect(result.types.response).toBeDefined();
+  test("rejects nested floating record type in field", () => {
+    expectError(
+      `type Response a = { data : a, metadata : { code : Int, message : String } }`,
+      "Record types cannot be used directly in type annotations",
+    );
   });
 
   test("record type with function field using type parameter", () => {
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Handler a = { process : a -> String, callback : String -> a }
+type Handler a = { process : a -> String, callback : String -> a }
 
 handler : Handler Int
 handler = { process = \\n -> "result", callback = \\s -> 0 }`);
 
     const result = analyze(program);
 
-    expect(result.typeAliases.Handler).toBeDefined();
-    expect(result.typeAliases.Handler?.params).toEqual(["a"]);
+    expect(result.records.Handler).toBeDefined();
+    expect(result.records.Handler?.params).toEqual(["a"]);
     expect(result.types.handler).toBeDefined();
   });
 
-  test("multiple parameterized record type aliases coexist", () => {
+  test("multiple parameterized record types coexist", () => {
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Container a = { value : a, count : Int }
-type alias Pair a b = { first : a, second : b }
-type alias Wrapper a = { wrapped : a }
+type Container a = { value : a, count : Int }
+type Pair a b = { first : a, second : b }
+type Wrapper a = { wrapped : a }
 
 c : Container String
 c = { value = "data", count = 1 }
@@ -1098,28 +1083,28 @@ w = { wrapped = [1, 2, 3] }`);
 
     const result = analyze(program);
 
-    expect(result.typeAliases.Container).toBeDefined();
-    expect(result.typeAliases.Pair).toBeDefined();
-    expect(result.typeAliases.Wrapper).toBeDefined();
+    expect(result.records.Container).toBeDefined();
+    expect(result.records.Pair).toBeDefined();
+    expect(result.records.Wrapper).toBeDefined();
     expect(result.types.c).toBeDefined();
     expect(result.types.p).toBeDefined();
     expect(result.types.w).toBeDefined();
   });
 
-  test("parameterized record alias in record field", () => {
+  test("parameterized record type in record field", () => {
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Box a = { contents : a }
-type alias Pair a b = { left : a, right : b }
+type Box a = { contents : a }
+type Pair a b = { left : a, right : b }
 
 nested : Pair (Box String) (Box Int)
 nested = { left = { contents = "text" }, right = { contents = 42 } }`);
 
     const result = analyze(program);
 
-    expect(result.typeAliases.Box).toBeDefined();
-    expect(result.typeAliases.Pair).toBeDefined();
+    expect(result.records.Box).toBeDefined();
+    expect(result.records.Pair).toBeDefined();
     expect(result.types.nested).toBeDefined();
   });
 
@@ -1144,21 +1129,21 @@ wrapped = Some 42`);
 
   test("rejects lowercase type name in type alias (suggests capitalization)", () => {
     expectError(
-      `type alias Point = { x : Int, y : int }`,
+      `type alias IntPair = (Int, int)`,
       "Type 'int' is not defined. Did you mean 'Int'?",
     );
   });
 
   test("rejects undefined type in type alias", () => {
     expectError(
-      `type alias Point = { x : Int, y : Foo }`,
+      `type alias MyPair = (Int, Foo)`,
       "Type 'Foo' is not defined",
     );
   });
 
   test("rejects undefined type variable in type alias", () => {
     expectError(
-      `type alias Container = { value : a }`,
+      `type alias Container = List a`,
       "Type variable 'a' is not defined in this context",
     );
   });
@@ -1167,16 +1152,16 @@ wrapped = Some 42`);
     const program = parse(`module Test exposing (..)
 
 ${TYPE_PREAMBLE}
-type alias Container a = { value : a }`);
+type alias Container a = List a`);
     const result = analyze(program);
 
     expect(result.typeAliases.Container).toBeDefined();
     expect(result.typeAliases.Container?.params).toEqual(["a"]);
   });
 
-  test("rejects nested undefined type in type alias", () => {
+  test("rejects nested undefined type in type expression", () => {
     expectError(
-      `type alias Nested = { inner : { value : foo } }`,
+      `type alias Nested = (Int, (String, foo))`,
       "Type 'foo' is not defined",
     );
   });
@@ -1195,11 +1180,11 @@ type alias Container a = { value : a }`);
   test("validates type alias stores module name", () => {
     const program = parse(`module TestModule exposing (..)
 ${TYPE_PREAMBLE}
-type alias Point = { x : Int, y : Int }`);
+type alias IntPair = (Int, Int)`);
     const result = analyze(program);
 
-    expect(result.typeAliases.Point).toBeDefined();
-    expect(result.typeAliases.Point?.moduleName).toBe("TestModule");
+    expect(result.typeAliases.IntPair).toBeDefined();
+    expect(result.typeAliases.IntPair?.moduleName).toBe("TestModule");
   });
 
   test("validates ADT stores module name", () => {

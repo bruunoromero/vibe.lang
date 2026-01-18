@@ -40,6 +40,7 @@ import {
   type MethodImplementation,
   type InfixDeclaration,
   type OperatorRegistry,
+  type RecordFieldType,
 } from "@vibe/syntax";
 import {
   buildRegistryFromTokens,
@@ -590,12 +591,14 @@ class Parser {
 
     // Check if this is a record type (= { ... })
     if (this.peek(TokenKind.LBrace)) {
-      throw new ParseError(
-        "Record types must use 'type alias' syntax: type alias " +
-          name +
-          " = { ... }",
-        { start: typeToken.span.start, end: this.current().span.end },
-      );
+      const recordFields = this.parseRecordTypeFields();
+      return {
+        kind: "TypeDeclaration",
+        name,
+        params,
+        recordFields,
+        span: { start: typeToken.span.start, end: this.previousSpan().end },
+      };
     }
 
     // Parse ADT - constructor variants separated by pipe (|)
@@ -1387,7 +1390,7 @@ class Parser {
     // Parse record type { field1 : Type1, field2 : Type2, ... }
     if (this.match(TokenKind.LBrace)) {
       const start = this.previousSpan().start;
-      const fields: Array<{ name: string; type: TypeExpr }> = [];
+            const fields: Array<{ name: string; type: TypeExpr; span: Span }> = [];
 
       // Check for empty record {}
       if (this.match(TokenKind.RBrace)) {
@@ -1405,7 +1408,11 @@ class Parser {
       );
       this.expect(TokenKind.Colon, "':' after field name");
       const firstType = this.parseTypeExpression();
-      fields.push({ name: firstName.lexeme, type: firstType });
+      fields.push({
+        name: firstName.lexeme,
+        type: firstType,
+        span: { start: firstName.span.start, end: firstType.span.end },
+      });
 
       const baseIndent = firstName.span.start.column;
       let lastEnd = firstType.span.end;
@@ -1422,7 +1429,11 @@ class Parser {
         );
         this.expect(TokenKind.Colon, "':' after field name");
         const fieldType = this.parseTypeExpression();
-        fields.push({ name: fieldName.lexeme, type: fieldType });
+        fields.push({
+          name: fieldName.lexeme,
+          type: fieldType,
+          span: { start: fieldName.span.start, end: fieldType.span.end },
+        });
         lastEnd = fieldType.span.end;
       }
 
@@ -1520,7 +1531,7 @@ class Parser {
     // Parse record type { field1 : Type1, field2 : Type2, ... }
     if (this.match(TokenKind.LBrace)) {
       const start = this.previousSpan().start;
-      const fields: Array<{ name: string; type: TypeExpr }> = [];
+      const fields: Array<{ name: string; type: TypeExpr; span: Span }> = [];
 
       // Check for empty record {}
       if (this.match(TokenKind.RBrace)) {
@@ -1538,7 +1549,11 @@ class Parser {
       );
       this.expect(TokenKind.Colon, "':' after field name");
       const firstType = this.parseTypeExpression();
-      fields.push({ name: firstName.lexeme, type: firstType });
+      fields.push({
+        name: firstName.lexeme,
+        type: firstType,
+        span: { start: firstName.span.start, end: firstType.span.end },
+      });
 
       const baseIndent = firstName.span.start.column;
       let lastEnd = firstType.span.end;
@@ -1555,7 +1570,11 @@ class Parser {
         );
         this.expect(TokenKind.Colon, "':' after field name");
         const fieldType = this.parseTypeExpression();
-        fields.push({ name: fieldName.lexeme, type: fieldType });
+        fields.push({
+          name: fieldName.lexeme,
+          type: fieldType,
+          span: { start: fieldName.span.start, end: fieldType.span.end },
+        });
         lastEnd = fieldType.span.end;
       }
 
@@ -1621,6 +1640,59 @@ class Parser {
       args: [],
       span: ident.span,
     };
+  }
+
+  /**
+   * Parse record type fields: { field1 : Type1, field2 : Type2, ... }
+   * Returns an array of record field types.
+   */
+  private parseRecordTypeFields(): RecordFieldType[] {
+    this.expect(TokenKind.LBrace, "record type start '{'");
+    const fields: RecordFieldType[] = [];
+
+    // Check for empty record {}
+    if (this.match(TokenKind.RBrace)) {
+      return [];
+    }
+
+    // Parse first field
+    const firstNameToken = this.expect(
+      TokenKind.LowerIdentifier,
+      "record field name",
+    );
+    this.expect(TokenKind.Colon, "':' after field name");
+    const firstType = this.parseTypeExpression();
+    fields.push({
+      name: firstNameToken.lexeme,
+      type: firstType,
+      span: { start: firstNameToken.span.start, end: firstType.span.end },
+    });
+
+    const baseIndent = firstNameToken.span.start.column;
+    let lastEnd = firstType.span.end;
+
+    // Parse subsequent fields
+    while (this.peek(TokenKind.Comma)) {
+      const next = this.peekAhead(1);
+      if (!next || !this.continuesLayout(baseIndent, lastEnd, next)) break;
+      this.advance(); // consume comma
+
+      const fieldNameToken = this.expect(
+        TokenKind.LowerIdentifier,
+        "record field name",
+      );
+      this.expect(TokenKind.Colon, "':' after field name");
+      const fieldType = this.parseTypeExpression();
+      fields.push({
+        name: fieldNameToken.lexeme,
+        type: fieldType,
+        span: { start: fieldNameToken.span.start, end: fieldType.span.end },
+      });
+      lastEnd = fieldType.span.end;
+    }
+
+    this.expect(TokenKind.RBrace, "close record type '}'");
+    return fields;
   }
 
   /**

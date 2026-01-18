@@ -250,18 +250,29 @@ function extractDeclarationTokens(
       // Type parameters
       // Note: spans not directly available, would need position tracking
 
-      // Constructors
-      for (const ctor of decl.constructors) {
-        addToken(
-          tokens,
-          ctor.span,
-          TokenTypeIndex.Constructor,
-          TokenModifierFlags.Declaration
-        );
+      // Constructors (for ADTs)
+      if (decl.constructors) {
+        for (const ctor of decl.constructors) {
+          addToken(
+            tokens,
+            ctor.span,
+            TokenTypeIndex.Constructor,
+            TokenModifierFlags.Declaration
+          );
 
-        // Constructor argument types
-        for (const arg of ctor.args) {
-          extractTypeExprTokens(arg, content, tokens);
+          // Constructor argument types
+          for (const arg of ctor.args) {
+            extractTypeExprTokens(arg, content, tokens);
+          }
+        }
+      }
+
+      // Record fields (for record types)
+      if (decl.recordFields) {
+        for (const field of decl.recordFields) {
+          const fieldSpan = getNameSpan(field.span, field.name, content);
+          addToken(tokens, fieldSpan, TokenTypeIndex.Property, 0);
+          extractTypeExprTokens(field.type, content, tokens);
         }
       }
       break;

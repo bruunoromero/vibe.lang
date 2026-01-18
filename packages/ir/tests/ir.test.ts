@@ -257,10 +257,10 @@ x c =
 
 describe("Record update desugaring", () => {
   test("record update is desugared", () => {
-    // Define a Point type alias and use record update
+    // Define a Point type and use record update
     // The parameter needs a type annotation for the semantics to know it's a record
     const source = `
-type alias Point = { x : Int, y : Int }
+type Point = { x : Int, y : Int }
 
 moveX : Point -> Point
 moveX p =
@@ -612,7 +612,7 @@ x = [1, 2, 3]
   test("field access", () => {
     // Need type annotation for semantics to know r is a record
     const source = `
-type alias Rec = { field : Int }
+type Rec = { field : Int }
 
 x : Rec -> Int
 x r = r.field

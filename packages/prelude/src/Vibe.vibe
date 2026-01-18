@@ -60,7 +60,6 @@ never nvr =
 -- These establish precedence and associativity for all standard operators.
 -- Higher numbers bind tighter. Range: 1-9.
 --
--- NOTE: && and || are BUILTIN operators with short-circuit semantics.
 -- Their fixity (infixr 3 && and infixr 2 ||) is defined by the compiler.
 
 -- Application operators (lowest precedence)

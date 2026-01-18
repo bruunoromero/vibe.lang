@@ -188,10 +188,19 @@ export type TypeExpr =
   | { kind: "TupleType"; elements: TypeExpr[]; span: Span }
   | {
       kind: "RecordType";
-      fields: Array<{ name: string; type: TypeExpr }>;
+    fields: Array<{ name: string; type: TypeExpr; span: Span }>;
       span: Span;
     }
   | QualifiedType;
+
+/**
+ * A record field definition in a type declaration.
+ */
+export type RecordFieldType = {
+  name: string;
+  type: TypeExpr;
+  span: Span;
+};
 
 // ===== Algebraic Data Type (ADT) Declarations =====
 // ADTs allow defining custom sum types like: type Maybe a = Just a | Nothing
@@ -230,12 +239,16 @@ export type ConstructorVariant = {
  */
 export type TypeDeclaration = {
   kind: "TypeDeclaration";
-  /** The type name (must be uppercase, e.g., "Maybe", "Result") */
+  /** The type name (must be uppercase, e.g., "Maybe", "Result", "Person") */
   name: string;
   /** Type parameters (lowercase identifiers, e.g., ["a"] for Maybe a) */
   params: string[];
-  /** Constructor variants (at least one required) */
-  constructors: ConstructorVariant[];
+  /** Optional protocol constraints on type parameters */
+  constraints: Constraint[];
+  /** Constructor variants (for ADTs) */
+  constructors?: ConstructorVariant[];
+  /** Record fields (for Record types) */
+  recordFields?: RecordFieldType[];
   /** Protocols to automatically implement (requires all methods have defaults) */
   implementing?: string[];
   /** Source location span for error reporting */
@@ -262,7 +275,9 @@ export type TypeAliasDeclaration = {
   name: string;
   /** Type parameters (lowercase identifiers, e.g., ["a", "b"] for Pair a b) */
   params: string[];
-  /** The type expression this alias refers to (cannot be a record type) */
+  /** Optional protocol constraints on type parameters */
+  constraints: Constraint[];
+  /** The type expression this alias refers to (cannot be a bare record type) */
   value: TypeExpr;
   /** Source location span for error reporting */
   span: Span;

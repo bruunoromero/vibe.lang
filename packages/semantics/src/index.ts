@@ -43,6 +43,8 @@ export type {
   ConstructorInfo,
   ADTInfo,
   TypeAliasInfo,
+  RecordInfo,
+  RecordFieldInfo,
   OpaqueTypeInfo,
   ProtocolInfo,
   ProtocolMethodInfo,
@@ -72,6 +74,8 @@ import type {
   ConstructorInfo,
   ADTInfo,
   TypeAliasInfo,
+  RecordInfo,
+  RecordFieldInfo,
   OpaqueTypeInfo,
   ProtocolInfo,
   ProtocolMethodInfo,
@@ -979,6 +983,7 @@ export function analyze(
   const constructors: Record<string, ConstructorInfo> = {};
   const constructorTypes: Record<string, TypeScheme> = {};
   const typeAliases: Record<string, TypeAliasInfo> = {};
+  const records: Record<string, RecordInfo> = {};
 
   // ===== Opaque Type Registry =====
   // These track opaque types for JS interop (no pattern matching or record updates allowed)
@@ -1278,8 +1283,11 @@ export function analyze(
       registerTypeDeclaration(
         decl,
         adts,
+        records,
         constructors,
         constructorTypes,
+        typeAliases,
+        opaqueTypes,
         globalScope,
         currentModuleName,
       );
@@ -1311,7 +1319,7 @@ export function analyze(
   // ===== PASS 1c: Validate type alias references =====
   // Now that all ADTs and aliases are registered, validate that type references exist.
   for (const decl of typeAliasDecls) {
-    validateTypeAliasReferences(decl, adts, typeAliases, opaqueTypes);
+    validateTypeAliasReferences(decl, adts, typeAliases, opaqueTypes, records);
   }
 
   // ===== PASS 1d: Register protocols =====
@@ -1438,6 +1446,7 @@ export function analyze(
         typeAliases,
         info.declaration.span,
         opaqueTypes,
+        records,
       );
 
       if (validationErrors.length > 0) {
@@ -1454,6 +1463,7 @@ export function analyze(
         adts,
         typeAliases,
         protocols,
+        records,
       );
       annotationType = result.type;
       annotatedConstraints =
@@ -1534,6 +1544,7 @@ export function analyze(
           adts,
           typeAliases,
           protocols,
+          records,
         );
         info.type = result.type;
 
@@ -1570,7 +1581,7 @@ export function analyze(
         const declaredType = types[name]!;
         // Use the pre-computed annotated type (already extracted with constraints during seeding)
         const annotationType = info.annotation
-          ? typeFromAnnotation(info.annotation, new Map(), adts, typeAliases)
+          ? typeFromAnnotation(info.annotation, new Map(), adts, typeAliases, records)
           : undefined;
 
         const inferred = analyzeValueDeclaration(
@@ -1698,6 +1709,7 @@ export function analyze(
     constructors,
     constructorTypes,
     typeAliases,
+    records,
     opaqueTypes,
     protocols,
     instances,
@@ -1748,8 +1760,11 @@ function registerValue(
 function registerTypeDeclaration(
   decl: TypeDeclaration,
   adts: Record<string, ADTInfo>,
+  records: Record<string, RecordInfo>,
   constructors: Record<string, ConstructorInfo>,
   constructorTypes: Record<string, TypeScheme>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
   globalScope: Scope,
   moduleName?: string,
 ) {
@@ -1782,8 +1797,21 @@ function registerTypeDeclaration(
     paramSet.add(param);
   }
 
-  // Validate at least one constructor
-  if (decl.constructors.length === 0) {
+  // Validate at least one constructor (for ADTs only)
+  // Record types don't have constructors
+  if (!decl.constructors || decl.constructors.length === 0) {
+    // If we have record fields, this is a record type - register it separately
+    if (decl.recordFields) {
+      registerRecordTypeDeclaration(
+        decl,
+        records,
+        adts,
+        typeAliases,
+        opaqueTypes,
+        moduleName,
+      );
+      return;
+    }
     throw new SemanticError(
       `Type '${decl.name}' must have at least one constructor`,
       decl.span,
@@ -1863,6 +1891,133 @@ function registerTypeDeclaration(
     // Also store in constructorTypes for export
     constructorTypes[ctor.name] = ctorScheme;
   }
+}
+
+/**
+ * Check if a TypeExpr contains a RecordType anywhere in its structure.
+ * Used to reject floating record types in type annotations.
+ */
+function containsRecordType(expr: TypeExpr): boolean {
+  switch (expr.kind) {
+    case "RecordType":
+      return true;
+    case "TypeRef":
+      return expr.args.some(containsRecordType);
+    case "FunctionType":
+      return containsRecordType(expr.from) || containsRecordType(expr.to);
+    case "TupleType":
+      return expr.elements.some(containsRecordType);
+    case "QualifiedType":
+      return containsRecordType(expr.type);
+  }
+}
+
+/**
+ * Register a record type declaration.
+ *
+ * Record types are named types with fields, defined using:
+ * `type Person = { name : String, age : Int }`
+ *
+ * Unlike ADTs:
+ * - Record types don't have constructors
+ * - Fields are accessed using dot notation
+ * - Records can be used in pattern matching
+ */
+function registerRecordTypeDeclaration(
+  decl: TypeDeclaration,
+  records: Record<string, RecordInfo>,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
+  moduleName?: string,
+): void {
+  // Check for duplicate type name across all type namespaces
+  if (records[decl.name]) {
+    throw new SemanticError(
+      `Duplicate record type declaration for '${decl.name}'`,
+      decl.span,
+    );
+  }
+  if (adts[decl.name]) {
+    throw new SemanticError(
+      `Record type '${decl.name}' conflicts with ADT '${decl.name}'`,
+      decl.span,
+    );
+  }
+  if (typeAliases[decl.name]) {
+    throw new SemanticError(
+      `Record type '${decl.name}' conflicts with type alias '${decl.name}'`,
+      decl.span,
+    );
+  }
+  if (opaqueTypes[decl.name]) {
+    throw new SemanticError(
+      `Record type '${decl.name}' conflicts with opaque type '${decl.name}'`,
+      decl.span,
+    );
+  }
+
+  // Validate no mixing of constructors and record fields
+  if (decl.constructors && decl.constructors.length > 0) {
+    throw new SemanticError(
+      `Type '${decl.name}' cannot have both constructors and record fields. ` +
+        `Use 'type' for ADTs or record types separately.`,
+      decl.span,
+    );
+  }
+
+  // Validate record fields exist - but allow empty records (like unit types)
+  if (!decl.recordFields) {
+    throw new SemanticError(
+      `Record type '${decl.name}' is missing field definitions`,
+      decl.span,
+    );
+  }
+
+  // Check for duplicate field names
+  const fieldNames = new Set<string>();
+  for (const field of decl.recordFields) {
+    if (fieldNames.has(field.name)) {
+      throw new SemanticError(
+        `Duplicate field '${field.name}' in record type '${decl.name}'`,
+        field.span,
+      );
+    }
+    fieldNames.add(field.name);
+  }
+
+  // Create temporary type variables for type params (for field type resolution)
+  const paramTypeVars: Map<string, TypeVar> = new Map();
+  for (const param of decl.params) {
+    paramTypeVars.set(param, freshType());
+  }
+
+  // Validate field types - reject floating record types in field definitions
+  for (const field of decl.recordFields) {
+    if (containsRecordType(field.type)) {
+      throw new SemanticError(
+        `Record types cannot be used directly in type annotations. ` +
+          `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
+        field.span,
+      );
+    }
+  }
+
+  // Build field info - store the AST TypeExpr for proper type parameter resolution
+  const fields: RecordFieldInfo[] = decl.recordFields.map((field) => ({
+    name: field.name,
+    typeExpr: field.type, // Store the AST TypeExpr for later resolution
+    span: field.span,
+  }));
+
+  // Register the record type
+  records[decl.name] = {
+    name: decl.name,
+    moduleName,
+    params: decl.params,
+    fields,
+    span: decl.span,
+  };
 }
 
 /**
@@ -2044,6 +2199,7 @@ function validateTypeExpr(
   typeAliases: Record<string, TypeAliasInfo>,
   parentSpan: Span,
   opaqueTypes: Record<string, OpaqueTypeInfo> = {},
+  records: Record<string, RecordInfo> = {},
 ): TypeValidationError[] {
   const errors: TypeValidationError[] = [];
 
@@ -2065,6 +2221,12 @@ function validateTypeExpr(
     for (const opaqueName of Object.keys(opaqueTypes)) {
       if (opaqueName.toLowerCase() === nameLower && opaqueName !== name) {
         return opaqueName;
+      }
+    }
+    // Check record types
+    for (const recordName of Object.keys(records)) {
+      if (recordName.toLowerCase() === nameLower && recordName !== name) {
+        return recordName;
       }
     }
     return undefined;
@@ -2120,6 +2282,15 @@ function validateTypeExpr(
         // Check if it's an opaque type
         if (opaqueTypes[name]) {
           // Valid opaque type reference - validate args
+          for (const arg of e.args) {
+            validate(arg);
+          }
+          return;
+        }
+
+        // Check if it's a named record type
+        if (records[name]) {
+          // Valid record type reference - validate args
           for (const arg of e.args) {
             validate(arg);
           }
@@ -2244,7 +2415,18 @@ function validateTypeAliasReferences(
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo> = {},
+  records: Record<string, RecordInfo> = {},
 ) {
+  // Reject bare record types in type alias declarations
+  // Record types must be defined using `type Name = { ... }` syntax
+  if (decl.value.kind === "RecordType") {
+    throw new SemanticError(
+      `Type alias '${decl.name}' cannot directly define a record type. ` +
+        `Use 'type ${decl.name} = { ... }' instead of 'type alias'.`,
+      decl.value.span,
+    );
+  }
+
   const paramSet = new Set<string>(decl.params);
 
   const validationErrors = validateTypeExpr(
@@ -2254,6 +2436,7 @@ function validateTypeAliasReferences(
     typeAliases,
     decl.span,
     opaqueTypes,
+    records,
   );
 
   if (validationErrors.length > 0) {
@@ -2336,7 +2519,7 @@ function registerTypeAlias(
   moduleName?: string,
 ) {
   registerTypeAliasWithoutValidation(decl, typeAliases, moduleName);
-  validateTypeAliasReferences(decl, adts, typeAliases);
+  validateTypeAliasReferences(decl, adts, typeAliases, {}, {});
 }
 
 /**
@@ -6949,6 +7132,7 @@ function typeFromAnnotationWithConstraints(
   adts: Record<string, ADTInfo> = {},
   typeAliases: Record<string, TypeAliasInfo> = {},
   protocols: Record<string, ProtocolInfo> = {},
+  records: Record<string, RecordInfo> = {},
 ): AnnotationResult {
   // Handle QualifiedType at the top level to extract constraints
   if (annotation.kind === "QualifiedType") {
@@ -6977,7 +7161,7 @@ function typeFromAnnotationWithConstraints(
       const constraintTypeArgs: Type[] = [];
       for (const typeArg of astConstraint.typeArgs) {
         constraintTypeArgs.push(
-          typeFromAnnotation(typeArg, context, adts, typeAliases),
+          typeFromAnnotation(typeArg, context, adts, typeAliases, records),
         );
       }
 
@@ -7006,6 +7190,7 @@ function typeFromAnnotationWithConstraints(
       adts,
       typeAliases,
       protocols,
+      records,
     );
 
     // Merge constraints from nested qualified types
@@ -7016,7 +7201,7 @@ function typeFromAnnotationWithConstraints(
   }
 
   // For non-qualified types, delegate to the simpler function
-  const type = typeFromAnnotation(annotation, context, adts, typeAliases);
+  const type = typeFromAnnotation(annotation, context, adts, typeAliases, records);
   return { type, constraints: [] };
 }
 
@@ -7044,6 +7229,7 @@ function typeFromAnnotation(
   context: TypeVarContext = new Map(),
   adts: Record<string, ADTInfo> = {},
   typeAliases: Record<string, TypeAliasInfo> = {},
+  records: Record<string, RecordInfo> = {},
 ): Type {
   switch (annotation.kind) {
     case "TypeRef": {
@@ -7080,6 +7266,7 @@ function typeFromAnnotation(
               context,
               adts,
               typeAliases,
+              records,
             );
             argTypes.push(argType);
           }
@@ -7102,10 +7289,67 @@ function typeFromAnnotation(
             aliasContext,
             adts,
             typeAliases,
+            records,
           );
 
           // Apply substitution to replace fresh vars with actual argument types
           return applySubstitution(expandedType, substitutionMap);
+        }
+      }
+
+      // Check if this is a named record type
+      const recordInfo = records[annotation.name];
+      if (recordInfo) {
+        // Named record type: expand to structural TypeRecord
+        // Handle type parameters by creating a substitution map
+        if (annotation.args.length !== recordInfo.params.length) {
+          // Mismatch in type arguments - fall through to treat as type constructor
+        } else {
+          // Convert all argument types first
+          const argTypes: Type[] = [];
+          for (let i = 0; i < recordInfo.params.length; i++) {
+            const argType = typeFromAnnotation(
+              annotation.args[i]!,
+              context,
+              adts,
+              typeAliases,
+              records,
+            );
+            argTypes.push(argType);
+          }
+
+          // Create fresh type variables for each record parameter
+          // and build a substitution map to replace them with actual argument types
+          const recordContext: TypeVarContext = new Map(context);
+          const substitutionMap = new Map<number, Type>();
+
+          for (let i = 0; i < recordInfo.params.length; i++) {
+            const paramName = recordInfo.params[i]!;
+            const fresh = freshType();
+            recordContext.set(paramName, fresh);
+            substitutionMap.set(fresh.id, argTypes[i]!);
+          }
+
+          // Build the structural TypeRecord from the record fields
+          const fields: Record<string, Type> = {};
+          for (const field of recordInfo.fields) {
+            // Convert the field's AST TypeExpr to a Type using the record context
+            // This properly handles type parameters (e.g., `a` in `Container a`)
+            const fieldType = typeFromAnnotation(
+              field.typeExpr,
+              recordContext,
+              adts,
+              typeAliases,
+              records,
+            );
+            // Apply substitution to replace fresh vars with actual argument types
+            fields[field.name] = applySubstitution(fieldType, substitutionMap);
+          }
+
+          return {
+            kind: "record",
+            fields,
+          };
         }
       }
 
@@ -7115,7 +7359,7 @@ function typeFromAnnotation(
         kind: "con",
         name: annotation.name,
         args: annotation.args.map((arg) =>
-          typeFromAnnotation(arg, context, adts, typeAliases),
+          typeFromAnnotation(arg, context, adts, typeAliases, records),
         ),
       };
     }
@@ -7125,43 +7369,45 @@ function typeFromAnnotation(
         context,
         adts,
         typeAliases,
+        records,
       );
-      const to = typeFromAnnotation(annotation.to, context, adts, typeAliases);
+      const to = typeFromAnnotation(
+        annotation.to,
+        context,
+        adts,
+        typeAliases,
+        records,
+      );
       return fn(from, to);
     }
     case "TupleType": {
       return {
         kind: "tuple",
         elements: annotation.elements.map((el) =>
-          typeFromAnnotation(el, context, adts, typeAliases),
+          typeFromAnnotation(el, context, adts, typeAliases, records),
         ),
       };
     }
     case "RecordType": {
-      // Convert record type annotation to internal record type
-      // Sort fields alphabetically for consistent comparison
-      const sortedFields = [...annotation.fields].sort((a, b) =>
-        a.name.localeCompare(b.name),
+      // Reject floating record types in type annotations
+      // Record types must be defined using `type Name = { ... }` and then referenced by name
+      throw new SemanticError(
+        `Record types cannot be used directly in type annotations. ` +
+          `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
+        annotation.span,
       );
-      const fields: Record<string, Type> = {};
-      for (const field of sortedFields) {
-        fields[field.name] = typeFromAnnotation(
-          field.type,
-          context,
-          adts,
-          typeAliases,
-        );
-      }
-      return {
-        kind: "record",
-        fields,
-      };
     }
     case "QualifiedType": {
       // For the simple typeFromAnnotation function, we extract only the underlying type.
       // Use typeFromAnnotationWithConstraints() to also extract constraints.
       // This maintains backwards compatibility with call sites that only need the type.
-      return typeFromAnnotation(annotation.type, context, adts, typeAliases);
+      return typeFromAnnotation(
+        annotation.type,
+        context,
+        adts,
+        typeAliases,
+        records,
+      );
     }
   }
 }
