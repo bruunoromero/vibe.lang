@@ -1,8 +1,25 @@
 module Vibe.Maybe exposing
     ( withDefault 
+    , Maybe(..)
     )
 
-import Vibe exposing (Maybe(..))
+
+{-| Represents an optional value. Used when a value may or may not exist.
+
+    Just x  -- Contains a value x
+    Nothing -- No value present
+
+    Example:
+        head : List a -> Maybe a
+        head list =
+            case list of
+                x :: _ -> Just x
+                [] -> Nothing
+-}
+type Maybe a
+    = Just a
+    | Nothing
+
 
 withDefault : a -> Maybe a -> a
 withDefault defaultValue maybeValue =

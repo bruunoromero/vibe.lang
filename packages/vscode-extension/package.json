@@ -72,7 +72,8 @@
     "build": "bun build ./src/extension.ts --outdir ./dist --target node --format cjs --external vscode --external vscode-languageclient",
     "watch": "bun build ./src/extension.ts --outdir ./dist --target node --format cjs --external vscode --external vscode-languageclient --watch",
     "package": "vsce package",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

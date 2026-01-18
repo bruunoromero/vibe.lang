@@ -23,20 +23,17 @@ import { generate } from "../src/index";
  */
 function compileToJS(
   source: string,
-  preludeSource?: string
+  preludeSource?: string,
 ): { code: string; ir: IRProgram } {
   // Parse prelude if provided
   let preludeSemantics: SemanticModule | undefined;
   if (preludeSource) {
     const preludeAst = parse(preludeSource);
-    preludeSemantics = analyze(preludeAst, {
-      injectPrelude: false,
-    });
+    preludeSemantics = analyze(preludeAst);
   }
 
   const ast = parse(source);
   const semantics = analyze(ast, {
-    injectPrelude: false,
     dependencies: preludeSemantics
       ? new Map([["Vibe", preludeSemantics]])
       : undefined,
@@ -387,7 +384,7 @@ test1 = False || False || True
     // With right-associativity, False || False || True becomes:
     // False || (False || True) => nested calls to _PIPE_PIPE
     expect(code).toContain(
-      "_PIPE_PIPE(false)(() => _PIPE_PIPE(false)(() => true))"
+      "_PIPE_PIPE(false)(() => _PIPE_PIPE(false)(() => true))",
     );
   });
 
@@ -520,5 +517,402 @@ not b = if b then False else True
     expect(code).toContain("$default_Eq_List");
     // It should use the passed-in dictionary, not reference a concrete one
     expect(code).toMatch(/\$default_Eq_List[^=]+=\s*\(\$dict_Eq\)/);
+  });
+});
+
+// ============================================================================
+// External Function Reference Tests
+// ============================================================================
+
+describe("External Function References", () => {
+  test("external function calls use the binding name, not the runtime export name", () => {
+    // This tests the bug where external function calls were compiled using
+    // the runtime export name (e.g., "listCons") instead of the binding name
+    // (e.g., "cons"). Since imports alias the runtime name to the binding name
+    // (import { listCons as cons }), the binding name must be used in the body.
+    const source = `
+module Test exposing (..)
+
+@external "@vibe/runtime" "listCons"
+cons : a -> List a -> List a
+
+append : List a -> List a -> List a
+append xs ys =
+    case xs of
+        [] -> ys
+        x :: xsTail -> cons x (append xsTail ys)
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should import with alias: import { listCons as cons }
+    expect(code).toContain('import { listCons as cons } from "@vibe/runtime"');
+
+    // Should call "cons" in the body, NOT "listCons"
+    expect(code).toContain("cons(x)");
+    expect(code).not.toMatch(/[^a-zA-Z]listCons\(/);
+  });
+
+  test("external function with same binding and export name works correctly", () => {
+    // When the Vibe name matches the runtime export name, no alias is needed
+    const source = `
+module Test exposing (..)
+
+@external "@vibe/runtime" "listCons"
+listCons : a -> List a -> List a
+
+test : List Int
+test = listCons 1 []
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should import directly: import { listCons }
+    expect(code).toContain("listCons");
+    // Should call "listCons" in the body
+    expect(code).toContain("listCons(1)");
+  });
+
+  test("multiple external functions from same module use correct binding names", () => {
+    const source = `
+module Test exposing (..)
+
+@external "@vibe/runtime" "intAdd"
+add : Int -> Int -> Int
+
+@external "@vibe/runtime" "intSub"
+sub : Int -> Int -> Int
+
+compute : Int -> Int -> Int
+compute x y = add (sub x y) y
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should import with aliases
+    expect(code).toContain("intAdd as add");
+    expect(code).toContain("intSub as sub");
+
+    // Should use binding names in the body
+    expect(code).toContain("add(");
+    expect(code).toContain("sub(");
+    // Should NOT use the runtime export names directly in the body
+    expect(code).not.toMatch(/[^a-zA-Z_]intAdd\(/);
+    expect(code).not.toMatch(/[^a-zA-Z_]intSub\(/);
+  });
+});
+
+// ============================================================================
+// SSC-Based Dependency Order Tests
+// ============================================================================
+
+describe("SSC-Based Dependency Order", () => {
+  test("synthetic implementations are emitted before dictionaries that reference them", () => {
+    // This test ensures that $impl_* and $default_* values are included in the
+    // dependency order so they're emitted before the dictionaries reference them.
+    const source = `
+module Test exposing (..)
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+    (==) : a -> a -> Bool
+    (/=) : a -> a -> Bool
+    (/=) x y = not (x == y)
+
+implement Eq Int where
+    (==) x y = True
+
+not : Bool -> Bool
+not b = if b then False else True
+`;
+
+    const { code } = compileToJS(source);
+    const lines = code.split("\n");
+
+    // Find the line where $impl or $default is defined
+    const implLine = lines.findIndex(
+      (l) =>
+        l.includes("const $impl_Eq_Int") || l.includes("const $default_Eq_Int"),
+    );
+    // Find the line where the dictionary is defined
+    const dictLine = lines.findIndex((l) => l.includes("const $dict_Eq_Int"));
+
+    // Synthetic implementations should be emitted before the dictionary
+    expect(implLine).toBeLessThan(dictLine);
+    expect(implLine).toBeGreaterThan(-1);
+    expect(dictLine).toBeGreaterThan(-1);
+  });
+
+  test("values are emitted before dictionaries that reference them", () => {
+    // Regular values referenced by dictionary methods should be emitted first
+    const source = `
+module Test exposing (..)
+
+infix 4 ==
+
+protocol Eq a where
+    (==) : a -> a -> Bool
+
+myCompare : Int -> Int -> Bool
+myCompare x y = True
+
+implement Eq Int where
+    (==) = myCompare
+`;
+
+    const { code } = compileToJS(source);
+    const lines = code.split("\n");
+
+    // myCompare should be emitted before the dictionary
+    const compareLine = lines.findIndex((l) => l.includes("const myCompare"));
+    const dictLine = lines.findIndex((l) => l.includes("const $dict_Eq_Int"));
+
+    expect(compareLine).toBeLessThan(dictLine);
+  });
+});
+
+// ============================================================================
+// Type Variable Naming Consistency Tests
+// ============================================================================
+
+describe("Type Variable Naming Consistency", () => {
+  test("synthetic implementations and dictionaries use consistent type variable names", () => {
+    // This test ensures that IR and codegen use the same format for type variable
+    // keys (lowercase 'v' prefix) to prevent duplicate dictionary generation.
+    const source = `
+module Test exposing (..)
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+    (==) : a -> a -> Bool
+    (/=) : a -> a -> Bool
+    (/=) x y = not (x == y)
+
+implement Eq a => Eq (List a) where
+    (==) xs ys = True
+
+not : Bool -> Bool
+not b = if b then False else True
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should use lowercase 'v' for type variables, not 'Var'
+    // Check that we don't have inconsistent naming
+    expect(code).not.toMatch(/\$dict_Eq_List_Var\d+/);
+    expect(code).not.toMatch(/\$impl_Eq_List_Var\d+/);
+    expect(code).not.toMatch(/\$default_Eq_List_Var\d+/);
+
+    // Should have consistent lowercase 'v' naming
+    expect(code).toMatch(/\$dict_Eq_List_v\d+/);
+    expect(code).toMatch(/\$default_Eq_List_v\d+/);
+  });
+});
+
+// ============================================================================
+// Import Path Tests
+// ============================================================================
+
+import {
+  calculateReExportPath,
+  calculateImportPath,
+  generateDependencyImports,
+} from "../src/imports";
+
+describe("Re-export Path Calculation", () => {
+  test("calculates correct path for submodule re-exports within same package", () => {
+    const mockProgram = {
+      moduleName: "Vibe",
+      packageName: "Vibe",
+    } as IRProgram;
+    const modulePackages = new Map([["Vibe.Maybe", "Vibe"]]);
+
+    const path = calculateReExportPath(
+      mockProgram,
+      "Vibe.Maybe",
+      modulePackages,
+    );
+    expect(path).toBe("./Vibe/Maybe.js");
+  });
+
+  test("calculates correct path for cross-package re-exports", () => {
+    const mockProgram = {
+      moduleName: "Vibe",
+      packageName: "Vibe",
+    } as IRProgram;
+    const modulePackages = new Map([["ExampleApp", "ExampleApp"]]);
+
+    const path = calculateReExportPath(
+      mockProgram,
+      "ExampleApp",
+      modulePackages,
+    );
+    expect(path).toBe("../ExampleApp/ExampleApp.js");
+  });
+
+  test("falls back to first segment when modulePackages missing entry", () => {
+    const mockProgram = {
+      moduleName: "Vibe",
+      packageName: "Vibe",
+    } as IRProgram;
+    const modulePackages = new Map();
+
+    const path = calculateReExportPath(
+      mockProgram,
+      "Vibe.Maybe",
+      modulePackages,
+    );
+    expect(path).toBe("./Vibe/Maybe.js");
+  });
+
+  test("handles deeply nested modules correctly", () => {
+    const mockProgram = {
+      moduleName: "Vibe.Sub.Deep",
+      packageName: "Vibe",
+    } as IRProgram;
+    const modulePackages = new Map([["Vibe.Other", "Vibe"]]);
+
+    const path = calculateReExportPath(
+      mockProgram,
+      "Vibe.Other",
+      modulePackages,
+    );
+    expect(path).toBe("../../Vibe/Other.js");
+  });
+});
+
+describe("ADT Constructor Imports", () => {
+  test("imports constructors instead of type name for ExportTypeAll", () => {
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Maybe",
+            exposing: {
+              kind: "Explicit",
+              exports: [{ kind: "ExportTypeAll", name: "Maybe" }],
+            },
+          },
+        ],
+      },
+      adts: {
+        Maybe: {
+          constructors: ["Just", "Nothing"],
+        },
+      },
+    } as unknown as IRProgram;
+    const modulePackages = new Map([["Vibe.Maybe", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+    expect(imports).toContain(
+      'import { Just, Nothing } from "../Vibe/Vibe/Maybe.js";',
+    );
+    expect(imports).not.toContain("import { Maybe }");
+  });
+
+  test("imports specific constructors for ExportTypeSome", () => {
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Maybe",
+            exposing: {
+              kind: "Explicit",
+              exports: [
+                { kind: "ExportTypeSome", name: "Maybe", members: ["Just"] },
+              ],
+            },
+          },
+        ],
+      },
+      adts: {
+        Maybe: {
+          constructors: ["Just", "Nothing"],
+        },
+      },
+    } as unknown as IRProgram;
+    const modulePackages = new Map([["Vibe.Maybe", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+    expect(imports).toContain('import { Just } from "../Vibe/Vibe/Maybe.js";');
+    expect(imports).not.toContain("Nothing");
+  });
+
+  test("handles protocol ExportTypeAll without generating imports", () => {
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe",
+            exposing: {
+              kind: "Explicit",
+              exports: [{ kind: "ExportTypeAll", name: "Eq" }],
+            },
+          },
+        ],
+      },
+      adts: {},
+    } as IRProgram;
+    const modulePackages = new Map([["Vibe", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+    // Protocols don't have constructors, so only namespace import is generated
+    expect(imports.length).toBe(1);
+    expect(imports[0]).toContain("import * as Vibe");
+  });
+
+  test("generates both namespace and named imports for alias with exposing", () => {
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Bool",
+            alias: "Bool",
+            exposing: {
+              kind: "Explicit",
+              exports: [{ kind: "ExportValue", name: "not" }],
+            },
+          },
+        ],
+      },
+      adts: {},
+    } as IRProgram;
+    const modulePackages = new Map([["Vibe.Bool", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+    expect(imports).toContain('import * as Bool from "../Vibe/Vibe/Bool.js";');
+    expect(imports).toContain('import { not } from "../Vibe/Vibe/Bool.js";');
+  });
+
+  test("generates only namespace import for alias without exposing", () => {
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Bool",
+            alias: "Bool",
+          },
+        ],
+      },
+      adts: {},
+    } as IRProgram;
+    const modulePackages = new Map([["Vibe.Bool", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+    expect(imports).toEqual(['import * as Bool from "../Vibe/Vibe/Bool.js";']);
   });
 });

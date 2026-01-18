@@ -756,7 +756,6 @@ process status =
   case status of
     Pending -> "waiting"
     Completed -> "done"`),
-        { injectPrelude: false },
       ),
     ).toThrow(/missing.*Running.*Failed|Non-exhaustive/);
   });
@@ -1384,13 +1383,13 @@ baz z = z`);
 describe("unary negation", () => {
   test("accepts unary negation of Int literal", () => {
     const result = analyzeNoPrelude("x = -10");
-    expect(result.values.x?.type.kind).toBe("con");
+    expect(result.values.x?.type!.kind).toBe("con");
     expect((result.values.x?.type as any).name).toBe("Int");
   });
 
   test("accepts unary negation of Float literal", () => {
     const result = analyzeNoPrelude("x = -10.5");
-    expect(result.values.x?.type.kind).toBe("con");
+    expect(result.values.x?.type!.kind).toBe("con");
     expect((result.values.x?.type as any).name).toBe("Float");
   });
 
@@ -1401,7 +1400,7 @@ y = 5
 
 x = -y
 `);
-    expect(result.values.x?.type.kind).toBe("con");
+    expect(result.values.x?.type!.kind).toBe("con");
     expect((result.values.x?.type as any).name).toBe("Int");
   });
 
@@ -1412,13 +1411,13 @@ y = 5.0
 
 x = -y
 `);
-    expect(result.values.x?.type.kind).toBe("con");
+    expect(result.values.x?.type!.kind).toBe("con");
     expect((result.values.x?.type as any).name).toBe("Float");
   });
 
   test("accepts double negation with grouping", () => {
     const result = analyzeNoPrelude("x = -(-10)");
-    expect(result.values.x?.type.kind).toBe("con");
+    expect(result.values.x?.type!.kind).toBe("con");
     expect((result.values.x?.type as any).name).toBe("Int");
   });
 
@@ -1583,5 +1582,100 @@ main = 1
     // Should not throw even though module name doesn't match any file path
     const result = analyze(program);
     expect(result.module.name).toBe("AnyName");
+  });
+});
+
+describe("prefix operator syntax", () => {
+  test("resolves built-in logical operator in prefix form", () => {
+    // && is a built-in operator that takes Bool -> Bool -> Bool
+    const result = analyzeNoPrelude(`test = (&&) True False`);
+    expect(result.values.test).toBeDefined();
+    expect(result.typeSchemes?.test).toBeDefined();
+  });
+
+  test("resolves external operator in prefix form", () => {
+    const source = `module Test exposing (..)
+${OPERATOR_PREAMBLE}
+
+-- Using (+) as a prefix function
+result = (+) 1 2
+`;
+    const program = parse(source);
+    const result = analyze(program);
+    expect(result.values.result).toBeDefined();
+    expect(result.typeSchemes?.result).toBeDefined();
+  });
+
+  test("prefix operator can be passed as argument to higher-order function", () => {
+    const source = `module Test exposing (..)
+${OPERATOR_PREAMBLE}
+
+-- Define a simple fold-like function
+apply : (Int -> Int -> Int) -> Int -> Int -> Int
+apply f x y = f x y
+
+-- Pass (+) as an argument
+result = apply (+) 3 4
+`;
+    const program = parse(source);
+    const result = analyze(program);
+    expect(result.values.result).toBeDefined();
+    expect(result.typeSchemes?.result).toBeDefined();
+  });
+
+  test("prefix operator works in lambda context", () => {
+    const source = `module Test exposing (..)
+${OPERATOR_PREAMBLE}
+
+-- Lambda that uses prefix operator
+adder = \\x y -> (+) x y
+`;
+    const program = parse(source);
+    const result = analyze(program);
+    expect(result.values.adder).toBeDefined();
+  });
+
+  test("rejects undefined operator in prefix form", () => {
+    const source = `module Test exposing (..)
+${TYPE_PREAMBLE}
+
+-- (<>) is not defined
+result = (<>) 1 2
+`;
+    expect(() => analyze(parse(source))).toThrow("Undefined name");
+  });
+
+  test("prefix operator can be bound to a name and reused", () => {
+    const source = `module Test exposing (..)
+${OPERATOR_PREAMBLE}
+
+-- Bind the operator to a name
+add = (+)
+
+-- Use the bound name
+result = add 1 2
+`;
+    const program = parse(source);
+    const result = analyze(program);
+    expect(result.values.add).toBeDefined();
+    expect(result.values.result).toBeDefined();
+  });
+
+  test("prefix logical operator preserves type signature", () => {
+    // (&&) should still be Bool -> Bool -> Bool
+    const source = `module Test exposing (..)
+${TYPE_PREAMBLE}
+
+-- Bind && to a name with explicit type annotation
+myAnd : Bool -> Bool -> Bool
+myAnd = (&&)
+
+-- Use it
+result = myAnd True False
+`;
+    const program = parse(source);
+    const result = analyze(program);
+    expect(result.values.myAnd).toBeDefined();
+    expect(result.values.result).toBeDefined();
   });
 });

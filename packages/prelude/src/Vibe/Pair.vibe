@@ -1,0 +1,13 @@
+module Vibe.Pair exposing
+    ( Pair(..)
+    )
+
+{-| Represents an ordered pair of values.
+
+    Example:
+        point : Pair Int Int
+        point = Pair 3 4
+-}
+type Pair a b
+    = Pair a b
+

@@ -10,6 +10,12 @@ toString x =
     True -> "True"
     False -> "False"
 
+{-| Logical not. Inverts the boolean value.
+
+    not True  == False
+    not False == True
+-}
+
 @external "@vibe/runtime" "not"
 not : Bool -> Bool
 

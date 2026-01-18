@@ -179,17 +179,73 @@ myList2 : () -> MyList`);
     // Should have 3 declarations: myList (external), MyList (type), myList2 (external)
     expect(program.declarations.length).toBe(3);
 
-    const myList = program.declarations[0];
+    const myList = program.declarations[0]!;
     expect(myList.kind).toBe("ExternalDeclaration");
-    expect(myList.name).toBe("myList");
+    expect((myList as { name: string }).name).toBe("myList");
 
-    const myListType = program.declarations[1];
+    const myListType = program.declarations[1]!;
     expect(myListType.kind).toBe("OpaqueTypeDeclaration");
-    expect(myListType.name).toBe("MyList");
+    expect((myListType as { name: string }).name).toBe("MyList");
 
-    const myList2 = program.declarations[2];
+    const myList2 = program.declarations[2]!;
     expect(myList2.kind).toBe("ExternalDeclaration");
-    expect(myList2.name).toBe("myList2");
+    expect((myList2 as { name: string }).name).toBe("myList2");
+  });
+
+  test("parses opaque type followed by function definition", () => {
+    // Regression test: opaque types should not consume the next declaration's name
+    // as a type parameter (layout-sensitive parsing)
+    const program = parseTest(`type Never
+
+never : Never -> a
+never nvr = never nvr`);
+
+    expect(program.declarations.length).toBe(3);
+
+    // First declaration: opaque type with no params
+    const neverType = program.declarations[0]!;
+    expect(neverType.kind).toBe("OpaqueTypeDeclaration");
+    if (neverType.kind === "OpaqueTypeDeclaration") {
+      expect(neverType.name).toBe("Never");
+      expect(neverType.params).toEqual([]);
+    }
+
+    // Second declaration: type annotation
+    const neverAnnotation = program.declarations[1]!;
+    expect(neverAnnotation.kind).toBe("TypeAnnotationDeclaration");
+    if (neverAnnotation.kind === "TypeAnnotationDeclaration") {
+      expect(neverAnnotation.name).toBe("never");
+    }
+
+    // Third declaration: value (function) definition
+    const neverValue = program.declarations[2]!;
+    expect(neverValue.kind).toBe("ValueDeclaration");
+    if (neverValue.kind === "ValueDeclaration") {
+      expect(neverValue.name).toBe("never");
+    }
+  });
+
+  test("parses opaque type with params followed by function definition", () => {
+    // Ensure type params on the same line are correctly captured
+    const program = parseTest(`type Promise a b
+
+resolve : a -> Promise a b
+resolve x = resolve x`);
+
+    expect(program.declarations.length).toBe(3);
+
+    const promiseType = program.declarations[0]!;
+    expect(promiseType.kind).toBe("OpaqueTypeDeclaration");
+    if (promiseType.kind === "OpaqueTypeDeclaration") {
+      expect(promiseType.name).toBe("Promise");
+      expect(promiseType.params).toEqual(["a", "b"]);
+    }
+
+    const resolveAnnotation = program.declarations[1]!;
+    expect(resolveAnnotation.kind).toBe("TypeAnnotationDeclaration");
+    if (resolveAnnotation.kind === "TypeAnnotationDeclaration") {
+      expect(resolveAnnotation.name).toBe("resolve");
+    }
   });
 
   test("respects indentation for multi-line applications", () => {
@@ -1232,5 +1288,120 @@ describe("module export syntax", () => {
         expect(decl.body.operand.namespace).toBe("upper");
       }
     }
+  });
+});
+
+describe("prefix operator syntax", () => {
+  test("parses basic operator in parentheses", () => {
+    const program = parseTest("add = (+)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Var");
+    if (decl.body.kind === "Var") {
+      expect(decl.body.name).toBe("+");
+      expect(decl.body.namespace).toBe("operator");
+    }
+  });
+
+  test("parses multi-character operator in parentheses", () => {
+    const program = parseTest("eq = (==)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Var");
+    if (decl.body.kind === "Var") {
+      expect(decl.body.name).toBe("==");
+      expect(decl.body.namespace).toBe("operator");
+    }
+  });
+
+  test("parses custom operator in parentheses", () => {
+    const program = parseTest("pipe = (|>)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Var");
+    if (decl.body.kind === "Var") {
+      expect(decl.body.name).toBe("|>");
+      expect(decl.body.namespace).toBe("operator");
+    }
+  });
+
+  test("parses prefix operator applied to arguments", () => {
+    const program = parseTest("result = (+) 1 2");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Apply");
+    if (decl.body.kind === "Apply") {
+      expect(decl.body.callee.kind).toBe("Var");
+      if (decl.body.callee.kind === "Var") {
+        expect(decl.body.callee.name).toBe("+");
+        expect(decl.body.callee.namespace).toBe("operator");
+      }
+      expect(decl.body.args.length).toBe(2);
+    }
+  });
+
+  test("parses prefix operator with variable arguments", () => {
+    const program = parseTest("result = (==) x y");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Apply");
+    if (decl.body.kind === "Apply") {
+      expect(decl.body.callee.kind).toBe("Var");
+      if (decl.body.callee.kind === "Var") {
+        expect(decl.body.callee.name).toBe("==");
+        expect(decl.body.callee.namespace).toBe("operator");
+      }
+    }
+  });
+
+  test("parses prefix operator passed to higher-order function", () => {
+    const program = parseTest("result = foldr (::) []");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Apply");
+    if (decl.body.kind === "Apply") {
+      expect(decl.body.args.length).toBe(2);
+      const firstArg = decl.body.args[0];
+      expect(firstArg?.kind).toBe("Var");
+      if (firstArg?.kind === "Var") {
+        expect(firstArg.name).toBe("::");
+        expect(firstArg.namespace).toBe("operator");
+      }
+    }
+  });
+
+  test("parses logical operators in parentheses", () => {
+    const program = parseTest("and = (&&)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Var");
+    if (decl.body.kind === "Var") {
+      expect(decl.body.name).toBe("&&");
+      expect(decl.body.namespace).toBe("operator");
+    }
+  });
+
+  test("parses list cons operator in parentheses", () => {
+    const program = parseTest("cons = (::)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Var");
+    if (decl.body.kind === "Var") {
+      expect(decl.body.name).toBe("::");
+      expect(decl.body.namespace).toBe("operator");
+    }
+  });
+
+  test("parenthesized expression is not confused with prefix operator", () => {
+    // (x) is a parenthesized variable, not a prefix operator
+    const program = parseTest("result = (x)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Paren");
+    if (decl.body.kind === "Paren") {
+      expect(decl.body.expression.kind).toBe("Var");
+      if (decl.body.expression.kind === "Var") {
+        expect(decl.body.expression.name).toBe("x");
+        expect(decl.body.expression.namespace).toBe("lower");
+      }
+    }
+  });
+
+  test("tuple is not confused with prefix operator", () => {
+    // (a, b) is a tuple, not prefix operators
+    const program = parseTest("result = (a, b)");
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Tuple");
   });
 });

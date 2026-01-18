@@ -93,41 +93,70 @@ export function generateDependencyImports(
       moduleName,
     );
 
+    // Determine alias name: explicit alias or default to last segment
+    const alias = imp.alias || moduleName.split(".").pop() || moduleName;
+
+    // If there's an alias, always generate namespace import
+    // This is needed for qualified access like `Bool.eq`
+    if (imp.alias) {
+      lines.push(`import * as ${alias} from "${importPath}";`);
+    }
+
     if (imp.exposing?.kind === "All") {
       // import * as ModuleName from "..."
-      // Use just the base module name (last segment) as the alias
-      const alias = moduleName.split(".").pop() || moduleName;
-      lines.push(`import * as ${alias} from "${importPath}";`);
+      // Only generate if we didn't already generate it above for the alias
+      if (!imp.alias) {
+        lines.push(`import * as ${alias} from "${importPath}";`);
+      }
     } else if (imp.exposing?.kind === "Explicit") {
       // Extract names from the export specs
-      const names = imp.exposing.exports
-        .map((spec) => {
-          switch (spec.kind) {
-            case "ExportValue":
-            case "ExportTypeAll":
-              return sanitizeIdentifier(spec.name);
-            case "ExportOperator":
-              return sanitizeOperator(spec.operator);
-            case "ExportTypeSome":
-              // For ExportTypeSome, we import the type constructor and the specific members
-              return sanitizeIdentifier(spec.name);
-            default:
-              return null;
+      const names: string[] = [];
+
+      for (const spec of imp.exposing.exports) {
+        switch (spec.kind) {
+          case "ExportValue":
+            names.push(sanitizeIdentifier(spec.name));
+            break;
+          case "ExportOperator":
+            names.push(sanitizeOperator(spec.operator));
+            break;
+          case "ExportTypeAll": {
+            // For ADTs, import the constructors, not the type name
+            // Types don't exist at runtime, only constructors do
+            const adtInfo = program.adts[spec.name];
+            if (adtInfo && adtInfo.constructors.length > 0) {
+              for (const ctorName of adtInfo.constructors) {
+                names.push(sanitizeIdentifier(ctorName));
+              }
+            }
+            // Note: For protocols, ExportTypeAll means import protocol methods,
+            // but those are typically accessed via dictionaries, not direct imports
+            break;
           }
-        })
-        .filter((name): name is string => name !== null);
+          case "ExportTypeSome": {
+            // For ExportTypeSome, import only the specified constructors
+            if (spec.members) {
+              for (const ctorName of spec.members) {
+                names.push(sanitizeIdentifier(ctorName));
+              }
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      }
 
       if (names.length > 0) {
         // import { specific, names } from "..."
         lines.push(`import { ${names.join(", ")} } from "${importPath}";`);
-      } else {
-        // No explicit imports, import everything (exposing all)
-        const alias = moduleName.split(".").pop() || moduleName;
+      } else if (!imp.alias) {
+        // No explicit imports and no alias, import everything as namespace
         lines.push(`import * as ${alias} from "${importPath}";`);
       }
-    } else {
-      // Default: import everything (exposing all)
-      const alias = moduleName.split(".").pop() || moduleName;
+      // If we have alias but no names, namespace import was already generated above
+    } else if (!imp.alias) {
+      // Default: import everything (exposing all) - only if no alias
       lines.push(`import * as ${alias} from "${importPath}";`);
     }
   }
@@ -179,6 +208,7 @@ export function calculateImportPath(
 export function calculateReExportPath(
   program: IRProgram,
   targetModule: string,
+  modulePackages: Map<string, string>,
 ): string {
   const currentModule = program.moduleName;
   const currentPackage = program.packageName;
@@ -186,16 +216,10 @@ export function calculateReExportPath(
   // Calculate the depth of the current module within its package
   const currentDepth = currentModule.split(".").length - 1;
 
-  // Find the import for this module to get its package info
-  const imports = program.sourceProgram.imports || [];
-  let targetPackage = targetModule; // Default: assume module name is package name
-
-  for (const imp of imports) {
-    if (imp.moduleName === targetModule) {
-      // Could extract package info here if available
-      break;
-    }
-  }
+  // Look up the target package from modulePackages map
+  // Default to the first segment of the module name (e.g., "Vibe" from "Vibe.Maybe")
+  const targetPackage =
+    modulePackages.get(targetModule) || targetModule.split(".")[0];
 
   // Convert module name to path segments
   const moduleSegments = targetModule.split(".");

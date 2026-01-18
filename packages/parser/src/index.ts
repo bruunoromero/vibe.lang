@@ -541,9 +541,27 @@ class Parser {
     const nameToken = this.expect(TokenKind.UpperIdentifier, "type name");
     const name = nameToken.lexeme;
 
+    // Track the base column for layout-sensitive parsing
+    const typeColumn = typeToken.span.start.column;
+    const typeLine = typeToken.span.start.line;
+
     // Parse type parameters (zero or more lowercase identifiers)
+    // Type parameters must be on the same line as the type declaration,
+    // or on subsequent lines indented more than the "type" keyword.
+    // This ensures we don't accidentally consume the next declaration.
     const params: string[] = [];
     while (this.peek(TokenKind.LowerIdentifier)) {
+      const nextToken = this.current();
+      const nextLine = nextToken.span.start.line;
+      const nextColumn = nextToken.span.start.column;
+
+      // If on the same line as "type", it's a type parameter
+      // If on a different line, it must be indented more than "type"
+      if (nextLine !== typeLine && nextColumn <= typeColumn) {
+        // This identifier is at a new declaration boundary, stop parsing params
+        break;
+      }
+
       const param = this.expect(TokenKind.LowerIdentifier, "type parameter");
       params.push(param.lexeme);
     }
@@ -2031,6 +2049,24 @@ class Parser {
       if (this.match(TokenKind.RParen)) {
         return { kind: "Unit", span: { start, end: this.previousSpan().end } };
       }
+
+      // Check for parenthesized operator: (==), (+), etc.
+      // Operators in parentheses are treated as function references
+      // We look ahead to check for (operator) pattern without consuming tokens
+      if (
+        this.peek(TokenKind.Operator) &&
+        this.peekAhead(1)?.kind === TokenKind.RParen
+      ) {
+        const opToken = this.advance();
+        this.advance(); // consume RParen
+        return {
+          kind: "Var",
+          name: opToken.lexeme,
+          namespace: "operator",
+          span: { start, end: this.previousSpan().end },
+        };
+      }
+
       const first = this.parseExpression();
       const elements: Expr[] = [first];
       const baseIndent = first.span.start.column;

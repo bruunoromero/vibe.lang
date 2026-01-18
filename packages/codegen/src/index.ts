@@ -387,35 +387,26 @@ export function generate(
     bodyLines.push("");
   }
 
-  // 4. Generate synthetic values for default protocol implementations
-  // These must be generated before the dictionaries that reference them.
-  if (program.syntheticDefaultImpls.length > 0) {
-    bodyLines.push("// Default Protocol Implementations");
-    for (const syntheticValue of program.syntheticDefaultImpls) {
-      const safeName = sanitizeIdentifier(syntheticValue.name);
-      const body = generateValue(syntheticValue, ctx);
-      bodyLines.push(`const ${safeName} = ${body};`);
-    }
-    bodyLines.push("");
-  }
-
-  // 5. Generate protocol instance dictionaries
-  const dictLines = generateInstanceDictionaries(ctx);
-  if (dictLines.length > 0) {
-    bodyLines.push("// Protocol Instance Dictionaries");
-    bodyLines.push(...dictLines);
-    bodyLines.push("");
-  }
-
-  // 6. Generate values in dependency order
+  // 4. Generate values in dependency order
+  // This includes both regular values AND synthetic default implementations ($impl_*, $default_*)
+  // The dependency order ensures all values are defined before they are used.
   bodyLines.push("// Values");
   for (const scc of program.dependencyOrder) {
     const sccLines = generateSCC(scc, ctx);
     bodyLines.push(...sccLines);
   }
 
-  // 7. Generate exports
-  const exportLines = generateExports(program, ctx);
+  // 5. Generate protocol instance dictionaries
+  // These are generated AFTER values so all method implementations are defined.
+  const dictLines = generateInstanceDictionaries(ctx);
+  if (dictLines.length > 0) {
+    bodyLines.push("");
+    bodyLines.push("// Protocol Instance Dictionaries");
+    bodyLines.push(...dictLines);
+  }
+
+  // 6. Generate exports
+  const exportLines = generateExports(program, ctx, modulePackages);
   if (exportLines.length > 0) {
     bodyLines.push("");
     bodyLines.push(...exportLines);
@@ -881,9 +872,12 @@ function generateVar(
   }
 
   // Check if this is an external binding
+  // Check if this is an external binding
+  // Use the Vibe binding name (expr.name) since imports alias the runtime name to it
+  // e.g., "import { listCons as cons }" makes "cons" available, not "listCons"
   const value = ctx.program.values[expr.name];
   if (value?.isExternal && value.externalTarget) {
-    return sanitizeIdentifier(value.externalTarget.exportName);
+    return sanitizeIdentifier(expr.name);
   }
 
   // Check if this is a protocol method (using the protocol method map)
@@ -1826,7 +1820,11 @@ function generatePattern(pattern: IRPattern, ctx: CodegenContext): string {
  * - Local exports use `export { name };`
  * - Re-exports use `export { name } from "module";`
  */
-function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
+function generateExports(
+  program: IRProgram,
+  ctx: CodegenContext,
+  modulePackages: Map<string, string>,
+): string[] {
   const lines: string[] = [];
   const currentModule = program.moduleName;
   const moduleExports = program.exports;
@@ -1985,7 +1983,11 @@ function generateExports(program: IRProgram, ctx: CodegenContext): string[] {
     const sortedNames = [...names].sort();
     if (sortedNames.length > 0) {
       // Calculate the import path for the source module
-      const importPath = calculateReExportPath(program, moduleName);
+      const importPath = calculateReExportPath(
+        program,
+        moduleName,
+        modulePackages,
+      );
       lines.push(`export { ${sortedNames.join(", ")} } from "${importPath}";`);
     }
   }

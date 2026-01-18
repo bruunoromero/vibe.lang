@@ -1,3 +1,4 @@
+import { describe, it, expect } from "bun:test";
 import { deepEqual } from "../src/index";
 
 describe("deepEqual", () => {
@@ -33,8 +34,9 @@ describe("deepEqual", () => {
 
   it("should return false for different objects", () => {
     expect(deepEqual({ a: 1, b: 2 })({ a: 1, b: 3 })).toBe(false);
-    expect(deepEqual({ a: 1 })({ a: 1, b: 2 })).toBe(false);
-    expect(deepEqual({ a: 1, b: 2 })({ a: 1 })).toBe(false);
+    // Use 'as any' to test runtime behavior with mismatched types
+    expect(deepEqual({ a: 1 } as any)({ a: 1, b: 2 } as any)).toBe(false);
+    expect(deepEqual({ a: 1, b: 2 } as any)({ a: 1 } as any)).toBe(false);
   });
 
   it("should handle nested structures", () => {
@@ -47,7 +49,8 @@ describe("deepEqual", () => {
   });
 
   it("should handle mixed types", () => {
-    expect(deepEqual(1)([1])).toBe(false);
-    expect(deepEqual({ a: 1 })("string")).toBe(false);
+    // Use 'as any' to test runtime behavior with mixed types
+    expect(deepEqual(1 as any)([1] as any)).toBe(false);
+    expect(deepEqual({ a: 1 } as any)("string" as any)).toBe(false);
   });
 });

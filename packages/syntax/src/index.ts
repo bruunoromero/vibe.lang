@@ -295,7 +295,12 @@ export type OpaqueTypeDeclaration = {
 };
 
 export type Expr =
-  | { kind: "Var"; name: string; namespace: "lower" | "upper"; span: Span }
+  | {
+      kind: "Var";
+      name: string;
+      namespace: "lower" | "upper" | "operator";
+      span: Span;
+    }
   | { kind: "Number"; value: string; span: Span }
   | { kind: "String"; value: string; span: Span }
   | { kind: "Char"; value: string; span: Span }

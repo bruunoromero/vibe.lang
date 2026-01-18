@@ -1,7 +1,12 @@
 module Vibe.List exposing
   ( cons
   , append
+  , foldl
+  , toString
+  , eq
   )
+
+import Vibe.String as String
 
 {-| Constructs a new list by prepending an element to the front of an existing list.
 
@@ -10,5 +15,32 @@ module Vibe.List exposing
 @external "@vibe/runtime" "listCons"
 cons: a -> List a -> List a
 
-@external "@vibe/runtime" "listAppend"
-append: List a -> List a -> List a
+append : List a -> List a -> List a
+append xs ys =
+    case xs of
+        [] -> ys
+        x :: xsTail -> cons x (append xsTail ys)
+
+foldl : (b -> a -> b) -> b -> List a -> b
+foldl f acc lst =
+    case lst of
+        [] -> acc
+        x :: xs -> foldl f (f acc x) xs
+
+eq : (a -> a -> Bool) -> List a -> List a -> Bool
+eq elementEq xs ys =
+    case (xs, ys) of
+        ([], []) -> True
+        (x :: xtail, y :: ytail) ->
+            elementEq x y && eq elementEq xtail ytail
+        _ -> False
+
+map : (a -> b) -> List a -> List b
+map f lst =
+    case lst of
+        [] -> []
+        x :: xs -> cons (f x) (map f xs)
+
+toString : (a -> String) -> List a -> String
+toString elementToString lst =
+       String.append "[" (String.append (String.join ", " (map elementToString lst)) "]")

@@ -24,14 +24,17 @@ module Vibe exposing
 
 import Vibe.Int as Int
 import Vibe.Float as Float
-import Vibe.Bool as Bool
+import Vibe.Bool as Bool exposing (not)
 import Vibe.List as List
 import Vibe.String as String
+import Vibe.Maybe exposing (Maybe(..))
+import Vibe.Result exposing (Result(..))
+import Vibe.Pair exposing (Pair(..))
 
-type Never = JustOneMore Never
+type Never
 
 never : Never -> a
-never (JustOneMore nvr) = 
+never nvr = 
     never nvr
 
 {- =============================================================================
@@ -94,51 +97,6 @@ infixr 9 >>
 -- Core ADTs
 -- =============================================================================
 
-{-| Represents an optional value. Used when a value may or may not exist.
-
-    Just x  -- Contains a value x
-    Nothing -- No value present
-
-    Example:
-        head : List a -> Maybe a
-        head list =
-            case list of
-                x :: _ -> Just x
-                [] -> Nothing
--}
-type Maybe a
-    = Just a
-    | Nothing
-
-
-{-| Represents a computation that can succeed or fail.
-
-    Ok value  -- Success with a value
-    Err error -- Failure with an error
-
-    Example:
-        divide : Int -> Int -> Result String Int
-        divide x y =
-            if y == 0 then
-                Err "Division by zero"
-            else
-                Ok (x / y)
--}
-type Result error value
-    = Ok value
-    | Err error
-
-
-{-| Represents an ordered pair of values.
-
-    Example:
-        point : Pair Int Int
-        point = Pair 3 4
--}
-type Pair a b
-    = Pair a b
-
-
 -- =============================================================================
 -- Numeric Protocol
 -- =============================================================================
@@ -181,7 +139,7 @@ protocol Integral a where
 protocol Eq a where
     (==) : a -> a -> Bool
     (/=) : a -> a -> Bool
-    (/=) x y = Bool.not (x == y)
+    (/=) x y = not (x == y)
 
 
 {-| Protocol for types supporting ordering comparison.
@@ -233,15 +191,6 @@ protocol Show a where
 -- Short-circuit semantics:
 --   False && _  => False  (right side not evaluated)
 --   True || _   => True   (right side not evaluated)
-
-{-| Logical not. Inverts the boolean value.
-
-    not True  == False
-    not False == True
--}
-
-not: Bool -> Bool
-not = Bool.not
 
 -- =============================================================================
 -- Function Composition and Application
@@ -352,18 +301,19 @@ implement Ord Float where
     (>) = Float.gt
 
 implement Eq a => Eq (List a) where
-    (==) xs ys =
-        case (xs, ys) of
-            ([], []) -> True
-            (x :: xtail, y :: ytail) ->
-                x == y && xtail == ytail
-            _ -> False
+    (==) = List.eq (==)
 
 implement Appendable (List a) where
     (++) = List.append
 
 implement Appendable String where
     (++) = String.append
+
+implement Show Unit where
+    toString _ = "()"
+
+implement Show String where
+    toString = identity
 
 implement Show Int where
     toString = Int.toString
@@ -373,6 +323,9 @@ implement Show Float where
 
 implement Show Bool where
     toString = Bool.toString
+
+implement Show a => Show (List a) where
+    toString = List.toString toString
 
 -- =============================================================================
 -- Utility Functions

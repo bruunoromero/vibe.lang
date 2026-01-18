@@ -18,6 +18,7 @@
   },
   "scripts": {
     "build": "bun install && turbo run build",
-    "start": "bun ./packages/example-app/main.ts"
+    "start": "bun ./packages/example-app/main.ts",
+    "typecheck": "turbo run typecheck"
   }
 }

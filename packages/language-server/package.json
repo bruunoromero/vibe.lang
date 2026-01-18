@@ -8,7 +8,8 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node && bun build ./src/server.ts --outdir ./dist --target node",
     "dev": "bun run ./src/server.ts --stdio",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@vibe/config": "workspace:*",

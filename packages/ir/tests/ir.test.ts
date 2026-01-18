@@ -40,7 +40,7 @@ function compileToIR(source: string): IRProgram {
     ? source
     : `module Test exposing (..)\n\n${source}`;
   const ast = parse(fullSource);
-  const semantics = analyze(ast, { injectPrelude: false });
+  const semantics = analyze(ast);
   return lower(ast, semantics);
 }
 
@@ -95,6 +95,12 @@ function stringifyExpr(expr: IRExpr): string {
       return expr.args.length > 0
         ? `${expr.name} ${expr.args.map(stringifyExpr).join(" ")}`
         : expr.name;
+    case "IRModuleAccess":
+      return `${expr.importAlias}.${expr.valueName}`;
+    case "IRRecordUpdate":
+      return `{ ${stringifyExpr(expr.base)} | ... }`;
+    case "IRUnary":
+      return `(${expr.operator}${stringifyExpr(expr.operand)})`;
   }
 }
 

@@ -4,6 +4,10 @@
     "build": {
       "dependsOn": ["^build"],
       "cache": false
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "cache": false
     }
   }
 }

@@ -1,0 +1,20 @@
+module Vibe.Result exposing
+    ( Result(..)
+    )
+
+{-| Represents a computation that can succeed or fail.
+
+    Ok value  -- Success with a value
+    Err error -- Failure with an error
+
+    Example:
+        divide : Int -> Int -> Result String Int
+        divide x y =
+            if y == 0 then
+                Err "Division by zero"
+            else
+                Ok (x / y)
+-}
+type Result error value
+    = Ok value
+    | Err error

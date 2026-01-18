@@ -15,7 +15,8 @@ export function formatTypeKey(type: IRType | undefined): string {
   if (!type) return "Unknown";
   switch (type.kind) {
     case "var":
-      return `Var${type.id}`;
+      // Use lowercase 'v' prefix to match codegen's formatTypeKey for consistency
+      return `v${type.id}`;
     case "con":
       if (type.args.length === 0) return type.name;
       return `${type.name}_${type.args.map(formatTypeKey).join("_")}`;
@@ -40,7 +41,7 @@ export function formatTypeKey(type: IRType | undefined): string {
  */
 export function substituteProtocolMethods(
   expr: Expr,
-  methodSubstitutions: Map<string, Expr>
+  methodSubstitutions: Map<string, Expr>,
 ): Expr {
   switch (expr.kind) {
     case "Var":
@@ -58,7 +59,7 @@ export function substituteProtocolMethods(
         const left = substituteProtocolMethods(expr.left, methodSubstitutions);
         const right = substituteProtocolMethods(
           expr.right,
-          methodSubstitutions
+          methodSubstitutions,
         );
         return {
           kind: "Apply",
@@ -94,7 +95,7 @@ export function substituteProtocolMethods(
         kind: "Apply",
         callee: substituteProtocolMethods(expr.callee, methodSubstitutions),
         args: expr.args.map((arg) =>
-          substituteProtocolMethods(arg, methodSubstitutions)
+          substituteProtocolMethods(arg, methodSubstitutions),
         ),
         span: expr.span,
       };
@@ -104,15 +105,15 @@ export function substituteProtocolMethods(
         kind: "If",
         condition: substituteProtocolMethods(
           expr.condition,
-          methodSubstitutions
+          methodSubstitutions,
         ),
         thenBranch: substituteProtocolMethods(
           expr.thenBranch,
-          methodSubstitutions
+          methodSubstitutions,
         ),
         elseBranch: substituteProtocolMethods(
           expr.elseBranch,
-          methodSubstitutions
+          methodSubstitutions,
         ),
         span: expr.span,
       };
@@ -133,7 +134,7 @@ export function substituteProtocolMethods(
         kind: "Case",
         discriminant: substituteProtocolMethods(
           expr.discriminant,
-          methodSubstitutions
+          methodSubstitutions,
         ),
         branches: expr.branches.map((branch) => ({
           ...branch,
@@ -147,7 +148,7 @@ export function substituteProtocolMethods(
         kind: "Paren",
         expression: substituteProtocolMethods(
           expr.expression,
-          methodSubstitutions
+          methodSubstitutions,
         ),
         span: expr.span,
       };
@@ -156,7 +157,7 @@ export function substituteProtocolMethods(
       return {
         kind: "Tuple",
         elements: expr.elements.map((e) =>
-          substituteProtocolMethods(e, methodSubstitutions)
+          substituteProtocolMethods(e, methodSubstitutions),
         ),
         span: expr.span,
       };
@@ -165,7 +166,7 @@ export function substituteProtocolMethods(
       return {
         kind: "List",
         elements: expr.elements.map((e) =>
-          substituteProtocolMethods(e, methodSubstitutions)
+          substituteProtocolMethods(e, methodSubstitutions),
         ),
         span: expr.span,
       };
@@ -230,7 +231,7 @@ export function substituteProtocolMethods(
  */
 export function convertTypeExprToType(
   typeExpr: TypeExpr,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): any {
   switch (typeExpr.kind) {
     case "TypeRef":

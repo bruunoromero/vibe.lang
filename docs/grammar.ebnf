@@ -218,6 +218,17 @@ Application = PrimaryWithAccess, {PrimaryWithAccess} ;  (* function application 
 
 PrimaryWithAccess = Primary, {".", LowerIdentifier} ;  (* field access *)
 
+(* Primary expressions include all atomic expressions and grouped expressions.
+   
+   Operators in parentheses are treated as function references:
+     (+)     -- the addition function
+     (==)    -- the equality function
+     (|>)    -- the pipe operator as a function
+   
+   This allows operators to be used in prefix form or passed as arguments:
+     (+) 1 2         -- equivalent to 1 + 2
+     foldr (::) []   -- passing cons operator to foldr
+*)
 Primary = IfExpr
         | LetInExpr
         | CaseExpr
@@ -228,7 +239,8 @@ Primary = IfExpr
         | TupleExpr
         | RecordExpr
         | RecordUpdateExpr
-        | "(", Expr, ")" ;
+        | "(", Operator, ")"                  (* operator as function *)
+        | "(", Expr, ")" ;                    (* grouped expression *)
 
 IfExpr = "if", Expr, "then", Expr, "else", Expr ;
 

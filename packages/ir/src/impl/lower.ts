@@ -214,18 +214,6 @@ export function lower(
     values[name] = irValue;
   }
 
-  // Build dependency graph and find SCCs
-  const depGraph = buildDependencyGraph(values);
-  const sccs = findSCCs(depGraph, declarationOrder);
-
-  // Validate if requested
-  if (options.validateDependencies) {
-    const validation = validateTopologicalOrder(sccs, depGraph);
-    if (!validation.valid) {
-      console.warn("Dependency order validation failed:", validation.errors);
-    }
-  }
-
   // Extract constructor info with tags
   const constructors: Record<string, IRConstructorInfo> = {};
   for (const [name, info] of Object.entries(semantics.constructors)) {
@@ -269,6 +257,12 @@ export function lower(
 
   // Track synthetic values created for default implementations
   const syntheticValues: Record<string, IRValue> = {};
+  const syntheticOrder: string[] = [];
+
+  // Check if an instance is local (defined in this module, not imported)
+  const currentModuleName = semantics.module.name;
+  const isLocalInstance = (inst: (typeof semantics.instances)[0]) =>
+    !inst.moduleName || inst.moduleName === currentModuleName;
 
   // Extract instance metadata
   const instances: IRInstance[] = semantics.instances.map((inst) => {
@@ -296,6 +290,21 @@ export function lower(
         // Determine if this is an explicit inline implementation or an inherited default:
         // - Explicit: `implement Show A where toString a = showA a` -> use $impl_ prefix
         // - Default: method inherited from protocol's default impl -> use $default_ prefix
+        //
+        // Only create synthetic values for local instances, not imported ones.
+        if (!isLocalInstance(inst)) {
+          // For imported instances, the synthetic value should be imported from the source module
+          const typeKey =
+            inst.typeArgs.length > 0
+              ? formatTypeKey(convertType(inst.typeArgs[0]))
+              : "Unknown";
+          const sanitizedMethodName = sanitizeOperator(methodName);
+          const isExplicit = inst.explicitMethods.has(methodName);
+          const prefix = isExplicit ? "$impl" : "$default";
+          const syntheticName = `${prefix}_${inst.protocolName}_${typeKey}_${sanitizedMethodName}`;
+          methodsObj[methodName] = syntheticName;
+          continue;
+        }
         const isExplicit = inst.explicitMethods.has(methodName);
         const typeKey =
           inst.typeArgs.length > 0
@@ -402,10 +411,23 @@ export function lower(
         };
 
         syntheticValues[syntheticName] = syntheticValue;
+        syntheticOrder.push(syntheticName);
         methodsObj[methodName] = syntheticName;
       } else {
         // For other expressions (literals, etc.), create a synthetic value
         // containing the lowered expression
+        //
+        // Only create synthetic values for local instances, not imported ones.
+        if (!isLocalInstance(inst)) {
+          const typeKey =
+            inst.typeArgs.length > 0
+              ? formatTypeKey(convertType(inst.typeArgs[0]))
+              : "Unknown";
+          const sanitizedMethodName = sanitizeOperator(methodName);
+          const syntheticName = `$impl_${inst.protocolName}_${typeKey}_${sanitizedMethodName}`;
+          methodsObj[methodName] = syntheticName;
+          continue;
+        }
         const typeKey =
           inst.typeArgs.length > 0
             ? formatTypeKey(convertType(inst.typeArgs[0]))
@@ -484,6 +506,7 @@ export function lower(
         };
 
         syntheticValues[syntheticName] = syntheticValue;
+        syntheticOrder.push(syntheticName);
         methodsObj[methodName] = syntheticName;
       }
     }
@@ -498,12 +521,29 @@ export function lower(
     };
   });
 
-  // Convert synthetic values object to array
+  // Merge synthetic values into main values for dependency analysis
+  // This ensures that $impl_* and $default_* are properly ordered
+  const mergedValues = { ...values, ...syntheticValues };
+  const mergedOrder = [...declarationOrder, ...syntheticOrder];
+
+  // Build dependency graph and find SCCs with merged values
+  const depGraph = buildDependencyGraph(mergedValues);
+  const sccs = findSCCs(depGraph, mergedOrder);
+
+  // Validate if requested
+  if (options.validateDependencies) {
+    const validation = validateTopologicalOrder(sccs, depGraph);
+    if (!validation.valid) {
+      console.warn("Dependency order validation failed:", validation.errors);
+    }
+  }
+
+  // Convert synthetic values object to array (for backward compatibility)
   const syntheticDefaultImpls = Object.values(syntheticValues);
 
-  // Build constraint metadata map
+  // Build constraint metadata map (use merged values)
   const constraintMetadata = new Map<string, IRConstraint[]>();
-  for (const [name, value] of Object.entries(values)) {
+  for (const [name, value] of Object.entries(mergedValues)) {
     if (value.constraints.length > 0) {
       constraintMetadata.set(name, value.constraints);
     }
@@ -535,7 +575,7 @@ export function lower(
   return {
     moduleName: semantics.module.name,
     packageName,
-    values,
+    values: mergedValues,
     dependencyOrder: sccs,
     liftedBindings: ctx.liftedBindings,
     syntheticDefaultImpls,

@@ -6,3 +6,6 @@ type A = A
 
 showA : A -> String
 showA _ = "This is an A"
+
+
+main = toString [1, 2, 3, 4]

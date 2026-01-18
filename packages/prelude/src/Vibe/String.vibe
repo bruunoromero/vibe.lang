@@ -1,6 +1,14 @@
 module Vibe.String exposing 
   ( append
+  , join
   )
 
 @external "@vibe/runtime" "stringAppend"
 append : String -> String -> String
+
+join : String -> List String -> String
+join separator strings =
+  case strings of
+    [] -> ""
+    [x] -> x
+    x :: xs -> append x (append separator (join separator xs))

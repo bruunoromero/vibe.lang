@@ -40,19 +40,19 @@ describe("module resolver", () => {
           packages: ["@vibe/prelude"],
         },
         null,
-        2
-      )
+        2,
+      ),
     );
 
     const packageJsonPath = path.join(
       root,
       "packages",
       "prelude",
-      "package.json"
+      "package.json",
     );
     fs.writeFileSync(
       packageJsonPath,
-      JSON.stringify({ name: "@vibe/prelude", version: "0.0.0" }, null, 2)
+      JSON.stringify({ name: "@vibe/prelude", version: "0.0.0" }, null, 2),
     );
 
     const config = loadConfig({ path: configPath });
@@ -88,11 +88,11 @@ describe("module resolver", () => {
     fs.writeFileSync(basePath, "module Base exposing (..)\n\nvalue = 42");
     fs.writeFileSync(
       utilPath,
-      "module Util exposing (..)\n\nimport Base\n\nhelper = Base.value"
+      "module Util exposing (..)\n\nimport Base\n\nhelper = Base.value",
     );
     fs.writeFileSync(
       mainPath,
-      "module Main exposing (..)\n\nimport Util\n\nmain = Util.helper"
+      "module Main exposing (..)\n\nimport Util\n\nmain = Util.helper",
     );
 
     const configPath = path.join(root, DEFAULT_CONFIG_NAME);
@@ -106,8 +106,8 @@ describe("module resolver", () => {
           packages: [],
         },
         null,
-        2
-      )
+        2,
+      ),
     );
 
     const config = loadConfig({ path: configPath });
@@ -130,6 +130,14 @@ describe("module resolver", () => {
       }
 
       return {
+        module: {
+          name: "Mock",
+          exposing: null,
+          span: {
+            start: { offset: 0, line: 1, column: 1 },
+            end: { offset: 0, line: 1, column: 1 },
+          },
+        },
         imports,
         declarations: [],
       };
@@ -171,11 +179,11 @@ describe("module resolver", () => {
 
     fs.writeFileSync(
       aPath,
-      "module A exposing (..)\n\nimport B\n\nvalue = B.helper"
+      "module A exposing (..)\n\nimport B\n\nvalue = B.helper",
     );
     fs.writeFileSync(
       bPath,
-      "module B exposing (..)\n\nimport A\n\nhelper = A.value"
+      "module B exposing (..)\n\nimport A\n\nhelper = A.value",
     );
 
     const configPath = path.join(root, DEFAULT_CONFIG_NAME);
@@ -189,8 +197,8 @@ describe("module resolver", () => {
           packages: [],
         },
         null,
-        2
-      )
+        2,
+      ),
     );
 
     const config = loadConfig({ path: configPath });
@@ -212,13 +220,21 @@ describe("module resolver", () => {
       }
 
       return {
+        module: {
+          name: "Mock",
+          exposing: null,
+          span: {
+            start: { offset: 0, line: 1, column: 1 },
+            end: { offset: 0, line: 1, column: 1 },
+          },
+        },
         imports,
         declarations: [],
       };
     };
 
     expect(() => discoverModuleGraph(config, "A", mockParse)).toThrow(
-      "Circular dependency"
+      "Circular dependency",
     );
   });
 });

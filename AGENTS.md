@@ -125,16 +125,15 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
 
 **CRITICAL:** Always fix all TypeScript compilation errors before considering a task complete. This is a hard requirement:
 
-1. **After any code changes**, run:
+1. **After any code changes**, run the typecheck command:
 
    ```bash
-   bun run packages/cli/src/index.ts --help  # Or the relevant package
+   bun run typecheck
    ```
 
-   and check for TypeScript errors using the `get_errors` tool.
+   This uses Turbo to run `tsc --noEmit` across all TypeScript packages in parallel. You can also use the `get_errors` tool to check for TypeScript errors.
 
 2. **The task is NOT finished** if there are any remaining TypeScript errors, even if:
-
    - Tests pass
    - The code appears to work
    - Only minor errors remain
@@ -147,7 +146,6 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
    ```
 
 4. **Common error patterns** in this project:
-
    - Duplicate interface definitions with conflicting property types
    - Variable scope issues (variables used outside their declaration scope)
    - Type mismatches between function parameters and arguments
@@ -160,27 +158,23 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
 **CRITICAL:** Always write tests to prevent regressions after fixing bugs or implementing features:
 
 1. **When to write tests**:
-
    - After fixing any bug, write tests that would have caught the bug
    - After implementing a new feature, add tests covering the feature
    - When making changes to type checking, constraint resolution, or code generation logic
 
 2. **Test scope and coverage**:
-
    - Tests should verify both positive cases (correct behavior works) and negative cases (invalid code fails with proper errors)
    - Test error messages to ensure they are clear and accurate
    - Test edge cases and boundary conditions relevant to the fix
    - Include examples that directly relate to the bug being fixed
 
 3. **Test organization**:
-
    - Group related tests in a describe block
    - Use clear, descriptive test names that explain what is being tested
    - Add comments in tests explaining why they exist (especially referencing the bug they prevent)
    - Place tests near the code they test (e.g., protocol tests in `packages/semantics/tests/protocol.test.ts`)
 
 4. **Verification process**:
-
    - Run the specific test file to verify new tests pass: `bun test packages/<package>/tests/<file>.test.ts`
    - Run the full test suite to ensure no regressions: `bun test`
    - Verify all tests pass before considering the task complete
@@ -196,7 +190,6 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
 **CRITICAL:** Whenever you modify the language's parsing or syntax, you **MUST** update the grammar file at [docs/grammar.ebnf](docs/grammar.ebnf):
 
 1. **Every syntax change requires grammar updates**:
-
    - Adding new expression types
    - Modifying operator precedence
    - Introducing new keywords
@@ -206,14 +199,12 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
    - Updating type expression rules
 
 2. **Grammar file is the source of truth** for the language syntax:
-
    - It serves as documentation for language users and developers
    - It helps catch ambiguities and inconsistencies in the parser
    - Parser implementation should strictly follow the grammar
    - Keep grammar EBNF notation accurate and clear
 
 3. **Update process**:
-
    - Make changes to parser/lexer/syntax
    - Update grammar.ebnf to reflect the changes
    - Include clear comments and examples in the grammar
@@ -290,7 +281,6 @@ User-annotated qualified type constraints (e.g., `Num a => a -> a -> a`) are now
 1. **Constraint Extraction**: Constraints from `QualifiedType` annotations are extracted and validated during semantic analysis.
 
 2. **Protocol Validation**: Constraints must reference existing protocols with the correct number of type arguments. Hard errors are thrown for:
-
    - Unknown protocols in constraints
    - Wrong number of type arguments for a protocol
    - Constraints applied to concrete types instead of type variables
