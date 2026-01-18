@@ -1818,6 +1818,26 @@ function registerTypeDeclaration(
     );
   }
 
+  // Create fresh type variables for each type parameter
+  // These will be used to construct the polymorphic type scheme for constructors
+  const paramTypeVars: Map<string, TypeVar> = new Map();
+  for (const param of decl.params) {
+    paramTypeVars.set(param, freshType());
+  }
+
+  // Resolve constraints (if any)
+  const semanticConstraints: Constraint[] = [];
+  if (decl.constraints) {
+    for (const c of decl.constraints) {
+      semanticConstraints.push({
+        protocolName: c.protocolName,
+        typeArgs: c.typeArgs.map((t) =>
+          constructorArgToType(t, paramTypeVars),
+        ),
+      });
+    }
+  }
+
   // Register the ADT
   const constructorNames = decl.constructors.map((c) => c.name);
   adts[decl.name] = {
@@ -1825,15 +1845,9 @@ function registerTypeDeclaration(
     moduleName,
     params: decl.params,
     constructors: constructorNames,
+    constraints: semanticConstraints,
     span: decl.span,
   };
-
-  // Create fresh type variables for each type parameter
-  // These will be used to construct the polymorphic type scheme for constructors
-  const paramTypeVars: Map<string, TypeVar> = new Map();
-  for (const param of decl.params) {
-    paramTypeVars.set(param, freshType());
-  }
 
   // Build the result type: TypeName param1 param2 ...
   // For Maybe a, this is: { kind: "con", name: "Maybe", args: [TypeVar(a)] }
@@ -1881,7 +1895,7 @@ function registerTypeDeclaration(
 
     const ctorScheme: TypeScheme = {
       vars: quantifiedVars,
-      constraints: [],
+      constraints: semanticConstraints, // Apply type constraints to constructor
       type: ctorType,
     };
 
@@ -1992,6 +2006,19 @@ function registerRecordTypeDeclaration(
     paramTypeVars.set(param, freshType());
   }
 
+  // Resolve constraints (if any)
+  const semanticConstraints: Constraint[] = [];
+  if (decl.constraints) {
+    for (const c of decl.constraints) {
+      semanticConstraints.push({
+        protocolName: c.protocolName,
+        typeArgs: c.typeArgs.map((t) =>
+          constructorArgToType(t, paramTypeVars)
+        ),
+      });
+    }
+  }
+
   // Validate field types - reject floating record types in field definitions
   for (const field of decl.recordFields) {
     if (containsRecordType(field.type)) {
@@ -2015,6 +2042,7 @@ function registerRecordTypeDeclaration(
     name: decl.name,
     moduleName,
     params: decl.params,
+    constraints: semanticConstraints,
     fields,
     span: decl.span,
   };

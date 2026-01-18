@@ -538,6 +538,28 @@ class Parser {
       return this.parseTypeAliasDeclaration(typeToken);
     }
 
+    // Try to parse constraints (optional context)
+    const constraints: Constraint[] = [];
+
+    // Check if we have constraints (look ahead for =>)
+    if (this.peekConstraintContextInTypeDecl()) {
+      // Parse constraint(s) before =>
+      if (this.match(TokenKind.LParen)) {
+        // Multiple constraints: (Eq a, Show a) =>
+        do {
+          constraints.push(this.parseConstraint());
+        } while (this.match(TokenKind.Comma));
+
+        this.expect(TokenKind.RParen, "close constraint list");
+      } else {
+        // Single constraint: Eq a =>
+        constraints.push(this.parseConstraint());
+      }
+
+      // Consume =>
+      this.expectOperator("=>");
+    }
+
     // Parse type name (must be uppercase)
     const nameToken = this.expect(TokenKind.UpperIdentifier, "type name");
     const name = nameToken.lexeme;
@@ -567,9 +589,15 @@ class Parser {
       params.push(param.lexeme);
     }
 
-    // Check for opaque type (no equals sign)
+    // Check for Opaque type (no equals sign)
     // Opaque types end when we see something that's not part of the type params
     if (!this.peek(TokenKind.Equals)) {
+      if (constraints.length > 0) {
+        throw new ParseError(
+          "Opaque types cannot have constraints",
+          { start: typeToken.span.start, end: this.previousSpan().end }
+        );
+      }
       // This is an opaque type: type Name params
       const lastToken =
         params.length > 0 ? this.tokens[this.index - 1]! : nameToken;
@@ -596,6 +624,7 @@ class Parser {
         kind: "TypeDeclaration",
         name,
         params,
+        constraints,
         recordFields,
         span: { start: typeToken.span.start, end: this.previousSpan().end },
       };
@@ -647,10 +676,56 @@ class Parser {
       kind: "TypeDeclaration",
       name,
       params,
+      constraints,
       constructors,
       implementing,
       span,
     } satisfies TypeDeclaration;
+  }
+
+  /**
+   * Check if we have a constraint context in a type declaration (looks ahead for =>)
+   * The => must appear before the equals sign or end of declaration (for opaque types).
+   */
+  private peekConstraintContextInTypeDecl(): boolean {
+    // Look ahead to find => operator
+    let i = 0;
+    let parenDepth = 0;
+
+    while (this.peekAhead(i)) {
+      const tok = this.peekAhead(i);
+      if (!tok) break;
+
+      // Track parentheses depth
+      if (tok.kind === TokenKind.LParen) parenDepth++;
+      if (tok.kind === TokenKind.RParen) parenDepth--;
+
+      // Found => at top level - we have constraints
+      if (
+        parenDepth === 0 &&
+        tok.kind === TokenKind.Operator &&
+        tok.lexeme === "=>"
+      ) {
+        return true;
+      }
+
+      // Stop looking if we hit '=' - valid boundary for type def
+      if (tok.kind === TokenKind.Equals && parenDepth === 0) {
+        return false;
+      }
+
+      // Stop looking if we hit newline at top level (end of opaque type)
+      // Actually parser doesn't see newlines easily in token stream usually, 
+      // but we can check if we hit another keyword that starts a decl?
+      // For now, looking for => within reasonable distance is enough.
+      
+      i++;
+
+      // Don't look too far ahead
+      if (i > 50) break;
+    }
+
+    return false;
   }
 
   /**

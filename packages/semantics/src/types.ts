@@ -109,6 +109,8 @@ export type ADTInfo = {
   params: string[];
   /** Names of all constructors in this type */
   constructors: string[];
+  /** Protocol constraints on type parameters */
+  constraints: Constraint[];
   /** Source span for error messages */
   span: Span;
 };
@@ -142,6 +144,8 @@ export type RecordInfo = {
   moduleName?: string;
   /** Type parameters (e.g., ["a"] for Container a) */
   params: string[];
+  /** Protocol constraints on type parameters */
+  constraints: Constraint[];
   /** Record field definitions */
   fields: RecordFieldInfo[];
   /** Source span for error messages */

@@ -243,8 +243,8 @@ export type TypeDeclaration = {
   name: string;
   /** Type parameters (lowercase identifiers, e.g., ["a"] for Maybe a) */
   params: string[];
-  /** Optional protocol constraints on type parameters */
-  constraints: Constraint[];
+  /** Constraints on type parameters (e.g., "Eq a" in "type Eq a => Set a = ...") */
+  constraints?: Constraint[];
   /** Constructor variants (for ADTs) */
   constructors?: ConstructorVariant[];
   /** Record fields (for Record types) */
@@ -275,8 +275,6 @@ export type TypeAliasDeclaration = {
   name: string;
   /** Type parameters (lowercase identifiers, e.g., ["a", "b"] for Pair a b) */
   params: string[];
-  /** Optional protocol constraints on type parameters */
-  constraints: Constraint[];
   /** The type expression this alias refers to (cannot be a bare record type) */
   value: TypeExpr;
   /** Source location span for error reporting */

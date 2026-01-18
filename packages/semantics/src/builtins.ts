@@ -84,6 +84,7 @@ export function initializeBuiltinADTs(
     name: "Bool",
     params: [],
     constructors: ["True", "False"],
+    constraints: [],
     span: BUILTIN_SPAN,
   };
   constructors["True"] = {
@@ -119,6 +120,7 @@ export function initializeBuiltinADTs(
     name: "List",
     params: ["a"],
     constructors: [], // List constructors are handled specially (via list literals)
+    constraints: [],
     span: BUILTIN_SPAN,
   };
 }
