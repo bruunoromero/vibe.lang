@@ -27,6 +27,7 @@ import Vibe.Float as Float
 import Vibe.Bool as Bool exposing (not)
 import Vibe.List as List
 import Vibe.String as String
+import Vibe.Basics exposing (Eq(..))
 import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Result exposing (Result(..))
 import Vibe.Pair exposing (Pair(..))
@@ -66,9 +67,7 @@ never nvr =
 infixl 1 |>
 infixr 1 <|
 
--- Comparison operators
-infix 4 ==
-infix 4 /=
+-- Comparison operators (== and /= are defined in Vibe.Basics)
 infix 4 <
 infix 4 <=
 infix 4 >
@@ -129,17 +128,7 @@ protocol Integral a where
 -- Comparison Protocols
 -- =============================================================================
 
-{-| Protocol for types supporting equality comparison.
-
-    Implementing types must provide:
-    - (==) : Equality test
-    - (/=) : Inequality test (default implementation provided if == is defined)
--}
-protocol Eq a where
-    (==) : a -> a -> Bool
-    (/=) : a -> a -> Bool
-    (/=) x y = not (x == y)
-
+-- NOTE: Eq protocol is defined in Vibe.Basics and imported above
 
 {-| Protocol for types supporting ordering comparison.
 

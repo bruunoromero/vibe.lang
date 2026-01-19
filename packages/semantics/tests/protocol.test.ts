@@ -640,114 +640,6 @@ implement Describable Int where
   });
 });
 
-describe("implementing Keyword", () => {
-  test("allows implementing when all methods have defaults", () => {
-    const source = `
-protocol Describable a where
-  describe : a -> String
-  describe _ = "A value"
-
-type Color = Red | Green | Blue
-  implementing Describable
-`;
-    const program = parseTest(source);
-    const result = analyze(program);
-
-    // Should have created a synthetic implementation
-    expect(result.instances).toHaveLength(1);
-    expect(result.instances[0]?.protocolName).toBe("Describable");
-    expect(result.instances[0]?.methods.has("describe")).toBe(true);
-  });
-
-  test("rejects implementing when method lacks default", () => {
-    const source = `
-protocol Show a where
-  show : a -> String
-
-type Color = Red | Green | Blue
-  implementing Show
-`;
-    const program = parseTest(source);
-
-    expect(() => analyze(program)).toThrow("Cannot use 'implementing'");
-    expect(() => analyze(program)).toThrow("Missing defaults for: show");
-  });
-
-  test("allows implementing multiple protocols with all defaults", () => {
-    const source = `
-protocol Describable a where
-  describe : a -> String
-  describe _ = "A value"
-
-protocol Tagged a where
-  tag : a -> String
-  tag _ = "untagged"
-
-type Color = Red | Green | Blue
-  implementing Describable, Tagged
-`;
-    const program = parseTest(source);
-    const result = analyze(program);
-
-    // Should have two synthetic implementations
-    expect(result.instances).toHaveLength(2);
-    expect(result.instances[0]?.protocolName).toBe("Describable");
-    expect(result.instances[1]?.protocolName).toBe("Tagged");
-  });
-
-  test("rejects implementing with non-existent protocol", () => {
-    const source = `
-type Color = Red | Green | Blue
-  implementing NonExistent
-`;
-    const program = parseTest(source);
-
-    expect(() => analyze(program)).toThrow(SemanticError);
-    expect(() => analyze(program)).toThrow("Unknown protocol");
-  });
-
-  test("provides helpful error listing missing defaults", () => {
-    const source = `
-protocol Eq a where
-  eq : a -> a -> Bool
-  neq : a -> a -> Bool
-  neq x y = not (eq x y)
-
-type Color = Red | Green | Blue
-  implementing Eq
-`;
-    const program = parseTest(source);
-
-    try {
-      analyze(program);
-      expect(false).toBe(true); // Should have thrown
-    } catch (e) {
-      expect(e instanceof Error).toBe(true);
-      const error = e as Error;
-      expect(error.message).toContain("Cannot use 'implementing'");
-      expect(error.message).toContain("Missing defaults for: eq");
-      expect(error.message).toContain("Methods with defaults: neq");
-      expect(error.message).toContain("Hint:");
-    }
-  });
-
-  test("rejects overlapping implementing with explicit implement", () => {
-    const source = `
-protocol Describable a where
-  describe : a -> String
-  describe _ = "A value"
-
-type Color = Red | Green | Blue
-  implementing Describable
-
-implement Describable Color where
-  describe = showColor
-`;
-    const program = parseTest(source);
-
-    expect(() => analyze(program)).toThrow("Overlapping implementation");
-  });
-});
 
 describe("Integration: Chained Default Methods", () => {
   test("default method can call another protocol method", () => {
@@ -784,7 +676,9 @@ protocol Describable a where
   detailedDescription x = longDescription x
 
 type Color = Red | Green | Blue
-  implementing Describable
+
+implement Describable Color where
+  describe _ = "A color"
 `;
     const program = parseTest(source);
     const result = analyze(program);
@@ -830,26 +724,6 @@ implement Eq Int where
     expect(result.instances[0]?.methods.has("neq")).toBe(true);
     // allEqual is explicitly overridden
     expect(result.instances[0]?.methods.has("allEqual")).toBe(true);
-  });
-
-  test("multiple types implementing same protocol with all defaults", () => {
-    const source = `
-protocol Default a where
-  value : a -> String
-  value _ = "default"
-
-type Foo = Foo
-  implementing Default
-
-type Bar = Bar
-  implementing Default
-`;
-    const program = parseTest(source);
-    const result = analyze(program);
-
-    expect(result.instances).toHaveLength(2);
-    expect(result.instances[0]?.protocolName).toBe("Default");
-    expect(result.instances[1]?.protocolName).toBe("Default");
   });
 });
 describe("Protocol Methods with Inferred Types", () => {
@@ -1460,5 +1334,194 @@ eq x y = x == y
     const program = parseTest(source);
     const result = analyze(program);
     expect(result.values.eq).toBeDefined();
+  });
+});
+
+describe("Auto Eq Implementation", () => {
+  test("auto-implements Eq for simple ADT", () => {
+    const source = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+  (/=) : a -> a -> Bool
+  (/=) x y = not (x == y)
+
+type Color = Red | Green | Blue
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+
+    // Should auto-generate Eq instance
+    expect(
+      result.instances.some(
+        (i) =>
+          i.protocolName === "Eq" &&
+          i.typeArgs[0]?.kind === "con" &&
+          (i.typeArgs[0] as any).name === "Color",
+      ),
+    ).toBe(true);
+  });
+
+  test("auto-implements Eq for record type", () => {
+    const source = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+  (/=) : a -> a -> Bool
+  (/=) x y = not (x == y)
+
+@external "runtime" "eqInt"
+eqInt : Int -> Int -> Bool
+
+implement Eq Int where
+  (==) = eqInt
+
+type Point = { x : Int, y : Int }
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+
+    // Should auto-generate Eq instance for Point
+    expect(
+      result.instances.some(
+        (i) =>
+          i.protocolName === "Eq" &&
+          i.typeArgs[0]?.kind === "con" &&
+          (i.typeArgs[0] as any).name === "Point",
+      ),
+    ).toBe(true);
+  });
+
+  test("does not auto-implement Eq for type with function field", () => {
+    const source = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+infix 4 ==
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+
+type FuncHolder = Holder (Int -> Int)
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+
+    // Should NOT auto-generate Eq instance (function type can't implement Eq)
+    expect(
+      result.instances.some(
+        (i) =>
+          i.protocolName === "Eq" &&
+          i.typeArgs[0]?.kind === "con" &&
+          (i.typeArgs[0] as any).name === "FuncHolder",
+      ),
+    ).toBe(false);
+  });
+
+  test("does not auto-implement Eq when explicit implementation exists", () => {
+    const source = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+  (/=) : a -> a -> Bool
+  (/=) x y = not (x == y)
+
+type Color = Red | Green | Blue
+
+-- Explicit custom implementation
+implement Eq Color where
+  (==) _ _ = True
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+
+    // Should only have one Eq instance for Color (the explicit one)
+    const colorInstances = result.instances.filter(
+      (i) =>
+        i.protocolName === "Eq" &&
+        i.typeArgs[0]?.kind === "con" &&
+        (i.typeArgs[0] as any).name === "Color",
+    );
+    expect(colorInstances).toHaveLength(1);
+  });
+
+  test("auto-implements Eq with constraint for polymorphic type", () => {
+    const source = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+  (/=) : a -> a -> Bool
+  (/=) x y = not (x == y)
+
+type Box a = MkBox a
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+
+    // Should auto-generate Eq instance with Eq a constraint
+    const boxInstance = result.instances.find(
+      (i) =>
+        i.protocolName === "Eq" &&
+        i.typeArgs[0]?.kind === "con" &&
+        (i.typeArgs[0] as any).name === "Box",
+    );
+    expect(boxInstance).toBeDefined();
+    expect(boxInstance?.constraints).toHaveLength(1);
+    expect(boxInstance?.constraints[0]?.protocolName).toBe("Eq");
+  });
+
+  test("does not auto-implement Eq for custom Eq protocol", () => {
+    // When module defines its own Eq protocol (not from Vibe),
+    // auto-implementation should not apply
+    const source = `
+module CustomModule exposing (..)
+
+protocol Eq a where
+  eq : a -> a -> Bool
+
+type Color = Red | Green | Blue
+`;
+    const program = parseTest(source);
+    const result = analyze(program);
+
+    // Should NOT auto-generate Eq instance (not from Vibe/Vibe.Basics)
+    expect(
+      result.instances.some(
+        (i) =>
+          i.protocolName === "Eq" &&
+          i.typeArgs[0]?.kind === "con" &&
+          (i.typeArgs[0] as any).name === "Color",
+      ),
+    ).toBe(false);
   });
 });

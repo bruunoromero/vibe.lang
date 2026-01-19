@@ -192,7 +192,7 @@
         },
         {
           "name": "keyword.other.vibe",
-          "match": "\\b(type|alias|module|import|exposing|as|port|protocol|implement|implementing|where|external)\\b"
+          "match": "\\b(type|alias|module|import|exposing|as|port|protocol|implement|where|external)\\b"
         }
       ]
     },

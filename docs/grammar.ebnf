@@ -113,19 +113,34 @@ InfixDeclaration = ("infix" | "infixl" | "infixr"), Number, Operator
 (*   1. ADT: type [Constraints =>] Name params = Constructor1 | Constructor2 *)
 (*   2. Record: type [Constraints =>] Name params = { field : Type, ... } *)
 (*   3. Opaque: type Name params (no equals sign - for JS interop) *)
+(*
+(* Constraints on type declarations require that any value stored in the type must
+   satisfy the constraint. For example:
+     type Eq a => Set a = MkSet (List a)
+   This ensures that only types implementing Eq can be stored in a Set. *)
+(*
+(* Auto-implementation of Eq:
+   ADT and record types automatically implement Eq (from Vibe.Basics) when:
+   - All fields/constructor arguments can implement Eq (no function types)
+   - No explicit Eq implementation already exists
+   
+   For polymorphic types, the auto-generated Eq instance includes constraints:
+     type Box a = MkBox a
+   Generates: implement Eq a => Eq (Box a) where ... *)
 TypeDeclaration = "type", [Constraints, "=>"], UpperIdentifier, {LowerIdentifier}, "=", (ConstructorDef, {"|", ConstructorDef} | RecordType) ;
 
 (* Opaque type declarations - abstract types for JS interop *)
+(* Opaque types cannot have constraints and do not auto-implement Eq *)
 OpaqueTypeDeclaration = "type", UpperIdentifier, {LowerIdentifier} ;
 
 ConstructorDef = UpperIdentifier, {TypeTerm} ;
 
 (* Type alias declarations - for both record types and simple type aliases *)
+(* Type aliases do not auto-implement Eq; they inherit the Eq instance of the aliased type *)
 (* Examples: *)
 (*   type alias Point = { x : Int, y : Int }  (Record) *)
 (*   type alias UserId = Int                   (Simple alias) *)
 TypeAliasDeclaration = "type", "alias", UpperIdentifier, {LowerIdentifier}, "=", TypeExpr ;
-
 
 
 (* Protocol (type class) declarations *)

@@ -617,60 +617,22 @@ class Parser {
     // Consume equals sign
     this.expect(TokenKind.Equals, "type definition");
 
+    let recordFields: RecordFieldType[] | undefined;
+    let constructors: ConstructorVariant[] | undefined;
+
     // Check if this is a record type (= { ... })
     if (this.peek(TokenKind.LBrace)) {
-      const recordFields = this.parseRecordTypeFields();
-      return {
-        kind: "TypeDeclaration",
-        name,
-        params,
-        constraints,
-        recordFields,
-        span: { start: typeToken.span.start, end: this.previousSpan().end },
-      };
-    }
-
-    // Parse ADT - constructor variants separated by pipe (|)
-    const constructors: ConstructorVariant[] = [];
-    constructors.push(this.parseConstructorVariant());
-
-    // Parse additional variants separated by |
-    while (this.match(TokenKind.Pipe)) {
+      recordFields = this.parseRecordTypeFields();
+    } else {
+      // Parse ADT - constructor variants separated by pipe (|)
+      constructors = [];
       constructors.push(this.parseConstructorVariant());
-    }
 
-    // Check for optional 'implementing' clause
-    // Syntax: implementing Protocol1, Protocol2, ...
-    let implementing: string[] | undefined = undefined;
-    let endSpan = constructors[constructors.length - 1]!.span.end;
-
-    if (this.peekKeyword("implementing")) {
-      this.advance(); // consume 'implementing'
-      implementing = [];
-
-      // Parse comma-separated list of protocol names
-      const protocolName = this.expect(
-        TokenKind.UpperIdentifier,
-        "protocol name after 'implementing'",
-      );
-      implementing.push(protocolName.lexeme);
-      endSpan = protocolName.span.end;
-
-      while (this.match(TokenKind.Comma)) {
-        const nextProtocol = this.expect(
-          TokenKind.UpperIdentifier,
-          "protocol name",
-        );
-        implementing.push(nextProtocol.lexeme);
-        endSpan = nextProtocol.span.end;
+      // Parse additional variants separated by |
+      while (this.match(TokenKind.Pipe)) {
+        constructors.push(this.parseConstructorVariant());
       }
     }
-
-    // Calculate span from "type" to end of last constructor or implementing clause
-    const span: Span = {
-      start: typeToken.span.start,
-      end: endSpan,
-    };
 
     return {
       kind: "TypeDeclaration",
@@ -678,8 +640,8 @@ class Parser {
       params,
       constraints,
       constructors,
-      implementing,
-      span,
+      recordFields,
+      span: { start: typeToken.span.start, end: this.previousSpan().end },
     } satisfies TypeDeclaration;
   }
 

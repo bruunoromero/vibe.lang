@@ -525,57 +525,6 @@ protocol Invalid a where
   });
 });
 
-describe("Type Declaration with implementing Parsing", () => {
-  test("parses type with single implementing protocol", () => {
-    const source = `
-type Color = Red | Green | Blue
-  implementing Show
-`;
-    const program = parseTest(source);
-    expect(program.declarations).toHaveLength(1);
-
-    const decl = program.declarations[0];
-    expect(decl?.kind).toBe("TypeDeclaration");
-
-    if (decl?.kind === "TypeDeclaration") {
-      expect(decl.name).toBe("Color");
-      expect(decl.implementing).toEqual(["Show"]);
-    }
-  });
-
-  test("parses type with multiple implementing protocols", () => {
-    const source = `
-type Person = Person String Int
-  implementing Show, Eq, Describable
-`;
-    const program = parseTest(source);
-    expect(program.declarations).toHaveLength(1);
-
-    const decl = program.declarations[0];
-    expect(decl?.kind).toBe("TypeDeclaration");
-
-    if (decl?.kind === "TypeDeclaration") {
-      expect(decl.name).toBe("Person");
-      expect(decl.implementing).toEqual(["Show", "Eq", "Describable"]);
-    }
-  });
-
-  test("parses type without implementing clause", () => {
-    const source = `
-type Maybe a = Just a | Nothing
-`;
-    const program = parseTest(source);
-    expect(program.declarations).toHaveLength(1);
-
-    const decl = program.declarations[0];
-    expect(decl?.kind).toBe("TypeDeclaration");
-
-    if (decl?.kind === "TypeDeclaration") {
-      expect(decl.name).toBe("Maybe");
-      expect(decl.implementing).toBeUndefined();
-    }
-  });
-});
 
 describe("Qualified Type Parsing", () => {
   test("parses type annotation with single constraint", () => {

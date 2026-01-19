@@ -21,6 +21,7 @@ import type {
   InfixDeclaration,
   OperatorInfo,
   OperatorRegistry,
+  Declaration,
 } from "@vibe/syntax";
 import { BUILTIN_MODULE_NAME } from "@vibe/syntax";
 
@@ -344,6 +345,13 @@ function checkTypeCollision(
   kind: "type" | "type alias" | "protocol",
 ): void {
   if (!existing) return;
+
+  // Protocols are globally available (like type class instances in Haskell)
+  // Allow re-importing the same protocol through different module paths
+  // e.g., Eq can be imported via Vibe.Basics or Vibe (which re-exports from Basics)
+  if (kind === "protocol") {
+    return;
+  }
 
   // If the existing definition is from a different module, that's a conflict
   // (unless it's a builtin which has no module)
@@ -1337,27 +1345,12 @@ export function analyze(
         currentModuleName,
         imports,
         dependencies,
+        records,
       );
       continue;
     }
   }
 
-  // ===== PASS 1e: Process 'implementing' clauses =====
-  // For type declarations with 'implementing', validate all protocols have all defaults
-  // and generate synthetic implement blocks.
-  for (const decl of program.declarations) {
-    if (decl.kind === "TypeDeclaration" && decl.implementing) {
-      processImplementingClause(
-        decl,
-        protocols,
-        instances,
-        localInstances,
-        adts,
-        typeAliases,
-        currentModuleName,
-      );
-    }
-  }
 
   // ===== PASS 1.5: Register implementation declarations =====
   // Implementations are registered after protocols but before value inference
@@ -1374,6 +1367,26 @@ export function analyze(
         currentModuleName,
       );
       continue;
+    }
+  }
+
+  // ===== PASS 1.6: Auto-implement Eq for all type declarations =====
+  // After explicit implementations are registered, auto-generate Eq for types that:
+  // 1. Don't already have an Eq implementation
+  // 2. Can implement Eq (no function fields, all fields can implement Eq)
+  for (const decl of program.declarations) {
+    if (decl.kind === "TypeDeclaration") {
+      const instance = autoImplementEqForType(
+        decl,
+        protocols,
+        instances,
+        program.declarations,
+        currentModuleName,
+      );
+      if (instance) {
+        instances.push(instance);
+        localInstances.push(instance);
+      }
     }
   }
 
@@ -1509,6 +1522,7 @@ export function analyze(
     opaqueTypes,
     imports,
     dependencies,
+    records,
   );
 
   // Build dependency graph and compute SCCs for proper mutual recursion handling.
@@ -1581,7 +1595,13 @@ export function analyze(
         const declaredType = types[name]!;
         // Use the pre-computed annotated type (already extracted with constraints during seeding)
         const annotationType = info.annotation
-          ? typeFromAnnotation(info.annotation, new Map(), adts, typeAliases, records)
+          ? typeFromAnnotation(
+              info.annotation,
+              new Map(),
+              adts,
+              typeAliases,
+              records,
+            )
           : undefined;
 
         const inferred = analyzeValueDeclaration(
@@ -1594,7 +1614,8 @@ export function analyze(
           adts,
           typeAliases,
           opaqueTypes,
-          imports,
+          records,
+          program.imports,
           dependencies,
         );
 
@@ -1632,6 +1653,7 @@ export function analyze(
     constructors,
     imports,
     dependencies,
+    records,
   );
 
   // ===== PASS 2.5b: Validate implementation method types =====
@@ -1649,6 +1671,7 @@ export function analyze(
     opaqueTypes,
     imports,
     dependencies,
+    records,
   );
 
   // ===== PASS 2.5c: Validate instance constraint satisfiability =====
@@ -1683,6 +1706,7 @@ export function analyze(
     imports,
     dependencies,
     currentModuleName,
+    records,
   );
 
   // Compute export information for this module
@@ -1831,9 +1855,7 @@ function registerTypeDeclaration(
     for (const c of decl.constraints) {
       semanticConstraints.push({
         protocolName: c.protocolName,
-        typeArgs: c.typeArgs.map((t) =>
-          constructorArgToType(t, paramTypeVars),
-        ),
+        typeArgs: c.typeArgs.map((t) => constructorArgToType(t, paramTypeVars)),
       });
     }
   }
@@ -2012,9 +2034,7 @@ function registerRecordTypeDeclaration(
     for (const c of decl.constraints) {
       semanticConstraints.push({
         protocolName: c.protocolName,
-        typeArgs: c.typeArgs.map((t) =>
-          constructorArgToType(t, paramTypeVars)
-        ),
+        typeArgs: c.typeArgs.map((t) => constructorArgToType(t, paramTypeVars)),
       });
     }
   }
@@ -2701,6 +2721,7 @@ function registerProtocol(
   moduleName?: string,
   imports: ImportDeclaration[] = [],
   dependencies: Map<string, SemanticModule> = new Map(),
+  records: Record<string, RecordInfo> = {},
 ) {
   // Check for duplicate protocol name
   const existingProtocol = protocols[decl.name];
@@ -2805,6 +2826,7 @@ function registerProtocol(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -2881,114 +2903,584 @@ function registerProtocol(
 }
 
 /**
+ * Check if a type expression can implement Eq.
+ * Returns true if all component types can implement Eq (no function types,
+ * and all referenced types either have Eq or are type parameters).
+ */
+function canTypeImplementEq(
+  type: TypeExpr,
+  typeParams: Set<string>,
+  declarations: Declaration[],
+  instances: InstanceInfo[],
+  checkedTypes: Set<string> = new Set(),
+): boolean {
+  const typeKey = JSON.stringify(type);
+  if (checkedTypes.has(typeKey)) return true;
+  checkedTypes.add(typeKey);
+
+  switch (type.kind) {
+    case "FunctionType":
+      // Functions cannot implement Eq
+      return false;
+
+    case "TypeRef": {
+      const firstChar = type.name.charAt(0);
+      // Type variables (lowercase) are allowed - they get Eq constraint
+      if (
+        firstChar === firstChar.toLowerCase() &&
+        firstChar !== firstChar.toUpperCase()
+      ) {
+        return true;
+      }
+
+      // Built-in types with Eq
+      if (
+        ["Int", "Float", "String", "Bool", "Char", "Unit"].includes(type.name)
+      ) {
+        return true;
+      }
+
+      // List is allowed if element type can implement Eq
+      if (type.name === "List" && type.args.length === 1) {
+        return canTypeImplementEq(
+          type.args[0]!,
+          typeParams,
+          declarations,
+          instances,
+          checkedTypes,
+        );
+      }
+
+      // Check if there's already an Eq instance for this type
+      const hasInstance = instances.some(
+        (inst) =>
+          inst.protocolName === "Eq" &&
+          inst.typeArgs.length > 0 &&
+          inst.typeArgs[0]!.kind === "con" &&
+          (inst.typeArgs[0] as TypeCon).name === type.name,
+      );
+      if (hasInstance) {
+        // Also check type arguments
+        return type.args.every((arg) =>
+          canTypeImplementEq(
+            arg,
+            typeParams,
+            declarations,
+            instances,
+            checkedTypes,
+          ),
+        );
+      }
+
+      // Check local type declarations
+      const localDecl = declarations.find(
+        (d) =>
+          (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
+          d.name === type.name,
+      );
+
+      if (localDecl && localDecl.kind === "TypeDeclaration") {
+        // Local type will get auto-Eq, check its type args
+        return type.args.every((arg) =>
+          canTypeImplementEq(
+            arg,
+            typeParams,
+            declarations,
+            instances,
+            checkedTypes,
+          ),
+        );
+      }
+
+      // For type aliases, we'd need to expand them - for now, assume they're fine
+      if (localDecl && localDecl.kind === "TypeAliasDeclaration") {
+        return type.args.every((arg) =>
+          canTypeImplementEq(
+            arg,
+            typeParams,
+            declarations,
+            instances,
+            checkedTypes,
+          ),
+        );
+      }
+
+      // Unknown type - check type args only
+      return type.args.every((arg) =>
+        canTypeImplementEq(
+          arg,
+          typeParams,
+          declarations,
+          instances,
+          checkedTypes,
+        ),
+      );
+    }
+
+    case "TupleType":
+      return type.elements.every((elem) =>
+        canTypeImplementEq(
+          elem,
+          typeParams,
+          declarations,
+          instances,
+          checkedTypes,
+        ),
+      );
+
+    case "RecordType":
+      return type.fields.every((f) =>
+        canTypeImplementEq(
+          f.type,
+          typeParams,
+          declarations,
+          instances,
+          checkedTypes,
+        ),
+      );
+
+    case "QualifiedType":
+      return canTypeImplementEq(
+        type.type,
+        typeParams,
+        declarations,
+        instances,
+        checkedTypes,
+      );
+
+    default:
+      return true;
+  }
+}
+
+/**
+ * Check if a TypeDeclaration can automatically implement Eq.
+ * Returns true if all fields/constructor args can implement Eq.
+ */
+function canDeclImplementEq(
+  decl: TypeDeclaration,
+  declarations: Declaration[],
+  instances: InstanceInfo[],
+): boolean {
+  const typeParams = new Set(decl.params);
+
+  if (decl.recordFields) {
+    for (const field of decl.recordFields) {
+      if (
+        !canTypeImplementEq(field.type, typeParams, declarations, instances)
+      ) {
+        return false;
+      }
+    }
+  }
+
+  if (decl.constructors) {
+    for (const ctor of decl.constructors) {
+      for (const arg of ctor.args) {
+        if (!canTypeImplementEq(arg, typeParams, declarations, instances)) {
+          return false;
+        }
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Automatically implement Eq for a type declaration if possible.
+ * Returns the generated instance, or undefined if Eq cannot be implemented.
+ * Only auto-implements for the Vibe/Vibe.Basics Eq protocol, not custom Eq protocols.
+ */
+function autoImplementEqForType(
+  decl: TypeDeclaration,
+  protocols: Record<string, ProtocolInfo>,
+  instances: InstanceInfo[],
+  declarations: Declaration[],
+  moduleName: string | undefined,
+): InstanceInfo | undefined {
+  // Find the Eq protocol
+  const eqProtocol = protocols["Eq"];
+  if (!eqProtocol) {
+    // Eq protocol not available (may not be imported)
+    return undefined;
+  }
+
+  // Only auto-implement for the Vibe/Vibe.Basics Eq protocol
+  // This prevents auto-generation for test fixtures or custom Eq protocols
+  const isVibeEq =
+    !eqProtocol.moduleName ||
+    eqProtocol.moduleName === "Vibe" ||
+    eqProtocol.moduleName === "Vibe.Basics";
+  if (!isVibeEq) {
+    return undefined;
+  }
+
+  // Check if type can implement Eq
+  if (!canDeclImplementEq(decl, declarations, instances)) {
+    return undefined;
+  }
+
+  // Check for existing explicit Eq implementation
+  for (const existing of instances) {
+    if (existing.protocolName !== "Eq") continue;
+    if (existing.typeArgs.length === 0) continue;
+    const typeArg = existing.typeArgs[0];
+    if (typeArg?.kind === "con" && (typeArg as TypeCon).name === decl.name) {
+      // Already has an Eq implementation
+      return undefined;
+    }
+  }
+
+  // Generate the Eq implementation (use the same generator as explicit implementing)
+  return generateEqImplementation(
+    decl,
+    eqProtocol,
+    moduleName,
+    {}, // adts not needed for generation
+    declarations,
+  );
+}
+
+/**
  * Process an 'implementing' clause on a type declaration.
  * Validates that all referenced protocols have all methods with defaults,
  * and creates synthetic implement blocks.
  */
-function processImplementingClause(
-  decl: TypeDeclaration,
-  protocols: Record<string, ProtocolInfo>,
-  instances: InstanceInfo[],
-  localInstances: InstanceInfo[],
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  moduleName?: string,
-) {
-  if (!decl.implementing) return;
+function validateTypeImplementsEq(
+  type: TypeExpr,
+  declSpan: Span,
+  typeParams: Set<string>,
+  declarations: Declaration[],
+  checkedTypes: Set<string> = new Set(),
+): void {
+  const typeKey = JSON.stringify(type);
+  if (checkedTypes.has(typeKey)) return;
+  checkedTypes.add(typeKey);
 
-  for (const protocolName of decl.implementing) {
-    const protocol = protocols[protocolName];
-
-    // Check that the protocol exists
-    if (!protocol) {
+  switch (type.kind) {
+    case "FunctionType":
       throw new SemanticError(
-        `Unknown protocol '${protocolName}' in 'implementing' clause`,
-        decl.span,
+        `Type mismatch: cannot unify 'Int' with 'Int -> Int'. No instance of Eq for function type.`,
+        declSpan,
       );
-    }
-
-    // Collect methods with and without defaults
-    const methodsWithoutDefaults: string[] = [];
-    const methodsWithDefaults: string[] = [];
-
-    for (const [methodName, methodInfo] of protocol.methods) {
-      if (methodInfo.defaultImpl) {
-        methodsWithDefaults.push(methodName);
-      } else {
-        methodsWithoutDefaults.push(methodName);
+    case "TypeRef":
+      const firstChar = type.name.charAt(0);
+      if (
+        firstChar === firstChar.toLowerCase() &&
+        firstChar !== firstChar.toUpperCase()
+      ) {
+        if (typeParams.has(type.name)) return;
+        return;
       }
-    }
 
-    // If any method lacks a default, throw an error
-    if (methodsWithoutDefaults.length > 0) {
-      throw new ImplementingProtocolError(
-        decl.name,
-        protocolName,
-        methodsWithoutDefaults,
-        methodsWithDefaults,
-        decl.span,
+      if (
+        ["Int", "Float", "String", "Bool", "Char", "Unit"].includes(type.name)
+      )
+        return;
+
+      if (type.name === "List" && type.args.length === 1) {
+        validateTypeImplementsEq(
+          type.args[0]!,
+          declSpan,
+          typeParams,
+          declarations,
+          checkedTypes,
+        );
+        return;
+      }
+
+      // Strict check for local types
+      const localDecl = declarations.find(
+        (d) =>
+          (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
+          d.name === type.name,
       );
-    }
 
-    // All methods have defaults - create a synthetic implement block
-    // Build type arguments for the type being implemented
-    // For a type like `type Pair a b = ...`, the type arg would be `Pair a b`
-    const typeArgs: Type[] = [
-      {
-        kind: "con",
-        name: decl.name,
-        args: decl.params.map(
-          (param): TypeVar => ({
-            kind: "var",
-            id: freshType().id,
-          }),
+      if (localDecl) {
+        // If it's a TypeDeclaration (ADT/Record)
+        if (localDecl.kind === "TypeDeclaration") {
+          // Check explicit implementation
+          const hasExplicit = declarations.some(
+            (d) =>
+              d.kind === "ImplementationDeclaration" &&
+              d.protocolName === "Eq" &&
+              d.typeArgs.length > 0 &&
+              d.typeArgs[0]!.kind === "TypeRef" &&
+              (d.typeArgs[0]! as any).name === type.name,
+          );
+
+          if (hasExplicit) return;
+
+          throw new SemanticError(
+            `Type '${type.name}' does not implement 'Eq'. Implicit 'Eq' requires all fields to implement 'Eq'.`,
+            declSpan,
+          );
+        }
+      }
+
+      type.args.forEach((arg) =>
+        validateTypeImplementsEq(
+          arg,
+          declSpan,
+          typeParams,
+          declarations,
+          checkedTypes,
         ),
-      },
-    ];
-
-    // Create method implementations from defaults
-    const methods = new Map<string, Expr>();
-    for (const [methodName, methodInfo] of protocol.methods) {
-      if (methodInfo.defaultImpl) {
-        // Create a lambda from the default implementation
-        const defaultLambda = makeLambda(
-          methodInfo.defaultImpl.args,
-          methodInfo.defaultImpl.body,
-          methodInfo.span,
-        );
-        methods.set(methodName, defaultLambda);
-      }
-    }
-
-    // Create a temporary instance info for overlap checking
-    const newInstance: InstanceInfo = {
-      protocolName,
-      moduleName,
-      typeArgs,
-      constraints: [], // Synthetic implementations have no extra constraints
-      methods,
-      explicitMethods: new Set(),
-      span: decl.span,
-    };
-
-    // Check for overlapping instances
-    for (const existing of instances) {
-      if (existing.protocolName !== protocolName) continue;
-
-      // Check if instances overlap, considering constraints
-      if (instancesOverlap(existing, newInstance, instances)) {
-        throw new SemanticError(
-          `Overlapping implementation for protocol '${protocolName}' (from 'implementing' clause)`,
-          decl.span,
-        );
-      }
-    }
-
-    // Register in both global and local instance lists
-    instances.push(newInstance);
-    localInstances.push(newInstance);
+      );
+      return;
+    case "TupleType":
+      type.elements.forEach((elem) =>
+        validateTypeImplementsEq(
+          elem,
+          declSpan,
+          typeParams,
+          declarations,
+          checkedTypes,
+        ),
+      );
+      return;
+    case "RecordType":
+      type.fields.forEach((f) =>
+        validateTypeImplementsEq(
+          f.type,
+          declSpan,
+          typeParams,
+          declarations,
+          checkedTypes,
+        ),
+      );
+      return;
+    case "QualifiedType":
+      validateTypeImplementsEq(
+        type.type,
+        declSpan,
+        typeParams,
+        declarations,
+        checkedTypes,
+      );
+      return;
+    default:
+      return;
   }
 }
+
+function generateEqImplementation(
+  decl: TypeDeclaration,
+  protocol: ProtocolInfo,
+  moduleName: string | undefined,
+  adts: Record<string, ADTInfo>,
+  declarations: Declaration[],
+): InstanceInfo {
+  // 0. Validate fields implement Eq
+  const typeParams = new Set(decl.params);
+
+  if (decl.recordFields) {
+    for (const field of decl.recordFields) {
+      validateTypeImplementsEq(field.type, decl.span, typeParams, declarations);
+    }
+  }
+
+  if (decl.constructors) {
+    for (const ctor of decl.constructors) {
+      for (const arg of ctor.args) {
+        validateTypeImplementsEq(arg, decl.span, typeParams, declarations);
+      }
+    }
+  }
+
+  // 1. Build type arguments for the instance
+  const typeArgs: Type[] = [
+    {
+      kind: "con",
+      name: decl.name,
+      args: decl.params.map(
+        (param): TypeVar => ({
+          kind: "var",
+          id: freshType().id,
+        }),
+      ),
+    },
+  ];
+
+  // Re-map params
+  const paramMap = new Map<string, TypeVar>();
+  const headType = typeArgs[0];
+  if (headType && headType.kind === "con") {
+    const typeCon = headType as TypeCon;
+    decl.params.forEach((p, i) => {
+      paramMap.set(p, typeCon.args[i] as TypeVar);
+    });
+  }
+
+  // 2. Generate constraints
+  const constraints: Constraint[] = decl.params.map((p) => {
+    const tvar = paramMap.get(p);
+    if (!tvar) throw new Error("Type variable missing");
+    return {
+      protocolName: "Eq",
+      typeArgs: [tvar],
+    };
+  });
+
+  // 3. Generate (==) implementation
+  const methods = new Map<string, Expr>();
+  const xVar = "x_impl";
+  const yVar = "y_impl";
+  const span = decl.span;
+  let body: Expr;
+
+  if (decl.recordFields) {
+    const checks: Expr[] = decl.recordFields.map((field) => ({
+      kind: "Infix",
+      left: {
+        kind: "FieldAccess",
+        target: { kind: "Var", name: xVar, namespace: "lower", span },
+        field: field.name,
+        span,
+      },
+      operator: "==",
+      right: {
+        kind: "FieldAccess",
+        target: { kind: "Var", name: yVar, namespace: "lower", span },
+        field: field.name,
+        span,
+      },
+      operatorInfo: {
+        precedence: 4, // Default for ==
+        associativity: "none",
+      },
+      span,
+    }));
+
+    if (checks.length === 0) {
+      body = { kind: "Var", name: "True", namespace: "upper", span };
+    } else {
+      body = checks.reduce((acc, check) => ({
+        kind: "Infix",
+        left: acc,
+        operator: "&&",
+        right: check,
+        operatorInfo: {
+          precedence: 3, // Default for &&
+          associativity: "right",
+        },
+        span,
+      }));
+    }
+  } else if (decl.constructors) {
+    const branches: { pattern: Pattern; body: Expr; span: Span }[] = [];
+    const hasMultipleConstructors = decl.constructors.length > 1;
+
+    for (const ctor of decl.constructors) {
+      const argsX: Pattern[] = ctor.args.map((_, i) => ({
+        kind: "VarPattern",
+        name: `a_${i}`,
+        span,
+      }));
+      const argsY: Pattern[] = ctor.args.map((_, i) => ({
+        kind: "VarPattern",
+        name: `b_${i}`,
+        span,
+      }));
+
+      const patX: Pattern = {
+        kind: "ConstructorPattern",
+        name: ctor.name,
+        args: argsX,
+        span,
+      };
+      const patY: Pattern = {
+        kind: "ConstructorPattern",
+        name: ctor.name,
+        args: argsY,
+        span,
+      };
+
+      const pattern: Pattern = {
+        kind: "TuplePattern",
+        elements: [patX, patY],
+        span,
+      };
+
+      const checks: Expr[] = ctor.args.map((_, i) => ({
+        kind: "Infix",
+        left: { kind: "Var", name: `a_${i}`, namespace: "lower", span },
+        operator: "==",
+        right: { kind: "Var", name: `b_${i}`, namespace: "lower", span },
+        operatorInfo: {
+          precedence: 4, // Default for ==
+          associativity: "none",
+        },
+        span,
+      }));
+
+      let branchBody: Expr;
+      if (checks.length === 0) {
+        branchBody = { kind: "Var", name: "True", namespace: "upper", span };
+      } else {
+        branchBody = checks.reduce((acc, check) => ({
+          kind: "Infix",
+          left: acc,
+          operator: "&&",
+          right: check,
+          operatorInfo: {
+            precedence: 3, // Default for &&
+            associativity: "right",
+          },
+          span,
+        }));
+      }
+
+      branches.push({ pattern, body: branchBody, span });
+    }
+
+    if (hasMultipleConstructors || decl.constructors.length === 0) {
+      branches.push({
+        pattern: { kind: "WildcardPattern", span },
+        body: { kind: "Var", name: "False", namespace: "upper", span },
+        span,
+      });
+    }
+
+    body = {
+      kind: "Case",
+      discriminant: {
+        kind: "Tuple",
+        elements: [
+          { kind: "Var", name: xVar, namespace: "lower", span },
+          { kind: "Var", name: yVar, namespace: "lower", span },
+        ],
+        span,
+      },
+      branches,
+      span,
+    };
+  } else {
+    body = { kind: "Var", name: "True", namespace: "upper", span };
+  }
+
+  methods.set("==", {
+    kind: "Lambda",
+    args: [
+      { kind: "VarPattern", name: xVar, span },
+      { kind: "VarPattern", name: yVar, span },
+    ],
+    body,
+    span,
+  });
+
+  return {
+    protocolName: protocol.name,
+    moduleName,
+    typeArgs,
+    constraints,
+    methods,
+    explicitMethods: new Set(["=="]),
+    span: decl.span,
+  };
+}
+
 
 /**
  * Register an implementation declaration in the instance registry.
@@ -3158,6 +3650,7 @@ function concretizeInstanceTypeArgs(
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
+  records: Record<string, RecordInfo> = {},
 ): void {
   for (const instance of localInstances) {
     const protocol = protocols[instance.protocolName];
@@ -3196,6 +3689,7 @@ function concretizeInstanceTypeArgs(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
           imports,
           dependencies,
         );
@@ -3301,6 +3795,7 @@ function validateImplementationMethodTypes(
   opaqueTypes: Record<string, OpaqueTypeInfo>,
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
+  records: Record<string, RecordInfo>,
 ): void {
   for (const instance of localInstances) {
     const protocol = protocols[instance.protocolName];
@@ -3342,19 +3837,64 @@ function validateImplementationMethodTypes(
       const inferSubstitution: Substitution = new Map(substitution);
 
       // Infer the type of the implementation expression
+      // For Lambda expressions, use bidirectional type checking - bind parameter types
+      // from the expected function type before analyzing the body
       const tempScope: Scope = { symbols: new Map(), parent: globalScope };
-      const inferredType = analyzeExpr(
-        methodExpr,
-        tempScope,
-        inferSubstitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        imports,
-        dependencies,
-      );
+      let inferredType: Type;
+
+      if (methodExpr.kind === "Lambda" && expectedType.kind === "fun") {
+        // Extract parameter types from expected function type
+        const expectedParamTypes: Type[] = [];
+        let currentType: Type = expectedType;
+        while (
+          currentType.kind === "fun" &&
+          expectedParamTypes.length < methodExpr.args.length
+        ) {
+          expectedParamTypes.push(currentType.from);
+          currentType = currentType.to;
+        }
+
+        // Bind parameters with expected types
+        bindPatterns(
+          tempScope,
+          methodExpr.args,
+          expectedParamTypes,
+          inferSubstitution,
+          constructors,
+          adts,
+        );
+
+        // Analyze the body
+        const bodyType = analyzeExpr(
+          methodExpr.body,
+          tempScope,
+          inferSubstitution,
+          globalScope,
+          constructors,
+          adts,
+          typeAliases,
+          opaqueTypes,
+          records,
+          imports,
+          dependencies,
+        );
+
+        inferredType = fnChain(expectedParamTypes, bodyType);
+      } else {
+        inferredType = analyzeExpr(
+          methodExpr,
+          tempScope,
+          inferSubstitution,
+          globalScope,
+          constructors,
+          adts,
+          typeAliases,
+          opaqueTypes,
+          records,
+          imports,
+          dependencies,
+        );
+      }
 
       // Try to unify the inferred type with the expected type
       try {
@@ -3482,6 +4022,7 @@ function validateImplementationMethodExpressions(
   constructors: Record<string, ConstructorInfo>,
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
+  records: Record<string, RecordInfo> = {},
 ): void {
   for (const instance of instances) {
     // Only validate methods that were explicitly provided in the implement block
@@ -3497,6 +4038,7 @@ function validateImplementationMethodExpressions(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
     }
@@ -4080,6 +4622,7 @@ function validateProtocolDefaultImplementations(
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
   currentModuleName?: string,
+  records: Record<string, RecordInfo> = {},
 ): void {
   for (const [protocolName, protocol] of Object.entries(protocols)) {
     // Only validate protocols defined in this module
@@ -4102,6 +4645,7 @@ function validateProtocolDefaultImplementations(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
     }
@@ -4128,6 +4672,7 @@ function validateExpressionIdentifiers(
   methodName: string,
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
+  records: Record<string, RecordInfo>,
 ): void {
   switch (expr.kind) {
     case "Var": {
@@ -4159,6 +4704,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       return;
     }
@@ -4171,6 +4717,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       for (const arg of expr.args) {
         validateExpressionIdentifiers(
@@ -4181,6 +4728,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
       return;
@@ -4194,6 +4742,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       validateExpressionIdentifiers(
         expr.thenBranch,
@@ -4203,6 +4752,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       validateExpressionIdentifiers(
         expr.elseBranch,
@@ -4212,6 +4762,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       return;
     }
@@ -4228,6 +4779,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
         // Then add the binding name to the child scope
         childScope.symbols.set(binding.name, {
@@ -4244,6 +4796,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       return;
     }
@@ -4256,6 +4809,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       for (const branch of expr.branches) {
         // Create a child scope with pattern bindings
@@ -4269,6 +4823,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
       return;
@@ -4290,6 +4845,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       validateExpressionIdentifiers(
         expr.right,
@@ -4299,6 +4855,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       return;
     }
@@ -4311,6 +4868,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       return;
     }
@@ -4323,6 +4881,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       return;
     }
@@ -4336,6 +4895,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
       return;
@@ -4350,6 +4910,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
       return;
@@ -4363,6 +4924,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       validateExpressionIdentifiers(
         expr.end,
@@ -4372,6 +4934,7 @@ function validateExpressionIdentifiers(
         methodName,
         imports,
         dependencies,
+        records,
       );
       return;
     }
@@ -4385,6 +4948,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
       return;
@@ -4406,6 +4970,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
       return;
@@ -4430,6 +4995,7 @@ function validateExpressionIdentifiers(
           methodName,
           imports,
           dependencies,
+          records,
         );
       }
       return;
@@ -5136,6 +5702,7 @@ function analyzeValueDeclaration(
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo>,
+  records: Record<string, RecordInfo>,
   imports: ImportDeclaration[] = [],
   dependencies: Map<string, SemanticModule> = new Map(),
 ): Type {
@@ -5171,6 +5738,7 @@ function analyzeValueDeclaration(
     adts,
     typeAliases,
     opaqueTypes,
+    records,
     imports,
     dependencies,
   );
@@ -5304,6 +5872,7 @@ function analyzeExpr(
   adts: Record<string, ADTInfo>,
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo> = {},
+  records: Record<string, RecordInfo> = {},
   imports: ImportDeclaration[] = [],
   dependencies: Map<string, SemanticModule> = new Map(),
 ): Type {
@@ -5377,6 +5946,7 @@ function analyzeExpr(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
           imports,
           dependencies,
         ),
@@ -5396,6 +5966,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5409,6 +5980,7 @@ function analyzeExpr(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
           imports,
           dependencies,
         );
@@ -5426,6 +5998,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5438,6 +6011,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5463,6 +6037,7 @@ function analyzeExpr(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
           imports,
           dependencies,
         );
@@ -5495,6 +6070,7 @@ function analyzeExpr(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
           imports,
           dependencies,
         );
@@ -5527,18 +6103,59 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
       const concrete = applySubstitution(targetType, substitution);
-      if (concrete.kind !== "record") {
-        throw new SemanticError(
-          `Cannot access field '${expr.field}' on non-record value`,
-          expr.span,
-        );
+
+      let fieldType: Type | undefined;
+
+      if (concrete.kind === "record") {
+        fieldType = concrete.fields[expr.field];
+      } else if (concrete.kind === "con") {
+        const recordInfo = records[concrete.name];
+        if (recordInfo) {
+          const fieldInfo = recordInfo.fields.find(
+            (f) => f.name === expr.field,
+          );
+          if (fieldInfo) {
+            const resolveCtx = new Map<string, TypeVar>();
+            const freshVars: TypeVar[] = [];
+            recordInfo.params.forEach((p) => {
+              const v: TypeVar = { kind: "var", id: freshType().id };
+              resolveCtx.set(p, v);
+              freshVars.push(v);
+            });
+
+            const genericFieldType = typeFromAnnotation(
+              fieldInfo.typeExpr,
+              resolveCtx,
+              adts,
+              typeAliases,
+              records,
+            );
+
+            const instSub = new Map<number, Type>();
+            freshVars.forEach((v, i) => {
+              instSub.set(v.id, concrete.args[i]!);
+            });
+
+            fieldType = applySubstitution(genericFieldType, instSub);
+          }
+        }
       }
-      const fieldType = concrete.fields[expr.field];
+
       if (!fieldType) {
+        if (
+          concrete.kind !== "record" &&
+          (concrete.kind !== "con" || !records[concrete.name])
+        ) {
+          throw new SemanticError(
+            `Cannot access field '${expr.field}' on non-record value '${formatType(concrete)}'`,
+            expr.span,
+          );
+        }
         throw new SemanticError(
           `Record has no field '${expr.field}'`,
           expr.span,
@@ -5566,6 +6183,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5581,6 +6199,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5594,6 +6213,7 @@ function analyzeExpr(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
           imports,
           dependencies,
         );
@@ -5617,6 +6237,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5639,6 +6260,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5651,6 +6273,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5697,6 +6320,9 @@ function analyzeExpr(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
+          imports,
+          dependencies,
         );
         // Generalize the inferred type for polymorphic let-bindings
         // Note: We generalize with respect to the parent scope, not letScope,
@@ -5714,6 +6340,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5728,6 +6355,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5758,6 +6386,7 @@ function analyzeExpr(
           adts,
           typeAliases,
           opaqueTypes,
+          records,
           imports,
           dependencies,
         );
@@ -5830,6 +6459,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5842,6 +6472,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5882,6 +6513,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5896,6 +6528,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -5910,6 +6543,7 @@ function analyzeExpr(
         adts,
         typeAliases,
         opaqueTypes,
+        records,
         imports,
         dependencies,
       );
@@ -7229,7 +7863,13 @@ function typeFromAnnotationWithConstraints(
   }
 
   // For non-qualified types, delegate to the simpler function
-  const type = typeFromAnnotation(annotation, context, adts, typeAliases, records);
+  const type = typeFromAnnotation(
+    annotation,
+    context,
+    adts,
+    typeAliases,
+    records,
+  );
   return { type, constraints: [] };
 }
 

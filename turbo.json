@@ -6,8 +6,7 @@
       "cache": false
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"],
-      "cache": false
+      "dependsOn": ["^typecheck"]
     }
   }
 }

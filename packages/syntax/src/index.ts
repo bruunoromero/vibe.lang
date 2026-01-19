@@ -62,7 +62,6 @@ export const KEYWORDS = [
   "infixr",
   "protocol",
   "implement",
-  "implementing",
   "where",
 ] as const;
 
@@ -226,16 +225,16 @@ export type ConstructorVariant = {
  * An Algebraic Data Type declaration.
  *
  * Syntax: type Name param1 param2 ... = Constructor1 args | Constructor2 args | ...
- *         [implementing Protocol1, Protocol2, ...]
  *
  * Examples:
  * - type Bool = True | False
  * - type Maybe a = Just a | Nothing
  * - type Result error value = Ok value | Err error
  * - type List a = Cons a (List a) | Nil  (recursive type)
- * - type Person = Person String Int implementing Show, Eq
+ * - type Person = Person String Int
  *
  * Note: Constructor names must be unique within a module (Elm 0.18 style).
+ * Note: Eq is automatically implemented for all ADTs and records where possible.
  */
 export type TypeDeclaration = {
   kind: "TypeDeclaration";
@@ -249,8 +248,6 @@ export type TypeDeclaration = {
   constructors?: ConstructorVariant[];
   /** Record fields (for Record types) */
   recordFields?: RecordFieldType[];
-  /** Protocols to automatically implement (requires all methods have defaults) */
-  implementing?: string[];
   /** Source location span for error reporting */
   span: Span;
 };

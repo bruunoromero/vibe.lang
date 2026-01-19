@@ -1,0 +1,29 @@
+module Vibe.Basics exposing
+    ( Eq(..)
+    , not
+    )
+
+import Vibe.Bool as Bool exposing (not)
+
+{-| Basic protocols and functions that other modules depend on.
+    This module is imported by types like Maybe and Result that need Eq.
+-}
+
+-- =============================================================================
+-- Comparison Protocols
+-- =============================================================================
+
+-- Comparison operators fixity
+infix 4 ==
+infix 4 /=
+
+{-| Protocol for types supporting equality comparison.
+
+    Implementing types must provide:
+    - (==) : Equality test
+    - (/=) : Inequality test (default implementation provided if == is defined)
+-}
+protocol Eq a where
+    (==) : a -> a -> Bool
+    (/=) : a -> a -> Bool
+    (/=) x y = not (x == y)

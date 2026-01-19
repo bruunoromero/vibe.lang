@@ -3,6 +3,7 @@ module Vibe.Maybe exposing
     , Maybe(..)
     )
 
+import Vibe.Basics exposing (Eq(..))
 
 {-| Represents an optional value. Used when a value may or may not exist.
 
