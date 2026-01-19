@@ -6,30 +6,8 @@
 import type { Expr, TypeExpr } from "@vibe/syntax";
 import type { IRType } from "../types";
 import type { LoweringContext } from "../lowering";
+import { formatTypeKey } from "../utils";
 
-/**
- * Format a type as a string key for synthetic value naming.
- * E.g., `Int` -> "Int", `List Int` -> "List_Int"
- */
-export function formatTypeKey(type: IRType | undefined): string {
-  if (!type) return "Unknown";
-  switch (type.kind) {
-    case "var":
-      // Use lowercase 'v' prefix to match codegen's formatTypeKey for consistency
-      return `v${type.id}`;
-    case "con":
-      if (type.args.length === 0) return type.name;
-      return `${type.name}_${type.args.map(formatTypeKey).join("_")}`;
-    case "fun":
-      return `fn_${formatTypeKey(type.from)}_${formatTypeKey(type.to)}`;
-    case "tuple":
-      return `tuple_${type.elements.map(formatTypeKey).join("_")}`;
-    case "list":
-      return `list_${formatTypeKey(type.element)}`;
-    case "record":
-      return `record`;
-  }
-}
 
 /**
  * Substitute protocol method references in an expression with concrete implementations.

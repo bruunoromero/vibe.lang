@@ -41,6 +41,7 @@ export {
   findSCCs,
   validateTopologicalOrder,
 } from "./dependency";
+export * from "./utils";
 export {
   lowerExpr,
   lowerPattern,
@@ -101,7 +102,7 @@ export function dependsOn(
   valueName: string,
   dependencyName: string
 ): boolean {
-  const depGraph = buildDependencyGraph(ir.values);
+  const depGraph = buildDependencyGraph(ir.values, ir.instances, ir.protocols, ir.constructors);
   const deps = depGraph.get(valueName);
   return deps?.has(dependencyName) ?? false;
 }

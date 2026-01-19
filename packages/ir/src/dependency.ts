@@ -11,28 +11,81 @@
  * The algorithm runs in O(V + E) where V is values and E is dependencies.
  */
 
-import type { IRExpr, IRPattern, IRValue, SCC } from "./types";
+import type { IRExpr, IRPattern, IRValue, SCC, IRProgram, IRType, IRInstance, IRProtocol, IRConstructorInfo } from "./types";
+import { formatTypeKey, findMatchingInstance, findPolymorphicInstance } from "./utils";
 
 /**
  * Build a dependency graph from IR values.
  * Returns an adjacency list: Map<valueName, Set<dependencyNames>>
  */
 export function buildDependencyGraph(
-  values: Record<string, IRValue>
+  values: Record<string, IRValue>,
+  instances: IRInstance[],
+  protocols: Record<string, IRProtocol> = {},
+  constructors: Record<string, IRConstructorInfo> = {}
 ): Map<string, Set<string>> {
   const graph = new Map<string, Set<string>>();
-  const valueNames = new Set(Object.keys(values));
+  
+  // Set of all available top-level names (values and instances)
+  const availableNames = new Set(Object.keys(values));
+  
+  // Helper map to identify protocol methods
+  // mapping: method name -> protocol name
+  const protocolMethodMap = new Map<string, string>();
+  for (const protocol of Object.values(protocols)) {
+    for (const method of protocol.methods) {
+      protocolMethodMap.set(method.name, protocol.name);
+    }
+  }
+  
+  // Add instance names to available names
+  for (const inst of instances) {
+    if (!inst.typeArgs[0]) continue;
+    const typeKey = formatTypeKey(inst.typeArgs[0]);
+    const instName = `$dict_${inst.protocolName}_${typeKey}`;
+    availableNames.add(instName);
+  }
 
+  // 1. Collect dependencies for values
   for (const [name, value] of Object.entries(values)) {
     const deps = new Set<string>();
-    collectDependencies(value.body, deps, valueNames);
+    collectDependencies(value.body, deps, availableNames, instances, protocolMethodMap, constructors);
 
     // Also check params for pattern bindings (though rare to have deps there)
     for (const param of value.params) {
-      collectPatternDependencies(param, deps, valueNames);
+      collectPatternDependencies(param, deps, availableNames);
     }
 
     graph.set(name, deps);
+  }
+
+  // 2. Collect dependencies for instances
+  for (const inst of instances) {
+    if (!inst.typeArgs[0]) continue;
+    const typeKey = formatTypeKey(inst.typeArgs[0]);
+    const instName = `$dict_${inst.protocolName}_${typeKey}`;
+    const deps = new Set<string>();
+
+    // Dependencies on method implementations
+    for (const implName of Object.values(inst.methods)) {
+      if (availableNames.has(implName)) {
+        deps.add(implName);
+      }
+    }
+
+    // Dependencies on constrained dictionaries (e.g. Eq a => Set a)
+    for (const constraint of inst.constraints) {
+       const typeArg = constraint.typeArgs[0];
+       if (typeArg && typeArg.kind !== "var") {
+           const constraintKey = formatTypeKey(typeArg);
+           const constraintDict = `$dict_${constraint.protocolName}_${constraintKey}`;
+           if (availableNames.has(constraintDict)) {
+               deps.add(constraintDict);
+           }
+       }
+    }
+
+    graph.set(instName, deps);
   }
 
   return graph;
@@ -40,17 +93,36 @@ export function buildDependencyGraph(
 
 /**
  * Recursively collect free variable references from an IR expression.
- * Only includes names that are in the valueNames set (top-level values).
+ * Only includes names that are in the availableNames set (top-level values).
  */
 function collectDependencies(
   expr: IRExpr,
   deps: Set<string>,
-  valueNames: Set<string>
+  availableNames: Set<string>,
+  instances: IRInstance[],
+  protocolMethodMap: Map<string, string>,
+  constructors: Record<string, IRConstructorInfo>
 ): void {
   switch (expr.kind) {
     case "IRVar":
-      if (expr.namespace === "value" && valueNames.has(expr.name)) {
-        deps.add(expr.name);
+      if (expr.namespace === "value") {
+        if (availableNames.has(expr.name)) {
+          deps.add(expr.name);
+        }
+        
+        // Check for protocol constraint dependency
+        if (expr.constraint) {
+          // Resolve the dictionary this constraint points to
+          // If it's a concrete type, we need the specific instance dictionary
+          const typeArg = expr.constraint.typeArgs[0];
+          if (typeArg && typeArg.kind !== "var") {
+             // Resolve dictionary for this type
+             const dictName = resolveDictionaryName(expr.constraint.protocolName, typeArg, instances);
+             if (dictName && availableNames.has(dictName)) {
+               deps.add(dictName);
+             }
+          }
+        }
       }
       break;
 
@@ -61,59 +133,132 @@ function collectDependencies(
 
     case "IRLambda":
       // Lambda params shadow outer names, but we still traverse body
-      // (proper shadowing would require scope tracking, but for top-level
-      // dependency analysis, it's safe to over-approximate)
-      collectDependencies(expr.body, deps, valueNames);
+      collectDependencies(expr.body, deps, availableNames, instances, protocolMethodMap, constructors);
       break;
 
     case "IRApply":
-      collectDependencies(expr.callee, deps, valueNames);
+      // Check for protocol method application
+      // form: method arg1 arg2 ...
+      // If we can identify 'method' as a protocol method, try to infer the dictionary from arg1
+      if (expr.callee.kind === "IRVar" && protocolMethodMap.has(expr.callee.name)) {
+         const protocolName = protocolMethodMap.get(expr.callee.name);
+         if (protocolName && expr.args.length > 0) {
+            const firstArg = expr.args[0]!;
+            let inferenceType: IRType | undefined;
+
+            // Try to infer type from literal
+            if (firstArg.kind === "IRLiteral") {
+               const litType = firstArg.literalType;
+               // Map literal type to Vibe type name
+               const typeName = litType.charAt(0).toUpperCase() + litType.slice(1); // "Int", "Float", "String"
+               if (typeName === "Int" || typeName === "Float" || typeName === "String" || typeName === "Bool") {
+                   inferenceType = { kind: "con", name: typeName, args: [] };
+               } else if (litType === "char") {
+                   inferenceType = { kind: "con", name: "Char", args: [] };
+               }
+            }
+            // If IRVar, check if it has type info attached
+            else if (firstArg.kind === "IRVar" && firstArg.type) {
+                inferenceType = firstArg.type;
+            }
+            // Handle Constructor (e.g. A == A)
+            else if (firstArg.kind === "IRConstructor") {
+                const ctorInfo = constructors[firstArg.name];
+                if (ctorInfo) {
+                    inferenceType = { kind: "con", name: ctorInfo.parentType, args: [] };
+                }
+            }
+            
+            if (inferenceType) {
+                const dictName = resolveDictionaryName(protocolName, inferenceType, instances);
+                if (dictName && availableNames.has(dictName)) {
+                    deps.add(dictName);
+                }
+            }
+         }
+      }
+
+      collectDependencies(expr.callee, deps, availableNames, instances, protocolMethodMap, constructors);
       for (const arg of expr.args) {
-        collectDependencies(arg, deps, valueNames);
+        collectDependencies(arg, deps, availableNames, instances, protocolMethodMap, constructors);
       }
       break;
 
     case "IRIf":
-      collectDependencies(expr.condition, deps, valueNames);
-      collectDependencies(expr.thenBranch, deps, valueNames);
-      collectDependencies(expr.elseBranch, deps, valueNames);
+      collectDependencies(expr.condition, deps, availableNames, instances, protocolMethodMap, constructors);
+      collectDependencies(expr.thenBranch, deps, availableNames, instances, protocolMethodMap, constructors);
+      collectDependencies(expr.elseBranch, deps, availableNames, instances, protocolMethodMap, constructors);
       break;
-
+      
     case "IRCase":
-      collectDependencies(expr.discriminant, deps, valueNames);
+      collectDependencies(expr.discriminant, deps, availableNames, instances, protocolMethodMap, constructors);
       for (const branch of expr.branches) {
-        collectDependencies(branch.body, deps, valueNames);
+        collectDependencies(branch.body, deps, availableNames, instances, protocolMethodMap, constructors);
       }
       break;
 
     case "IRTuple":
       for (const elem of expr.elements) {
-        collectDependencies(elem, deps, valueNames);
+        collectDependencies(elem, deps, availableNames, instances, protocolMethodMap, constructors);
       }
       break;
 
     case "IRList":
       for (const elem of expr.elements) {
-        collectDependencies(elem, deps, valueNames);
+        collectDependencies(elem, deps, availableNames, instances, protocolMethodMap, constructors);
       }
       break;
 
     case "IRRecord":
       for (const field of expr.fields) {
-        collectDependencies(field.value, deps, valueNames);
+        collectDependencies(field.value, deps, availableNames, instances, protocolMethodMap, constructors);
+      }
+      break;
+      
+    case "IRRecordUpdate":
+      collectDependencies(expr.base, deps, availableNames, instances, protocolMethodMap, constructors);
+      for (const field of expr.updates) {
+        collectDependencies(field.value, deps, availableNames, instances, protocolMethodMap, constructors);
       }
       break;
 
     case "IRFieldAccess":
-      collectDependencies(expr.target, deps, valueNames);
+      collectDependencies(expr.target, deps, availableNames, instances, protocolMethodMap, constructors);
       break;
 
     case "IRConstructor":
       for (const arg of expr.args) {
-        collectDependencies(arg, deps, valueNames);
+        collectDependencies(arg, deps, availableNames, instances, protocolMethodMap, constructors);
       }
       break;
   }
+}
+
+/**
+ * Resolve the dictionary name for a protocol and type.
+ */
+function resolveDictionaryName(
+  protocolName: string, 
+  type: IRType, 
+  instances: IRInstance[]
+): string | null {
+  // Try exact match first
+  const typeKey = formatTypeKey(type);
+  const exactKey = `${protocolName}_${typeKey}`;
+  
+  // Check exact/structural match
+  const match = findMatchingInstance(protocolName, type, instances);
+  if (match) {
+    return `$dict_${match.key}`;
+  }
+  
+  // Check polymorphic match
+  const polyMatch = findPolymorphicInstance(protocolName, instances);
+  if (polyMatch) {
+    return `$dict_${polyMatch.key}`;
+  }
+  
+  return `$dict_${exactKey}`; // Default guess
 }
 
 /**
@@ -122,7 +267,7 @@ function collectDependencies(
 function collectPatternDependencies(
   pattern: IRPattern,
   deps: Set<string>,
-  valueNames: Set<string>
+  availableNames: Set<string>
 ): void {
   switch (pattern.kind) {
     case "IRVarPattern":
@@ -133,13 +278,13 @@ function collectPatternDependencies(
 
     case "IRConstructorPattern":
       for (const arg of pattern.args) {
-        collectPatternDependencies(arg, deps, valueNames);
+        collectPatternDependencies(arg, deps, availableNames);
       }
       break;
 
     case "IRTuplePattern":
       for (const elem of pattern.elements) {
-        collectPatternDependencies(elem, deps, valueNames);
+        collectPatternDependencies(elem, deps, availableNames);
       }
       break;
   }

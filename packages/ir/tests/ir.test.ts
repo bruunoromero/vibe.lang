@@ -399,7 +399,7 @@ f = d
     const ir = compileToIR(source);
 
     // Validate topological order
-    const graph = buildDependencyGraph(ir.values);
+    const graph = buildDependencyGraph(ir.values, ir.instances, ir.protocols, ir.constructors);
     const validation = validateTopologicalOrder(ir.dependencyOrder, graph);
     expect(validation.valid).toBe(true);
   });

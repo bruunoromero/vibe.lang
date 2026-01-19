@@ -30,7 +30,8 @@ import {
   findSCCs,
   validateTopologicalOrder,
 } from "../dependency";
-import { formatTypeKey, substituteProtocolMethods } from "../internal/helpers";
+import { formatTypeKey } from "../utils";
+import { substituteProtocolMethods } from "../internal/helpers";
 import type { Type, Constraint } from "@vibe/semantics";
 
 /**
@@ -524,10 +525,20 @@ export function lower(
   // Merge synthetic values into main values for dependency analysis
   // This ensures that $impl_* and $default_* are properly ordered
   const mergedValues = { ...values, ...syntheticValues };
-  const mergedOrder = [...declarationOrder, ...syntheticOrder];
+  
+  // Create instance dictionary names for dependency analysis/ordering
+  const instanceNames: string[] = [];
+  for (const inst of instances) {
+     if (inst.typeArgs[0]) {
+       const key = formatTypeKey(inst.typeArgs[0]);
+       instanceNames.push(`$dict_${inst.protocolName}_${key}`);
+     }
+  }
+
+  const mergedOrder = [...declarationOrder, ...syntheticOrder, ...instanceNames];
 
   // Build dependency graph and find SCCs with merged values
-  const depGraph = buildDependencyGraph(mergedValues);
+  const depGraph = buildDependencyGraph(mergedValues, instances, protocols, constructors);
   const sccs = findSCCs(depGraph, mergedOrder);
 
   // Validate if requested

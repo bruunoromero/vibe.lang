@@ -2903,29 +2903,55 @@ function registerProtocol(
 }
 
 /**
- * Check if a type expression can implement Eq.
- * Returns true if all component types can implement Eq (no function types,
- * and all referenced types either have Eq or are type parameters).
+ * Check if a type expression can implement a protocol.
+ * 
+ * This function determines whether a type can satisfy a protocol constraint either through:
+ * 1. An explicit instance implementation
+ * 2. Auto-derivation (currently only supported for standard Eq from Vibe/Vibe.Basics)
+ * 3. Protocol with all default method implementations
+ * 
+ * @param type - The type expression to check
+ * @param protocolName - The name of the protocol to check
+ * @param typeParams - Set of type parameters in scope (these are always valid)
+ * @param declarations - All declarations in scope (for checking local types)
+ * @param instances - All instances in scope (for checking explicit implementations)
+ * @param protocols - All protocols in scope (for checking default methods)
+ * @param checkedTypes - Set of already-checked types (for cycle detection)
+ * @returns true if the type can implement the protocol
  */
-function canTypeImplementEq(
+function canTypeImplementProtocol(
   type: TypeExpr,
+  protocolName: string,
   typeParams: Set<string>,
   declarations: Declaration[],
   instances: InstanceInfo[],
+  protocols: Record<string, ProtocolInfo>,
   checkedTypes: Set<string> = new Set(),
 ): boolean {
   const typeKey = JSON.stringify(type);
   if (checkedTypes.has(typeKey)) return true;
   checkedTypes.add(typeKey);
 
+  // Helper to check if a type matches an instance's type argument
+  const typeMatchesInstanceArg = (instanceArg: Type, typeName: string): boolean => {
+    return instanceArg.kind === "con" && (instanceArg as TypeCon).name === typeName;
+  };
+
   switch (type.kind) {
     case "FunctionType":
-      // Functions cannot implement Eq
-      return false;
+      // Functions can only implement protocols if there's an explicit instance
+      // Check if there's an instance for function types
+      const hasFunctionInstance = instances.some(
+        (inst) =>
+          inst.protocolName === protocolName &&
+          inst.typeArgs.length > 0 &&
+          inst.typeArgs[0]!.kind === "fun",
+      );
+      return hasFunctionInstance;
 
     case "TypeRef": {
       const firstChar = type.name.charAt(0);
-      // Type variables (lowercase) are allowed - they get Eq constraint
+      // Type variables (lowercase) are allowed - they get protocol constraint
       if (
         firstChar === firstChar.toLowerCase() &&
         firstChar !== firstChar.toUpperCase()
@@ -2933,141 +2959,158 @@ function canTypeImplementEq(
         return true;
       }
 
-      // Built-in types with Eq
-      if (
-        ["Int", "Float", "String", "Bool", "Char", "Unit"].includes(type.name)
-      ) {
+      // Global Check: Check if there's already an instance for this type
+      const hasInstance = instances.some(
+        (inst) =>
+          inst.protocolName === protocolName &&
+          inst.typeArgs.length > 0 &&
+          typeMatchesInstanceArg(inst.typeArgs[0]!, type.name),
+      );
+      if (hasInstance) {
+        // Also check type arguments recursively
+        return type.args.every((arg) =>
+          canTypeImplementProtocol(
+            arg,
+            protocolName,
+            typeParams,
+            declarations,
+            instances,
+            protocols,
+            checkedTypes,
+          ),
+        );
+      }
+
+      // Auto-Derive Check: Determine if we can auto-derive this protocol
+      const protocol = protocols[protocolName];
+      if (!protocol) {
+        // Protocol not found - can't implement
+        return false;
+      }
+
+      // Check if all methods have default implementations
+      const allMethodsHaveDefaults = Array.from(protocol.methods.values()).every(
+        (method) => method.defaultImpl !== undefined,
+      );
+
+      // If all methods have defaults, any type can satisfy the protocol
+      if (allMethodsHaveDefaults) {
         return true;
       }
 
-      // List is allowed if element type can implement Eq
-      if (type.name === "List" && type.args.length === 1) {
-        return canTypeImplementEq(
-          type.args[0]!,
-          typeParams,
-          declarations,
-          instances,
-          checkedTypes,
+        // Check if type is structural and all fields can implement Eq
+        // Check local type declarations
+        const localDecl = declarations.find(
+          (d) =>
+            (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
+            d.name === type.name,
         );
-      }
 
-      // Check if there's already an Eq instance for this type
-      const hasInstance = instances.some(
-        (inst) =>
-          inst.protocolName === "Eq" &&
-          inst.typeArgs.length > 0 &&
-          inst.typeArgs[0]!.kind === "con" &&
-          (inst.typeArgs[0] as TypeCon).name === type.name,
-      );
-      if (hasInstance) {
-        // Also check type arguments
+        if (localDecl && localDecl.kind === "TypeDeclaration") {
+          // Local type will get auto-Eq, check its type args
+          return type.args.every((arg) =>
+            canTypeImplementProtocol(
+              arg,
+              protocolName,
+              typeParams,
+              declarations,
+              instances,
+              protocols,
+              checkedTypes,
+            ),
+          );
+        }
+
+        // For type aliases, check type args
+        if (localDecl && localDecl.kind === "TypeAliasDeclaration") {
+          return type.args.every((arg) =>
+            canTypeImplementProtocol(
+              arg,
+              protocolName,
+              typeParams,
+              declarations,
+              instances,
+              protocols,
+              checkedTypes,
+            ),
+          );
+        }
+
+        // Unknown type - check type args only
         return type.args.every((arg) =>
-          canTypeImplementEq(
+          canTypeImplementProtocol(
             arg,
+            protocolName,
             typeParams,
             declarations,
             instances,
+            protocols,
             checkedTypes,
           ),
         );
       }
-
-      // Check local type declarations
-      const localDecl = declarations.find(
-        (d) =>
-          (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
-          d.name === type.name,
-      );
-
-      if (localDecl && localDecl.kind === "TypeDeclaration") {
-        // Local type will get auto-Eq, check its type args
-        return type.args.every((arg) =>
-          canTypeImplementEq(
-            arg,
-            typeParams,
-            declarations,
-            instances,
-            checkedTypes,
-          ),
-        );
-      }
-
-      // For type aliases, we'd need to expand them - for now, assume they're fine
-      if (localDecl && localDecl.kind === "TypeAliasDeclaration") {
-        return type.args.every((arg) =>
-          canTypeImplementEq(
-            arg,
-            typeParams,
-            declarations,
-            instances,
-            checkedTypes,
-          ),
-        );
-      }
-
-      // Unknown type - check type args only
-      return type.args.every((arg) =>
-        canTypeImplementEq(
-          arg,
-          typeParams,
-          declarations,
-          instances,
-          checkedTypes,
-        ),
-      );
-    }
 
     case "TupleType":
+      // Tuples can implement protocols if all elements can
       return type.elements.every((elem) =>
-        canTypeImplementEq(
+        canTypeImplementProtocol(
           elem,
+          protocolName,
           typeParams,
           declarations,
           instances,
+          protocols,
           checkedTypes,
         ),
       );
 
     case "RecordType":
+      // Records can implement protocols if all fields can
       return type.fields.every((f) =>
-        canTypeImplementEq(
+        canTypeImplementProtocol(
           f.type,
+          protocolName,
           typeParams,
           declarations,
           instances,
+          protocols,
           checkedTypes,
         ),
       );
 
     case "QualifiedType":
-      return canTypeImplementEq(
+      return canTypeImplementProtocol(
         type.type,
+        protocolName,
         typeParams,
         declarations,
         instances,
+        protocols,
         checkedTypes,
       );
 
     default:
-      return true;
+      return false;
   }
 }
 
 /**
- * Check if a TypeDeclaration can automatically implement Eq.
- * Returns true if all fields/constructor args can implement Eq.
+ * Check if a TypeDeclaration can automatically implement a protocol.
+ * Returns true if all fields/constructor args can implement the protocol.
  */
-function canDeclImplementEq(
+function canDeclImplementProtocol(
   decl: TypeDeclaration,
+  protocolName: string,
   declarations: Declaration[],
   instances: InstanceInfo[],
+  protocols: Record<string, ProtocolInfo>,
 ): boolean {
   const typeParams = new Set(decl.params);
 
   if (decl.recordFields) {
     for (const field of decl.recordFields) {
       if (
-        !canTypeImplementEq(field.type, typeParams, declarations, instances)
+        !canTypeImplementProtocol(field.type, protocolName, typeParams, declarations, instances, protocols)
       ) {
         return false;
       }
@@ -3077,7 +3120,7 @@ function canDeclImplementEq(
   if (decl.constructors) {
     for (const ctor of decl.constructors) {
       for (const arg of ctor.args) {
-        if (!canTypeImplementEq(arg, typeParams, declarations, instances)) {
+        if (!canTypeImplementProtocol(arg, protocolName, typeParams, declarations, instances, protocols)) {
           return false;
         }
       }
@@ -3109,7 +3152,6 @@ function autoImplementEqForType(
   // Only auto-implement for the Vibe/Vibe.Basics Eq protocol
   // This prevents auto-generation for test fixtures or custom Eq protocols
   const isVibeEq =
-    !eqProtocol.moduleName ||
     eqProtocol.moduleName === "Vibe" ||
     eqProtocol.moduleName === "Vibe.Basics";
   if (!isVibeEq) {
@@ -3117,7 +3159,7 @@ function autoImplementEqForType(
   }
 
   // Check if type can implement Eq
-  if (!canDeclImplementEq(decl, declarations, instances)) {
+  if (!canDeclImplementProtocol(decl, "Eq", declarations, instances, protocols)) {
     return undefined;
   }
 
