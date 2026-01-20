@@ -2,9 +2,4 @@ module ExampleApp exposing (..)
 
 import Vibe exposing (..)
 
-type A = A
-
-showA : A -> String
-showA _ = "This is an A"
-
-main = A == A
+main = toString [1, 2, 3]

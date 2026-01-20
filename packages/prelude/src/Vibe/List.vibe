@@ -20,7 +20,15 @@ implement Eq a => Eq (List a) where
 
 implement Show a => Show (List a) where
     toString lst =
-        "[" ++ (String.join ", " (map toString lst)) ++ "]"
+        let 
+            elementStrings = map toString lst
+        in
+            "[" ++ (String.join ", " elementStrings) ++ "]"
+
+
+-- implement Show a => Show (List a) where
+--     toString lst =
+--         "[" ++ (String.join ", " (map toString lst)) ++ "]"
 
 implement Appendable (List a) where
     (++) = _append

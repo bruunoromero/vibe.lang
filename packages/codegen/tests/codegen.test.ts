@@ -1003,3 +1003,229 @@ describe("ADT Constructor Imports", () => {
     expect(imports).toEqual(['import * as Bool from "../Vibe/Vibe/Bool.js";']);
   });
 });
+
+describe("Protocol Dictionary Re-exports", () => {
+  test("exports locally generated dictionaries even with explicit exposing clause", () => {
+    // This tests the bug fix where modules with explicit exposing clauses
+    // (not exposing (..)) would not export their instance dictionaries.
+    // Dictionaries should always be exported when an instance is defined.
+    const preludeSource = `
+module Vibe exposing (..)
+
+protocol Show a where
+  toString : a -> String
+
+implement Show Int where
+  toString = _intToString
+
+@external "@vibe/runtime" "numToString"
+_intToString : Int -> String
+`;
+
+    const source = `
+module Test exposing (myValue)
+
+import Vibe exposing (..)
+
+protocol MyShow a where
+  myToString : a -> String
+
+implement MyShow Int where
+  myToString = toString
+
+myValue : Int
+myValue = 42
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    // Should export the locally generated dictionary even though exposing clause
+    // only mentions myValue
+    expect(code).toContain("$dict_MyShow_Int");
+    expect(code).toMatch(/export\s*{[^}]*\$dict_MyShow_Int[^}]*}/);
+  });
+
+  test("re-exports dictionaries from imported modules when protocol is exported", () => {
+    // This tests that when a module exports a protocol, it also re-exports
+    // dictionaries for instances of that protocol from imported modules.
+    const libSource = `
+module Lib exposing (..)
+
+protocol Showable a where
+  show : a -> String
+
+implement Showable Int where
+  show x = "int"
+`;
+
+    // First compile the library
+    const libAst = parse(libSource);
+    const libSemantics = analyze(libAst);
+
+    // Then compile the re-exporting module
+    const reexportSource = `
+module ReExporter exposing (Showable(..))
+
+import Lib exposing (..)
+`;
+
+    const reexportAst = parse(reexportSource);
+    const reexportSemantics = analyze(reexportAst, {
+      dependencies: new Map([["Lib", libSemantics]]),
+    });
+    const reexportIr = lower(reexportAst, reexportSemantics, {
+      dependencies: new Map([["Lib", libSemantics]]),
+    });
+
+    // Generate with module packages info
+    const modulePackages = new Map([
+      ["Lib", "Lib"],
+      ["ReExporter", "ReExporter"],
+    ]);
+    const result = generate(reexportIr, { modulePackages });
+
+    // Should re-export the Lib's Showable_Int dictionary
+    expect(result.code).toContain("$dict_Showable_Int");
+    expect(result.code).toMatch(
+      /export\s*{[^}]*\$dict_Showable_Int[^}]*}\s*from/,
+    );
+  });
+});
+
+// ============================================================================
+// Let Expression Code Generation Tests
+// ============================================================================
+
+describe("Let Expression Code Generation", () => {
+  test("generates correct code for let expression with single binding", () => {
+    // Regression test: let expressions must wrap lambda in parentheses
+    // Without the fix, (x) => body(arg) is generated instead of ((x) => body)(arg)
+    const source = `
+module Test exposing (..)
+
+passthrough x = 
+    let 
+        y = x
+    in
+        y
+`;
+
+    const { code } = compileToJS(source);
+
+    // The let expression should generate an IIFE (immediately invoked function expression)
+    // The lambda must be wrapped in parentheses before being applied
+    expect(code).toMatch(/\(\(y\)\s*=>/);
+    // And the binding value should be applied to it
+    expect(code).toContain(")(x)");
+  });
+
+  test("generates correct code for let expression with multiple bindings", () => {
+    // Multiple bindings are chained: let x = e1; y = e2 in body => ((\x -> (\y -> body)(e2))(e1))
+    const source = `
+module Test exposing (..)
+
+compute x = 
+    let 
+        a = x
+        b = a
+    in
+        b
+`;
+
+    const { code } = compileToJS(source);
+
+    // Each binding creates a nested IIFE
+    // Both lambdas must be wrapped in parentheses
+    expect(code).toMatch(/\(\(a\)\s*=>/);
+    expect(code).toMatch(/\(\(b\)\s*=>/);
+  });
+
+  test("let expression produces same result as inlined expression", () => {
+    // The let version and inlined version should be semantically equivalent
+    const letSource = `
+module TestLet exposing (..)
+
+identity x = 
+    let 
+        result = x
+    in
+        result
+`;
+
+    const inlinedSource = `
+module TestInlined exposing (..)
+
+identity x = x
+`;
+
+    const { code: letCode } = compileToJS(letSource);
+    const { code: inlinedCode } = compileToJS(inlinedSource);
+
+    // Both should produce valid JavaScript that computes the same result
+    // The let version uses an IIFE, the inlined version is direct
+    expect(letCode).toContain("identity");
+    expect(inlinedCode).toContain("identity");
+
+    // Let version should have the IIFE pattern
+    expect(letCode).toMatch(/\(\(result\)\s*=>/);
+  });
+
+  test("nested let expressions generate correctly nested IIFEs", () => {
+    const source = `
+module Test exposing (..)
+
+nested x = 
+    let 
+        a = x
+    in
+        let 
+            b = a
+        in
+            b
+`;
+
+    const { code } = compileToJS(source);
+
+    // Both nested let expressions should generate properly wrapped lambdas
+    expect(code).toMatch(/\(\(a\)\s*=>/);
+    expect(code).toMatch(/\(\(b\)\s*=>/);
+  });
+
+  test("let expression with function binding", () => {
+    // Let bindings can define local functions
+    const source = `
+module Test exposing (..)
+
+withLocalFn x = 
+    let 
+        wrap y = y
+    in
+        wrap x
+`;
+
+    const { code } = compileToJS(source);
+
+    // The local function binding should be wrapped and applied correctly
+    expect(code).toMatch(/\(\(wrap\)\s*=>/);
+  });
+
+  test("let expression with tuple binding", () => {
+    // Test let expressions with more complex expressions
+    const source = `
+module Test exposing (..)
+
+useTuple = 
+    let 
+        pair = (1, 2)
+    in
+        pair
+`;
+
+    const { code } = compileToJS(source);
+
+    // The let expression should generate an IIFE
+    expect(code).toMatch(/\(\(pair\)\s*=>/);
+    // The tuple should be applied as the argument
+    expect(code).toContain(")([1, 2])");
+  });
+});

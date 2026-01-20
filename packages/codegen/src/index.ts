@@ -257,7 +257,7 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     if (inst.constraints.length > 0) {
       ctx.constrainedInstances.set(key, inst.constraints);
     }
-    
+
     // allow looking up instance by generated name
     ctx.instanceMap.set(`$dict_${key}`, inst);
   }
@@ -406,8 +406,6 @@ export function generate(
     bodyLines.push(...sccLines);
   }
 
-
-
   // 6. Generate exports
   const exportLines = generateExports(program, ctx, modulePackages);
   if (exportLines.length > 0) {
@@ -537,20 +535,23 @@ function generateConstructors(ctx: CodegenContext): string[] {
 /**
  * Generate code for a single protocol instance dictionary.
  */
-function generateInstanceDictionary(inst: IRInstance, ctx: CodegenContext): string[] {
+function generateInstanceDictionary(
+  inst: IRInstance,
+  ctx: CodegenContext,
+): string[] {
   const lines: string[] = [];
   const currentModule = ctx.program.moduleName;
-  
+
   const typeKey = formatTypeKey(inst.typeArgs[0]);
   const key = `${inst.protocolName}_${typeKey}`;
   const dictName = ctx.instanceDictNames.get(key);
-  
+
   if (!dictName) return [];
 
   // Check if this instance belongs to the current module
   const instanceModule = ctx.instanceModules.get(key);
   if (instanceModule && instanceModule !== currentModule) {
-      return [];
+    return [];
   }
 
   // Check if this instance has constraints (needs dictionary parameters)
@@ -737,71 +738,71 @@ function generateSCC(scc: SCC, ctx: CodegenContext): string[] {
         const body = generateValue(value, ctx);
         lines.push(`${safeName} = ${body};`);
       } else if (ctx.instanceMap.has(name)) {
-        // Handle instance in recursive block? 
+        // Handle instance in recursive block?
         // Instances usually aren't mutually recursive with values in a way that requires `let`.
-        // But if they are, we'd need to emit them. 
+        // But if they are, we'd need to emit them.
         // JavaScript object literals can refer to things defined later? No.
         // If an instance refers to a function that refers to the instance...
         // The function is a value. The instance is an object.
         // `const inst = { method: func }; func = ... use inst ...`
         // We might need `let inst; inst = { ... }`.
-        
-        // For now, let's assume instances are generated as consts in their own right 
+
+        // For now, let's assume instances are generated as consts in their own right
         // if they are part of a cycle with values, we might have issues if we don't use `let`.
-        
+
         // However, `generateInstanceDictionary` returns lines like `const $dict = ...`.
         // We'd need to split it into decl and assignment if recursive.
-        // Given the current architecture, instances are usually not recursive with functions 
+        // Given the current architecture, instances are usually not recursive with functions
         // in a way that blocks valid JS emission if we use function hoisting.
         // But we are emitting `const func = ...`.
-        
+
         // Let's defer complex recursive instance handling for a moment and just emit it.
         // If it's in a recursive block, we should probably output it.
         // But `generateInstanceDictionary` outputs `const`.
-        
+
         // Actually, if an instance is part of a recursive SCC, it's likely a bug or edge case.
         // But let's try to handle it gracefully.
-        
+
         const inst = ctx.instanceMap.get(name)!;
         const dictLines = generateInstanceDictionary(inst, ctx);
         // If it was `const ...`, and we are in recursive block, we might want to change it?
         // But `let` variables are already declared at top of block.
         // If instance name was in `scc.values`, we declared `let $dict_...`.
         // So we need to assign it.
-        
+
         // But `generateInstanceDictionary` creates `const ...`.
         // We should probably just emit it as is, but that would shadow the `let`.
         // This is tricky.
-        
-        // Strategy: standard instances likely won't be in SCCs with values often 
-        // because values depend on instances (functions use dicts) 
+
+        // Strategy: standard instances likely won't be in SCCs with values often
+        // because values depend on instances (functions use dicts)
         // but instances depend on values (impls).
         // If logic is `func uses dict`, `dict uses func`, that's a cycle.
         // `func` takes dict as arg? No, global dict.
         // `dict` has method `func`.
         // `func` body uses `dict`.
-        
+
         // JS:
         // let func;
         // const dict = { method: func }; // uses undefined func? No, func is reference.
         // func = ... uses dict ...
-        
+
         // This works fine in JS if `func` is reference.
         // But `dict` must be defined before `func` is CALLED.
         // If `func` is TOP-LEVEL called (e.g. implicitly), then order matters.
-        
+
         // If in SCC, we rely on `let` for values.
         // Instances are objects. `const dict = ...` is fine as long as we don't redeclare.
-        
+
         // If `name` is in `scc.values`, we emitted `let name;`.
         // So we should NOT emit `const name = ...`.
-        
+
         // I will assume for now instances are NOT in recursive SCCs with values commonly enough to break.
         // If they are, I should change `generateInstanceDictionary` to support assignment.
         // But for this fix, we just want correct ordering.
-        
+
         // For non-recursive steps (the vast majority), just call generateInstance.
-        
+
         lines.push(...dictLines);
       }
     }
@@ -1217,7 +1218,13 @@ function generateApply(
     return protocolMethodResult;
   }
 
-  const callee = generateExpr(expr.callee, ctx);
+  let callee = generateExpr(expr.callee, ctx);
+
+  // Wrap lambda expressions in parentheses to ensure correct application
+  // Without this, (x) => body(arg) is generated instead of ((x) => body)(arg)
+  if (expr.callee.kind === "IRLambda") {
+    callee = `(${callee})`;
+  }
 
   // Check if the callee is a named function with constraints
   // If so, we need to pass dictionaries before regular arguments
@@ -2107,13 +2114,28 @@ function generateExports(
       // If no constructors specified, type is exported opaquely (no constructors)
     }
 
-    // Export instance dictionaries for specified protocols
+    // Always export all locally generated instance dictionaries
+    // Dictionaries are internal implementation details needed for protocol dispatch,
+    // so they should always be accessible when an instance is defined in this module
+    for (const dictName of ctx.generatedDictNames) {
+      localExports.push(dictName);
+    }
+
+    // Re-export dictionaries for instances of exported protocols from imported modules
+    // This is needed when a module re-exports a protocol - its dictionaries should
+    // also be available through the re-exporting module
     for (const [protocolName, protocolExport] of moduleExports.protocols) {
-      // Export dictionaries for instances of this protocol defined in this module
-      for (const dictName of ctx.generatedDictNames) {
-        // Dictionary names are like $dict_Num_Int, $dict_Eq_Float
-        if (dictName.startsWith(`$dict_${protocolName}_`)) {
-          localExports.push(dictName);
+      for (const [instanceKey, sourceModule] of ctx.instanceModules) {
+        // Check if this instance is for the exported protocol
+        // Instance keys are like "Show_List_v120", "Num_Int"
+        if (
+          instanceKey.startsWith(`${protocolName}_`) &&
+          sourceModule !== currentModule
+        ) {
+          const dictName = ctx.instanceDictNames.get(instanceKey);
+          if (dictName) {
+            addReExport(sourceModule, dictName);
+          }
         }
       }
     }

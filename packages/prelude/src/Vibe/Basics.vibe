@@ -20,13 +20,6 @@ module Vibe.Basics exposing
 
 import Vibe.Bool as Bool exposing (not)
 
-{- | A type that represents a value that can never exist.
-
-    This is useful for functions that do not return normally,
-    such as those that always throw an exception or enter an infinite loop.
--}
-type Never
-
 -- =============================================================================
 -- Operator Fixity Declarations
 -- =============================================================================
@@ -63,6 +56,16 @@ infixl 7 %
 infixr 9 <<
 infixr 9 >>
 
+-- =============================================================================
+-- Never Type
+-- =============================================================================
+
+{- | A type that represents a value that can never exist.
+
+    This is useful for functions that do not return normally,
+    such as those that always throw an exception or enter an infinite loop.
+-}
+type Never
 
 -- =============================================================================
 -- Comparison Protocols
@@ -179,7 +182,7 @@ protocol Show a where
         addOne >> double  -- first adds 1, then doubles
 -}
 (>>) : (a -> b) -> (b -> c) -> (a -> c)
-(>>) f g = \x -> g (f x)
+(>>) f g x = g (f x)
 
 
 {-| Backward function composition.
@@ -191,7 +194,7 @@ protocol Show a where
         double << addOne  -- first adds 1, then doubles
 -}
 (<<) : (b -> c) -> (a -> b) -> (a -> c)
-(<<) g f = \x -> g (f x)
+(<<) g f x = g (f x)
 
 -- =============================================================================
 -- Utility Functions
