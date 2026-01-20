@@ -460,6 +460,9 @@ export type IRProgram = {
   /** ADT information for pattern matching */
   adts: Record<string, ADTInfo>;
 
+  /** Opaque type information (types without constructors) */
+  opaqueTypes: Record<string, import("@vibe/semantics").OpaqueTypeInfo>;
+
   /** Constructor info with assigned tags */
   constructors: Record<string, IRConstructorInfo>;
 
@@ -532,4 +535,5 @@ export type {
   ConstructorInfo,
   ADTInfo,
   ExportInfo,
+  OpaqueTypeInfo,
 } from "@vibe/semantics";

@@ -1,5 +1,26 @@
 # Vibe Compiler Project Context
 
+# Mindset & Process
+
+- superthink. THINK A LOT. Think hard, do not lose the plot.
+- No breadcrumbs. If you delete or move code, do not leave a comment in the old place. No "// moved to X", no "relocated". Just remove it.
+- Use comments sparingly. If obvious from the code, do not add a comment.
+- Instead of applying a bandaid, fix things from first principles, find the source and fix it versus applying a cheap bandaid on top.
+- When taking on new work, follow this order:
+  - Think about the architecture.
+  - Research official docs, blogs, or papers on the best architecture.
+  - Review the existing codebase.
+  - Compare the research with the codebase to choose the best fit.
+  - Implement the fix or ask about the tradeoffs the user is willing to make.
+- Write idiomatic, simple, maintainable code. Always ask yourself if this is the most simple intuitive solution to the problem.
+- Leave each repo better than how you found it. If something is giving a code smell, fix it for the next person.
+- Clean up unused code ruthlessly. If a function no longer needs a parameter or a helper is dead, delete it and update the callers instead of letting the junk linger.
+- Search before pivoting. If you are stuck or uncertain, do a quick web search for official docs or specs, then continue with the current approach. Do not change direction unless asked.
+
+- If code is very confusing or hard to understand:
+  - Try to simplify it.
+  - Add an ASCII art diagram in a code comment if it would help.
+
 ## Project Overview
 
 **Vibe** is a programming language project consisting of a compiler, interpreter, and associated tooling. It is built as a TypeScript monorepo using **Bun** as the runtime and package manager. The language compiles to JavaScript and It's heavily Inspired by Elm 0.18.

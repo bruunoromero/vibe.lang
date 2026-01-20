@@ -24,15 +24,17 @@ module Vibe exposing
     )
 
 import Vibe.Basics exposing (..)
+
 import Vibe.Unit
+import Vibe.Bool
 import Vibe.Int
 import Vibe.Float
 import Vibe.String
-import Vibe.Bool exposing (not)
 import Vibe.List exposing ((::))
 import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Result exposing (Result(..))
 import Vibe.Pair exposing (Pair(..))
+import Vibe.Never exposing (Never, never)
 
 
 {- =============================================================================

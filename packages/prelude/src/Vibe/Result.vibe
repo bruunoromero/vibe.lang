@@ -2,6 +2,7 @@ module Vibe.Result exposing
     ( Result(..)
     )
 
+
 {-| Represents a computation that can succeed or fail.
 
     Ok value  -- Success with a value

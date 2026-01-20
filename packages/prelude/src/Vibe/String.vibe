@@ -2,7 +2,10 @@ module Vibe.String exposing
   ( join
   )
 
-import Vibe.Basics exposing (Show, Appendable(..), identity)
+import Vibe.Basics exposing (Eq, Show, Appendable(..), identity)
+
+implement Eq String where
+    (==) = _eq
 
 implement Show String where
     toString = identity
@@ -12,6 +15,9 @@ implement Appendable String where
 
 @external "@vibe/runtime" "stringAppend"
 _append : String -> String -> String
+
+@external "@vibe/runtime" "stringEq"
+_eq: String -> String -> Bool
 
 join : String -> List String -> String
 join separator strings =

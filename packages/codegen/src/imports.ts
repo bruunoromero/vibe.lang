@@ -127,7 +127,12 @@ export function generateDependencyImports(
             const isProtocol =
               depModule?.protocols &&
               Object.hasOwn(depModule.protocols, spec.name);
-            if (!isProtocol) {
+            // Skip if the name is an opaque type - opaque types have no runtime representation
+            const isOpaque =
+              (depModule?.opaqueTypes &&
+                Object.hasOwn(depModule.opaqueTypes, spec.name)) ||
+              Object.hasOwn(program.opaqueTypes, spec.name);
+            if (!isProtocol && !isOpaque) {
               names.push(sanitizeIdentifier(spec.name));
             }
             break;
@@ -136,6 +141,15 @@ export function generateDependencyImports(
             names.push(sanitizeOperator(spec.operator));
             break;
           case "ExportTypeAll": {
+            // Opaque types have no constructors and no runtime representation - skip them
+            const isOpaque =
+              (depModule?.opaqueTypes &&
+                Object.hasOwn(depModule.opaqueTypes, spec.name)) ||
+              Object.hasOwn(program.opaqueTypes, spec.name);
+            if (isOpaque) {
+              break;
+            }
+
             // For ADTs, import the constructors, not the type name
             // Types don't exist at runtime, only constructors do
             // Check the dependency module's ADTs first, fall back to current module's ADTs

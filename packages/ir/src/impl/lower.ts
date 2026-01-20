@@ -600,6 +600,7 @@ export function lower(
     liftedBindings: ctx.liftedBindings,
     syntheticDefaultImpls,
     adts: semantics.adts,
+    opaqueTypes: semantics.opaqueTypes,
     constructors,
     protocols,
     instances,

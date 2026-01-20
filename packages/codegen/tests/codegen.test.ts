@@ -806,6 +806,7 @@ describe("ADT Constructor Imports", () => {
           constructors: ["Just", "Nothing"],
         },
       },
+      opaqueTypes: {},
     } as unknown as IRProgram;
     const modulePackages = new Map([["Vibe.Maybe", "Vibe"]]);
 
@@ -838,6 +839,7 @@ describe("ADT Constructor Imports", () => {
           constructors: ["Just", "Nothing"],
         },
       },
+      opaqueTypes: {},
     } as unknown as IRProgram;
     const modulePackages = new Map([["Vibe.Maybe", "Vibe"]]);
 
@@ -862,6 +864,7 @@ describe("ADT Constructor Imports", () => {
         ],
       },
       adts: {},
+      opaqueTypes: {},
     } as IRProgram;
     const modulePackages = new Map([["Vibe", "Vibe"]]);
 
@@ -902,6 +905,7 @@ describe("ADT Constructor Imports", () => {
         ],
       },
       adts: {},
+      opaqueTypes: {},
       dependencies: new Map([["Vibe.Basics", mockDepModule]]),
     } as unknown as IRProgram;
     const modulePackages = new Map([["Vibe.Basics", "Vibe"]]);
@@ -945,6 +949,7 @@ describe("ADT Constructor Imports", () => {
         ],
       },
       adts: {},
+      opaqueTypes: {},
       dependencies: new Map([["Vibe.Basics", mockDepModule]]),
     } as unknown as IRProgram;
     const modulePackages = new Map([["Vibe.Basics", "Vibe"]]);
@@ -975,6 +980,7 @@ describe("ADT Constructor Imports", () => {
         ],
       },
       adts: {},
+      opaqueTypes: {},
     } as IRProgram;
     const modulePackages = new Map([["Vibe.Bool", "Vibe"]]);
 
@@ -996,11 +1002,146 @@ describe("ADT Constructor Imports", () => {
         ],
       },
       adts: {},
+      opaqueTypes: {},
     } as IRProgram;
     const modulePackages = new Map([["Vibe.Bool", "Vibe"]]);
 
     const imports = generateDependencyImports(mockProgram, modulePackages);
     expect(imports).toEqual(['import * as Bool from "../Vibe/Vibe/Bool.js";']);
+  });
+
+  test("skips opaque types when imported as ExportTypeAll", () => {
+    // This tests the bug fix where opaque types (types without constructors)
+    // were incorrectly being imported. For example:
+    //   import Vibe.Never exposing (Never)
+    // Should NOT try to import `Never` since it's an opaque type with no
+    // runtime representation.
+    const mockDepModule = {
+      opaqueTypes: {
+        Never: { name: "Never", params: [], span: { start: 0, end: 0 } },
+      },
+      adts: {},
+      protocols: {},
+      values: {
+        never: { type: {} },
+      },
+    };
+
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Never",
+            exposing: {
+              kind: "Explicit",
+              exports: [
+                { kind: "ExportTypeAll", name: "Never" },
+                { kind: "ExportValue", name: "never" },
+              ],
+            },
+          },
+        ],
+      },
+      adts: {},
+      opaqueTypes: {},
+      dependencies: new Map([["Vibe.Never", mockDepModule]]),
+    } as unknown as IRProgram;
+    const modulePackages = new Map([["Vibe.Never", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+
+    // Should import the `never` function, but NOT try to import `Never`
+    expect(imports.length).toBe(1);
+    expect(imports[0]).toContain(
+      'import { never } from "../Vibe/Vibe/Never.js";',
+    );
+    // Should NOT contain Never as a named import (it appears in the path, but not as `{ Never }`)
+    expect(imports[0]).not.toContain("{ Never");
+  });
+
+  test("skips opaque types from current module when imported as ExportTypeAll", () => {
+    // Test when the opaque type is in the current program's opaqueTypes
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Never",
+            exposing: {
+              kind: "Explicit",
+              exports: [{ kind: "ExportTypeAll", name: "Never" }],
+            },
+          },
+        ],
+      },
+      adts: {},
+      opaqueTypes: {
+        Never: { name: "Never", params: [], span: { start: 0, end: 0 } },
+      },
+      dependencies: new Map(),
+    } as unknown as IRProgram;
+    const modulePackages = new Map([["Vibe.Never", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+
+    // Should generate namespace import since no values are imported
+    expect(imports.length).toBe(1);
+    expect(imports[0]).toContain("import * as Never");
+    // Should NOT try to import Never as a named import
+    expect(imports[0]).not.toContain("{ Never }");
+  });
+
+  test("skips opaque types when imported as ExportValue (bare type name)", () => {
+    // This tests the case where an opaque type is imported without (..)
+    // For example: import Vibe.Never exposing (Never, never)
+    // The `Never` without (..) is parsed as ExportValue, not ExportTypeAll
+    const mockDepModule = {
+      opaqueTypes: {
+        Never: { name: "Never", params: [], span: { start: 0, end: 0 } },
+      },
+      adts: {},
+      protocols: {},
+      values: {
+        never: { type: {} },
+      },
+    };
+
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Never",
+            exposing: {
+              kind: "Explicit",
+              exports: [
+                // Never without (..) is parsed as ExportValue
+                { kind: "ExportValue", name: "Never" },
+                { kind: "ExportValue", name: "never" },
+              ],
+            },
+          },
+        ],
+      },
+      adts: {},
+      opaqueTypes: {},
+      dependencies: new Map([["Vibe.Never", mockDepModule]]),
+    } as unknown as IRProgram;
+    const modulePackages = new Map([["Vibe.Never", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+
+    // Should import the `never` function, but NOT the opaque type `Never`
+    expect(imports.length).toBe(1);
+    expect(imports[0]).toContain(
+      'import { never } from "../Vibe/Vibe/Never.js";',
+    );
+    // Should NOT contain Never as a named import
+    expect(imports[0]).not.toContain("{ Never");
   });
 });
 

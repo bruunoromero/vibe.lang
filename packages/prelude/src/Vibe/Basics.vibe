@@ -6,19 +6,16 @@ module Vibe.Basics exposing
     , Integral(..)
     , Show(..)
     , Appendable(..)
-    , Never
     , (|>)
     , (<|)
     , (>>)
     , (<<)
-    , never
+    , not
     , identity
     , always
     , flip
     , apply
     )
-
-import Vibe.Bool as Bool exposing (not)
 
 -- =============================================================================
 -- Operator Fixity Declarations
@@ -55,17 +52,6 @@ infixl 7 %
 -- Function composition (highest precedence)
 infixr 9 <<
 infixr 9 >>
-
--- =============================================================================
--- Never Type
--- =============================================================================
-
-{- | A type that represents a value that can never exist.
-
-    This is useful for functions that do not return normally,
-    such as those that always throw an exception or enter an infinite loop.
--}
-type Never
 
 -- =============================================================================
 -- Comparison Protocols
@@ -200,6 +186,17 @@ protocol Show a where
 -- Utility Functions
 -- =============================================================================
 
+{-| Logical not. Inverts the boolean value.
+
+    not True  == False
+    not False == True
+-}
+not : Bool -> Bool
+not b =
+  case b of
+    True -> False
+    False -> True
+
 {-| Identity function. Returns its argument unchanged.
 
     identity x  ==  x
@@ -230,12 +227,3 @@ flip f x y = f y x
 -}
 apply : (a -> b) -> a -> b
 apply f x = f x
-
-{-| Function that never returns a value.
-
-    Useful in situations where a value is required but the code path
-    cannot produce one (e.g., infinite loops, exceptions).
--}
-never : Never -> a
-never nvr = 
-    never nvr

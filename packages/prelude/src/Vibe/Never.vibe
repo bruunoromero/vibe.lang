@@ -1,0 +1,26 @@
+module Vibe.Never exposing
+    ( Never
+    , never
+    )
+
+{-| Represents a type that can never have any values.
+
+    This type is useful in scenarios where a value is logically impossible,
+    such as the return type of functions that always throw an error or enter
+    an infinite loop.
+
+    Example:
+        impossibleFunction : Never
+        impossibleFunction =
+            never
+-}
+type Never
+
+{-| Function that never returns a value.
+
+    Useful in situations where a value is required but the code path
+    cannot produce one (e.g., infinite loops, exceptions).
+-}
+never : Never -> a
+never nvr = 
+    never nvr

@@ -3,6 +3,7 @@ module Vibe.Maybe exposing
     , Maybe(..)
     )
 
+
 {-| Represents an optional value. Used when a value may or may not exist.
 
     Just x  -- Contains a value x
@@ -18,7 +19,6 @@ module Vibe.Maybe exposing
 type Maybe a
     = Just a
     | Nothing
-
 
 {-| Extracts the value from a `Maybe`, providing a default if it is `Nothing`. -}
 withDefault : a -> Maybe a -> a

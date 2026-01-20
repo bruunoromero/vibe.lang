@@ -6,11 +6,16 @@
  */
 
 // =============================================================================
-// Logical Operations
+// Bool Operations
 // =============================================================================
 
 /** Logical NOT */
 export const not = (a: boolean): boolean => !a;
+
+export const boolEq =
+  (a: boolean) =>
+  (b: boolean): boolean =>
+    a === b;
 
 // =============================================================================
 // List Operations
@@ -55,6 +60,11 @@ export const stringAppend =
   (a: string) =>
   (b: string): string =>
     a + b;
+
+export const stringEq =
+  (a: string) =>
+  (b: string): boolean =>
+    a === b;
 
 // =============================================================================
 // Generic Number Operations
