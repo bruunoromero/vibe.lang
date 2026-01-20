@@ -871,6 +871,93 @@ describe("ADT Constructor Imports", () => {
     expect(imports[0]).toContain("import * as Vibe");
   });
 
+  test("skips protocol names when imported as ExportValue", () => {
+    // This tests the case where a user writes:
+    // import Vibe.Basics exposing (Show, Eq)
+    // which is parsed as ExportValue specs, not ExportTypeAll
+    const mockDepModule = {
+      protocols: {
+        Show: { name: "Show", methods: new Map() },
+        Eq: { name: "Eq", methods: new Map() },
+      },
+      adts: {},
+      values: {},
+    };
+
+    const mockProgram = {
+      moduleName: "Vibe.Unit",
+      packageName: "Vibe",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Basics",
+            exposing: {
+              kind: "Explicit",
+              exports: [
+                { kind: "ExportValue", name: "Show" },
+                { kind: "ExportValue", name: "Eq" },
+              ],
+            },
+          },
+        ],
+      },
+      adts: {},
+      dependencies: new Map([["Vibe.Basics", mockDepModule]]),
+    } as unknown as IRProgram;
+    const modulePackages = new Map([["Vibe.Basics", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+    // Should generate namespace import since no non-protocol values are imported
+    expect(imports.length).toBe(1);
+    expect(imports[0]).toContain("import * as Basics");
+    // Should NOT contain protocol names as named imports
+    expect(imports[0]).not.toContain("{ Show");
+    expect(imports[0]).not.toContain("{ Eq");
+  });
+
+  test("imports non-protocol values while skipping protocols in same exposing clause", () => {
+    // Test mixing protocols and values in the same import
+    const mockDepModule = {
+      protocols: {
+        Show: { name: "Show", methods: new Map() },
+      },
+      adts: {},
+      values: {
+        toString: { type: {} },
+      },
+    };
+
+    const mockProgram = {
+      moduleName: "ExampleApp",
+      packageName: "ExampleApp",
+      sourceProgram: {
+        imports: [
+          {
+            moduleName: "Vibe.Basics",
+            exposing: {
+              kind: "Explicit",
+              exports: [
+                { kind: "ExportValue", name: "Show" },
+                { kind: "ExportValue", name: "toString" },
+              ],
+            },
+          },
+        ],
+      },
+      adts: {},
+      dependencies: new Map([["Vibe.Basics", mockDepModule]]),
+    } as unknown as IRProgram;
+    const modulePackages = new Map([["Vibe.Basics", "Vibe"]]);
+
+    const imports = generateDependencyImports(mockProgram, modulePackages);
+    // Should import toString but not Show
+    expect(imports.length).toBe(1);
+    expect(imports[0]).toContain(
+      'import { toString } from "../Vibe/Vibe/Basics.js";',
+    );
+    expect(imports[0]).not.toContain("Show");
+  });
+
   test("generates both namespace and named imports for alias with exposing", () => {
     const mockProgram = {
       moduleName: "ExampleApp",

@@ -62,6 +62,20 @@ custom x y = x <+> y
     }
   });
 
+  test("parses module header without exposing clause", () => {
+    const source = `module Vibe.Unit
+
+import Vibe.Basics exposing (..)
+
+implement Eq Unit where
+    (==) _ _ = True
+`;
+    const program = parse(source);
+    expect(program.module.name).toBe("Vibe.Unit");
+    expect(program.module.exposing).toBeNull();
+    expect(program.declarations.length).toBe(1);
+  });
+
   test("allows custom operators in expressions", () => {
     const program = parseTest("value = a <*> b");
     const decl = program.declarations[0] as ValueDeclaration;

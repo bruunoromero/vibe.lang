@@ -1,46 +1,53 @@
-module Vibe.Int exposing
-  ( add
-  , sub
-  , mul
-  , div
-  , mod
-  , negate
-  , toString
-  , eq
-  , neq
-  , lt
-  , gt
-  )
+module Vibe.Int
+
+import Vibe.Basics exposing (Num, Integral, Eq, Ord(..), Show)
+
+implement Eq Int where
+    (==) = _eq
+
+implement Ord Int where
+    (<) = _lt
+    (>) = _gt
+
+implement Num Int where
+    (+) = _add
+    (-) = _sub
+    (*) = _mul
+    negate = _negate
+
+implement Integral Int where
+    (//) = _div
+    (%) = _mod
+
+implement Show Int where
+    toString = _toString
 
 @external "@vibe/runtime" "intAdd"
-add: Int -> Int -> Int
+_add: Int -> Int -> Int
 
 @external "@vibe/runtime" "intSub"
-sub: Int -> Int -> Int
+_sub: Int -> Int -> Int
 
 @external "@vibe/runtime" "intMul"
-mul: Int -> Int -> Int
+_mul: Int -> Int -> Int
 
 @external "@vibe/runtime" "intDiv"
-div: Int -> Int -> Int
+_div: Int -> Int -> Int
 
 @external "@vibe/runtime" "intMod"
-mod: Int -> Int -> Int
-
-@external "@vibe/runtime" "numToString"
-toString: Int -> String
+_mod: Int -> Int -> Int
 
 @external "@vibe/runtime" "numEq"
-eq: Int -> Int -> Bool
-
-@external "@vibe/runtime" "numNeq"
-neq: Int -> Int -> Bool
+_eq: Int -> Int -> Bool
 
 @external "@vibe/runtime" "numLt"
-lt: Int -> Int -> Bool
+_lt: Int -> Int -> Bool
 
 @external "@vibe/runtime" "numGt"
-gt: Int -> Int -> Bool
+_gt: Int -> Int -> Bool
 
-negate: Int -> Int
-negate x = -x
+@external "@vibe/runtime" "numToString"
+_toString: Int -> String
+
+_negate: Int -> Int
+_negate x = -x

@@ -5,13 +5,17 @@
 
 (* A module declaration is REQUIRED as the first statement in every Vibe file.
    The module name must match the file's path relative to the src directory.
-   For example:
-   - File src/Main.vibe must have: module Main exposing (..)
-   - File src/Data/List.vibe must have: module Data.List exposing (..)
-   Missing or mismatched module declarations result in a compile error. *)
+   The "exposing" clause is optional; if omitted, the module exports nothing
+   (useful for modules that only provide protocol implementations).
+   
+   Examples:
+   - module Main exposing (..)
+   - module Data.List exposing (..)
+   - module Vibe.Unit        -- exports nothing
+*)
 Program = ModuleDeclaration, {ImportDeclaration}, {Declaration} ;
 
-ModuleDeclaration = "module", ModuleName, "exposing", Exposing ;
+ModuleDeclaration = "module", ModuleName, ["exposing", Exposing] ;
 
 ImportDeclaration = "import", ModuleName, ["as", UpperIdentifier], ["exposing", Exposing] ;
 

@@ -1135,10 +1135,7 @@ wrapped = Some 42`);
   });
 
   test("rejects undefined type in type alias", () => {
-    expectError(
-      `type alias MyPair = (Int, Foo)`,
-      "Type 'Foo' is not defined",
-    );
+    expectError(`type alias MyPair = (Int, Foo)`, "Type 'Foo' is not defined");
   });
 
   test("rejects undefined type variable in type alias", () => {
@@ -1297,6 +1294,34 @@ protocol MyProtocol a where
       `module TestModule exposing (undefined)
 foo x = x`,
       "Module exposes 'undefined' which is not defined",
+    );
+  });
+
+  test("rejects exporting Object.prototype properties as values", () => {
+    // Regression test: ensure we use Object.hasOwn to avoid prototype pollution
+    // Previously, trying to export 'toString' would succeed because it exists on Object.prototype
+    expectError(
+      `module TestModule exposing (toString)
+foo x = x`,
+      "Module exposes 'toString' which is not defined",
+    );
+  });
+
+  test("rejects exporting constructor property from Object.prototype", () => {
+    // Similar test for the 'constructor' property
+    expectError(
+      `module TestModule exposing (constructor)
+foo x = x`,
+      "Module exposes 'constructor' which is not defined",
+    );
+  });
+
+  test("rejects exporting hasOwnProperty from Object.prototype", () => {
+    // Test for hasOwnProperty as well
+    expectError(
+      `module TestModule exposing (hasOwnProperty)
+foo x = x`,
+      "Module exposes 'hasOwnProperty' which is not defined",
     );
   });
 
@@ -1535,7 +1560,7 @@ main = 1
           srcDir: "/project/src",
         },
       }),
-    ).toThrow("Expected: module Data.List exposing (..)");
+    ).toThrow("Expected: module Data.List [exposing (..)]");
   });
 
   test("error for mismatched module includes expected name", () => {
@@ -1552,7 +1577,7 @@ main = 1
           srcDir: "/project/src",
         },
       }),
-    ).toThrow("Expected: module Correct.Module exposing (..)");
+    ).toThrow("Expected: module Correct.Module [exposing (..)]");
   });
 
   test("allows any module name when fileContext is not provided (backward compatibility)", () => {
@@ -1662,5 +1687,133 @@ result = myAnd True False
     const result = analyze(program);
     expect(result.values.myAnd).toBeDefined();
     expect(result.values.result).toBeDefined();
+  });
+});
+
+describe("infix declarations", () => {
+  test("rejects fixity declaration without corresponding function definition", () => {
+    // Declare fixity for an undefined operator (<>) - should fail
+    // Note: we use analyzeNoPrelude which doesn't include OPERATOR_PREAMBLE
+    expect(() =>
+      analyzeNoPrelude(`
+infixl 6 <>
+
+value = 1
+`),
+    ).toThrow(
+      "Infix declaration for operator '<>' has no corresponding function definition",
+    );
+  });
+
+  test("rejects fixity declaration with only parenthesized export", () => {
+    // Exporting an operator without defining it should fail
+    // Use a unique operator ~> that isn't in OPERATOR_PREAMBLE
+    expect(() =>
+      analyzeNoPrelude(`
+module Test exposing ((~>))
+
+infixl 6 ~>
+
+value = 1
+`),
+    ).toThrow(
+      "Infix declaration for operator '~>' has no corresponding function definition",
+    );
+  });
+
+  test("allows fixity declaration with external function", () => {
+    // Operator is defined via external declaration - should succeed
+    const result = analyzeNoPrelude(`
+infixl 6 <+>
+
+@external "@vibe/runtime" "intAdd"
+(<+>) : Int -> Int -> Int
+`);
+    expect(result.operators.has("<+>")).toBe(true);
+    expect(result.values["<+>"]).toBeDefined();
+  });
+
+  test("allows fixity declaration with value declaration", () => {
+    // Operator is defined via value declaration - should succeed
+    const result = analyzeNoPrelude(`
+infixl 6 <#>
+
+(<#>) : Int -> Int -> Int
+(<#>) a b = a
+`);
+    expect(result.operators.has("<#>")).toBe(true);
+    expect(result.values["<#>"]).toBeDefined();
+  });
+
+  test("allows fixity declaration for protocol method", () => {
+    // Protocol method with alphanumeric name - should succeed
+    const result = analyzeNoPrelude(`
+protocol Add a where
+    (<+>) : a -> a -> a
+
+infixl 6 <+>
+`);
+    expect(result.operators.has("<+>")).toBe(true);
+    expect(result.protocols.Add).toBeDefined();
+    expect(result.protocols.Add!.methods.has("<+>")).toBe(true);
+  });
+
+  test("rejects multiple orphan fixity declarations", () => {
+    // Only the first undefined operator should error (semantic analysis stops)
+    expect(() =>
+      analyzeNoPrelude(`
+infixl 6 <>
+infixl 7 ><
+
+value = 1
+`),
+    ).toThrow(
+      "Infix declaration for operator '<>' has no corresponding function definition",
+    );
+  });
+
+  test("allows fixity declaration for operator-style protocol method", () => {
+    // Protocol methods with operator names should work
+    const result = analyzeNoPrelude(`
+protocol Addable a where
+    (<>) : a -> a -> a
+
+infixr 5 <>
+`);
+    expect(result.operators.has("<>")).toBe(true);
+    expect(result.protocols.Addable!.methods.has("<>")).toBe(true);
+  });
+
+  test("rejects fixity declaration for imported operator", () => {
+    // Fixity is intrinsic and cannot be redefined for imported operators
+    // We test this via the module resolution path
+
+    // First, create a "dependency" module that exports an operator <+>
+    const depSource = `
+module DepModule exposing ((<+>))
+
+infixl 6 <+>
+
+@external "@vibe/runtime" "intAdd"
+(<+>) : Int -> Int -> Int
+`;
+    const depResult = analyzeNoPrelude(depSource);
+
+    // Now try to import it and redefine its fixity
+    const mainSource = `
+module MainModule
+
+import DepModule exposing ((<+>))
+
+infixr 7 <+>
+`;
+    // This should fail because we're trying to redefine fixity of an imported operator
+    expect(() => {
+      analyze(parse(mainSource), {
+        dependencies: new Map([["DepModule", depResult]]),
+      });
+    }).toThrow(
+      /Cannot declare fixity for imported operator '<\+>' from module 'DepModule'/,
+    );
   });
 });

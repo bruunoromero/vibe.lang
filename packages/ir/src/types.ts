@@ -490,6 +490,13 @@ export type IRProgram = {
 
   /** Export information from the module's exposing clause */
   exports: ExportInfo;
+
+  /**
+   * Pre-analyzed dependency modules for import resolution.
+   * Maps module name to its semantic analysis result.
+   * Used by codegen to determine which imported names are protocols vs values.
+   */
+  dependencies?: Map<string, SemanticModule>;
 };
 
 // ============================================================================

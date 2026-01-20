@@ -1,42 +1,49 @@
-module Vibe.Float exposing
-  ( add
-  , sub
-  , mul
-  , div
-  , negate
-  , toString
-  , eq
-  , neq
-  , lt
-  , gt
-  )
+module Vibe.Float
+
+import Vibe.Basics exposing (Num, Fractional, Eq, Ord, Show)
+
+implement Eq Float where
+    (==) = _eq
+
+implement Ord Float where
+    (<) = _lt
+    (>) = _gt
+
+implement Num Float where
+    (+) = _add
+    (-) = _sub
+    (*) = _mul
+    negate = _negate
+
+implement Fractional Float where
+    (/) = _div
+
+implement Show Float where
+    toString = _toString
 
 @external "@vibe/runtime" "floatAdd"
-add: Float -> Float -> Float
+_add: Float -> Float -> Float
 
 @external "@vibe/runtime" "floatSub"
-sub: Float -> Float -> Float
+_sub: Float -> Float -> Float
 
 @external "@vibe/runtime" "floatMul"
-mul: Float -> Float -> Float
+_mul: Float -> Float -> Float
 
 @external "@vibe/runtime" "floatDiv"
-div: Float -> Float -> Float
+_div: Float -> Float -> Float
 
 @external "@vibe/runtime" "numToString"
-toString: Float -> String
+_toString: Float -> String
 
 @external "@vibe/runtime" "numEq"
-eq: Float -> Float -> Bool
-
-@external "@vibe/runtime" "numNeq"
-neq: Float -> Float -> Bool
+_eq: Float -> Float -> Bool
 
 @external "@vibe/runtime" "numLt"
-lt: Float -> Float -> Bool
+_lt: Float -> Float -> Bool
 
 @external "@vibe/runtime" "numGt"
-gt: Float -> Float -> Bool
+_gt: Float -> Float -> Bool
 
-negate: Float -> Float
-negate x = -x
+_negate: Float -> Float
+_negate x = -x

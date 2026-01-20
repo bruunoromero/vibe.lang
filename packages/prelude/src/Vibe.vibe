@@ -1,42 +1,39 @@
 module Vibe exposing 
-    ( (|>)
-    , (<|)
-    , (>>)
-    , (<<)
-    , (::)
-    , (++)
+    ( Eq(..)
+    , Ord(..)
+    , Show(..)
+    , Fractional(..)
+    , Integral(..)
+    , Appendable(..)
+    , Never
     , Maybe(..)
     , Result(..)
     , Pair(..)
     , Num(..)
-    , Fractional(..)
-    , Integral(..)
-    , Eq(..)
-    , Ord(..)
-    , Show(..)
+    , (|>)
+    , (<|)
+    , (>>)
+    , (<<)
+    , (::)
     , identity
     , always
     , flip
     , apply
-    , Never
+    , never
     , not
     )
 
-import Vibe.Int as Int
-import Vibe.Float as Float
-import Vibe.Bool as Bool exposing (not)
-import Vibe.List as List
-import Vibe.String as String
-import Vibe.Basics exposing (Eq(..))
+import Vibe.Basics exposing (..)
+import Vibe.Unit
+import Vibe.Int
+import Vibe.Float
+import Vibe.String
+import Vibe.Bool exposing (not)
+import Vibe.List exposing ((::))
 import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Result exposing (Result(..))
 import Vibe.Pair exposing (Pair(..))
 
-type Never
-
-never : Never -> a
-never nvr = 
-    never nvr
 
 {- =============================================================================
    Vibe - The Standard Library for Vibe
@@ -54,298 +51,3 @@ never nvr =
    - Function composition and application operators
    - Basic utility functions
 -}
-
--- =============================================================================
--- Operator Fixity Declarations
--- =============================================================================
--- These establish precedence and associativity for all standard operators.
--- Higher numbers bind tighter. Range: 1-9.
---
--- Their fixity (infixr 3 && and infixr 2 ||) is defined by the compiler.
-
--- Application operators (lowest precedence)
-infixl 1 |>
-infixr 1 <|
-
--- Comparison operators (== and /= are defined in Vibe.Basics)
-infix 4 <
-infix 4 <=
-infix 4 >
-infix 4 >=
-
--- List operators
-infixr 5 ::
-infixr 5 ++
-
--- Arithmetic operators
-infixl 6 +
-infixl 6 -
-infixl 7 *
-infixl 7 /
-infixl 7 //
-infixl 7 %
-infixr 8 ^
-
--- Function composition (highest precedence)
-infixr 9 <<
-infixr 9 >>
-
-
--- =============================================================================
--- Core ADTs
--- =============================================================================
-
--- =============================================================================
--- Numeric Protocol
--- =============================================================================
-
-{-| Protocol for numeric types supporting basic arithmetic operations.
-
-    Implementing types must provide:
-    - (+)  : Addition
-    - (-)  : Subtraction
-    - (*)  : Multiplication
-    - negate : Negation (unary minus)
--}
-protocol Num a where
-    (+) : a -> a -> a
-    (-) : a -> a -> a
-    (*) : a -> a -> a
-    negate : a -> a
-
-{-| Protocol for types supporting division operations. -}
-protocol Fractional a where
-    (/) : a -> a -> a
-
-
-{-| Protocol for types supporting integer division and modulo. -}
-protocol Integral a where
-    (//) : a -> a -> a
-    (%) : a -> a -> a
-
-
--- =============================================================================
--- Comparison Protocols
--- =============================================================================
-
--- NOTE: Eq protocol is defined in Vibe.Basics and imported above
-
-{-| Protocol for types supporting ordering comparison.
-
-    Implementing types must provide all comparison operators.
-    Typically, implementing `compare` is sufficient, but we expose
-    individual operators for flexibility.
--}
-protocol Eq a => Ord a where
-    (<) : a -> a -> Bool
-    (>) : a -> a -> Bool
-
-    (<=) : a -> a -> Bool
-    (<=) x y = x < y || x == y
-
-    (>=) : a -> a -> Bool
-    (>=) x y = x > y || x == y
-
-protocol Appendable a where
-    (++) : a -> a -> a
-
-
--- =============================================================================
--- Comparison Protocols
--- =============================================================================
-
-{-| Protocol for types that can be converted to a String representation.
-
-    Implementing types must provide:
-    - toString : Convert the value to a String
--}
-
-protocol Show a where
-    toString : a -> String
-
--- =============================================================================
--- Logical Operations
--- =============================================================================
-
--- NOTE: && and || are builtin short-circuit operators handled by the compiler.
--- They cannot be defined as regular functions because they require special
--- evaluation semantics (the second operand must not be evaluated if the
--- first operand determines the result).
---
--- The compiler automatically provides:
---   (&&) : Bool -> Bool -> Bool  -- infixr 3
---   (||) : Bool -> Bool -> Bool  -- infixr 2
---
--- Short-circuit semantics:
---   False && _  => False  (right side not evaluated)
---   True || _   => True   (right side not evaluated)
-
--- =============================================================================
--- Function Composition and Application
--- =============================================================================
-
-{-| Forward function application (pipe operator).
-    Passes the left argument to the function on the right.
-
-    x |> f  ==  f x
-
-    Example:
-        [1, 2, 3]
-            |> map ((+) 1)
-            |> filter isEven
--}
-@external "@vibe/runtime" "pipeForward"
-(|>) : a -> (a -> b) -> b
-
-
-{-| Backward function application.
-    Applies the function on the left to the argument on the right.
-
-    f <| x  ==  f x
-
-    Example:
-        println <| "Hello, " ++ name
--}
-@external "@vibe/runtime" "pipeBackward"
-(<|) : (a -> b) -> a -> b
-
-
-{-| Forward function composition.
-    Composes two functions, applying the first then the second.
-
-    (f >> g) x  ==  g (f x)
-
-    Example:
-        addOne >> double  -- first adds 1, then doubles
--}
-@external "@vibe/runtime" "composeForward"
-(>>) : (a -> b) -> (b -> c) -> (a -> c)
-
-
-{-| Backward function composition.
-    Composes two functions, applying the second then the first.
-
-    (g << f) x  ==  g (f x)
-
-    Example:
-        double << addOne  -- first adds 1, then doubles
--}
-@external "@vibe/runtime" "composeBackward"
-(<<) : (b -> c) -> (a -> b) -> (a -> c)
-
-
--- =============================================================================
--- List Operations
--- =============================================================================
-
-{-| Cons operator. Prepends an element to a list.
-
-    1 :: [2, 3]  ==  [1, 2, 3]
--}
-@external "@vibe/runtime" "listAppend"
-(::) : a -> List a -> List a
-
--- =============================================================================
--- Protocol Implementations
--- =============================================================================
-
-implement Num Int where
-    (+) = Int.add
-    (-) = Int.sub
-    (*) = Int.mul
-    negate = Int.negate
-
-implement Num Float where
-    (+) = Float.add
-    (-) = Float.sub
-    (*) = Float.mul
-    negate = Float.negate
-
-implement Fractional Float where
-    (/) = Float.div
-
-implement Integral Int where
-    (//) = Int.div
-    (%) = Int.mod
-
-implement Eq Int where
-    (==) = Int.eq
-
-implement Eq Float where
-    (==) = Float.eq
-
-implement Eq Bool where
-    (==) = Bool.eq
-
-implement Eq Unit where
-    (==) _ _ = True
-
-implement Ord Int where
-    (<) = Int.lt
-    (>) = Int.gt
-
-implement Ord Float where
-    (<) = Float.lt
-    (>) = Float.gt
-
-implement Eq a => Eq (List a) where
-    (==) = List.eq (==)
-
-implement Appendable (List a) where
-    (++) = List.append
-
-implement Appendable String where
-    (++) = String.append
-
-implement Show Unit where
-    toString _ = "()"
-
-implement Show String where
-    toString = identity
-
-implement Show Int where
-    toString = Int.toString
-
-implement Show Float where
-    toString = Float.toString
-
-implement Show Bool where
-    toString = Bool.toString
-
-implement Show a => Show (List a) where
-    toString = List.toString toString
-
--- =============================================================================
--- Utility Functions
--- =============================================================================
-
-{-| Identity function. Returns its argument unchanged.
-
-    identity x  ==  x
--}
-identity : a -> a
-identity x = x
-
-
-{-| Constant function. Always returns the first argument.
-
-    always x y  ==  x
--}
-always : a -> b -> a
-always x _ = x
-
-
-{-| Flip the arguments of a binary function.
-
-    flip f x y  ==  f y x
--}
-flip : (a -> b -> c) -> b -> a -> c
-flip f x y = f y x
-
-
-{-| Function application. Useful for avoiding parentheses.
-
-    apply f x  ==  f x
--}
-apply : (a -> b) -> a -> b
-apply f x = f x

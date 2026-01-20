@@ -1,0 +1,9 @@
+module Vibe.Unit
+
+import Vibe.Basics exposing (Show, Eq)
+
+implement Eq Unit where
+    (==) _ _ = True
+
+implement Show Unit where
+    toString _ = "()"

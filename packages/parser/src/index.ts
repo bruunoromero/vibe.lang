@@ -184,7 +184,7 @@ class Parser {
       const currentToken = this.current();
       throw new ParseError(
         `Every Vibe file must begin with a module declaration.\n` +
-          `Expected: module <ModuleName> exposing (..)`,
+          `Expected: module <ModuleName> [exposing (..)]`,
         currentToken.span,
       );
     }
@@ -218,14 +218,18 @@ class Parser {
     // Parse module name (e.g., "Main" or "Data.List")
     const { name, end } = this.parseModuleName();
 
-    // Consume "exposing" keyword
-    this.expectKeyword("exposing");
-
-    // Parse exposing clause ((..) or explicit list)
-    const exposing = this.parseExposing();
+    // Parse optional "exposing" clause
+    let exposing: Exposing | null = null;
+    if (this.peekKeyword("exposing")) {
+      this.expectKeyword("exposing");
+      exposing = this.parseExposing();
+    }
 
     // Build AST node with full span
-    const span: Span = { start: moduleToken.span.start, end };
+    const span: Span = {
+      start: moduleToken.span.start,
+      end: exposing ? exposing.span.end : end,
+    };
     return { name, exposing, span };
   }
 

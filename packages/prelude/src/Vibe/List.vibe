@@ -1,46 +1,62 @@
 module Vibe.List exposing
-  ( cons
-  , append
-  , foldl
-  , toString
-  , eq
+  ( foldl
+  , map
+  , filter
+  , (::)
   )
 
 import Vibe.String as String
+import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..))
+
+infixr 5 ::
+
+implement Eq a => Eq (List a) where
+    (==) xs ys = 
+        case (xs, ys) of
+            ([], []) -> True
+            (x :: xtail, y :: ytail) ->
+                x == y && xtail == ytail
+            _ -> False
+
+implement Show a => Show (List a) where
+    toString lst =
+        "[" ++ (String.join ", " (map toString lst)) ++ "]"
+
+implement Appendable (List a) where
+    (++) = _append
 
 {-| Constructs a new list by prepending an element to the front of an existing list.
 
     1 :: [2, 3]  ==  [1, 2, 3]
 -}
 @external "@vibe/runtime" "listCons"
-cons: a -> List a -> List a
+(::) : a -> List a -> List a
 
-append : List a -> List a -> List a
-append xs ys =
-    case xs of
-        [] -> ys
-        x :: xsTail -> cons x (append xsTail ys)
+{-| Appends two lists together.
 
+    [1, 2] ++ [3, 4]  ==  [1, 2, 3, 4]
+-}
+@external "@vibe/runtime" "listAppend"
+_append : List a -> List a -> List a
+
+
+{-| Left fold over a list.
+
+    foldl (+) 0 [1, 2, 3, 4]  ==  10
+-}
+@external "@vibe/runtime" "listFoldl"
 foldl : (b -> a -> b) -> b -> List a -> b
-foldl f acc lst =
-    case lst of
-        [] -> acc
-        x :: xs -> foldl f (f acc x) xs
 
-eq : (a -> a -> Bool) -> List a -> List a -> Bool
-eq elementEq xs ys =
-    case (xs, ys) of
-        ([], []) -> True
-        (x :: xtail, y :: ytail) ->
-            elementEq x y && eq elementEq xtail ytail
-        _ -> False
+{-| Maps a function over a list.
 
+    map (\x -> x * 2) [1, 2, 3]  ==  [2, 4, 6]
+-}
+@external "@vibe/runtime" "listMap"
 map : (a -> b) -> List a -> List b
-map f lst =
-    case lst of
-        [] -> []
-        x :: xs -> cons (f x) (map f xs)
 
-toString : (a -> String) -> List a -> String
-toString elementToString lst =
-       String.append "[" (String.append (String.join ", " (map elementToString lst)) "]")
+{-| Filters a list based on a predicate function.
+
+    filter (\x -> x > 2) [1, 2, 3, 4]  ==  [3, 4]
+-}
+@external "@vibe/runtime" "listFilter"
+filter : (a -> Bool) -> List a -> List a

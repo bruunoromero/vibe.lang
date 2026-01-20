@@ -7,5 +7,4 @@ type A = A
 showA : A -> String
 showA _ = "This is an A"
 
-
 main = A == A

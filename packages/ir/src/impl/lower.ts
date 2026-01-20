@@ -525,20 +525,29 @@ export function lower(
   // Merge synthetic values into main values for dependency analysis
   // This ensures that $impl_* and $default_* are properly ordered
   const mergedValues = { ...values, ...syntheticValues };
-  
+
   // Create instance dictionary names for dependency analysis/ordering
   const instanceNames: string[] = [];
   for (const inst of instances) {
-     if (inst.typeArgs[0]) {
-       const key = formatTypeKey(inst.typeArgs[0]);
-       instanceNames.push(`$dict_${inst.protocolName}_${key}`);
-     }
+    if (inst.typeArgs[0]) {
+      const key = formatTypeKey(inst.typeArgs[0]);
+      instanceNames.push(`$dict_${inst.protocolName}_${key}`);
+    }
   }
 
-  const mergedOrder = [...declarationOrder, ...syntheticOrder, ...instanceNames];
+  const mergedOrder = [
+    ...declarationOrder,
+    ...syntheticOrder,
+    ...instanceNames,
+  ];
 
   // Build dependency graph and find SCCs with merged values
-  const depGraph = buildDependencyGraph(mergedValues, instances, protocols, constructors);
+  const depGraph = buildDependencyGraph(
+    mergedValues,
+    instances,
+    protocols,
+    constructors,
+  );
   const sccs = findSCCs(depGraph, mergedOrder);
 
   // Validate if requested
@@ -600,5 +609,6 @@ export function lower(
     sourceModule: semantics,
     sourceProgram: program,
     exports: semantics.exports,
+    dependencies,
   };
 }

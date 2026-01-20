@@ -17,6 +17,7 @@ import Vibe.Basics exposing (Eq(..))
                 x :: _ -> Just x
                 [] -> Nothing
 -}
+
 type Maybe a
     = Just a
     | Nothing

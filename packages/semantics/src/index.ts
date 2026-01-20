@@ -786,6 +786,8 @@ function importExportSpec(
       const opInfo = depModule.operators.get(op);
       if (opInfo) {
         operators.set(op, opInfo);
+        // Track as imported so we can reject fixity redefinitions
+        importedValues.set(op, imp.moduleName);
       }
       break;
     }
@@ -969,7 +971,7 @@ export function analyze(
     if (declaredModuleName !== expectedModuleName) {
       throw new SemanticError(
         `Module name '${declaredModuleName}' does not match file path.\n` +
-          `Expected: module ${expectedModuleName} exposing (..)\n` +
+          `Expected: module ${expectedModuleName} [exposing (..)]\n` +
           `File path: ${filePath}`,
         program.module.span,
       );
@@ -1010,6 +1012,11 @@ export function analyze(
   // These track custom operator precedence and associativity declarations.
   const operators: OperatorRegistry = new Map();
   const infixDeclarations: InfixDeclaration[] = [];
+
+  // ===== Local Protocol Methods =====
+  // Track protocol methods defined in THIS module (for fixity validation).
+  // Fixity can only be declared for operators defined locally, not imported ones.
+  const localProtocolMethods = new Set<string>();
 
   // ===== Imported Values Registry =====
   // Track values imported from other modules for re-export support.
@@ -1064,26 +1071,22 @@ export function analyze(
       continue;
     }
 
-    // IMPORTANT: Always import protocols and instances from dependencies
-    // Protocols and instances are "global" - they don't respect exposing clauses
-    // This matches Haskell's behavior where type class instances are always visible
-    for (const [name, protocol] of Object.entries(depModule.protocols) as [
-      string,
-      ProtocolInfo,
-    ][]) {
-      protocols[name] = protocol;
+    // NOTE: Protocols are only imported when explicitly requested:
+    // - `exposing (..)` imports all exported protocols
+    // - `exposing (ProtocolName(..))` imports that specific protocol
+    // - `import Dep` (no exposing clause) does NOT import any protocols
+    // This ensures that `import Vibe.Basics exposing (Num)` does NOT bring
+    // `Show` into scope, so `implement Show Int` will fail if Show is not imported.
+    // Protocols will be imported below in the exposing clause handling.
 
-      // Also add protocol methods to global scope
-      // Protocol methods are polymorphic functions with constraints
-      const methodSchemes = addProtocolMethodsToScope(protocol, globalScope);
-      // Store in typeSchemes for LSP hover/completion
-      for (const [methodName, scheme] of methodSchemes) {
-        typeSchemes[methodName] = scheme;
-      }
-    }
-
+    // IMPORTANT: Instances are always visible (Haskell's orphan instance semantics).
+    // However, we should only import instances that are DEFINED by the dependency module,
+    // not instances that the dependency merely imported from elsewhere.
     for (const instance of depModule.instances) {
-      instances.push(instance);
+      const isDefinedByDep = instance.moduleName === depModule.module.name;
+      if (isDefinedByDep) {
+        instances.push(instance);
+      }
     }
 
     // Handle import alias (e.g., `import Html as H`)
@@ -1279,7 +1282,12 @@ export function analyze(
   // Note: This pass validates declarations but the parser pre-processing handles actual precedence.
   for (const decl of program.declarations) {
     if (decl.kind === "InfixDeclaration") {
-      registerInfixDeclaration(decl, operators, infixDeclarations);
+      registerInfixDeclaration(
+        decl,
+        operators,
+        infixDeclarations,
+        importedValues,
+      );
       continue;
     }
   }
@@ -1347,10 +1355,13 @@ export function analyze(
         dependencies,
         records,
       );
+      // Track methods from locally-defined protocols for fixity validation
+      for (const method of decl.methods) {
+        localProtocolMethods.add(method.name);
+      }
       continue;
     }
   }
-
 
   // ===== PASS 1.5: Register implementation declarations =====
   // Implementations are registered after protocols but before value inference
@@ -1411,6 +1422,16 @@ export function analyze(
       annotations[decl.name] = decl;
     }
   }
+
+  // ===== PASS 2a: Validate infix declarations have definitions =====
+  // Each infix declaration must have a corresponding LOCAL function definition.
+  // Fixity is intrinsic to operators and cannot be redefined for imported operators.
+  // Note: Imported operator validation is done earlier in registerInfixDeclaration.
+  validateInfixDeclarationsHaveDefinitions(
+    infixDeclarations,
+    values,
+    localProtocolMethods,
+  );
 
   for (const [name, ann] of Object.entries(annotations)) {
     // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
@@ -2572,14 +2593,28 @@ function registerTypeAlias(
 
 /**
  * Register an infix declaration in the operator registry.
- * Validates that there are no duplicate declarations for the same operator.
+ * Validates that:
+ * 1. There are no duplicate declarations for the same operator
+ * 2. The operator is not already imported (fixity is intrinsic and cannot be redefined)
  */
 function registerInfixDeclaration(
   decl: InfixDeclaration,
   operators: OperatorRegistry,
   infixDeclarations: InfixDeclaration[],
+  importedValues: Map<string, string>,
 ) {
-  // Check for duplicate operator declaration
+  // Check if operator is imported - if so, reject the fixity declaration
+  // because fixity is intrinsic and travels with the operator
+  if (importedValues.has(decl.operator)) {
+    const sourceModule = importedValues.get(decl.operator)!;
+    throw new SemanticError(
+      `Cannot declare fixity for imported operator '${decl.operator}' from module '${sourceModule}'. ` +
+        `Fixity is an intrinsic property of the operator and cannot be redefined.`,
+      decl.span,
+    );
+  }
+
+  // Check for duplicate local operator declaration
   if (operators.has(decl.operator)) {
     throw new SemanticError(
       `Duplicate infix declaration for operator '${decl.operator}'`,
@@ -2611,6 +2646,47 @@ function registerInfixDeclaration(
 
   // Store the declaration for later reference
   infixDeclarations.push(decl);
+}
+
+/**
+ * Validates that each infix declaration has a corresponding LOCAL function definition.
+ *
+ * Fixity is an intrinsic property of an operator - it travels with the operator wherever
+ * it goes. You cannot separate an operator from its fixity. This means:
+ *
+ * 1. An infix declaration must define a NEW operator in the current module
+ * 2. The operator must have a local definition (not imported)
+ * 3. You cannot redefine the fixity of an imported operator
+ *
+ * Valid local definitions include:
+ * - Local value declarations (e.g., `(+) x y = ...`)
+ * - External declarations (e.g., `@external ... (+) : ...`)
+ * - Protocol methods defined in THIS module
+ *
+ * Note: Imported operator check is done earlier in registerInfixDeclaration.
+ */
+function validateInfixDeclarationsHaveDefinitions(
+  infixDeclarations: InfixDeclaration[],
+  values: Record<string, ValueInfo>,
+  localProtocolMethods: Set<string>,
+): void {
+  for (const decl of infixDeclarations) {
+    const op = decl.operator;
+
+    // Check if operator is defined locally:
+    // 1. As a local value/function
+    const hasLocalDefinition = Object.hasOwn(values, op);
+    // 2. As a local protocol method
+    const isLocalProtocolMethod = localProtocolMethods.has(op);
+
+    if (!hasLocalDefinition && !isLocalProtocolMethod) {
+      throw new SemanticError(
+        `Infix declaration for operator '${op}' has no corresponding function definition. ` +
+          `Define the operator in this module or remove the fixity declaration.`,
+        decl.span,
+      );
+    }
+  }
 }
 
 /**
@@ -2904,12 +2980,12 @@ function registerProtocol(
 
 /**
  * Check if a type expression can implement a protocol.
- * 
+ *
  * This function determines whether a type can satisfy a protocol constraint either through:
  * 1. An explicit instance implementation
  * 2. Auto-derivation (currently only supported for standard Eq from Vibe/Vibe.Basics)
  * 3. Protocol with all default method implementations
- * 
+ *
  * @param type - The type expression to check
  * @param protocolName - The name of the protocol to check
  * @param typeParams - Set of type parameters in scope (these are always valid)
@@ -2933,8 +3009,13 @@ function canTypeImplementProtocol(
   checkedTypes.add(typeKey);
 
   // Helper to check if a type matches an instance's type argument
-  const typeMatchesInstanceArg = (instanceArg: Type, typeName: string): boolean => {
-    return instanceArg.kind === "con" && (instanceArg as TypeCon).name === typeName;
+  const typeMatchesInstanceArg = (
+    instanceArg: Type,
+    typeName: string,
+  ): boolean => {
+    return (
+      instanceArg.kind === "con" && (instanceArg as TypeCon).name === typeName
+    );
   };
 
   switch (type.kind) {
@@ -2989,54 +3070,25 @@ function canTypeImplementProtocol(
       }
 
       // Check if all methods have default implementations
-      const allMethodsHaveDefaults = Array.from(protocol.methods.values()).every(
-        (method) => method.defaultImpl !== undefined,
-      );
+      const allMethodsHaveDefaults = Array.from(
+        protocol.methods.values(),
+      ).every((method) => method.defaultImpl !== undefined);
 
       // If all methods have defaults, any type can satisfy the protocol
       if (allMethodsHaveDefaults) {
         return true;
       }
 
-        // Check if type is structural and all fields can implement Eq
-        // Check local type declarations
-        const localDecl = declarations.find(
-          (d) =>
-            (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
-            d.name === type.name,
-        );
+      // Check if type is structural and all fields can implement Eq
+      // Check local type declarations
+      const localDecl = declarations.find(
+        (d) =>
+          (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
+          d.name === type.name,
+      );
 
-        if (localDecl && localDecl.kind === "TypeDeclaration") {
-          // Local type will get auto-Eq, check its type args
-          return type.args.every((arg) =>
-            canTypeImplementProtocol(
-              arg,
-              protocolName,
-              typeParams,
-              declarations,
-              instances,
-              protocols,
-              checkedTypes,
-            ),
-          );
-        }
-
-        // For type aliases, check type args
-        if (localDecl && localDecl.kind === "TypeAliasDeclaration") {
-          return type.args.every((arg) =>
-            canTypeImplementProtocol(
-              arg,
-              protocolName,
-              typeParams,
-              declarations,
-              instances,
-              protocols,
-              checkedTypes,
-            ),
-          );
-        }
-
-        // Unknown type - check type args only
+      if (localDecl && localDecl.kind === "TypeDeclaration") {
+        // Local type will get auto-Eq, check its type args
         return type.args.every((arg) =>
           canTypeImplementProtocol(
             arg,
@@ -3049,6 +3101,35 @@ function canTypeImplementProtocol(
           ),
         );
       }
+
+      // For type aliases, check type args
+      if (localDecl && localDecl.kind === "TypeAliasDeclaration") {
+        return type.args.every((arg) =>
+          canTypeImplementProtocol(
+            arg,
+            protocolName,
+            typeParams,
+            declarations,
+            instances,
+            protocols,
+            checkedTypes,
+          ),
+        );
+      }
+
+      // Unknown type - check type args only
+      return type.args.every((arg) =>
+        canTypeImplementProtocol(
+          arg,
+          protocolName,
+          typeParams,
+          declarations,
+          instances,
+          protocols,
+          checkedTypes,
+        ),
+      );
+    }
 
     case "TupleType":
       // Tuples can implement protocols if all elements can
@@ -3110,7 +3191,14 @@ function canDeclImplementProtocol(
   if (decl.recordFields) {
     for (const field of decl.recordFields) {
       if (
-        !canTypeImplementProtocol(field.type, protocolName, typeParams, declarations, instances, protocols)
+        !canTypeImplementProtocol(
+          field.type,
+          protocolName,
+          typeParams,
+          declarations,
+          instances,
+          protocols,
+        )
       ) {
         return false;
       }
@@ -3120,7 +3208,16 @@ function canDeclImplementProtocol(
   if (decl.constructors) {
     for (const ctor of decl.constructors) {
       for (const arg of ctor.args) {
-        if (!canTypeImplementProtocol(arg, protocolName, typeParams, declarations, instances, protocols)) {
+        if (
+          !canTypeImplementProtocol(
+            arg,
+            protocolName,
+            typeParams,
+            declarations,
+            instances,
+            protocols,
+          )
+        ) {
           return false;
         }
       }
@@ -3152,14 +3249,15 @@ function autoImplementEqForType(
   // Only auto-implement for the Vibe/Vibe.Basics Eq protocol
   // This prevents auto-generation for test fixtures or custom Eq protocols
   const isVibeEq =
-    eqProtocol.moduleName === "Vibe" ||
-    eqProtocol.moduleName === "Vibe.Basics";
+    eqProtocol.moduleName === "Vibe" || eqProtocol.moduleName === "Vibe.Basics";
   if (!isVibeEq) {
     return undefined;
   }
 
   // Check if type can implement Eq
-  if (!canDeclImplementProtocol(decl, "Eq", declarations, instances, protocols)) {
+  if (
+    !canDeclImplementProtocol(decl, "Eq", declarations, instances, protocols)
+  ) {
     return undefined;
   }
 
@@ -3523,7 +3621,6 @@ function generateEqImplementation(
   };
 }
 
-
 /**
  * Register an implementation declaration in the instance registry.
  */
@@ -3565,6 +3662,13 @@ function registerImplementation(
   // Convert constraints
   const constraints: Constraint[] = [];
   for (const astConstraint of decl.constraints) {
+    // Validate that the constraint protocol exists
+    if (!protocols[astConstraint.protocolName]) {
+      throw new SemanticError(
+        `Unknown protocol '${astConstraint.protocolName}' in constraint`,
+        decl.span,
+      );
+    }
     const constraintTypeArgs: Type[] = [];
     for (const typeArg of astConstraint.typeArgs) {
       constraintTypeArgs.push(
@@ -5537,7 +5641,8 @@ function computeModuleExports(
         const name = spec.name;
 
         // Check if it's a value/function defined locally
-        if (values[name]) {
+        // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+        if (Object.hasOwn(values, name)) {
           exports.values.add(name);
           continue;
         }
@@ -5549,24 +5654,25 @@ function computeModuleExports(
         }
 
         // Check if it's a type (ADT, alias, or opaque) exported without constructors
-        if (adts[name]) {
+        // Use Object.hasOwn to avoid prototype pollution
+        if (Object.hasOwn(adts, name)) {
           exports.types.set(name, {
             allConstructors: false,
             constructors: new Set(),
           });
           continue;
         }
-        if (typeAliases[name]) {
+        if (Object.hasOwn(typeAliases, name)) {
           exports.types.set(name, { allConstructors: false });
           continue;
         }
-        if (opaqueTypes[name]) {
+        if (Object.hasOwn(opaqueTypes, name)) {
           exports.types.set(name, { allConstructors: false });
           continue;
         }
 
         // Check if it's a protocol exported without methods
-        if (protocols[name]) {
+        if (Object.hasOwn(protocols, name)) {
           exports.protocols.set(name, {
             allMethods: false,
             methods: new Set(),
@@ -5584,7 +5690,12 @@ function computeModuleExports(
         const op = spec.operator;
 
         // Check if operator is defined (either as a value or in operator registry)
-        if (!values[op] && !operators.has(op) && !importedValues.has(op)) {
+        // Use Object.hasOwn to avoid prototype pollution
+        if (
+          !Object.hasOwn(values, op) &&
+          !operators.has(op) &&
+          !importedValues.has(op)
+        ) {
           throw new SemanticError(
             `Module exposes operator '${op}' which is not defined`,
             spec.span,
@@ -5593,7 +5704,7 @@ function computeModuleExports(
 
         exports.operators.add(op);
         // Also add to values since operators are functions
-        if (values[op]) {
+        if (Object.hasOwn(values, op)) {
           exports.values.add(op);
         } else if (importedValues.has(op)) {
           exports.reExportedValues.set(op, importedValues.get(op)!);
@@ -5605,7 +5716,8 @@ function computeModuleExports(
         const name = spec.name;
 
         // Check if it's an ADT
-        if (adts[name]) {
+        // Use Object.hasOwn to avoid prototype pollution
+        if (Object.hasOwn(adts, name)) {
           const adt = adts[name]!;
           exports.types.set(name, {
             allConstructors: true,
@@ -5615,7 +5727,7 @@ function computeModuleExports(
         }
 
         // Check if it's a protocol
-        if (protocols[name]) {
+        if (Object.hasOwn(protocols, name)) {
           const protocol = protocols[name]!;
           exports.protocols.set(name, {
             allMethods: true,
@@ -5627,13 +5739,13 @@ function computeModuleExports(
         }
 
         // Type alias or opaque type with (..) is an error
-        if (typeAliases[name]) {
+        if (Object.hasOwn(typeAliases, name)) {
           throw new SemanticError(
             `Type alias '${name}' cannot use (..) syntax - type aliases have no constructors`,
             spec.span,
           );
         }
-        if (opaqueTypes[name]) {
+        if (Object.hasOwn(opaqueTypes, name)) {
           throw new SemanticError(
             `Opaque type '${name}' cannot use (..) syntax - opaque types have no constructors`,
             spec.span,
@@ -5651,7 +5763,8 @@ function computeModuleExports(
         const members = spec.members;
 
         // Check if it's an ADT with specific constructors
-        if (adts[name]) {
+        // Use Object.hasOwn to avoid prototype pollution
+        if (Object.hasOwn(adts, name)) {
           const adt = adts[name]!;
           const exportedCtors = new Set<string>();
 
@@ -5673,7 +5786,7 @@ function computeModuleExports(
         }
 
         // Check if it's a protocol with specific methods
-        if (protocols[name]) {
+        if (Object.hasOwn(protocols, name)) {
           const protocol = protocols[name]!;
           const exportedMethods = new Set<string>();
 

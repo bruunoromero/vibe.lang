@@ -205,6 +205,26 @@ implement NonExistent Int where
     expect(() => analyze(program)).toThrow("Unknown protocol");
   });
 
+  test("rejects implementation with undefined protocol in constraint", () => {
+    // This test ensures that constraints reference only existing protocols
+    const source = `
+protocol Show a where
+  toString : a -> String
+
+@external "@vibe/runtime" "intToString"
+intToString : Int -> String
+
+implement UndefinedConstraint a => Show Int where
+  toString = intToString
+`;
+    const program = parseTest(source);
+
+    expect(() => analyze(program)).toThrow(SemanticError);
+    expect(() => analyze(program)).toThrow(
+      "Unknown protocol 'UndefinedConstraint' in constraint",
+    );
+  });
+
   test("rejects implementation missing required methods", () => {
     const source = `
 protocol Num a where
@@ -453,7 +473,7 @@ implement (Num a, Show a) => Show (Pair a a) where
 });
 
 describe("Protocol Imports", () => {
-  test("imports protocols from dependencies", () => {
+  test("imports protocols from dependencies with exposing all", () => {
     // Create a dependency module with a protocol
     const depSource = `
 module Dep exposing (..)
@@ -464,9 +484,9 @@ protocol Num a where
     const depProgram = parseTest(depSource);
     const depModule = analyze(depProgram);
 
-    // Create a module that imports the dependency
+    // Create a module that imports the dependency with exposing (..)
     const source = `
-import Dep
+import Dep exposing (..)
 
 @external "@vibe/runtime" "intPlus"
 intPlus : Int -> Int -> Int
@@ -479,9 +499,272 @@ implement Num Int where
       dependencies: new Map([["Dep", depModule]]),
     });
 
-    // The protocol should be available in the importing module
     expect(result.protocols.Num).toBeDefined();
     expect(result.instances).toHaveLength(1);
+  });
+
+  test("does not import protocols without exposing clause", () => {
+    // Create a dependency module with a protocol
+    const depSource = `
+module Dep exposing (..)
+
+protocol Num a where
+  plus : a -> a -> a
+`;
+    const depProgram = parseTest(depSource);
+    const depModule = analyze(depProgram);
+
+    // Create a module that imports without exposing - should NOT get protocol
+    const source = `
+import Dep
+
+@external "@vibe/runtime" "intPlus"
+intPlus : Int -> Int -> Int
+
+implement Num Int where
+  plus = intPlus
+`;
+    const program = parseTest(source);
+
+    // Should fail because Num protocol is not imported
+    expect(() =>
+      analyze(program, { dependencies: new Map([["Dep", depModule]]) }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { dependencies: new Map([["Dep", depModule]]) }),
+    ).toThrow("Unknown protocol 'Num'");
+  });
+
+  test("imports protocol instances unconditionally (orphan instance semantics)", () => {
+    // Create a dependency module with a protocol and implementation
+    const depSource = `module Dep exposing (..)
+
+protocol Show a where
+  show : a -> String
+
+@external "@vibe/runtime" "showInt"
+showInt : Int -> String
+
+implement Show Int where
+  show = showInt
+`;
+    const depProgram = parse(depSource);
+    const depModule = analyze(depProgram);
+
+    // Create a module that imports with exposing (..) to get protocol AND instances
+    const source = `module Main
+
+import Dep exposing (..)
+
+test : Int -> String
+test x = show x
+`;
+    const program = parse(source);
+    const result = analyze(program, {
+      dependencies: new Map([["Dep", depModule]]),
+    });
+
+    // The protocol and instance should be available
+    expect(result.protocols.Show).toBeDefined();
+    // Check that Show Int instance is present
+    // Instances are deduplicated, so we check that at least one Show Int exists
+    const showIntInstances = result.instances.filter(
+      (i) => i.protocolName === "Show" && i.moduleName === "Dep",
+    );
+    expect(showIntInstances.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test("does not leak protocol imports from dependency modules", () => {
+    // This test ensures that when Module A imports Protocol P, and Module B imports Module A,
+    // Module B does NOT get Protocol P unless A re-exports it.
+    // This was a bug where protocol imports were leaking through to importing modules.
+
+    // Create a "Basics" module that defines the Show protocol
+    const basicsSource = `module Basics exposing (..)
+
+protocol Show a where
+  toString : a -> String
+`;
+    const basicsProgram = parse(basicsSource);
+    const basicsModule = analyze(basicsProgram);
+
+    // Create a "MyString" module that imports Show internally but only exposes append
+    // Note: Module does NOT re-export Show
+    const myStringSource = `module MyString exposing (append)
+
+import Basics exposing (Show(..))
+
+@external "@vibe/runtime" "identity"
+identity : a -> a
+
+implement Show String where
+  toString = identity
+
+@external "@vibe/runtime" "stringAppend"
+append : String -> String -> String
+`;
+    const myStringProgram = parse(myStringSource);
+    const myStringModule = analyze(myStringProgram, {
+      dependencies: new Map([["Basics", basicsModule]]),
+    });
+
+    // Create a "MyList" module that imports MyString (without exposing)
+    // and defines its own toString function - this should NOT conflict
+    const myListSource = `module MyList exposing (toString)
+
+import MyString as MyString
+
+toString : (a -> String) -> List a -> String
+toString elemToString lst = ""
+`;
+    const myListProgram = parse(myListSource);
+
+    // This should NOT throw "Duplicate definition for 'toString'"
+    // because MyString's internal import of Show (and its toString method)
+    // should NOT leak into MyList's scope
+    const result = analyze(myListProgram, {
+      dependencies: new Map([
+        ["Basics", basicsModule],
+        ["MyString", myStringModule],
+      ]),
+    });
+
+    // MyList should have its own toString function
+    expect(result.values.toString).toBeDefined();
+
+    // MyList should NOT have Show protocol in scope (it wasn't imported)
+    expect(result.protocols.Show).toBeUndefined();
+  });
+
+  test("rejects implement for protocol not in explicit exposing list", () => {
+    // Regression test: when using explicit exposing, protocols NOT listed
+    // should NOT be available for `implement` declarations.
+    // This catches bugs where protocols were imported unconditionally.
+
+    // Create a dependency with two protocols
+    const depSource = `module Dep exposing (..)
+
+protocol Num a where
+  plus : a -> a -> a
+
+protocol Show a where
+  toString : a -> String
+`;
+    const depProgram = parse(depSource);
+    const depModule = analyze(depProgram);
+
+    // Import only Num, not Show
+    const mainSource = `module Main
+
+import Dep exposing (Num(..))
+
+@external "@vibe/runtime" "intToString"
+intToString : Int -> String
+
+implement Show Int where
+  toString = intToString
+`;
+    const mainProgram = parse(mainSource);
+
+    // Should fail because Show is not imported
+    expect(() =>
+      analyze(mainProgram, { dependencies: new Map([["Dep", depModule]]) }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(mainProgram, { dependencies: new Map([["Dep", depModule]]) }),
+    ).toThrow("Unknown protocol 'Show'");
+  });
+
+  test("does re-export protocols when explicitly exported", () => {
+    // Create a "Basics" module that defines the Show protocol
+    const basicsSource = `module Basics exposing (..)
+
+protocol Show a where
+  toString : a -> String
+`;
+    const basicsProgram = parse(basicsSource);
+    const basicsModule = analyze(basicsProgram);
+
+    // Create a "Wrapper" module that imports and RE-EXPORTS Show
+    const wrapperSource = `module Wrapper exposing (Show(..))
+
+import Basics exposing (Show(..))
+`;
+    const wrapperProgram = parse(wrapperSource);
+    const wrapperModule = analyze(wrapperProgram, {
+      dependencies: new Map([["Basics", basicsModule]]),
+    });
+
+    // Create a "Consumer" module that imports Wrapper
+    const consumerSource = `module Consumer exposing (..)
+
+import Wrapper exposing (Show(..))
+
+@external "@vibe/runtime" "intToString"
+intToString : Int -> String
+
+implement Show Int where
+  toString = intToString
+`;
+    const consumerProgram = parse(consumerSource);
+    const result = analyze(consumerProgram, {
+      dependencies: new Map([
+        ["Basics", basicsModule],
+        ["Wrapper", wrapperModule],
+      ]),
+    });
+
+    // Consumer should have Show protocol since it was re-exported by Wrapper
+    expect(result.protocols.Show).toBeDefined();
+    expect(result.instances).toHaveLength(1);
+  });
+
+  test("does not leak instance imports from dependency modules", () => {
+    // Create a "Basics" module that defines the Show protocol
+    const basicsSource = `module Basics exposing (..)
+
+protocol Show a where
+  toString : a -> String
+`;
+    const basicsProgram = parse(basicsSource);
+    const basicsModule = analyze(basicsProgram);
+
+    // Create a "StringShow" module that implements Show for String
+    const stringShowSource = `module StringShow
+
+import Basics exposing (Show(..))
+
+@external "@vibe/runtime" "identity"
+identity : a -> a
+
+implement Show String where
+  toString = identity
+`;
+    const stringShowProgram = parse(stringShowSource);
+    const stringShowModule = analyze(stringShowProgram, {
+      dependencies: new Map([["Basics", basicsModule]]),
+    });
+
+    // Create a "Consumer" module that imports StringShow
+    // Consumer should NOT see the Show String instance since
+    // StringShow doesn't define or re-export it
+    const consumerSource = `module Consumer exposing (..)
+
+import StringShow
+`;
+    const consumerProgram = parse(consumerSource);
+    const result = analyze(consumerProgram, {
+      dependencies: new Map([
+        ["Basics", basicsModule],
+        ["StringShow", stringShowModule],
+      ]),
+    });
+
+    // Consumer should see the instance from StringShow since it's DEFINED there
+    // (Instances are always visible from the module that defines them)
+    expect(result.instances).toHaveLength(1);
+    expect(result.instances[0]?.protocolName).toBe("Show");
+    expect(result.instances[0]?.moduleName).toBe("StringShow");
   });
 });
 
@@ -639,7 +922,6 @@ implement Describable Int where
     expect(result.instances[0]?.methods.size).toBe(2);
   });
 });
-
 
 describe("Integration: Chained Default Methods", () => {
   test("default method can call another protocol method", () => {

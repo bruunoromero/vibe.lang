@@ -1,21 +1,72 @@
 module Vibe.Basics exposing
     ( Eq(..)
-    , not
+    , Ord(..)
+    , Num(..)
+    , Fractional(..)
+    , Integral(..)
+    , Show(..)
+    , Appendable(..)
+    , Never
+    , (|>)
+    , (<|)
+    , (>>)
+    , (<<)
+    , never
+    , identity
+    , always
+    , flip
+    , apply
     )
 
 import Vibe.Bool as Bool exposing (not)
 
-{-| Basic protocols and functions that other modules depend on.
-    This module is imported by types like Maybe and Result that need Eq.
+{- | A type that represents a value that can never exist.
+
+    This is useful for functions that do not return normally,
+    such as those that always throw an exception or enter an infinite loop.
 -}
+type Never
+
+-- =============================================================================
+-- Operator Fixity Declarations
+-- =============================================================================
+-- These establish precedence and associativity for all standard operators.
+-- Higher numbers bind tighter. Range: 1-9.
+--
+-- Their fixity (infixr 3 && and infixr 2 ||) is defined by the compiler.
+
+-- Application operators (lowest precedence)
+
+infixl 1 |>
+infixr 1 <|
+
+-- Comparison operators 
+infix 4 <
+infix 4 <=
+infix 4 >
+infix 4 >=
+infix 4 ==
+infix 4 /=
+
+-- Appendable operators
+infixr 5 ++
+
+-- Arithmetic operators
+infixl 6 +
+infixl 6 -
+infixl 7 *
+infixl 7 /
+infixl 7 //
+infixl 7 %
+
+-- Function composition (highest precedence)
+infixr 9 <<
+infixr 9 >>
+
 
 -- =============================================================================
 -- Comparison Protocols
 -- =============================================================================
-
--- Comparison operators fixity
-infix 4 ==
-infix 4 /=
 
 {-| Protocol for types supporting equality comparison.
 
@@ -27,3 +78,161 @@ protocol Eq a where
     (==) : a -> a -> Bool
     (/=) : a -> a -> Bool
     (/=) x y = not (x == y)
+
+
+{-| Protocol for types supporting ordering comparison.
+
+    Implementing types must provide all comparison operators.
+    Typically, implementing `compare` is sufficient, but we expose
+    individual operators for flexibility.
+-}
+
+protocol Eq a => Ord a where
+    (<) : a -> a -> Bool
+    (>) : a -> a -> Bool
+
+    (<=) : a -> a -> Bool
+    (<=) x y = x < y || x == y
+
+    (>=) : a -> a -> Bool
+    (>=) x y = x > y || x == y
+
+-- =============================================================================
+-- Numeric Protocol
+-- =============================================================================
+
+{-| Protocol for numeric types supporting basic arithmetic operations.
+
+    Implementing types must provide:
+    - (+)  : Addition
+    - (-)  : Subtraction
+    - (*)  : Multiplication
+    - negate : Negation (unary minus)
+-}
+protocol Num a where
+    (+) : a -> a -> a
+    (-) : a -> a -> a
+    (*) : a -> a -> a
+    negate : a -> a
+
+{-| Protocol for types supporting division operations. -}
+protocol Fractional a where
+    (/) : a -> a -> a
+
+
+{-| Protocol for types supporting integer division and modulo. -}
+protocol Integral a where
+    (//) : a -> a -> a
+    (%) : a -> a -> a
+
+{-| Protocol for types that can be appended together.
+    Implementing types must provide:
+    - (++) : Append two values of the same type
+-}
+protocol Appendable a where
+    (++) : a -> a -> a
+
+{-| Protocol for types that can be converted to a String representation.
+
+    Implementing types must provide:
+    - toString : Convert the value to a String
+-}
+protocol Show a where
+    toString : a -> String
+
+-- =============================================================================
+-- Function Composition and Application
+-- =============================================================================
+
+{-| Forward function application (pipe operator).
+    Passes the left argument to the function on the right.
+
+    x |> f  ==  f x
+
+    Example:
+        [1, 2, 3]
+            |> map ((+) 1)
+            |> filter isEven
+-}
+(|>) : a -> (a -> b) -> b
+(|>) x f = f x
+
+
+{-| Backward function application.
+    Applies the function on the left to the argument on the right.
+
+    f <| x  ==  f x
+
+    Example:
+        println <| "Hello, " ++ name
+-}
+(<|) : (a -> b) -> a -> b
+(<|) f x = f x
+
+
+{-| Forward function composition.
+    Composes two functions, applying the first then the second.
+
+    (f >> g) x  ==  g (f x)
+
+    Example:
+        addOne >> double  -- first adds 1, then doubles
+-}
+(>>) : (a -> b) -> (b -> c) -> (a -> c)
+(>>) f g = \x -> g (f x)
+
+
+{-| Backward function composition.
+    Composes two functions, applying the second then the first.
+
+    (g << f) x  ==  g (f x)
+
+    Example:
+        double << addOne  -- first adds 1, then doubles
+-}
+(<<) : (b -> c) -> (a -> b) -> (a -> c)
+(<<) g f = \x -> g (f x)
+
+-- =============================================================================
+-- Utility Functions
+-- =============================================================================
+
+{-| Identity function. Returns its argument unchanged.
+
+    identity x  ==  x
+-}
+identity : a -> a
+identity x = x
+
+
+{-| Constant function. Always returns the first argument.
+
+    always x y  ==  x
+-}
+always : a -> b -> a
+always x _ = x
+
+
+{-| Flip the arguments of a binary function.
+
+    flip f x y  ==  f y x
+-}
+flip : (a -> b -> c) -> b -> a -> c
+flip f x y = f y x
+
+
+{-| Function application. Useful for avoiding parentheses.
+
+    apply f x  ==  f x
+-}
+apply : (a -> b) -> a -> b
+apply f x = f x
+
+{-| Function that never returns a value.
+
+    Useful in situations where a value is required but the code path
+    cannot produce one (e.g., infinite loops, exceptions).
+-}
+never : Never -> a
+never nvr = 
+    never nvr

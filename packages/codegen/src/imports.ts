@@ -74,6 +74,9 @@ export function generateDependencyImports(
   const currentPackage = program.packageName;
   const importedModules = new Set<string>();
 
+  // Get dependency modules for protocol/ADT checking
+  const dependencies = program.dependencies;
+
   // Calculate the depth of the current module within its package
   // e.g., "SimpleTest" -> 0, "Sub.Module" -> 1
   const currentDepth = currentModule.split(".").length - 1;
@@ -81,6 +84,9 @@ export function generateDependencyImports(
   for (const imp of imports) {
     const moduleName = imp.moduleName;
     importedModules.add(moduleName);
+
+    // Get the dependency module for protocol checking
+    const depModule = dependencies?.get(moduleName);
 
     // Get the imported module's package
     const importedPackage = modulePackages.get(moduleName) || moduleName;
@@ -114,23 +120,35 @@ export function generateDependencyImports(
 
       for (const spec of imp.exposing.exports) {
         switch (spec.kind) {
-          case "ExportValue":
-            names.push(sanitizeIdentifier(spec.name));
+          case "ExportValue": {
+            // Skip if the name is a protocol - protocols don't exist at runtime,
+            // only their instance dictionaries do.
+            // Use Object.hasOwn to avoid inherited properties like toString
+            const isProtocol =
+              depModule?.protocols &&
+              Object.hasOwn(depModule.protocols, spec.name);
+            if (!isProtocol) {
+              names.push(sanitizeIdentifier(spec.name));
+            }
             break;
+          }
           case "ExportOperator":
             names.push(sanitizeOperator(spec.operator));
             break;
           case "ExportTypeAll": {
             // For ADTs, import the constructors, not the type name
             // Types don't exist at runtime, only constructors do
-            const adtInfo = program.adts[spec.name];
+            // Check the dependency module's ADTs first, fall back to current module's ADTs
+            const adtInfo =
+              depModule?.adts[spec.name] ?? program.adts[spec.name];
             if (adtInfo && adtInfo.constructors.length > 0) {
               for (const ctorName of adtInfo.constructors) {
                 names.push(sanitizeIdentifier(ctorName));
               }
             }
-            // Note: For protocols, ExportTypeAll means import protocol methods,
-            // but those are typically accessed via dictionaries, not direct imports
+            // For protocols, ExportTypeAll means the protocol itself is imported,
+            // but protocols don't exist at runtime - only instance dictionaries do.
+            // So we skip adding anything for protocols.
             break;
           }
           case "ExportTypeSome": {

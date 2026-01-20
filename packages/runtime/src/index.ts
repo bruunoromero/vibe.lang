@@ -13,36 +13,6 @@
 export const not = (a: boolean): boolean => !a;
 
 // =============================================================================
-// Function Composition and Application
-// =============================================================================
-
-/** Forward pipe: x |> f = f(x) */
-export const pipeForward =
-  <A, B>(x: A) =>
-  (f: (a: A) => B): B =>
-    f(x);
-
-/** Backward pipe: f <| x = f(x) */
-export const pipeBackward =
-  <A, B>(f: (a: A) => B) =>
-  (x: A): B =>
-    f(x);
-
-/** Forward composition: (f >> g)(x) = g(f(x)) */
-export const composeForward =
-  <A, B, C>(f: (a: A) => B) =>
-  (g: (b: B) => C) =>
-  (x: A): C =>
-    g(f(x));
-
-/** Backward composition: (g << f)(x) = g(f(x)) */
-export const composeBackward =
-  <B, C, A>(g: (b: B) => C) =>
-  (f: (a: A) => B) =>
-  (x: A): C =>
-    g(f(x));
-
-// =============================================================================
 // List Operations
 // =============================================================================
 
@@ -57,6 +27,25 @@ export const listAppend =
   (ys: A[]): A[] => {
     return [...xs, ...ys];
   };
+
+/** Map over a list */
+export const listMap =
+  <A, B>(f: (a: A) => B) =>
+  (xs: A[]): B[] =>
+    xs.map(f);
+
+/** Left fold over a list */
+export const listFoldl =
+  <A, B>(f: (acc: B, a: A) => B) =>
+  (init: B) =>
+  (xs: A[]): B =>
+    xs.reduce(f, init);
+
+/** Filter a list */
+export const listFilter =
+  <A>(predicate: (a: A) => boolean) =>
+  (xs: A[]): A[] =>
+    xs.filter(predicate);
 
 // =============================================================================
 // String Operations
@@ -77,12 +66,6 @@ export const numEq =
   (b: number): boolean =>
     a === b;
 
-/** Number not equal */
-export const numNeq =
-  (a: number) =>
-  (b: number): boolean =>
-    a !== b;
-
 /** Number less than */
 export const numLt =
   (a: number) =>
@@ -100,12 +83,6 @@ export const numGt =
   (a: number) =>
   (b: number): boolean =>
     a > b;
-
-/** Number greater than or equal */
-export const numGte =
-  (a: number) =>
-  (b: number): boolean =>
-    a >= b;
 
 export const numToString = (n: number): string => n.toString();
 
@@ -190,46 +167,6 @@ export const intPow =
     floatPow(base)(exp) | 0;
 
 // =============================================================================
-// Generic Operations
-// =============================================================================
-
-export const deepEqual =
-  <A>(a: A) =>
-  (b: A): boolean => {
-    // Handle primitives and null/undefined
-    if (a === b) return true;
-
-    // Handle null/undefined cases
-    if (a == null || b == null) return false;
-
-    // Handle arrays
-    if (Array.isArray(a) && Array.isArray(b)) {
-      if (a.length !== b.length) return false;
-      for (let i = 0; i < a.length; i++) {
-        if (!deepEqual(a[i])(b[i])) return false;
-      }
-      return true;
-    }
-
-    // Handle objects
-    if (typeof a === "object" && typeof b === "object") {
-      const keysA = Object.keys(a);
-      const keysB = Object.keys(b);
-
-      if (keysA.length !== keysB.length) return false;
-
-      for (const key of keysA) {
-        if (!(key in b)) return false;
-        if (!deepEqual((a as any)[key])((b as any)[key])) return false;
-      }
-
-      return true;
-    }
-
-    return false;
-  };
-
-// =============================================================================
 // Debug / Development
 // =============================================================================
 
@@ -238,5 +175,3 @@ export const println = <A>(value: A): A => {
   console.log(value);
   return value;
 };
-
-export const null_ = null;
