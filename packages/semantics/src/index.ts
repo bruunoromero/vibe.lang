@@ -123,6 +123,8 @@ import {
   initializeBuiltinOpaqueTypes,
 } from "./builtins";
 
+import { checkExhaustiveness } from "./exhaustiveness";
+
 /**
  * Create a Lambda expression from pattern arguments and a body expression.
  * This is shared between protocol default methods, implementation methods,
@@ -6515,10 +6517,6 @@ function analyzeExpr(
         dependencies,
       );
       const branchTypes: Type[] = [];
-      let hasWildcard = false;
-      let hasTuplePattern = false;
-      let hasVarPattern = false;
-      const usedConstructors = new Set<string>();
 
       expr.branches.forEach((branch, index) => {
         const branchScope: Scope = { parent: scope, symbols: new Map() };
@@ -6548,7 +6546,6 @@ function analyzeExpr(
         branchTypes.push(bodyType);
 
         if (branch.pattern.kind === "WildcardPattern") {
-          hasWildcard = true;
           if (index !== expr.branches.length - 1) {
             throw new SemanticError(
               "Wildcard pattern makes following branches unreachable",
@@ -6556,14 +6553,7 @@ function analyzeExpr(
             );
           }
         }
-        if (branch.pattern.kind === "TuplePattern") {
-          hasTuplePattern = true;
-        }
-        if (branch.pattern.kind === "VarPattern") {
-          hasVarPattern = true;
-        }
         if (branch.pattern.kind === "ConstructorPattern") {
-          usedConstructors.add(branch.pattern.name);
           validateConstructorArity(branch.pattern, constructors);
         }
       });
@@ -6577,31 +6567,22 @@ function analyzeExpr(
         unify(firstType, bt, expr.span, substitution);
       }
 
-      // Exhaustiveness checking:
-      // - Wildcard patterns are always exhaustive
-      // - Variable patterns are always exhaustive (they match anything)
-      // - Tuple patterns are exhaustive (tuples have no variants)
-      // - Constructor patterns need coverage checking against ADT definition
-      if (!hasWildcard && !hasVarPattern && !hasTuplePattern) {
-        const coverage = constructorCoverage(
-          usedConstructors,
-          constructors,
-          adts,
-          discriminantType,
-          substitution,
-        );
-        if (!coverage.exhaustive) {
-          const missingMsg =
-            coverage.missing && coverage.missing.length > 0
-              ? ` (missing: ${coverage.missing.join(", ")})`
-              : "";
-          throw new SemanticError(
-            `Non-exhaustive case expression${missingMsg}`,
-            expr.span,
-          );
-        }
-      }
+      // Exhaustiveness checking
+      const patterns = expr.branches.map((b) => b.pattern);
+      const result = checkExhaustiveness(
+        patterns,
+        discriminantType,
+        adts,
+        constructors,
+      );
 
+      if (!result.exhaustive) {
+        throw new SemanticError(
+          `Non-exhaustive case expression (missing: ${result.missing})`,
+          expr.span,
+        );
+      }
+      
       return applySubstitution(firstType, substitution);
     }
     case "Infix": {

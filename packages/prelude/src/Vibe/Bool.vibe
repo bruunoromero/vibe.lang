@@ -2,6 +2,7 @@ module Vibe.Bool
 
 import Vibe.Basics exposing (Show, Eq)
 
+{-| TODO: case expression is not exhaustive. This should fail to compile as it doesn't take into account all possible permutations -} 
 implement Eq Bool where
   (==) x y =
     case (x, y) of
