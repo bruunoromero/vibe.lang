@@ -338,12 +338,26 @@ export function lower(
         // Lower the substituted lambda to IR
         const irLambda = lowerExpr(substitutedExpr, ctx);
 
-        // Get the method type from the protocol if available
+        // Get the method type from the protocol and specialize it for this instance
         const protocol = semantics.protocols[inst.protocolName];
         const methodInfo = protocol?.methods.get(methodName);
-        const methodType = methodInfo?.type
-          ? convertType(methodInfo.type)
-          : { kind: "var" as const, id: -1 };
+        let methodType: IRType = { kind: "var" as const, id: -1 };
+        if (methodInfo?.type) {
+          // Substitute protocol type parameters with instance type arguments
+          // E.g., for `implement Eq Char`, convert `a -> a -> Bool` to `Char -> Char -> Bool`
+          const paramSubst = new Map<string, Type>();
+          if (protocol) {
+            for (let pi = 0; pi < protocol.params.length; pi++) {
+              const param = protocol.params[pi];
+              const instTypeArg = inst.typeArgs[pi];
+              if (param && instTypeArg) {
+                paramSubst.set(param, instTypeArg);
+              }
+            }
+          }
+          const specializedType = substituteTypeArg(methodInfo.type, paramSubst);
+          methodType = convertType(specializedType);
+        }
 
         // Create a synthetic IRValue for this default implementation
         // Pass instance constraints so the method can accept dictionary parameters
@@ -439,12 +453,26 @@ export function lower(
         // Lower the expression to IR
         const irExpr = lowerExpr(methodExpr, ctx);
 
-        // Get the method type from the protocol if available
+        // Get the method type from the protocol and specialize it for this instance
         const protocol = semantics.protocols[inst.protocolName];
         const methodInfo = protocol?.methods.get(methodName);
-        const methodType = methodInfo?.type
-          ? convertType(methodInfo.type)
-          : { kind: "var" as const, id: -1 };
+        let methodType: IRType = { kind: "var" as const, id: -1 };
+        if (methodInfo?.type) {
+          // Substitute protocol type parameters with instance type arguments
+          // E.g., for `implement Eq Char`, convert `a -> a -> Bool` to `Char -> Char -> Bool`
+          const paramSubst2 = new Map<string, Type>();
+          if (protocol) {
+            for (let pi = 0; pi < protocol.params.length; pi++) {
+              const param = protocol.params[pi];
+              const instTypeArg = inst.typeArgs[pi];
+              if (param && instTypeArg) {
+                paramSubst2.set(param, instTypeArg);
+              }
+            }
+          }
+          const specializedType = substituteTypeArg(methodInfo.type, paramSubst2);
+          methodType = convertType(specializedType);
+        }
 
         // Create a synthetic IRValue for this implementation
         // Pass instance constraints so the method can accept dictionary parameters

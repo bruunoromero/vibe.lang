@@ -880,6 +880,22 @@ function generateValue(value: IRValue, ctx: CodegenContext): string {
     returnType = currentType;
   }
 
+  // Handle values where the body is an IRLambda (including synthetic values and partial application)
+  // We need to extract parameter types from the nested lambda's parameters
+  // Use `returnType` from above as the starting point (after processing value.params)
+  if (value.body.kind === "IRLambda" && returnType.kind === "fun") {
+    let currentType: IRType = returnType;
+    for (const param of value.body.params) {
+      if (currentType.kind === "fun") {
+        if (param?.kind === "IRVarPattern") {
+          varTypes.set(param.name, currentType.from);
+        }
+        currentType = currentType.to;
+      }
+    }
+    returnType = currentType;
+  }
+
   // Save previous context and set new scope
   const prevDictParams = ctx.dictParamsInScope;
   const prevConcreteConstraints = ctx.concreteConstraints;
@@ -1481,19 +1497,53 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
       }
       break;
 
-    case "IRApply":
-      // For applications like `* point.x point.x`, we can infer the result type
-      // by looking at the operands. For most numeric operations, the result type
-      // matches the operand types.
-      const { operands } = extractMethodAndOperands(expr);
+    case "IRApply": {
+      // For function applications, we need to compute the result type.
+      // First, try to get the callee's type and apply the arguments.
+      const { methodName, operands } = extractMethodAndOperands(expr);
+
+      // If the callee is a protocol method, we can compute result type from method signature
+      if (methodName) {
+        const protocolName = ctx.protocolMethodMap.get(methodName);
+        if (protocolName) {
+          const protocol = ctx.protocols[protocolName];
+          if (protocol) {
+            // Find the method in the protocol
+            const method = protocol.methods.find((m) => m.name === methodName);
+            if (method && method.type.kind === "fun") {
+              // Apply operand types to compute the result type
+              // For `toString : a -> String`, result is String
+              // For `== : a -> a -> Bool`, result is Bool after 2 args
+              let resultType: IRType = method.type;
+              for (let i = 0; i < operands.length && resultType.kind === "fun"; i++) {
+                resultType = resultType.to;
+              }
+              // If result is a type variable, try to substitute with concrete type
+              if (resultType.kind === "con") {
+                return resultType;
+              }
+              // Otherwise, infer from operands for numeric-like protocols
+              if (resultType.kind === "var") {
+                const opType = inferConcreteTypeFromOperands(operands, ctx);
+                if (opType) {
+                  return opType;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Fallback: For regular applications or when we can't determine the type,
+      // try to infer from operands (works for numeric operations where result matches operand types)
       for (const operand of operands) {
         const opType = inferExprType(operand, ctx);
         if (opType && opType.kind === "con") {
-          // For numeric operations, the result type matches the operand type
           return opType;
         }
       }
       break;
+    }
 
     case "IRUnary":
       // Unary negation returns the same type as the operand

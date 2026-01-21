@@ -1,0 +1,13 @@
+module Vibe.Char
+
+import Vibe.String
+import Vibe.Basics exposing (Show(..), Eq(..))
+
+implement Show Char where
+  toString = _toString
+
+implement Eq Char where
+  (==) x y = (toString x) == (toString y)
+
+@external "@vibe/runtime" "charToString"
+_toString : Char -> String

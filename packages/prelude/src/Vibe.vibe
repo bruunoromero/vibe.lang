@@ -30,6 +30,7 @@ import Vibe.Bool
 import Vibe.Int
 import Vibe.Float
 import Vibe.String
+import Vibe.Char
 import Vibe.List exposing ((::))
 import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Result exposing (Result(..))
