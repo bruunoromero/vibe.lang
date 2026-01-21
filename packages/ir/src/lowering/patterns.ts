@@ -30,6 +30,38 @@ export function lowerPattern(
         span: pattern.span,
       };
 
+    case "IntPattern":
+      return {
+        kind: "IRLiteralPattern",
+        value: Number(pattern.value),
+        literalType: "int",
+        span: pattern.span,
+      };
+
+    case "FloatPattern":
+      return {
+        kind: "IRLiteralPattern",
+        value: Number(pattern.value),
+        literalType: "float",
+        span: pattern.span,
+      };
+
+    case "StringPattern":
+      return {
+        kind: "IRLiteralPattern",
+        value: pattern.value,
+        literalType: "string",
+        span: pattern.span,
+      };
+
+    case "CharPattern":
+      return {
+        kind: "IRLiteralPattern",
+        value: pattern.value,
+        literalType: "char",
+        span: pattern.span,
+      };
+
     case "ConstructorPattern": {
       const tag = ctx.constructorTags.get(pattern.name) ?? 0;
       return {

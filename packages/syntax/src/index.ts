@@ -140,11 +140,11 @@ export type Pattern =
   | { kind: "TuplePattern"; elements: Pattern[]; span: Span }
   | { kind: "ListPattern"; elements: Pattern[]; span: Span }
   | { kind: "ConsPattern"; head: Pattern; tail: Pattern; span: Span }
-  | {
-      kind: "RecordPattern";
-      fields: { name: string; pattern?: Pattern }[];
-      span: Span;
-    };
+  | { kind: "RecordPattern"; fields: { name: string; pattern?: Pattern }[]; span: Span }
+  | { kind: "IntPattern"; value: string; span: Span }
+  | { kind: "FloatPattern"; value: string; span: Span }
+  | { kind: "StringPattern"; value: string; span: Span }
+  | { kind: "CharPattern"; value: string; span: Span };
 
 export type RecordField = { name: string; value: Expr; span: Span };
 

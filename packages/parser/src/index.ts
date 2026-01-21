@@ -1795,6 +1795,27 @@ class Parser {
       return { kind: "VarPattern", name: tok.lexeme, span: tok.span };
     }
 
+    // Check for number literal pattern
+    if (this.match(TokenKind.Number)) {
+      const tok = this.previous();
+      if (tok.lexeme.includes(".")) {
+        return { kind: "FloatPattern", value: tok.lexeme, span: tok.span };
+      }
+      return { kind: "IntPattern", value: tok.lexeme, span: tok.span };
+    }
+
+    // Check for string literal pattern
+    if (this.match(TokenKind.String)) {
+      const tok = this.previous();
+      return { kind: "StringPattern", value: tok.lexeme, span: tok.span };
+    }
+
+    // Check for char literal pattern
+    if (this.match(TokenKind.Char)) {
+      const tok = this.previous();
+      return { kind: "CharPattern", value: tok.lexeme, span: tok.span };
+    }
+
     // Check for constructor pattern (uppercase identifier)
     if (this.match(TokenKind.UpperIdentifier)) {
       const ctor = this.previous();

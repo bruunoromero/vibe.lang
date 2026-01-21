@@ -200,6 +200,7 @@ PrimaryPattern = VarPattern
                | ConstructorPattern
                | TuplePattern
                | ListPattern
+               | Literal
                | "(", Pattern, ")" ;
 
 VarPattern = LowerIdentifier ;

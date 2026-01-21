@@ -173,7 +173,11 @@ function isConstructorLike(p: Pattern): boolean {
     p.kind === "ConstructorPattern" ||
     p.kind === "TuplePattern" ||
     p.kind === "ListPattern" ||
-    p.kind === "ConsPattern"
+    p.kind === "ConsPattern" ||
+    p.kind === "IntPattern" ||
+    p.kind === "FloatPattern" ||
+    p.kind === "StringPattern" ||
+    p.kind === "CharPattern"
   );
 }
 
@@ -194,6 +198,14 @@ function getConstructorDecomposition(p: Pattern): { name: string; args: Pattern[
        // Actually, strictly speaking, [a] is Cons(a, Nil).
        // Let's treat it as such.
        return convertListToCons(p.elements);
+    case "IntPattern":
+      return { name: `Int:${p.value}`, args: [] };
+    case "FloatPattern":
+      return { name: `Float:${p.value}`, args: [] };
+    case "StringPattern":
+      return { name: `String:${p.value}`, args: [] };
+    case "CharPattern":
+      return { name: `Char:${p.value}`, args: [] };
     default:
       throw new Error(`Unexpected pattern kind in decomposition: ${p.kind}`);
   }
@@ -409,8 +421,9 @@ function patternToString(p: Pattern): string {
         case "RecordPattern":
             const fields = p.fields.map(f => `${f.name}${f.pattern ? " = " + patternToString(f.pattern) : ""}`);
             return `{ ${fields.join(", ")} }`; 
-        // case "Number": return p.value;
-        // case "String": return p.value;
-        // case "Char": return p.value;
+        case "IntPattern": return p.value;
+        case "FloatPattern": return p.value;
+        case "StringPattern": return p.value;
+        case "CharPattern": return p.value;
     }
 }
