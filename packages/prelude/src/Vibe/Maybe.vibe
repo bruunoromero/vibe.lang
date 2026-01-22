@@ -3,6 +3,8 @@ module Vibe.Maybe exposing
     , Maybe(..)
     )
 
+import Vibe.Result
+
 
 {-| Represents an optional value. Used when a value may or may not exist.
 
@@ -26,3 +28,10 @@ withDefault defaultValue maybeValue =
     case maybeValue of
         Just value -> value
         Nothing -> defaultValue
+
+{-| TODO: Fix bug where the compiled code is matching against tag === 0 always, instead of respectig the right tag of each constructor -}
+fromResult : Vibe.Result.Result e a -> Maybe a
+fromResult result =
+    case result of
+        Vibe.Result.Ok value -> Just value
+        Vibe.Result.Err _ -> Nothing

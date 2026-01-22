@@ -64,8 +64,14 @@ export function createLoweringContext(
 /**
  * Assign runtime tags to ADT constructors.
  * Tags are assigned per-ADT, starting from 0.
+ *
+ * For local constructors, we use the bare name (e.g., "Just").
+ * For constructors from dependencies, we also add qualified names:
+ *   - Full module path: "Vibe.Result.Ok"
+ *   - Import alias if used: "R.Ok" (when `import Vibe.Result as R`)
  */
 function assignConstructorTags(ctx: LoweringContext): void {
+  // 1. Assign tags for local constructors (bare names)
   for (const [adtName, adt] of Object.entries(ctx.semantics.adts)) {
     for (let i = 0; i < adt.constructors.length; i++) {
       const ctorName = adt.constructors[i];
@@ -74,7 +80,31 @@ function assignConstructorTags(ctx: LoweringContext): void {
       }
     }
   }
+
+  // 2. Assign tags for constructors from dependencies using qualified names
+  for (const imp of ctx.imports) {
+    const depModule = ctx.dependencies.get(imp.moduleName);
+    if (!depModule) continue;
+
+    for (const [adtName, adt] of Object.entries(depModule.adts)) {
+      for (let i = 0; i < adt.constructors.length; i++) {
+        const ctorName = adt.constructors[i];
+        if (ctorName) {
+          // Full module path: "Vibe.Result.Ok"
+          const fullQualified = `${imp.moduleName}.${ctorName}`;
+          ctx.constructorTags.set(fullQualified, i);
+
+          // If import has an alias: "R.Ok"
+          if (imp.alias) {
+            const aliasQualified = `${imp.alias}.${ctorName}`;
+            ctx.constructorTags.set(aliasQualified, i);
+          }
+        }
+      }
+    }
+  }
 }
+
 
 /**
  * Build record field info from type aliases with record types.

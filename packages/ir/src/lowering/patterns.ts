@@ -63,7 +63,14 @@ export function lowerPattern(
       };
 
     case "ConstructorPattern": {
-      const tag = ctx.constructorTags.get(pattern.name) ?? 0;
+      const tag = ctx.constructorTags.get(pattern.name);
+      if (tag === undefined) {
+        throw new IRError(
+          `Unknown constructor '${pattern.name}' - no tag found. ` +
+            `This is a compiler bug: the constructor may be from an unresolved import.`,
+          pattern.span
+        );
+      }
       return {
         kind: "IRConstructorPattern",
         name: pattern.name,

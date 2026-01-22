@@ -1532,14 +1532,25 @@ class Parser {
     }
 
     const ident = this.expectIdentifier("type reference");
+    let name = ident.lexeme;
+    let end = ident.span.end;
+
+    // Handle qualified types (e.g. Module.Type)
+    while (this.match(TokenKind.Dot)) {
+      const next = this.expect(TokenKind.UpperIdentifier, "type name part");
+      name += "." + next.lexeme;
+      end = next.span.end;
+    }
 
     // Only uppercase type constructors can have arguments
     // Lowercase identifiers are type variables and don't take arguments
     // This ensures "a (List a)" parses as two separate types, not "a" applied to "(List a)"
-    const isTypeConstructor = ident.kind === TokenKind.UpperIdentifier;
+    // Note: Qualified names (e.g. M.T) are always considered constructors/aliases
+    const isTypeConstructor = ident.kind === TokenKind.UpperIdentifier || name.includes(".");
 
     const args: TypeExpr[] = [];
-    let lastSpan = ident.span;
+    let lastSpan = { start: ident.span.start, end };
+
     while (
       isTypeConstructor &&
       this.isTypeStart(this.current()) &&
@@ -1552,11 +1563,11 @@ class Parser {
 
     return {
       kind: "TypeRef",
-      name: ident.lexeme,
+      name,
       args,
       span: {
         start: ident.span.start,
-        end: args.at(-1)?.span.end ?? ident.span.end,
+        end: args.at(-1)?.span.end ?? end,
       },
     };
   }
@@ -1674,12 +1685,21 @@ class Parser {
 
     // Parse simple type reference (no type application at this level)
     const ident = this.expectIdentifier("type reference");
+    let name = ident.lexeme;
+    let end = ident.span.end;
+
+    // Handle qualified types (e.g. Module.Type)
+    while (this.match(TokenKind.Dot)) {
+      const next = this.expect(TokenKind.UpperIdentifier, "type name part");
+      name += "." + next.lexeme;
+      end = next.span.end;
+    }
 
     return {
       kind: "TypeRef",
-      name: ident.lexeme,
+      name,
       args: [],
-      span: ident.span,
+      span: { start: ident.span.start, end },
     };
   }
 
@@ -1819,6 +1839,15 @@ class Parser {
     // Check for constructor pattern (uppercase identifier)
     if (this.match(TokenKind.UpperIdentifier)) {
       const ctor = this.previous();
+      let name = ctor.lexeme;
+      let end = ctor.span.end;
+
+      // Handle qualified constructors (e.g. Module.Just)
+      while (this.match(TokenKind.Dot)) {
+        const next = this.expect(TokenKind.UpperIdentifier, "constructor name part");
+        name += "." + next.lexeme;
+        end = next.span.end;
+      }
 
       // Parse constructor arguments (zero or more patterns)
       const args: Pattern[] = [];
@@ -1826,12 +1855,12 @@ class Parser {
         args.push(this.parsePrimaryPattern());
       }
 
-      const end = args.at(-1)?.span.end ?? ctor.span.end;
+      const finalEnd = args.at(-1)?.span.end ?? end;
       return {
         kind: "ConstructorPattern",
-        name: ctor.lexeme,
+        name,
         args,
-        span: { start: ctor.span.start, end },
+        span: { start: ctor.span.start, end: finalEnd },
       };
     }
 

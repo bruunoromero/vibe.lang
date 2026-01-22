@@ -1337,7 +1337,15 @@ export function analyze(
   // ===== PASS 1c: Validate type alias references =====
   // Now that all ADTs and aliases are registered, validate that type references exist.
   for (const decl of typeAliasDecls) {
-    validateTypeAliasReferences(decl, adts, typeAliases, opaqueTypes, records);
+    validateTypeAliasReferences(
+      decl,
+      adts,
+      typeAliases,
+      opaqueTypes,
+      records,
+      program.imports,
+      dependencies,
+    );
   }
 
   // ===== PASS 1d: Register protocols =====
@@ -1483,6 +1491,8 @@ export function analyze(
         info.declaration.span,
         opaqueTypes,
         records,
+        program.imports,
+        dependencies,
       );
 
       if (validationErrors.length > 0) {
@@ -1500,6 +1510,8 @@ export function analyze(
         typeAliases,
         protocols,
         records,
+        program.imports,
+        dependencies,
       );
       annotationType = result.type;
       annotatedConstraints =
@@ -1582,6 +1594,8 @@ export function analyze(
           typeAliases,
           protocols,
           records,
+          imports,
+          dependencies,
         );
         info.type = result.type;
 
@@ -1624,6 +1638,8 @@ export function analyze(
               adts,
               typeAliases,
               records,
+              program.imports,
+              dependencies,
             )
           : undefined;
 
@@ -2271,8 +2287,22 @@ function validateTypeExpr(
   parentSpan: Span,
   opaqueTypes: Record<string, OpaqueTypeInfo> = {},
   records: Record<string, RecordInfo> = {},
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map(),
 ): TypeValidationError[] {
   const errors: TypeValidationError[] = [];
+
+  function resolve(name: string) {
+    return resolveQualifiedType(
+      name,
+      adts,
+      typeAliases,
+      opaqueTypes,
+      records,
+      imports,
+      dependencies,
+    );
+  }
 
   function findCaseSuggestion(name: string): string | undefined {
     const nameLower = name.toLowerCase();
@@ -2362,6 +2392,16 @@ function validateTypeExpr(
         // Check if it's a named record type
         if (records[name]) {
           // Valid record type reference - validate args
+          for (const arg of e.args) {
+            validate(arg);
+          }
+          return;
+        }
+
+        // Try to resolve qualified type
+        const resolved = resolve(name);
+        if (resolved) {
+          // Valid qualified reference - validate args
           for (const arg of e.args) {
             validate(arg);
           }
@@ -2487,6 +2527,8 @@ function validateTypeAliasReferences(
   typeAliases: Record<string, TypeAliasInfo>,
   opaqueTypes: Record<string, OpaqueTypeInfo> = {},
   records: Record<string, RecordInfo> = {},
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map(),
 ) {
   // Reject bare record types in type alias declarations
   // Record types must be defined using `type Name = { ... }` syntax
@@ -2508,6 +2550,8 @@ function validateTypeAliasReferences(
     decl.span,
     opaqueTypes,
     records,
+    imports,
+    dependencies,
   );
 
   if (validationErrors.length > 0) {
@@ -2897,6 +2941,7 @@ function registerProtocol(
       // Infer the type of the lambda
       const inferredType = analyzeExpr(
         lambdaExpr,
+        null, // expectedType
         tempScope,
         substitution,
         globalScope,
@@ -3830,6 +3875,7 @@ function concretizeInstanceTypeArgs(
       try {
         const inferredType = analyzeExpr(
           methodExpr,
+          null, // expectedType
           tempScope,
           inferSubstitution,
           globalScope,
@@ -4010,11 +4056,14 @@ function validateImplementationMethodTypes(
           inferSubstitution,
           constructors,
           adts,
+          imports,
+          dependencies,
         );
 
         // Analyze the body
         const bodyType = analyzeExpr(
           methodExpr.body,
+          null, // expectedType (could use return type of function from expectedType)
           tempScope,
           inferSubstitution,
           globalScope,
@@ -4031,6 +4080,7 @@ function validateImplementationMethodTypes(
       } else {
         inferredType = analyzeExpr(
           methodExpr,
+          expectedType, // We have expectedType here!
           tempScope,
           inferSubstitution,
           globalScope,
@@ -5884,10 +5934,13 @@ function analyzeValueDeclaration(
     substitution,
     constructors,
     adts,
+    imports,
+    dependencies,
   );
 
   const bodyType = analyzeExpr(
     decl.body,
+    returnType,
     fnScope,
     substitution,
     globalScope,
@@ -6022,6 +6075,7 @@ function tryResolveModuleFieldAccess(
 
 function analyzeExpr(
   expr: Expr,
+  expectedType: Type | null,
   scope: Scope,
   substitution: Substitution,
   globalScope: Scope,
@@ -6096,6 +6150,7 @@ function analyzeExpr(
       const elements = expr.elements.map((el) =>
         analyzeExpr(
           el,
+          null,
           scope,
           substitution,
           globalScope,
@@ -6116,6 +6171,7 @@ function analyzeExpr(
       }
       const first = analyzeExpr(
         expr.elements[0]!,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6130,6 +6186,7 @@ function analyzeExpr(
       for (const el of expr.elements.slice(1)) {
         const elType = analyzeExpr(
           el,
+          null,
           scope,
           substitution,
           globalScope,
@@ -6148,6 +6205,7 @@ function analyzeExpr(
     case "ListRange": {
       const startType = analyzeExpr(
         expr.start,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6161,6 +6219,7 @@ function analyzeExpr(
       );
       const endType = analyzeExpr(
         expr.end,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6187,6 +6246,7 @@ function analyzeExpr(
         }
         fields[field.name] = analyzeExpr(
           field.value,
+          null,
           scope,
           substitution,
           globalScope,
@@ -6220,6 +6280,7 @@ function analyzeExpr(
         }
         const fieldType = analyzeExpr(
           field.value,
+          null,
           scope,
           substitution,
           globalScope,
@@ -6253,6 +6314,7 @@ function analyzeExpr(
       // Otherwise, handle as record field access
       const targetType = analyzeExpr(
         expr.target,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6291,6 +6353,8 @@ function analyzeExpr(
               adts,
               typeAliases,
               records,
+              imports,
+              dependencies,
             );
 
             const instSub = new Map<number, Type>();
@@ -6330,9 +6394,12 @@ function analyzeExpr(
         substitution,
         constructors,
         adts,
+        imports,
+        dependencies,
       );
       const bodyType = analyzeExpr(
         expr.body,
+        null, // expectedType could be derived from context? But simpler to infer.
         fnScope,
         substitution,
         globalScope,
@@ -6349,6 +6416,7 @@ function analyzeExpr(
     case "Apply": {
       let calleeType = analyzeExpr(
         expr.callee,
+        null, // expectedType
         scope,
         substitution,
         globalScope,
@@ -6363,6 +6431,7 @@ function analyzeExpr(
       for (const arg of expr.args) {
         const argType = analyzeExpr(
           arg,
+          null,
           scope,
           substitution,
           globalScope,
@@ -6387,6 +6456,7 @@ function analyzeExpr(
     case "If": {
       const condType = analyzeExpr(
         expr.condition,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6410,6 +6480,7 @@ function analyzeExpr(
       unify(condType, tBool, expr.condition.span, substitution);
       const thenType = analyzeExpr(
         expr.thenBranch,
+        null, // Could pass expectedType from parent if available? But here null is safe for inference.
         scope,
         substitution,
         globalScope,
@@ -6423,6 +6494,7 @@ function analyzeExpr(
       );
       const elseType = analyzeExpr(
         expr.elseBranch,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6490,6 +6562,7 @@ function analyzeExpr(
 
       return analyzeExpr(
         expr.body,
+        expectedType, // Pass through expectedType if available in scope? Wait, analyzeExpr has expectedType arg now!
         letScope,
         substitution,
         globalScope,
@@ -6505,6 +6578,7 @@ function analyzeExpr(
     case "Case": {
       const discriminantType = analyzeExpr(
         expr.discriminant,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6528,10 +6602,13 @@ function analyzeExpr(
           freshType(),
           constructors,
           adts,
+          imports,
+          dependencies,
         );
         unify(discriminantType, patternType, branch.pattern.span, substitution);
         const bodyType = analyzeExpr(
           branch.body,
+          expectedType, // Pass through expected type to branches!
           branchScope,
           substitution,
           globalScope,
@@ -6574,6 +6651,14 @@ function analyzeExpr(
         discriminantType,
         adts,
         constructors,
+        (name) =>
+          resolveQualifiedConstructor(
+            name,
+            constructors,
+            adts,
+            imports,
+            dependencies,
+          ) || undefined,
       );
 
       if (!result.exhaustive) {
@@ -6588,6 +6673,7 @@ function analyzeExpr(
     case "Infix": {
       const leftType = analyzeExpr(
         expr.left,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6601,6 +6687,7 @@ function analyzeExpr(
       );
       const rightType = analyzeExpr(
         expr.right,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6642,6 +6729,7 @@ function analyzeExpr(
       };
       return analyzeExpr(
         applyExpr,
+        expectedType, // Pass through expected type
         scope,
         substitution,
         globalScope,
@@ -6657,6 +6745,7 @@ function analyzeExpr(
     case "Paren":
       return analyzeExpr(
         expr.expression,
+        expectedType, // Pass through expected type
         scope,
         substitution,
         globalScope,
@@ -6672,6 +6761,7 @@ function analyzeExpr(
       // Unary negation: only allowed for Int and Float
       const operandType = analyzeExpr(
         expr.operand,
+        null,
         scope,
         substitution,
         globalScope,
@@ -6902,6 +6992,8 @@ function bindPatterns(
   substitution: Substitution,
   constructors: Record<string, ConstructorInfo>,
   adts: Record<string, ADTInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>,
 ) {
   if (patterns.length !== paramTypes.length) {
     throw new Error("Internal arity mismatch during pattern binding");
@@ -6917,6 +7009,8 @@ function bindPatterns(
       paramType,
       constructors,
       adts,
+      imports,
+      dependencies,
     );
     if (pattern.kind === "VarPattern") {
       // Pattern variables are monomorphic
@@ -6949,6 +7043,8 @@ function bindPattern(
   expected: Type,
   constructors: Record<string, ConstructorInfo>,
   adts: Record<string, ADTInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>,
 ): Type {
   switch (pattern.kind) {
     case "VarPattern": {
@@ -6988,6 +7084,8 @@ function bindPattern(
           subTypes[idx]!,
           constructors,
           adts,
+          imports,
+          dependencies,
         ),
       );
       return applySubstitution(
@@ -6999,8 +7097,15 @@ function bindPattern(
       // Validate constructor arity
       validateConstructorArity(pattern, constructors);
 
-      // Look up constructor info to get proper types
-      const ctorInfo = constructors[pattern.name];
+      // Look up constructor info to get proper types (supports qualified names)
+      const resolved = resolveQualifiedConstructor(
+        pattern.name,
+        constructors,
+        adts,
+        imports,
+        dependencies,
+      );
+      const ctorInfo = resolved ? resolved.info : undefined;
 
       if (ctorInfo) {
         // User-defined ADT constructor
@@ -7044,6 +7149,8 @@ function bindPattern(
             argType,
             constructors,
             adts,
+            imports,
+            dependencies,
           );
         });
 
@@ -7062,6 +7169,8 @@ function bindPattern(
             argTypes[idx]!,
             constructors,
             adts,
+            imports,
+            dependencies,
           ),
         );
         return applySubstitution(expected, substitution);
@@ -7084,6 +7193,8 @@ function bindPattern(
           applySubstitution(elemType, substitution),
           constructors,
           adts,
+          imports,
+          dependencies,
         ),
       );
       return applySubstitution(lt, substitution);
@@ -7104,6 +7215,8 @@ function bindPattern(
         applySubstitution(elemType, substitution),
         constructors,
         adts,
+        imports,
+        dependencies,
       );
 
       // Tail pattern binds to list type
@@ -7115,6 +7228,8 @@ function bindPattern(
         applySubstitution(lt, substitution),
         constructors,
         adts,
+        imports,
+        dependencies,
       );
 
       return applySubstitution(lt, substitution);
@@ -7151,6 +7266,8 @@ function bindPattern(
             appliedFieldType,
             constructors,
             adts,
+            imports,
+            dependencies,
           );
         } else {
           // Field without pattern becomes a variable: { x } === { x = x }
@@ -7931,6 +8048,8 @@ function typeFromAnnotationWithConstraints(
   typeAliases: Record<string, TypeAliasInfo> = {},
   protocols: Record<string, ProtocolInfo> = {},
   records: Record<string, RecordInfo> = {},
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map(),
 ): AnnotationResult {
   // Handle QualifiedType at the top level to extract constraints
   if (annotation.kind === "QualifiedType") {
@@ -7959,7 +8078,15 @@ function typeFromAnnotationWithConstraints(
       const constraintTypeArgs: Type[] = [];
       for (const typeArg of astConstraint.typeArgs) {
         constraintTypeArgs.push(
-          typeFromAnnotation(typeArg, context, adts, typeAliases, records),
+          typeFromAnnotation(
+            typeArg,
+            context,
+            adts,
+            typeAliases,
+            records,
+            imports,
+            dependencies,
+          ),
         );
       }
 
@@ -7989,6 +8116,8 @@ function typeFromAnnotationWithConstraints(
       typeAliases,
       protocols,
       records,
+      imports,
+      dependencies,
     );
 
     // Merge constraints from nested qualified types
@@ -8005,6 +8134,8 @@ function typeFromAnnotationWithConstraints(
     adts,
     typeAliases,
     records,
+    imports,
+    dependencies,
   );
   return { type, constraints: [] };
 }
@@ -8034,33 +8165,61 @@ function typeFromAnnotation(
   adts: Record<string, ADTInfo> = {},
   typeAliases: Record<string, TypeAliasInfo> = {},
   records: Record<string, RecordInfo> = {},
+  imports: ImportDeclaration[] = [],
+  dependencies: Map<string, SemanticModule> = new Map(),
 ): Type {
+  // Helper to resolve type names (qualified or unqualified)
+  function resolve(name: string) {
+    return resolveQualifiedType(
+      name,
+      adts,
+      typeAliases,
+      {}, // Opaque types not passed but usually in adts/aliases? wait, typeFromAnnotation signature doesn't take opaque types
+      records,
+      imports,
+      dependencies,
+    );
+  }
+
+  // Need to add opaque types to typeFromAnnotation signature if we want to resolve them properly
+  // For now, assuming adts covers most? No, opaque types are separate.
+  // I will check resolveQualifiedType definition below.
+
   switch (annotation.kind) {
     case "TypeRef": {
       // Check if this is a type variable (lowercase identifier)
       if (isTypeVariable(annotation.name)) {
-        // Type variable: look up or create a fresh TypeVar
+        // ... (existing logic)
+        // Check local context
         let typeVar = context.get(annotation.name);
         if (!typeVar) {
           typeVar = freshType();
           context.set(annotation.name, typeVar);
         }
-
-        // Type variables cannot have arguments
         if (annotation.args.length > 0) {
-          // This is likely an error, but we'll treat it as a type constructor
-          // to maintain compatibility
+           // Treating as type constructor if it has args - fall through? 
+           // Existing logic returns var immediately.
+           // If 'a' has args, it's invalid syntax usually, but parser allows?
+           // Actually, if it has args it shouldn't be a var.
+           // But isTypeVariable check is just lowercase.
+           // 'list' is lowercase but is type alias/con?
+           // Vibe types must be Uppercase.
+           // So lowercase implies var. 
+           // If dot present? 'a.b' is not lowercase? 
+           // 'R.Result' starts with Upper.
         } else {
           return typeVar;
         }
       }
 
-      // Check if this is a type alias
-      const aliasInfo = typeAliases[annotation.name];
-      if (aliasInfo) {
+      // Try to resolve reference (handles qualified names and aliases including imported ones)
+      const resolved = resolve(annotation.name);
+      
+      if (resolved && resolved.kind === "alias") {
+        const aliasInfo = resolved.info as TypeAliasInfo;
         // Expand the type alias
         if (annotation.args.length !== aliasInfo.params.length) {
-          // Mismatch in type arguments - just fall through to treat as type constructor
+          // Mismatch - fall back to constructor
         } else {
           // Convert all argument types first
           const argTypes: Type[] = [];
@@ -8071,12 +8230,13 @@ function typeFromAnnotation(
               adts,
               typeAliases,
               records,
+              imports,
+              dependencies,
             );
             argTypes.push(argType);
           }
 
-          // Create fresh type variables for each alias parameter
-          // and build a substitution map to replace them with actual argument types
+          // Create fresh type variables and substitution
           const aliasContext: TypeVarContext = new Map(context);
           const substitutionMap = new Map<number, Type>();
 
@@ -8087,83 +8247,68 @@ function typeFromAnnotation(
             substitutionMap.set(fresh.id, argTypes[i]!);
           }
 
-          // Convert the alias value with fresh type variables
           const expandedType = typeFromAnnotation(
             aliasInfo.value,
             aliasContext,
             adts,
             typeAliases,
             records,
+            imports,
+            dependencies,
           );
 
-          // Apply substitution to replace fresh vars with actual argument types
           return applySubstitution(expandedType, substitutionMap);
         }
       }
 
-      // Check if this is a named record type
-      const recordInfo = records[annotation.name];
-      if (recordInfo) {
-        // Named record type: expand to structural TypeRecord
-        // Handle type parameters by creating a substitution map
-        if (annotation.args.length !== recordInfo.params.length) {
-          // Mismatch in type arguments - fall through to treat as type constructor
-        } else {
-          // Convert all argument types first
-          const argTypes: Type[] = [];
-          for (let i = 0; i < recordInfo.params.length; i++) {
-            const argType = typeFromAnnotation(
-              annotation.args[i]!,
-              context,
-              adts,
-              typeAliases,
-              records,
-            );
-            argTypes.push(argType);
-          }
-
-          // Create fresh type variables for each record parameter
-          // and build a substitution map to replace them with actual argument types
-          const recordContext: TypeVarContext = new Map(context);
-          const substitutionMap = new Map<number, Type>();
-
-          for (let i = 0; i < recordInfo.params.length; i++) {
-            const paramName = recordInfo.params[i]!;
-            const fresh = freshType();
-            recordContext.set(paramName, fresh);
-            substitutionMap.set(fresh.id, argTypes[i]!);
-          }
-
-          // Build the structural TypeRecord from the record fields
-          const fields: Record<string, Type> = {};
-          for (const field of recordInfo.fields) {
-            // Convert the field's AST TypeExpr to a Type using the record context
-            // This properly handles type parameters (e.g., `a` in `Container a`)
-            const fieldType = typeFromAnnotation(
-              field.typeExpr,
-              recordContext,
-              adts,
-              typeAliases,
-              records,
-            );
-            // Apply substitution to replace fresh vars with actual argument types
-            fields[field.name] = applySubstitution(fieldType, substitutionMap);
-          }
-
-          return {
-            kind: "record",
-            fields,
-          };
-        }
+      if (resolved && resolved.kind === "record") {
+         const recordInfo = resolved.info as RecordInfo;
+         if (annotation.args.length === recordInfo.params.length) {
+            // Convert args
+            const argTypes: Type[] = [];
+            for (let i = 0; i < recordInfo.params.length; i++) {
+                argTypes.push(typeFromAnnotation(annotation.args[i]!, context, adts, typeAliases, records, imports, dependencies));
+            }
+            // Subst map
+            const recordContext: TypeVarContext = new Map(context);
+            const substitutionMap = new Map<number, Type>();
+            for(let i=0; i<recordInfo.params.length; i++) {
+                const pname = recordInfo.params[i]!;
+                const fresh = freshType();
+                recordContext.set(pname, fresh);
+                substitutionMap.set(fresh.id, argTypes[i]!);
+            }
+            // Build fields
+            const fields: Record<string, Type> = {};
+            for (const field of recordInfo.fields) {
+                // We need to resolve field type expr with record context
+                // But wait, typeFromAnnotation recursion needs global context?
+                // No, field.typeExpr is static. 
+                // We need `imports` and `dependencies` here too!
+                const fieldType = typeFromAnnotation(
+                    field.typeExpr, 
+                    recordContext, 
+                    adts, 
+                    typeAliases, 
+                    records,
+                    imports,
+                    dependencies
+                );
+                fields[field.name] = applySubstitution(fieldType, substitutionMap);
+            }
+            return { kind: "record", fields };
+         }
       }
 
-      // Concrete type constructor (Int, String, List, Maybe, etc.)
-      // List is now represented as TypeCon like other ADTs
+      // If resolved to ADT or Opaque, use the CANONICAL name
+      const canonicalName = resolved ? resolved.name : annotation.name;
+
+      // Concrete type constructor
       return {
         kind: "con",
-        name: annotation.name,
+        name: canonicalName,
         args: annotation.args.map((arg) =>
-          typeFromAnnotation(arg, context, adts, typeAliases, records),
+          typeFromAnnotation(arg, context, adts, typeAliases, records, imports, dependencies),
         ),
       };
     }
@@ -8174,6 +8319,8 @@ function typeFromAnnotation(
         adts,
         typeAliases,
         records,
+        imports,
+        dependencies,
       );
       const to = typeFromAnnotation(
         annotation.to,
@@ -8181,6 +8328,8 @@ function typeFromAnnotation(
         adts,
         typeAliases,
         records,
+        imports,
+        dependencies,
       );
       return fn(from, to);
     }
@@ -8188,7 +8337,7 @@ function typeFromAnnotation(
       return {
         kind: "tuple",
         elements: annotation.elements.map((el) =>
-          typeFromAnnotation(el, context, adts, typeAliases, records),
+          typeFromAnnotation(el, context, adts, typeAliases, records, imports, dependencies),
         ),
       };
     }
@@ -8211,6 +8360,8 @@ function typeFromAnnotation(
         adts,
         typeAliases,
         records,
+        imports,
+        dependencies,
       );
     }
   }
@@ -8307,3 +8458,137 @@ function unify(a: Type, b: Type, span: Span, substitution: Substitution) {
     span,
   );
 }
+/**
+ * Helper to resolve a potentially qualified type name (e.g., "R.Result" or "Result").
+ * Looks up in local definitions, aliases, opaque types, records, and imports.
+ */
+function resolveQualifiedType(
+  name: string,
+  adts: Record<string, ADTInfo>,
+  typeAliases: Record<string, TypeAliasInfo>,
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
+  records: Record<string, RecordInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>,
+): {
+  kind: "adt" | "alias" | "opaque" | "record";
+  name: string;
+  info: ADTInfo | TypeAliasInfo | OpaqueTypeInfo | RecordInfo;
+} | null {
+  // 1. Check local definitions first (exact match)
+  if (adts[name]) return { kind: "adt", name, info: adts[name]! };
+  if (typeAliases[name])
+    return { kind: "alias", name, info: typeAliases[name]! };
+  if (opaqueTypes[name])
+    return { kind: "opaque", name, info: opaqueTypes[name]! };
+  if (records[name]) return { kind: "record", name, info: records[name]! };
+
+  // 2. Check if it's a qualified name (e.g. Module.Type)
+  const parts = name.split(".");
+  if (parts.length > 1) {
+    const typeName = parts.pop()!;
+    const moduleName = parts.join("."); // Remaining part is module path/alias
+
+    // Find import matching moduleName
+    for (const imp of imports) {
+      if (imp.alias === moduleName || imp.moduleName === moduleName) {
+        // Found the module import, look up the type in dependencies
+        const depModule = dependencies.get(imp.moduleName);
+        if (depModule) {
+          // Check exports of dependency module
+          if (depModule.adts[typeName])
+            return {
+              kind: "adt",
+              name: typeName,
+              info: depModule.adts[typeName]!,
+            };
+          if (depModule.typeAliases[typeName])
+            return {
+              kind: "alias",
+              name: typeName,
+              info: depModule.typeAliases[typeName]!,
+            };
+          if (depModule.opaqueTypes[typeName])
+            return {
+              kind: "opaque",
+              name: typeName,
+              info: depModule.opaqueTypes[typeName]!,
+            };
+          if (depModule.records[typeName])
+            return {
+              kind: "record",
+              name: typeName,
+              info: depModule.records[typeName]!,
+            };
+        }
+      }
+    }
+  }
+
+  // 3. Not found
+  return null;
+}
+
+/**
+ * Helper to resolve a potentially qualified constructor name (e.g., "R.Just" or "Just").
+ * Looks up in local constructors and imported modules.
+ */
+function resolveQualifiedConstructor(
+  name: string,
+  constructors: Record<string, ConstructorInfo>,
+  adts: Record<string, ADTInfo>,
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>,
+  moduleContext?: string,
+): {
+  name: string;
+  info: ConstructorInfo;
+  adt: ADTInfo;
+} | null {
+  // 0. Check module context if provided (for resolving siblings in same module)
+  if (moduleContext) {
+    const depModule = dependencies.get(moduleContext);
+    if (depModule && depModule.constructors[name]) {
+      const info = depModule.constructors[name]!;
+      const adt = depModule.adts[info.parentType];
+      if (adt) {
+        return { name, info, adt };
+      }
+    }
+    // If not found in module context, fall back or fail?
+    // Usually strict lookup.
+    // But continue to standard lookup just in case?
+  }
+
+  if (constructors[name]) {
+    const info = constructors[name]!;
+    const adt = adts[info.parentType];
+    if (adt) {
+      return { name, info, adt };
+    }
+  }
+
+  // 2. Check if it's a qualified name (e.g. Module.Ctor)
+  const parts = name.split(".");
+  if (parts.length > 1) {
+    const ctorName = parts.pop()!;
+    const moduleName = parts.join("."); 
+
+    for (const imp of imports) {
+      if (imp.alias === moduleName || imp.moduleName === moduleName) {
+        const depModule = dependencies.get(imp.moduleName);
+        if (depModule) {
+          if (depModule.constructors[ctorName]) {
+             const info = depModule.constructors[ctorName]!;
+             const adt = depModule.adts[info.parentType];
+             if (adt) {
+               return { name: ctorName, info, adt };
+             }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+

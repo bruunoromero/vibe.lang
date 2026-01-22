@@ -20,14 +20,30 @@ export type ExhaustivenessResult =
  * @param branches - The list of patterns from the case expression branches.
  * @param scrutineeType - The type of the value being matched (needed to determine ADT/Enum completeness).
  * @param adts - Registry of ADT definitions.
+ * @param adts - Registry of ADT definitions.
  * @param constructors - Registry of constructor definitions.
+ * @param resolveConstructor - Callback to resolve component names to canonical constructor info.
  */
+export type Resolver = (name: string, moduleContext?: string) => { name: string; info: ConstructorInfo; adt: ADTInfo } | undefined;
+
 export function checkExhaustiveness(
   branches: Pattern[],
   scrutineeType: Type,
   adts: Record<string, ADTInfo>,
   constructors: Record<string, ConstructorInfo>,
+  resolveConstructor: Resolver,
 ): ExhaustivenessResult {
+  // Default resolver if none provided (for tests or legacy calls)
+  const resolver = resolveConstructor || ((name: string) => {
+    const info = constructors[name];
+    if (info) {
+       const adt = adts[info.parentType];
+       if (adt) return { name, info, adt };
+    }
+    return undefined;
+  });
+
+  // Convert branches to a matrix of width 1
   // Convert branches to a matrix of width 1 (since 'case' matches a single expression)
   // Each row corresponds to one case branch.
   const matrix: PatternMatrix = branches.map((p) => [p]);
@@ -35,7 +51,7 @@ export function checkExhaustiveness(
   // We test if a "Wildcard" pattern is useful given the matrix.
   // If the wildcard is useful, it means there is at least one value not matched by the matrix,
   // so the match is NOT exhaustive. The 'isUseful' function returns a witness pattern if useful.
-  const witness = isUseful(matrix, [{ kind: "WildcardPattern", span: createDummySpan() }], adts, constructors);
+  const witness = isUseful(matrix, [{ kind: "WildcardPattern", span: createDummySpan() }], adts, constructors, resolver);
 
   if (witness) {
     return { exhaustive: false, missing: patternToString(witness[0]!) };
@@ -56,6 +72,7 @@ function isUseful(
   vector: PatternVector,
   adts: Record<string, ADTInfo>,
   constructors: Record<string, ConstructorInfo>,
+  resolver: Resolver,
 ): Pattern[] | null {
   // Base Case 1: If the matrix has no rows, then nothing matches.
   // So 'vector' is definitely useful (it matches something the matrix doesn't).
@@ -80,10 +97,13 @@ function isUseful(
     const { name, args } = getConstructorDecomposition(p);
     
     // Specialize the matrix for this constructor
-    const specializedMatrix = specialize(matrix, name, args.length, adts, constructors);
+    const resolved = resolver(name);
+    const canonicalName = resolved ? resolved.name : name;
+    
+    const specializedMatrix = specialize(matrix, canonicalName, args.length, adts, constructors, resolver);
     
     // Check usefulness recursively with the expanded arguments
-    const witness = isUseful(specializedMatrix, [...args, ...restVector], adts, constructors);
+    const witness = isUseful(specializedMatrix, [...args, ...restVector], adts, constructors, resolver);
     
     if (witness) {
       // Reconstruct the witness by wrapping the result back in the constructor
@@ -98,12 +118,11 @@ function isUseful(
   // We need to check if the matrix covers all possible constructors for the type of this column.
   if (p.kind === "WildcardPattern" || p.kind === "VarPattern") {
     // Collect the set of constructors present in the first column of the matrix
-    const usedConstructors = getUsedConstructors(matrix);
+    // This also captures the ADT info if available from qualified names
+    const { names: usedConstructors, adt } = getUsedConstructors(matrix, resolver);
     
     // Determine the set of ALL possible constructors for this type
-    // Note: We infer this from the used constructors or type info if available.
-    // For now, we try to deduce completeness from the matrix.
-    const typeInfo = inferTypeInfo(usedConstructors, adts, constructors);
+    const typeInfo = inferTypeInfo(usedConstructors, adt, adts, constructors, resolver);
 
     if (typeInfo.isComplete) {
       // If the matrix covers all constructors, we must check if `vector` is useful 
@@ -114,13 +133,13 @@ function isUseful(
       
       // We iterate over all possible constructors `c`
       for (const ctor of typeInfo.allConstructors) {
-        const arity = getConstructorArity(ctor, constructors, adts);
-        const specializedMatrix = specialize(matrix, ctor, arity, adts, constructors);
+        const arity = getConstructorArity(ctor, constructors, adts, resolver, typeInfo.adtModuleName);
+        const specializedMatrix = specialize(matrix, ctor, arity, adts, constructors, resolver);
         // Specialize the vector (Wildcard becomes c(_, ..., _))
         // We simulate `c(_, ...)` by passing `arity` wildcards
         const dummyArgs = Array(arity).fill({ kind: "WildcardPattern", span: createDummySpan() });
         
-        const witness = isUseful(specializedMatrix, [...dummyArgs, ...restVector], adts, constructors);
+        const witness = isUseful(specializedMatrix, [...dummyArgs, ...restVector], adts, constructors, resolver);
         if (witness) {
            // We found a gap in this constructor branch
            const witnessArgs = witness.slice(0, arity);
@@ -143,7 +162,7 @@ function isUseful(
       // for `M` are only those that were originally Wildcards.
       
       const defaultMatrix = specializeDefault(matrix);
-      const witness = isUseful(defaultMatrix, restVector, adts, constructors);
+      const witness = isUseful(defaultMatrix, restVector, adts, constructors, resolver);
       
       if (witness) {
         // We found a witness in the default case.
@@ -151,7 +170,7 @@ function isUseful(
         const missingCtor = pickMissingConstructor(typeInfo.allConstructors, usedConstructors);
         if (missingCtor) {
            // If we have a concrete missing constructor (e.g., "Nothing"), use it.
-           const arity = getConstructorArity(missingCtor, constructors, adts);
+           const arity = getConstructorArity(missingCtor, constructors, adts, resolver, typeInfo.adtModuleName);
            const args = Array(arity).fill({ kind: "WildcardPattern", span: createDummySpan() });
            return [createConstructorPattern(missingCtor, args), ...witness];
         } else {
@@ -265,7 +284,8 @@ function specialize(
   ctorName: string,
   arity: number,
   adts: Record<string, ADTInfo>,
-  constructors: Record<string, ConstructorInfo>
+  constructors: Record<string, ConstructorInfo>,
+  resolver: Resolver,
 ): PatternMatrix {
   const newMatrix: PatternMatrix = [];
   
@@ -280,7 +300,10 @@ function specialize(
       newMatrix.push([...newArgs, ...rest]);
     } else if (isConstructorLike(p)) {
       const { name, args } = getConstructorDecomposition(p);
-      if (name === ctorName) {
+      const resolved = resolver(name);
+      const canonicalName = resolved ? resolved.name : name;
+      
+      if (canonicalName === ctorName) {
         // We handle ListPattern specially to ensure arity matches the "::" or "[]" view
         // If we specialized on "::", getConstructorDecomposition returns 2 args.
         // If "[]", 0 args.
@@ -309,25 +332,35 @@ function specializeDefault(matrix: PatternMatrix): PatternMatrix {
   return newMatrix;
 }
 
-function getUsedConstructors(matrix: PatternMatrix): Set<string> {
+function getUsedConstructors(matrix: PatternMatrix, resolver: Resolver): { names: Set<string>; adt?: ADTInfo } {
   const used = new Set<string>();
+  let adtInfo: ADTInfo | undefined;
+
   for (const row of matrix) {
     if (row.length > 0) {
       const p = row[0]!;
       if (isConstructorLike(p)) {
         const { name } = getConstructorDecomposition(p);
-        used.add(name);
+        const resolved = resolver(name);
+        if (resolved) {
+           used.add(resolved.name);
+           if (!adtInfo && resolved.adt) adtInfo = resolved.adt;
+        } else {
+           used.add(name);
+        }
       }
     }
   }
-  return used;
+  return { names: used, adt: adtInfo };
 }
 
 function inferTypeInfo(
   usedConstructors: Set<string>,
+  adtContext: ADTInfo | undefined,
   adts: Record<string, ADTInfo>,
-  constructors: Record<string, ConstructorInfo>
-): { isComplete: boolean; allConstructors: string[] } {
+  constructors: Record<string, ConstructorInfo>,
+  resolver: Resolver,
+): { isComplete: boolean; allConstructors: string[]; adtModuleName?: string } {
   if (usedConstructors.size === 0) {
     return { isComplete: false, allConstructors: [] };
   }
@@ -345,20 +378,39 @@ function inferTypeInfo(
   }
 
   // Handle ADTs
+  // If we captured ADT info during scanning, use it directly
+  if (adtContext) {
+      return { 
+        isComplete: true, 
+        allConstructors: adtContext.constructors,
+        adtModuleName: adtContext.moduleName 
+     };
+  }
+
   // Look up parent type of the constructor
+  // The usedConstructors set contains canonical names (resolved)
+  // Use resolver to get rich ADT info if possible
+  const resolved = resolver(firstCtor);
+  if (resolved) {
+     const { info, adt } = resolved;
+     return { 
+        isComplete: true, 
+        allConstructors: adt.constructors,
+        adtModuleName: adt.moduleName 
+     };
+  }
+  
+  // Fallback to local lookup if resolver failed (shouldn't happen if usedConstructors came from resolver)
   const info = constructors[firstCtor];
   if (info) {
     const adt = adts[info.parentType];
     if (adt) {
       // Check if we have all constructors
       const all = adt.constructors;
-      // It is complete if the used set covers all? 
-      // No, `isComplete` here means "Do we know the closed set of all constructors?"
-      // Yes, for ADTs we do.
-      return { isComplete: true, allConstructors: all };
+      return { isComplete: true, allConstructors: all, adtModuleName: adt.moduleName };
     }
   }
-
+  
   // Fallback
   return { isComplete: false, allConstructors: [] };
 }
@@ -366,31 +418,31 @@ function inferTypeInfo(
 function getConstructorArity(
   name: string,
   constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>
+  adts: Record<string, ADTInfo>,
+  resolver: Resolver,
+  moduleName?: string,
 ): number {
   if (name === "::") return 2;
   if (name === "[]") return 0;
   if (name.startsWith("Tuple")) {
-     // extract N from TupleN? Or just trust usage?
-     // We can just parse the number typically, but here we might not have it.
-     // However, we only call this for known constructors.
-     // In `inferTypeInfo` we returned `[firstCtor]` for tuples.
-     // So we can assume the arity matches the usage found in specialization?
-     // Actually, if we are in `inferTypeInfo`'s "isComplete" branch, we are iterating `allConstructors`.
-     // For Tuples, `allConstructors` has 1 element: the tuple constructor itself.
-     // We need to know its arity.
-     // We can pass `usedConstructors` into a better structure to retrieve it.
-     // Hack: extract from name? "Tuple2" -> 2?
-     // Vibe "Tuple" Ast doesn't have explicit names like Tuple2. 
-     // `getConstructorDecomposition` generated `Tuple${len}`.
      const match = name.match(/^Tuple(\d+)$/);
      if (match) return parseInt(match[1]!, 10);
      return 0; // Should not happen
   }
   
+  // Try resolving with module context first
+  if (moduleName) {
+     const resolved = resolver(name, moduleName);
+     if (resolved) return resolved.info.arity;
+  }
+
   const info = constructors[name];
   if (info) return info.arity;
   
+  // Try resolving without module context last attempt
+  const resolved = resolver(name);
+  if (resolved) return resolved.info.arity;
+
   return 0; // Unknown or literal
 }
 
