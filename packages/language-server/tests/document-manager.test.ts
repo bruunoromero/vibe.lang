@@ -126,7 +126,7 @@ describe("DocumentManager", () => {
   describe("getSymbolsAtPosition", () => {
     test("should return symbols for analyzed document", () => {
       const doc = TextDocument.create(
-        "file:///test.vibe",
+        "file:///Test.vibe",
         "vibe",
         1,
         `module Test exposing (..)
@@ -136,7 +136,7 @@ add x y = x
       );
 
       manager.updateDocument(doc);
-      const symbols = manager.getSymbolsAtPosition("file:///test.vibe");
+      const symbols = manager.getSymbolsAtPosition("file:///Test.vibe");
 
       const addSymbol = symbols.find((s) => s.name === "add");
       expect(addSymbol).toBeDefined();
@@ -145,7 +145,7 @@ add x y = x
 
     test("should return type declarations", () => {
       const doc = TextDocument.create(
-        "file:///test.vibe",
+        "file:///Test.vibe",
         "vibe",
         1,
         `module Test exposing (..)
@@ -155,7 +155,7 @@ type Maybe a = Just a | Nothing
       );
 
       manager.updateDocument(doc);
-      const symbols = manager.getSymbolsAtPosition("file:///test.vibe");
+      const symbols = manager.getSymbolsAtPosition("file:///Test.vibe");
 
       const maybeType = symbols.find((s) => s.name === "Maybe");
       expect(maybeType).toBeDefined();
@@ -175,7 +175,7 @@ type Maybe a = Just a | Nothing
   describe("getHoverInfo", () => {
     test("should return type info for values", () => {
       const doc = TextDocument.create(
-        "file:///test.vibe",
+        "file:///Test.vibe",
         "vibe",
         1,
         `module Test exposing (..)
@@ -186,7 +186,7 @@ x = 42
 
       manager.updateDocument(doc);
       // Line 2 (0-indexed), column 0 should be 'x'
-      const hover = manager.getHoverInfo("file:///test.vibe", 2, 0);
+      const hover = manager.getHoverInfo("file:///Test.vibe", 2, 0);
 
       expect(hover).toBeDefined();
       expect(hover!.name).toBe("x");
@@ -194,7 +194,7 @@ x = 42
 
     test("should return undefined for whitespace", () => {
       const doc = TextDocument.create(
-        "file:///test.vibe",
+        "file:///Test.vibe",
         "vibe",
         1,
         `module Test exposing (..)
@@ -205,7 +205,7 @@ x = 42
 
       manager.updateDocument(doc);
       // Empty line
-      const hover = manager.getHoverInfo("file:///test.vibe", 1, 0);
+      const hover = manager.getHoverInfo("file:///Test.vibe", 1, 0);
 
       expect(hover).toBeUndefined();
     });

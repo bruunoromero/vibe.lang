@@ -7,7 +7,7 @@ module Vibe.List exposing
   , (::)
   )
 
-import Vibe.String as String
+-- import Vibe.String as String
 import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..))
 
@@ -42,8 +42,8 @@ implement Appendable (List a) where
 
     [1, 2] ++ [3, 4]  ==  [1, 2, 3, 4]
 -}
-@external "@vibe/runtime" "listAppend"
-_append : List a -> List a -> List a
+-- @external "@vibe/runtime" "listAppend"
+-- _append : List a -> List a -> List a
 
 
 {-| Left fold over a list.

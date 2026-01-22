@@ -44,3 +44,20 @@ export class ImplementingProtocolError extends SemanticError {
     this.name = "ImplementingProtocolError";
   }
 }
+
+/**
+ * Error container for multiple accumulated semantic errors.
+ * Thrown at the end of analysis when errors have been collected.
+ * Follows Elm's approach: per-definition isolation allows collecting
+ * errors across definitions while preserving error quality.
+ */
+export class MultipleSemanticErrors extends Error {
+  constructor(public readonly errors: SemanticError[]) {
+    const count = errors.length;
+    const summary = count === 1
+      ? errors[0]!.message
+      : `${count} semantic error(s) found`;
+    super(summary);
+    this.name = "MultipleSemanticErrors";
+  }
+}

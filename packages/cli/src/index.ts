@@ -3,7 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { lex } from "@vibe/lexer";
 import { parse, ParseError, collectInfixDeclarations } from "@vibe/parser";
-import { analyze, SemanticError, type SemanticModule } from "@vibe/semantics";
+import { analyze, SemanticError, MultipleSemanticErrors, type SemanticModule } from "@vibe/semantics";
 import { lower, printProgram, IRError, type IRProgram } from "@vibe/ir";
 import { loadConfig } from "@vibe/config";
 import {
@@ -394,34 +394,51 @@ function formatAndWriteError(
   fallbackSource: string,
   stderr: NodeJS.WritableStream,
 ): void {
+  // Handle multiple semantic errors (Elm-style error accumulation)
+  if (error instanceof MultipleSemanticErrors) {
+    for (const err of error.errors) {
+      formatSingleError(err, fallbackFilePath, fallbackSource, stderr);
+    }
+    return;
+  }
+
   if (
     error instanceof ParseError ||
     error instanceof SemanticError ||
     error instanceof IRError
   ) {
-    const { span, message } = error;
-    const filePath = (error as any).filePath || fallbackFilePath;
-
-    let actualSource = fallbackSource;
-    if ((error as any).filePath && (error as any).filePath !== fallbackFilePath) {
-      actualSource = fs.readFileSync((error as any).filePath, "utf8");
-    }
-
-    const lines = actualSource.split("\n");
-    const line = lines[span.start.line - 1] || "";
-
-    stderr.write(
-      `${filePath}:${span.start.line}:${span.start.column}: error: ${message}\n`,
-    );
-    stderr.write(`${line}\n`);
-
-    // Write caret indicator
-    const caretPos = span.start.column - 1;
-    if (caretPos >= 0) {
-      stderr.write(`${" ".repeat(caretPos)}^\n`);
-    }
+    formatSingleError(error, fallbackFilePath, fallbackSource, stderr);
   } else {
     stderr.write(`${(error as Error).message}\n`);
+  }
+}
+
+function formatSingleError(
+  error: ParseError | SemanticError | IRError,
+  fallbackFilePath: string,
+  fallbackSource: string,
+  stderr: NodeJS.WritableStream,
+): void {
+  const { span, message } = error;
+  const filePath = (error as any).filePath || fallbackFilePath;
+
+  let actualSource = fallbackSource;
+  if ((error as any).filePath && (error as any).filePath !== fallbackFilePath) {
+    actualSource = fs.readFileSync((error as any).filePath, "utf8");
+  }
+
+  const lines = actualSource.split("\n");
+  const line = lines[span.start.line - 1] || "";
+
+  stderr.write(
+    `${filePath}:${span.start.line}:${span.start.column}: error: ${message}\n`,
+  );
+  stderr.write(`${line}\n`);
+
+  // Write caret indicator
+  const caretPos = span.start.column - 1;
+  if (caretPos >= 0) {
+    stderr.write(`${" ".repeat(caretPos)}^\n`);
   }
 }
 
@@ -562,7 +579,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
     }
 
     // Keep the process alive
-    return new Promise(() => {}) as never;
+    return new Promise(() => { }) as never;
   } catch (error) {
     stderr.write(`${(error as Error).message}\n`);
     process.exit(1);

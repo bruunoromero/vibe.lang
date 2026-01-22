@@ -116,6 +116,8 @@ export function typesEqual(t1: Type, t2: Type): boolean {
         )
       );
     }
+    case "error":
+      return true; // Two error types are always equal
   }
 }
 
@@ -375,6 +377,8 @@ export function formatType(type: Type): string {
         .map(([k, v]) => `${k}: ${formatType(v)}`)
         .join(", ");
       return `{ ${fields} }`;
+    case "error":
+      return "<error>";
   }
 }
 
@@ -501,5 +505,7 @@ export function applyTypeSubstitution(
       }
       return { kind: "record", fields };
     }
+    case "error":
+      return type; // Error types are unchanged by substitution
   }
 }

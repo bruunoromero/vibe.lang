@@ -30,7 +30,7 @@ function compileToJS(
   if (preludeSource) {
     const preludeAst = parse(preludeSource);
     preludeSemantics = analyze(preludeAst, {
-      fileContext: { filePath: "Prelude", srcDir: "" },
+      fileContext: { filePath: "Vibe", srcDir: "" },
     });
   }
 
@@ -1290,7 +1290,7 @@ compute x =
   test("let expression produces same result as inlined expression", () => {
     // The let version and inlined version should be semantically equivalent
     const letSource = `
-module TestLet exposing (..)
+module Test exposing (..)
 
 identity x = 
     let 
@@ -1300,7 +1300,7 @@ identity x =
 `;
 
     const inlinedSource = `
-module TestInlined exposing (..)
+module Test exposing (..)
 
 identity x = x
 `;

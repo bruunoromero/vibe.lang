@@ -321,11 +321,16 @@ export class DocumentManager {
         // Load all dependencies for this module
         const dependencies = this.loadDependencies(cache.parseResult.ast);
 
+        // Convert URI to file path for semantic analysis
+        const docFilePath = cache.uri.startsWith("file://")
+          ? decodeURIComponent(cache.uri.slice(7))
+          : cache.uri;
+
         // Build analysis options
         const analyzeOptions: AnalyzeOptions = {
           dependencies,
           fileContext: {
-            filePath: cache.uri,
+            filePath: docFilePath,
             srcDir: this.projectConfig?.srcDir || "",
           },
         };
@@ -778,6 +783,8 @@ export class DocumentManager {
           .join(", ");
         return `{ ${fields} }`;
       }
+      case "error":
+        return "<error>";
     }
   }
 

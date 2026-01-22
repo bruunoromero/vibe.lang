@@ -26,8 +26,8 @@ import type {
 import { BUILTIN_MODULE_NAME } from "@vibe/syntax";
 
 // Re-export errors for external consumers
-export { SemanticError, ImplementingProtocolError } from "./errors";
-import { SemanticError, ImplementingProtocolError } from "./errors";
+export { SemanticError, ImplementingProtocolError, MultipleSemanticErrors } from "./errors";
+import { SemanticError, ImplementingProtocolError, MultipleSemanticErrors } from "./errors";
 
 // Re-export types for external consumers
 export type {
@@ -163,6 +163,47 @@ let currentConstraintContext: ConstraintContext = createConstraintContext();
  * to validate that constraints on concrete types have matching instances.
  */
 let currentInstanceRegistry: InstanceInfo[] = [];
+
+/**
+ * Module-level error collector for accumulating errors during analysis.
+ * Follows Elm's per-definition isolation: errors from one definition
+ * don't prevent analysis of other definitions.
+ */
+let currentErrors: SemanticError[] = [];
+
+/**
+ * Set to track already-reported errors by their signature (line:col:message).
+ * Prevents duplicate errors when the same undefined name is looked up multiple times.
+ */
+let errorSignatures: Set<string> = new Set();
+
+/**
+ * Error type for recovery - unifies with anything without cascading errors.
+ * Inspired by Rust's ty::Error and TypeScript's ErrorType.
+ */
+const ERROR_TYPE: Type = { kind: "error" };
+
+/**
+ * Add an error to the current error collector.
+ * Uses deduplication by location: same file:line:col won't be added twice.
+ * This prevents duplicate errors from different code paths at the same location.
+ */
+function addError(message: string, span: Span, filePath: string): void {
+  // Dedupe by location only - prevents duplicates from different validation paths
+  const signature = `${filePath}:${span.start.line}:${span.start.column}`;
+  if (!errorSignatures.has(signature)) {
+    errorSignatures.add(signature);
+    currentErrors.push(new SemanticError(message, span, filePath));
+  }
+}
+
+/**
+ * Reset the error collector for a new module analysis.
+ */
+function resetErrors(): void {
+  currentErrors = [];
+  errorSignatures = new Set();
+}
 
 /**
  * Set the instance registry for constraint validation.
@@ -980,6 +1021,9 @@ export function analyze(
 ): SemanticModule {
   const { fileContext } = options;
   const filePath = fileContext?.filePath;
+
+  // Reset error collector for this module analysis
+  resetErrors();
 
   try {
     // ===== Module Declaration Validation =====
@@ -1827,7 +1871,7 @@ export function analyze(
       filePath
     );
 
-    return {
+    const result: SemanticModule = {
       values,
       annotations,
       module: program.module,
@@ -1845,8 +1889,20 @@ export function analyze(
       operators,
       infixDeclarations,
       exports,
+      errors: currentErrors,
     };
+
+    // If errors were collected, throw them as a group (Elm-style: report all, not just first)
+    if (currentErrors.length > 0) {
+      throw new MultipleSemanticErrors(currentErrors);
+    }
+
+    return result;
   } catch (error) {
+    // If we already wrapped errors in MultipleSemanticErrors, re-throw as-is
+    if (error instanceof MultipleSemanticErrors) {
+      throw error;
+    }
     // Enrich SemanticError with file path if available
     if (error instanceof SemanticError && filePath && !error.filePath) {
       throw new SemanticError(error.message, error.span, filePath);
@@ -5543,7 +5599,7 @@ function validateExpressionIdentifiers(
       }
       // Check if it's defined in scope
       if (!symbolExists(scope, name)) {
-        throw new SemanticError(
+        addError(
           `Undefined name '${name}' in implementation of '${methodName}' for protocol '${protocolName}'`,
           expr.span,
           filePath
@@ -5837,7 +5893,7 @@ function validateExpressionIdentifiers(
     case "RecordUpdate": {
       // Check that the base record exists
       if (!symbolExists(scope, expr.base)) {
-        throw new SemanticError(
+        addError(
           `Undefined name '${expr.base}' in implementation of '${methodName}' for protocol '${protocolName}'`,
           expr.span,
           filePath
@@ -7055,6 +7111,11 @@ function analyzeExpr(
       );
       const concrete = applySubstitution(targetType, substitution);
 
+      // If target is error type, propagate without additional errors (prevent cascading)
+      if (concrete.kind === "error") {
+        return ERROR_TYPE;
+      }
+
       let fieldType: Type | undefined;
 
       if (concrete.kind === "record") {
@@ -8155,7 +8216,10 @@ function lookupSymbolWithConstraints(
   if (scope.parent) {
     return lookupSymbolWithConstraints(scope.parent, name, span, substitution, filePath);
   }
-  throw new SemanticError(`Undefined name '${name}'`, span, filePath);
+  // Undefined name - add error and return ERROR_TYPE for recovery
+  // This allows analysis to continue for other definitions (Elm-style per-definition isolation)
+  addError(`Undefined name '${name}'`, span, filePath);
+  return { type: ERROR_TYPE, constraints: [] };
 }
 
 /**
@@ -9201,6 +9265,11 @@ function occursIn(id: number, type: Type, substitution: Substitution): boolean {
 function unify(a: Type, b: Type, span: Span, substitution: Substitution, filePath: string) {
   const left = applySubstitution(a, substitution);
   const right = applySubstitution(b, substitution);
+
+  // Error types unify with anything - prevents cascading errors
+  if (left.kind === "error" || right.kind === "error") {
+    return;
+  }
 
   if (left.kind === "var") {
     if (!typesEqual(left, right)) {

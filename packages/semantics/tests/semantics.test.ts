@@ -12,8 +12,14 @@ import { analyze, SemanticError } from "../src/index.ts";
 const expectError = (source: string, message: string) => {
   let fullSource = source;
   const trimmed = source.trim();
+  let moduleName = "Test"; // Default module name
 
   if (trimmed.startsWith("module")) {
+    // Extract the module name from the source
+    const moduleMatch = trimmed.match(/^module\s+(\S+)/);
+    if (moduleMatch) {
+      moduleName = moduleMatch[1]!;
+    }
     // Has module declaration - insert OPERATOR_PREAMBLE after module/imports
     const lines = source.split("\n");
     let insertIndex = 0;
@@ -41,7 +47,7 @@ const expectError = (source: string, message: string) => {
     fullSource =
       "module Test exposing (..)\n" + OPERATOR_PREAMBLE + "\n" + source;
   }
-  expect(() => analyze(parse(fullSource), { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(message);
+  expect(() => analyze(parse(fullSource), { fileContext: { filePath: moduleName, srcDir: "" } })).toThrow(message);
 };
 
 /**
@@ -54,8 +60,14 @@ const expectError = (source: string, message: string) => {
 const analyzeNoPrelude = (source: string) => {
   let fullSource = source;
   const trimmed = source.trim();
+  let moduleName = "Test"; // Default module name
 
   if (trimmed.startsWith("module")) {
+    // Extract the module name from the source
+    const moduleMatch = trimmed.match(/^module\s+(\S+)/);
+    if (moduleMatch) {
+      moduleName = moduleMatch[1]!;
+    }
     // Has module declaration - insert TYPE_PREAMBLE after module/imports
     const lines = source.split("\n");
     let insertIndex = 0;
@@ -81,7 +93,7 @@ const analyzeNoPrelude = (source: string) => {
     // No module or imports - add module declaration
     fullSource = "module Test exposing (..)\n" + TYPE_PREAMBLE + "\n" + source;
   }
-  return analyze(parse(fullSource), { fileContext: { filePath: "Test", srcDir: "" } });
+  return analyze(parse(fullSource), { fileContext: { filePath: moduleName, srcDir: "" } });
 };
 
 /**
@@ -215,16 +227,16 @@ ffiCompute : Int -> Int`,
 
   test("rejects module exposing missing value", () => {
     expectError(
-      `module Main exposing (foo)
+      `module Test exposing (foo)
 bar = 1`,
       "Module exposes 'foo'",
     );
   });
 
   test("accepts module exposing existing value", () => {
-    const result = analyzeNoPrelude(`module Main exposing (bar)
+    const result = analyzeNoPrelude(`module Test exposing (bar)
 bar = 1`);
-    expect(result.module?.name).toBe("Main");
+    expect(result.module?.name).toBe("Test");
   });
 
   test("rejects duplicate imports of the same module", () => {

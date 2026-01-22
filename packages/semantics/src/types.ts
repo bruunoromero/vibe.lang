@@ -22,7 +22,13 @@ export type TypeCon = { kind: "con"; name: string; args: Type[] };
 export type TypeFun = { kind: "fun"; from: Type; to: Type };
 export type TypeTuple = { kind: "tuple"; elements: Type[] };
 export type TypeRecord = { kind: "record"; fields: Record<string, Type> };
-export type Type = TypeVar | TypeCon | TypeFun | TypeTuple | TypeRecord;
+/**
+ * Error type for recovery during semantic analysis.
+ * Unifies with any type without producing cascading errors.
+ * Inspired by Rust's ty::Error / TypeScript's ErrorType.
+ */
+export type TypeError = { kind: "error" };
+export type Type = TypeVar | TypeCon | TypeFun | TypeTuple | TypeRecord | TypeError;
 
 /**
  * Constraint represents a protocol requirement on a type.
@@ -376,6 +382,8 @@ export type SemanticModule = {
   infixDeclarations: InfixDeclaration[];
   /** Computed export information for this module */
   exports: ExportInfo;
+  /** Accumulated semantic errors during analysis (Elm-style per-definition isolation) */
+  errors: import("./errors").SemanticError[];
 };
 
 export interface AnalyzeOptions {

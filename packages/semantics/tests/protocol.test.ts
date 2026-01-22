@@ -96,10 +96,17 @@ implement Num Int where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(
-      "Undefined name 'undefinedFunction'",
-    );
+    // Error accumulation wraps errors in MultipleSemanticErrors
+    let thrownError: any;
+    try {
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    } catch (e) {
+      thrownError = e;
+    }
+    expect(thrownError).toBeDefined();
+    // Check that one of the errors mentions the undefined function
+    const errorMessages = thrownError.errors?.map((e: any) => e.message) ?? [thrownError.message];
+    expect(errorMessages.some((msg: string) => msg.includes("undefinedFunction"))).toBe(true);
   });
 
   test("validates module-qualified access in implementation", () => {
@@ -1646,7 +1653,7 @@ protocol Eq a where
 type Color = Red | Green | Blue
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, { fileContext: { filePath: "Vibe.vibe", srcDir: "" } });
 
     // Should auto-generate Eq instance
     expect(
@@ -1683,7 +1690,7 @@ implement Eq Int where
 type Point = { x : Int, y : Int }
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
 
     // Should auto-generate Eq instance for Point
     expect(
@@ -1711,7 +1718,7 @@ protocol Eq a where
 type FuncHolder = Holder (Int -> Int)
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
 
     // Should NOT auto-generate Eq instance (function type can't implement Eq)
     expect(
@@ -1746,7 +1753,7 @@ implement Eq Color where
   (==) _ _ = True
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
 
     // Should only have one Eq instance for Color (the explicit one)
     const colorInstances = result.instances.filter(
@@ -1776,7 +1783,7 @@ protocol Eq a where
 type Box a = MkBox a
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
 
     // Should auto-generate Eq instance with Eq a constraint
     const boxInstance = result.instances.find(
@@ -1802,7 +1809,7 @@ protocol Eq a where
 type Color = Red | Green | Blue
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, { fileContext: { filePath: "CustomModule", srcDir: "" } });
 
     // Should NOT auto-generate Eq instance (not from Vibe/Vibe.Basics)
     expect(
