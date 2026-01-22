@@ -8,7 +8,6 @@ module Vibe exposing
     , Never
     , Maybe(..)
     , Result(..)
-    , Pair(..)
     , Num(..)
     , (|>)
     , (<|)
@@ -34,7 +33,6 @@ import Vibe.Char
 import Vibe.List exposing ((::))
 import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Result exposing (Result(..))
-import Vibe.Pair exposing (Pair(..))
 import Vibe.Never exposing (Never, never)
 
 

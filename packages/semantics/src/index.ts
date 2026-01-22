@@ -216,6 +216,7 @@ function validateConstraintsEagerly(
       applySubstitution(t, substitution),
     );
 
+
     // Check if any type arg has become a concrete non-variable type
     // (meaning it's no longer polymorphic and can be validated now)
     const hasConcreteNonVarArg = resolvedTypeArgs.some((t) => {
@@ -1397,16 +1398,30 @@ export function analyze(
   // 2. Can implement Eq (no function fields, all fields can implement Eq)
   for (const decl of program.declarations) {
     if (decl.kind === "TypeDeclaration") {
-      const instance = autoImplementEqForType(
+      const eqInstance = autoImplementProtocolForType(
+        "Eq",
         decl,
         protocols,
         instances,
         program.declarations,
         currentModuleName,
       );
-      if (instance) {
-        instances.push(instance);
-        localInstances.push(instance);
+      if (eqInstance) {
+        instances.push(eqInstance);
+        localInstances.push(eqInstance);
+      }
+
+      const showInstance = autoImplementProtocolForType(
+        "Show",
+        decl,
+        protocols,
+        instances,
+        program.declarations,
+        currentModuleName,
+      );
+      if (showInstance) {
+        instances.push(showInstance);
+        localInstances.push(showInstance);
       }
     }
   }
@@ -3279,54 +3294,182 @@ function canDeclImplementProtocol(
  * Returns the generated instance, or undefined if Eq cannot be implemented.
  * Only auto-implements for the Vibe/Vibe.Basics Eq protocol, not custom Eq protocols.
  */
-function autoImplementEqForType(
+
+function autoImplementProtocolForType(
+  protocolName: string,
   decl: TypeDeclaration,
   protocols: Record<string, ProtocolInfo>,
   instances: InstanceInfo[],
   declarations: Declaration[],
   moduleName: string | undefined,
 ): InstanceInfo | undefined {
-  // Find the Eq protocol
-  const eqProtocol = protocols["Eq"];
-  if (!eqProtocol) {
-    // Eq protocol not available (may not be imported)
-    return undefined;
-  }
+  // Find the protocol
+  const protocol = protocols[protocolName];
+  if (!protocol) return undefined;
 
-  // Only auto-implement for the Vibe/Vibe.Basics Eq protocol
-  // This prevents auto-generation for test fixtures or custom Eq protocols
-  const isVibeEq =
-    eqProtocol.moduleName === "Vibe" || eqProtocol.moduleName === "Vibe.Basics";
-  if (!isVibeEq) {
-    return undefined;
-  }
+  // Only auto-implement for Vibe/Vibe.Basics protocols
+  const isVibe =
+    protocol.moduleName === "Vibe" || protocol.moduleName === "Vibe.Basics";
+  if (!isVibe) return undefined;
 
-  // Check if type can implement Eq
+  // Check if type can implement protocol
   if (
-    !canDeclImplementProtocol(decl, "Eq", declarations, instances, protocols)
+    !canDeclImplementProtocol(decl, protocolName, declarations, instances, protocols)
   ) {
     return undefined;
   }
 
-  // Check for existing explicit Eq implementation
+  // Check for existing explicit implementation
   for (const existing of instances) {
-    if (existing.protocolName !== "Eq") continue;
+    if (existing.protocolName !== protocolName) continue;
     if (existing.typeArgs.length === 0) continue;
     const typeArg = existing.typeArgs[0];
     if (typeArg?.kind === "con" && (typeArg as TypeCon).name === decl.name) {
-      // Already has an Eq implementation
+      // Already has an implementation
       return undefined;
     }
   }
 
-  // Generate the Eq implementation (use the same generator as explicit implementing)
-  return generateEqImplementation(
-    decl,
-    eqProtocol,
+  if (protocolName === "Eq") {
+    return generateEqImplementation(
+      decl,
+      protocol,
+      moduleName,
+      {},
+      declarations,
+    );
+  } else if (protocolName === "Show") {
+    return generateShowImplementation(
+      decl,
+      protocol,
+      moduleName,
+      declarations
+    );
+  }
+
+  return undefined;
+}
+
+function generateShowImplementation(
+  decl: TypeDeclaration,
+  protocol: ProtocolInfo,
+  moduleName: string | undefined,
+  declarations: Declaration[],
+): InstanceInfo {
+  // 1. Build type arguments for the instance
+  const typeArgs: Type[] = [
+    {
+      kind: "con",
+      name: decl.name,
+      args: decl.params.map((param): TypeVar => ({
+         kind: "var",
+         id: freshType().id,
+      })),
+    },
+  ];
+
+  // Re-map params
+  const paramMap = new Map<string, TypeVar>();
+  const headType = typeArgs[0] as TypeCon;
+  decl.params.forEach((p, i) => {
+    paramMap.set(p, headType.args[i] as TypeVar);
+  });
+
+  // 2. Generate constraints
+  const constraints: Constraint[] = decl.params.map((p) => ({
+      protocolName: "Show",
+      typeArgs: [paramMap.get(p)!],
+  }));
+
+  // 3. Generate toString implementation
+  const methods = new Map<string, Expr>();
+  const span = decl.span;
+  let body: Expr;
+
+  const str = (s: string): Expr => ({ kind: "String", value: `"${s}"`, span });
+  const append = (a: Expr, b: Expr): Expr => ({
+      kind: "Infix", left: a, operator: "++", right: b, span
+  });
+  const toString = (val: Expr): Expr => ({
+      kind: "Apply", 
+      callee: { kind: "Var", name: "toString", namespace: "lower", span },
+      args: [val],
+      span
+  });
+
+  if (decl.recordFields) {
+      // Type(field = val, ...)
+      let expr: Expr = str(`${decl.name}(`);
+      
+      decl.recordFields.forEach((field, i) => {
+          if (i > 0) expr = append(expr, str(", "));
+          
+          expr = append(expr, str(`${field.name} = `));
+          
+          const fieldAccess: Expr = {
+             kind: "FieldAccess",
+             target: { kind: "Var", name: "x_impl", namespace: "lower", span },
+             field: field.name,
+             span
+          };
+          expr = append(expr, toString(fieldAccess));
+      });
+      
+      expr = append(expr, str(")"));
+      body = expr;
+  } else if (decl.constructors) {
+      // case x_impl of ...
+      const branches = decl.constructors.map(ctor => {
+          const args = ctor.args.map((_, i) => `a${i}`);
+          const pattern: Pattern = {
+              kind: "ConstructorPattern",
+              name: ctor.name,
+              args: args.map(a => ({ kind: "VarPattern", name: a, span })),
+              span
+          };
+          
+          let expr: Expr;
+          if (args.length === 0) {
+              expr = str(`${ctor.name}`);
+          } else {
+              expr = str(`${ctor.name}(`);
+              args.forEach((a, i) => {
+                  if (i > 0) expr = append(expr, str(", "));
+                  expr = append(expr, toString({ kind: "Var", name: a, namespace: "lower", span }));
+              });
+              expr = append(expr, str(")"));
+          }
+          
+          return { pattern, body: expr, span };
+      });
+      
+      body = {
+          kind: "Case",
+          discriminant: { kind: "Var", name: "x_impl", namespace: "lower", span },
+          branches,
+          span
+      };
+  } else {
+    // Should not happen for valid types? Opaque?
+    body = str(`${decl.name}`);
+  }
+
+  methods.set("toString", {
+     kind: "Lambda",
+     args: [{ kind: "VarPattern", name: "x_impl", span }],
+     body,
+     span
+  });
+
+  return {
+    protocolName: "Show",
     moduleName,
-    {}, // adts not needed for generation
-    declarations,
-  );
+    typeArgs,
+    constraints,
+    methods,
+    explicitMethods: new Set(["toString"]),
+    span,
+  };
 }
 
 /**
@@ -3533,10 +3676,6 @@ function generateEqImplementation(
         field: field.name,
         span,
       },
-      operatorInfo: {
-        precedence: 4, // Default for ==
-        associativity: "none",
-      },
       span,
     }));
 
@@ -3548,10 +3687,6 @@ function generateEqImplementation(
         left: acc,
         operator: "&&",
         right: check,
-        operatorInfo: {
-          precedence: 3, // Default for &&
-          associativity: "right",
-        },
         span,
       }));
     }
@@ -3953,6 +4088,7 @@ function findInstanceForConstraint(
   typeArgs: Type[],
   instances: InstanceInfo[],
 ): boolean {
+  throw new Error("ENTRY CONFIRMED");
   for (const inst of instances) {
     if (inst.protocolName !== protocolName) continue;
     if (inst.typeArgs.length !== typeArgs.length) continue;
@@ -3967,6 +4103,14 @@ function findInstanceForConstraint(
     }
     if (allMatch) return true;
   }
+
+  // Attempt synthetic derivation (Tuple/Record)
+  if (typeArgs.length > 0) {
+    if (trySynthesizeInstance(protocolName, typeArgs[0]!, instances)) {
+        return true;
+    }
+  }
+
   return false;
 }
 
@@ -4455,7 +4599,6 @@ function checkConstraintSatisfiability(
   for (const typeArg of constraint.typeArgs) {
     // Get the outermost shape of the type
     const shape = getTypeShape(typeArg);
-
     if (shape === "fun") {
       // This is a function type. Check if there's ANY instance for function types.
       // If not, this constraint can never be satisfied.
@@ -4473,6 +4616,9 @@ function checkConstraintSatisfiability(
     }
 
     if (shape === "tuple") {
+      if (constraint.protocolName === "Eq" || constraint.protocolName === "Show") {
+          return { possible: true };
+      }
       // Similar check for tuple types
       const hasTupleInstance = instances.some((inst) => {
         if (inst.protocolName !== constraint.protocolName) return false;
@@ -4487,6 +4633,9 @@ function checkConstraintSatisfiability(
     }
 
     if (shape === "record") {
+      if (constraint.protocolName === "Eq" || constraint.protocolName === "Show") {
+          return { possible: true };
+      }
       // Similar check for record types
       const hasRecordInstance = instances.some((inst) => {
         if (inst.protocolName !== constraint.protocolName) return false;
@@ -4639,6 +4788,13 @@ function validateConstraintSatisfiable(
     };
   }
 
+  // Attempt synthetic derivation (Tuple/Record)
+  if (constraint.typeArgs.length === 1) {
+    if (trySynthesizeInstance(constraint.protocolName, constraint.typeArgs[0]!, instances)) {
+        return { found: true };
+    }
+  }
+
   return { found: false, reason: "no-instance" };
 }
 
@@ -4699,6 +4855,31 @@ function matchTypeArgForInstance(
     );
   }
 
+  if (instArg.kind === "tuple" && constraintArg.kind === "tuple") {
+    if (instArg.elements.length !== constraintArg.elements.length) return false;
+    for (let i = 0; i < instArg.elements.length; i++) {
+        if (!matchTypeArgForInstance(instArg.elements[i]!, constraintArg.elements[i]!, substitution)) {
+            return false;
+        }
+    }
+    return true;
+  }
+
+  if (instArg.kind === "record" && constraintArg.kind === "record") {
+    const instKeys = Object.keys(instArg.fields).sort();
+    const constraintKeys = Object.keys(constraintArg.fields).sort();
+    if (instKeys.length !== constraintKeys.length) return false;
+    
+    for (let i = 0; i < instKeys.length; i++) {
+        const key = instKeys[i]!;
+        if (key !== constraintKeys[i]) return false;
+        if (!matchTypeArgForInstance(instArg.fields[key]!, constraintArg.fields[key]!, substitution)) {
+            return false;
+        }
+    }
+    return true;
+  }
+
   return typesEqual(instArg, constraintArg);
 }
 
@@ -4709,7 +4890,7 @@ function matchTypeArgForInstance(
  */
 function findInstanceForTypeWithReason(
   protocolName: string,
-  concreteType: TypeCon,
+  concreteType: Type,
   instances: InstanceInfo[],
 ): InstanceLookupResult {
   let hasPolymorphicInstance = false;
@@ -4725,38 +4906,54 @@ function findInstanceForTypeWithReason(
     if (!instTypeArg) continue;
 
     // Exact match: instance for the concrete type
-    if (
-      instTypeArg.kind === "con" &&
-      instTypeArg.name === concreteType.name &&
-      instTypeArg.args.length === concreteType.args.length
-    ) {
-      // Check if type arguments match (for parameterized types like List Int)
-      // Use instanceTypeMatches which allows type variables in the instance to match anything
-      let argsMatch = true;
-      for (let i = 0; i < instTypeArg.args.length; i++) {
-        if (!instanceTypeMatches(instTypeArg.args[i]!, concreteType.args[i]!)) {
-          argsMatch = false;
-          break;
+    let matchesStructure = false;
+    
+    if (instTypeArg.kind === concreteType.kind) {
+        if (instTypeArg.kind === "con" && concreteType.kind === "con") {
+            matchesStructure = instTypeArg.name === concreteType.name && 
+                               instTypeArg.args.length === concreteType.args.length;
+        } else if (instTypeArg.kind === "tuple" && concreteType.kind === "tuple") {
+             matchesStructure = instTypeArg.elements.length === concreteType.elements.length;
+        } else if (instTypeArg.kind === "record" && concreteType.kind === "record") {
+             // Exact record match is strict, usually relying on structural matching below
+             // But for safety, we can check keys
+             const k1 = Object.keys(instTypeArg.fields).sort();
+             const k2 = Object.keys(concreteType.fields).sort();
+             matchesStructure = k1.length === k2.length && k1.every((k, i) => k === k2[i]);
+        } else {
+             // Functions etc
+             matchesStructure = true; 
         }
-      }
-      if (argsMatch) {
-        return { found: true };
+    }
+
+    if (matchesStructure) {
+      // Check if type arguments match
+      let argsMatch = true;
+      
+      // Helper to get sub-args based on kind
+      const getArgs = (t: Type): Type[] => {
+        if (t.kind === "con") return t.args;
+        if (t.kind === "tuple") return t.elements;
+        // records handled by recursive matcher logic usually, but here we walk explicitly?
+        // Actually, let's delegate to instanceTypeMatches if mostly structural!
+        return [];
+      };
+
+      // Simplification: use instanceTypeMatches which I made robust
+      if (instanceTypeMatches(instTypeArg, concreteType)) {
+          return { found: true };
       }
     }
 
-    // Polymorphic match: instance with type variable that could match
-    // BUT we need to check if the instance's constraints are satisfiable
+    // Polymorphic match ... (unchanged logic)
     if (instTypeArg.kind === "var") {
       hasPolymorphicInstance = true;
-      // This is a polymorphic instance - check if constraints are satisfiable
       if (inst.constraints.length === 0) {
-        return { found: true }; // No constraints, always matches
+        return { found: true }; 
       }
 
-      // Check if all constraints can be satisfied for the concrete type
       let allConstraintsSatisfied = true;
       for (const constraint of inst.constraints) {
-        // For each constraint like `Eq a`, check if `Eq concreteType` exists
         const constraintResult = findInstanceForTypeWithReason(
           constraint.protocolName,
           concreteType,
@@ -4780,7 +4977,11 @@ function findInstanceForTypeWithReason(
     }
   }
 
-  // If we found a polymorphic instance but constraints weren't satisfied
+  // Hook for synthetic instances (Tuple/Record auto-derivation)
+  if (trySynthesizeInstance(protocolName, concreteType, instances)) {
+     return { found: true };
+  }
+
   if (hasPolymorphicInstance && firstUnsatisfiedConstraint) {
     return {
       found: false,
@@ -4798,7 +4999,7 @@ function findInstanceForTypeWithReason(
  */
 function findInstanceForTypeInternal(
   protocolName: string,
-  concreteType: TypeCon,
+  concreteType: Type,
   instances: InstanceInfo[],
 ): boolean {
   return findInstanceForTypeWithReason(protocolName, concreteType, instances)
@@ -4810,9 +5011,266 @@ function findInstanceForTypeInternal(
  * expressions are defined in the current scope. This ensures we catch undefined
  * function references at compile time.
  *
- * This is called after all value declarations have been processed, so the
- * globalScope contains all defined symbols.
+
  */
+
+
+const syntheticSpan: Span = { start: {offset:0, line:0, column:0}, end: {offset:0, line:0, column:0} };
+
+function trySynthesizeInstance(
+  protocolName: string,
+  type: Type,
+  instances: InstanceInfo[],
+): boolean {
+  if (protocolName !== "Eq" && protocolName !== "Show") return false;
+
+  // Tuples
+  if (type.kind === "tuple") {
+    // 1. Check constraints on elements
+    for (const elem of type.elements) {
+      if (!findInstanceForTypeInternal(protocolName, elem, instances)) {
+        return false;
+      }
+    }
+
+    // 2. Generate instance
+    const instance = generateSyntheticInstance(protocolName, type);
+    instances.push(instance);
+    return true;
+  }
+
+  // Records
+  if (type.kind === "record") {
+    // 1. Check constraints on fields
+    for (const fieldType of Object.values(type.fields)) {
+      if (!findInstanceForTypeInternal(protocolName, fieldType, instances)) {
+        return false;
+      }
+    }
+
+    // 2. Generate instance
+    const instance = generateSyntheticInstance(protocolName, type);
+    instances.push(instance);
+    return true;
+  }
+
+  return false;
+}
+
+function generateSyntheticInstance(
+  protocolName: string,
+  type: Type,
+): InstanceInfo {
+  const methods = new Map<string, Expr>();
+  const span = syntheticSpan;
+
+  if (protocolName === "Eq") {
+    methods.set("==", generateSyntheticEq(type));
+    // /= default impl handles it
+  } else if (protocolName === "Show") {
+    methods.set("toString", generateSyntheticShow(type));
+  }
+
+  return {
+    protocolName,
+    moduleName: "Synthetic",
+    typeArgs: [type],
+    constraints: [], // Constraints checked at synthesis time, effectively monomorphic instance?
+    // Wait, if we use type variables? 
+    // findInstanceForTypeInternal takes CONCRETE type. So we generate CONCRETE instance.
+    // e.g. Instance Eq (Int, Int)
+    methods,
+    explicitMethods: new Set(methods.keys()),
+    span,
+  };
+}
+
+function generateSyntheticEq(type: Type): Expr {
+    const span = syntheticSpan;
+    // (==) x y = ...
+    if (type.kind === "tuple") {
+        // case (x, y) of ((x0, x1...), (y0, y1...)) -> (x0 == y0) && (x1 == y1)
+        const arity = type.elements.length;
+        const xVars = Array.from({length: arity}, (_, i) => `x${i}`);
+        const yVars = Array.from({length: arity}, (_, i) => `y${i}`);
+        
+        let body: Expr = { kind: "Var", name: "True", namespace: "upper", span };
+        
+        if (arity > 0) {
+            const checks: Expr[] = xVars.map((xv, i) => ({
+                kind: "Infix",
+                left: { kind: "Var", name: xv, namespace: "lower", span },
+                operator: "==",
+                right: { kind: "Var", name: yVars[i]!, namespace: "lower", span },
+                span,
+            }));
+            
+            body = checks.reduce((acc, check) => ({
+                kind: "Infix",
+                left: acc,
+                operator: "&&",
+                right: check,
+                span
+            }));
+        }
+
+        const pattern: Pattern = {
+            kind: "TuplePattern",
+            elements: [
+                { kind: "TuplePattern", elements: xVars.map(v => ({ kind: "VarPattern", name: v, span })), span },
+                { kind: "TuplePattern", elements: yVars.map(v => ({ kind: "VarPattern", name: v, span })), span },
+            ],
+            span
+        };
+        
+        return {
+            kind: "Lambda",
+            args: [{ kind: "VarPattern", name: "x_impl", span }, { kind: "VarPattern", name: "y_impl", span }],
+            body: {
+                kind: "Case",
+                discriminant: { 
+                    kind: "Tuple", 
+                    elements: [
+                        { kind: "Var", name: "x_impl", namespace: "lower", span },
+                        { kind: "Var", name: "y_impl", namespace: "lower", span }
+                    ], 
+                    span 
+                },
+                branches: [{ pattern, body, span }],
+                span
+            },
+            span
+        };
+    } else if (type.kind === "record") {
+        // x.f1 == y.f1 && ...
+        const fields = Object.keys(type.fields).sort();
+        let body: Expr = { kind: "Var", name: "True", namespace: "upper", span };
+        
+        if (fields.length > 0) {
+             const checks: Expr[] = fields.map(f => ({
+                kind: "Infix",
+                left: { 
+                    kind: "FieldAccess", 
+                    target: { kind: "Var", name: "x_impl", namespace: "lower", span },
+                    field: f,
+                    span
+                },
+                operator: "==",
+                right: { 
+                    kind: "FieldAccess", 
+                    target: { kind: "Var", name: "y_impl", namespace: "lower", span },
+                    field: f,
+                    span
+                },
+                span,
+            }));
+             body = checks.reduce((acc, check) => ({
+                kind: "Infix",
+                left: acc,
+                operator: "&&",
+                right: check,
+                span
+            }));
+        }
+        
+        return {
+            kind: "Lambda",
+            args: [{ kind: "VarPattern", name: "x_impl", span }, { kind: "VarPattern", name: "y_impl", span }],
+            body,
+            span
+        };
+    }
+    throw new Error("Unsupported type for synthetic Eq");
+}
+
+function generateSyntheticShow(type: Type): Expr {
+    const span = syntheticSpan;
+    // toString x = ...
+    
+    if (type.kind === "tuple") {
+        // case x of (x0, x1...) -> "(" ++ toString x0 ++ ", " ++ toString x1 ++ ")"
+        const arity = type.elements.length;
+        const vars = Array.from({length: arity}, (_, i) => `x${i}`);
+        
+        // Helper to make string literal expr
+        const str = (s: string): Expr => ({ kind: "String", value: `"${s}"`, span });
+        // Helper for append: a ++ b
+        const append = (a: Expr, b: Expr): Expr => ({
+            kind: "Infix", left: a, operator: "++", right: b, span
+        });
+        // Helper for toString call: toString val
+        const toStringCall = (valName: string): Expr => ({
+            kind: "Apply", 
+            callee: { kind: "Var", name: "toString", namespace: "lower", span },
+            args: [{ kind: "Var", name: valName, namespace: "lower", span }],
+            span
+        });
+        
+        let body: Expr = str("(");
+        
+        vars.forEach((v, i) => {
+            if (i > 0) body = append(body, str(", "));
+            body = append(body, toStringCall(v));
+        });
+        
+        body = append(body, str(")"));
+        
+        const pattern: Pattern = {
+            kind: "TuplePattern",
+            elements: vars.map(v => ({ kind: "VarPattern", name: v, span })),
+            span
+        };
+        
+        return {
+             kind: "Lambda",
+             args: [{ kind: "VarPattern", name: "x_impl", span }],
+             body: {
+                 kind: "Case",
+                 discriminant: { kind: "Var", name: "x_impl", namespace: "lower", span },
+                 branches: [{ pattern, body, span }],
+                 span
+             },
+             span
+        };
+        
+    } else if (type.kind === "record") {
+        // "Record(x = " ++ toString x.x ++ ", ...)"
+        // But anonymous records usually printed as { x = ..., y = ... }
+        // User requested: "Point(x = ..., y = ...)" for named types.
+        // But here we have TypeRecord which is structural/anonymous (unless it came from TypeDeclaration, but then it's wrapped in TypeCon?)
+        // If it's TypeRecord, it's anonymous record `{x: Int}`.
+        // I'll emit `{ x = ..., ... }`.
+        
+        const fields = Object.keys(type.fields).sort();
+        const str = (s: string): Expr => ({ kind: "String", value: `"${s}"`, span });
+        const append = (a: Expr, b: Expr): Expr => ({
+            kind: "Infix", left: a, operator: "++", right: b, span
+        });
+        const toStringField = (f: string): Expr => ({
+            kind: "Apply", 
+            callee: { kind: "Var", name: "toString", namespace: "lower", span },
+            args: [{ kind: "FieldAccess", target: { kind: "Var", name: "x_impl", namespace: "lower", span }, field: f, span }],
+            span
+        });
+        
+        let body: Expr = str("{ ");
+        fields.forEach((f, i) => {
+            if (i > 0) body = append(body, str(", "));
+            body = append(body, str(`${f} = `));
+            body = append(body, toStringField(f));
+        });
+        body = append(body, str(" }"));
+        
+        return {
+            kind: "Lambda",
+            args: [{ kind: "VarPattern", name: "x_impl", span }],
+            body,
+            span
+        };
+    }
+    throw new Error("Unsupported type for synthetic Show");
+}
+
 function validateProtocolDefaultImplementations(
   protocols: Record<string, ProtocolInfo>,
   globalScope: Scope,
