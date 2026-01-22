@@ -1,7 +1,11 @@
 module Vibe.Result exposing
     ( Result(..)
+    , isOk
+    , isErr
     )
 
+
+import Vibe.Basics exposing (not)
 
 {-| Represents a computation that can succeed or fail.
 
@@ -19,3 +23,13 @@ module Vibe.Result exposing
 type Result error value
     = Ok value
     | Err error
+
+isOk : Result error value -> Bool
+isOk result = 
+    case result of
+        Ok _ -> True
+        Err _ -> False
+
+isErr : Result error value -> Bool
+isErr result = not (isOk result)
+

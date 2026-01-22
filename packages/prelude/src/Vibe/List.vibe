@@ -2,10 +2,13 @@ module Vibe.List exposing
   ( foldl
   , map
   , filter
+  , head
+  , tail
   , (::)
   )
 
 import Vibe.String as String
+import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..))
 
 infixr 5 ::
@@ -24,11 +27,6 @@ implement Show a => Show (List a) where
             elementStrings = map toString lst
         in
             "[" ++ (String.join ", " elementStrings) ++ "]"
-
-
--- implement Show a => Show (List a) where
---     toString lst =
---         "[" ++ (String.join ", " (map toString lst)) ++ "]"
 
 implement Appendable (List a) where
     (++) = _append
@@ -68,3 +66,25 @@ map : (a -> b) -> List a -> List b
 -}
 @external "@vibe/runtime" "listFilter"
 filter : (a -> Bool) -> List a -> List a
+
+{-| Returns the first element of a list, or `Nothing` if the list is empty.
+
+    head [1, 2, 3]  ==  Just 1
+    head []  ==  Nothing
+-}
+head : List a -> Maybe a
+head xs = 
+    case xs of
+        x :: _ -> Just x
+        [] -> Nothing
+
+{-| Returns the rest of the list after the first element, or `Nothing` if the list is empty.
+
+    tail [1, 2, 3]  ==  Just [2, 3]
+    tail []  ==  Nothing
+-}
+tail : List a -> Maybe (List a)
+tail xs = 
+    case xs of
+        _ :: xtail -> Just xtail
+        [] -> Nothing

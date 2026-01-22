@@ -1,5 +1,7 @@
 module Vibe.Pair exposing
     ( Pair(..)
+    , first
+    , second
     )
 
 {-| Represents an ordered pair of values.
@@ -10,3 +12,9 @@ module Vibe.Pair exposing
 -}
 type Pair a b
     = Pair a b
+
+first : Pair a b -> a
+first (Pair a _) = a
+
+second : Pair a b -> b
+second (Pair _ b) = b

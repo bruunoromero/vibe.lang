@@ -1,9 +1,12 @@
 module Vibe.Maybe exposing
-    ( withDefault 
-    , Maybe(..)
+    (  Maybe(..)
+    , withDefault
+    , isJust
+    , isNothing 
     )
 
-import Vibe.Result
+import Vibe.Basics exposing (not)
+import Vibe.Result exposing (Result(..))
 
 
 {-| Represents an optional value. Used when a value may or may not exist.
@@ -22,6 +25,15 @@ type Maybe a
     = Just a
     | Nothing
 
+isJust : Maybe a -> Bool
+isJust maybeValue =
+    case maybeValue of
+        Just _ -> True
+        Nothing -> False
+
+isNothing : Maybe a -> Bool
+isNothing maybeValue = not (isJust maybeValue)
+
 {-| Extracts the value from a `Maybe`, providing a default if it is `Nothing`. -}
 withDefault : a -> Maybe a -> a
 withDefault defaultValue maybeValue =
@@ -29,9 +41,9 @@ withDefault defaultValue maybeValue =
         Just value -> value
         Nothing -> defaultValue
 
-{-| TODO: Fix bug where the compiled code is matching against tag === 0 always, instead of respectig the right tag of each constructor -}
-fromResult : Vibe.Result.Result e a -> Maybe a
+{-| Extracts the value from a `Result`, converting `Err` to `Nothing`. -}
+fromResult : Result e a -> Maybe a
 fromResult result =
     case result of
-        Vibe.Result.Ok value -> Just value
-        Vibe.Result.Err _ -> Nothing
+        Ok value -> Just value
+        Err _ -> Nothing
