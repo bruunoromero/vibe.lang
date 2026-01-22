@@ -15,6 +15,7 @@ import { parseWithInfix, ParseError } from "@vibe/parser";
 import {
   analyze,
   SemanticError,
+  MultipleSemanticErrors,
   type SemanticModule,
   type TypeScheme,
   type Type,
@@ -338,7 +339,23 @@ export class DocumentManager {
         const semanticModule = analyze(cache.parseResult.ast, analyzeOptions);
         cache.semanticResult = { module: semanticModule, errors: [] };
       } catch (error) {
-        if (error instanceof SemanticError) {
+        if (error instanceof MultipleSemanticErrors) {
+          // Handle accumulated semantic errors - create a diagnostic for each
+          const errorInfos = error.errors.map((e) => ({
+            message: e.message,
+            span: e.span,
+          }));
+          cache.semanticResult = { errors: errorInfos };
+          for (const e of error.errors) {
+            diagnostics.push(
+              this.createDiagnostic(
+                e.message,
+                e.span,
+                DiagnosticSeverity.Error
+              )
+            );
+          }
+        } else if (error instanceof SemanticError) {
           cache.semanticResult = {
             errors: [{ message: error.message, span: error.span }],
           };
