@@ -29,7 +29,9 @@ function compileToJS(
   let preludeSemantics: SemanticModule | undefined;
   if (preludeSource) {
     const preludeAst = parse(preludeSource);
-    preludeSemantics = analyze(preludeAst);
+    preludeSemantics = analyze(preludeAst, {
+      fileContext: { filePath: "Prelude", srcDir: "" },
+    });
   }
 
   const ast = parse(source);
@@ -37,6 +39,7 @@ function compileToJS(
     dependencies: preludeSemantics
       ? new Map([["Vibe", preludeSemantics]])
       : undefined,
+    fileContext: { filePath: "Test", srcDir: "" },
   });
   const ir = lower(ast, semantics, {
     dependencies: preludeSemantics
@@ -1201,7 +1204,9 @@ implement Showable Int where
 
     // First compile the library
     const libAst = parse(libSource);
-    const libSemantics = analyze(libAst);
+    const libSemantics = analyze(libAst, {
+      fileContext: { filePath: "Lib", srcDir: "" },
+    });
 
     // Then compile the re-exporting module
     const reexportSource = `
@@ -1213,6 +1218,7 @@ import Lib exposing (..)
     const reexportAst = parse(reexportSource);
     const reexportSemantics = analyze(reexportAst, {
       dependencies: new Map([["Lib", libSemantics]]),
+      fileContext: { filePath: "ReExporter", srcDir: "" },
     });
     const reexportIr = lower(reexportAst, reexportSemantics, {
       dependencies: new Map([["Lib", libSemantics]]),

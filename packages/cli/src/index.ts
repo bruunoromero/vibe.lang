@@ -390,8 +390,8 @@ function executeCommand(
 
 function formatAndWriteError(
   error: unknown,
-  filePath: string,
-  source: string,
+  fallbackFilePath: string,
+  fallbackSource: string,
   stderr: NodeJS.WritableStream,
 ): void {
   if (
@@ -400,7 +400,14 @@ function formatAndWriteError(
     error instanceof IRError
   ) {
     const { span, message } = error;
-    const lines = source.split("\n");
+    const filePath = (error as any).filePath || fallbackFilePath;
+
+    let actualSource = fallbackSource;
+    if ((error as any).filePath && (error as any).filePath !== fallbackFilePath) {
+      actualSource = fs.readFileSync((error as any).filePath, "utf8");
+    }
+
+    const lines = actualSource.split("\n");
     const line = lines[span.start.line - 1] || "";
 
     stderr.write(

@@ -388,7 +388,7 @@ export interface AnalyzeOptions {
    * 1. The file has a module declaration
    * 2. The declared module name matches the expected name derived from the file path
    */
-  fileContext?: {
+  fileContext: {
     /** Absolute path to the source file being analyzed */
     filePath: string;
     /** Absolute path to the src directory (from vibe.json) */
@@ -425,11 +425,11 @@ export type InstanceLookupResult =
   | { found: true }
   | { found: false; reason: "no-instance" }
   | {
-      found: false;
-      reason: "unsatisfied-constraint";
-      constraint: string;
-      forType: string;
-    };
+    found: false;
+    reason: "unsatisfied-constraint";
+    constraint: string;
+    forType: string;
+  };
 
 /**
  * Result of instantiation including both type and instantiated constraints.

@@ -5,8 +5,8 @@ import { analyze } from "../src/index";
 
 describe("Show Auto-Derivation", () => {
 
-   // Mock Vibe.Basics
-   const basicsSource = `
+  // Mock Vibe.Basics
+  const basicsSource = `
 module Vibe.Basics exposing (..)
 protocol Show a where
   toString : a -> String
@@ -27,9 +27,9 @@ infixr 5 ++
 @external "js" "append"
 (++) : String -> String -> String
 `;
-   const basicsProgram = parse(basicsSource);
-   const basicsModule = analyze(basicsProgram);
-   const dependencies = new Map([["Vibe.Basics", basicsModule]]);
+  const basicsProgram = parse(basicsSource);
+  const basicsModule = analyze(basicsProgram, { fileContext: { filePath: "Vibe.Basics", srcDir: "" } });
+  const dependencies = new Map([["Vibe.Basics", basicsModule]]);
 
   test("auto-derives Show for ADTs", () => {
     const source = `
@@ -43,8 +43,8 @@ main = toString (Some 1)
 `;
     // Should compile and find instance
     const program = parse(source);
-    const result = analyze(program, { dependencies });
-    
+    const result = analyze(program, { dependencies, fileContext: { filePath: "Test", srcDir: "" } });
+
     // find instance for Option Int
     const inst = result.instances.find(i => i.protocolName === "Show" && i.typeArgs[0]?.kind === "con");
     expect(inst).toBeDefined();
@@ -64,14 +64,14 @@ main = toString (1, "hello")
 `;
     const program = parse(source);
     // This uses the synthetic hook
-    const result = analyze(program, { dependencies });
-    
+    const result = analyze(program, { dependencies, fileContext: { filePath: "TestTuple", srcDir: "" } });
+
     // We expect it to succeed.
     expect(result).toBeDefined();
   });
-  
+
   test("auto-derives Show for Records", () => {
-     // TODO: Records
+    // TODO: Records
   });
 
 });

@@ -60,6 +60,7 @@ export class ParseError extends Error {
   constructor(
     message: string,
     public readonly span: Span,
+    public readonly filePath?: string,
   ) {
     super(message);
   }
@@ -1068,55 +1069,54 @@ class Parser {
       typeArgs.push(this.parseTypeAtom());
     }
 
-    // Consume "where" keyword
-    this.expectKeyword("where");
-
-    // Parse method implementations (indented block)
+    // Check for "where" keyword
     const methods: MethodImplementation[] = [];
 
-    // Methods can be either LowerIdentifier or (Operator)
-    if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
-      throw new ParseError(
-        "Expected at least one method implementation in implementation",
-        this.currentSpan(),
-      );
-    }
-
-    const firstMethodStart = this.current().span.start;
-    const baseIndent = firstMethodStart.column;
-
-    // Parse all method implementations
-    while (
-      this.peek(TokenKind.LowerIdentifier) ||
-      this.peek(TokenKind.LParen)
-    ) {
-      const methodToken = this.current();
-
-      // Check indentation
-      if (methodToken.span.start.column < baseIndent) {
-        break;
+    if (this.matchKeyword("where")) {
+      // Methods can be either LowerIdentifier or (Operator)
+      if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
+        throw new ParseError(
+          "Expected at least one method implementation in implementation",
+          this.currentSpan(),
+        );
       }
-
-      // Parse method name using shared parseDeclarationName
-      // This handles both regular identifiers and operators in parens
-      const { name: methodName, span: nameSpan } = this.parseDeclarationName();
-
-      // Parse method body using shared parseMethodBody
-      // This ensures consistent pattern parsing with standard functions
-      const { args, body: implementation } = this.parseMethodBody();
-
-      methods.push({
-        name: methodName,
-        args: args.length > 0 ? args : undefined,
-        implementation,
-        span: { start: nameSpan.start, end: implementation.span.end },
-      });
+  
+      const firstMethodStart = this.current().span.start;
+      const baseIndent = firstMethodStart.column;
+  
+      // Parse all method implementations
+      while (
+        this.peek(TokenKind.LowerIdentifier) ||
+        this.peek(TokenKind.LParen)
+      ) {
+        const methodToken = this.current();
+  
+        // Check indentation
+        if (methodToken.span.start.column < baseIndent) {
+          break;
+        }
+  
+        // Parse method name using shared parseDeclarationName
+        // This handles both regular identifiers and operators in parens
+        const { name: methodName, span: nameSpan } = this.parseDeclarationName();
+  
+        // Parse method body using shared parseMethodBody
+        // This ensures consistent pattern parsing with standard functions
+        const { args, body: implementation } = this.parseMethodBody();
+  
+        methods.push({
+          name: methodName,
+          args: args.length > 0 ? args : undefined,
+          implementation,
+          span: { start: nameSpan.start, end: implementation.span.end },
+        });
+      }
     }
 
-    const lastMethod = methods[methods.length - 1]!;
+    const lastMethod = methods.length > 0 ? methods[methods.length - 1]! : undefined;
     const span: Span = {
       start: implementToken.span.start,
-      end: lastMethod.span.end,
+      end: lastMethod ? lastMethod.span.end : (typeArgs.length > 0 ? typeArgs[typeArgs.length - 1]!.span.end : protocolNameToken.span.end),
     };
 
     return {
@@ -2748,6 +2748,15 @@ class Parser {
   private peekKeyword(keyword: string): boolean {
     const token = this.current();
     return token.kind === TokenKind.Keyword && token.lexeme === keyword;
+  }
+
+  private matchKeyword(keyword: string): boolean {
+    const token = this.current();
+    if (token.kind === TokenKind.Keyword && token.lexeme === keyword) {
+      this.advance();
+      return true;
+    }
+    return false;
   }
 
   private peekOperator(op: string): boolean {

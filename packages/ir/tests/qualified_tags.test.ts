@@ -13,7 +13,7 @@ module ModuleA exposing (Result(..))
 type Result e a = Ok a | Err e
 `;
         const astA = parse(sourceA);
-        const semanticsA = analyze(astA);
+        const semanticsA = analyze(astA, { fileContext: { filePath: "ModuleA", srcDir: "" } });
 
         // 2. Setup Current Module (ModuleB)
         const sourceB = `
@@ -27,7 +27,7 @@ fromResult r =
 `;
         const astB = parse(sourceB);
         const dependencies = new Map([["ModuleA", semanticsA]]);
-        const semanticsB = analyze(astB, { dependencies });
+        const semanticsB = analyze(astB, { dependencies, fileContext: { filePath: "ModuleB", srcDir: "" } });
 
         // 3. Lower to IR
         const irB = lower(astB, semanticsB, { dependencies });
@@ -56,7 +56,7 @@ module ModuleA exposing (Result(..))
 type Result e a = Ok a | Err e
 `;
         const astA = parse(sourceA);
-        const semanticsA = analyze(astA);
+        const semanticsA = analyze(astA, { fileContext: { filePath: "ModuleA", srcDir: "" } });
 
         // 2. Setup Current Module (ModuleB)
         const sourceB = `
@@ -70,7 +70,7 @@ fromResult r =
 `;
         const astB = parse(sourceB);
         const dependencies = new Map([["ModuleA", semanticsA]]);
-        const semanticsB = analyze(astB, { dependencies });
+        const semanticsB = analyze(astB, { dependencies, fileContext: { filePath: "ModuleB", srcDir: "" } });
 
         // 3. Lower to IR
         const irB = lower(astB, semanticsB, { dependencies });

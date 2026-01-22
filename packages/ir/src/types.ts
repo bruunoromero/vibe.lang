@@ -513,6 +513,7 @@ export class IRError extends Error {
   constructor(
     message: string,
     public readonly span: Span,
+    public readonly filePath?: string,
   ) {
     super(message);
     this.name = "IRError";

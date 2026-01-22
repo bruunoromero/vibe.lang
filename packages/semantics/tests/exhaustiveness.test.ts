@@ -17,7 +17,7 @@ const dedent = (str: string) => {
 
 const analyzeSource = (source: string) => {
   const fullSource = "module Test exposing (..)\n" + TYPE_PREAMBLE + "\n" + dedent(source);
-  return analyze(parse(fullSource));
+  return analyze(parse(fullSource), { fileContext: { filePath: "Test", srcDir: "" } });
 };
 
 const expectError = (source: string, messagePart: string) => {
@@ -47,21 +47,21 @@ describe("Exhaustiveness Checking", () => {
     });
 
     test("Int patterns exhaustive with variable", () => {
-        expectSuccess(`
+      expectSuccess(`
           f x = case x of
                   1 -> "one"
                   n -> "other"
         `);
-      });
+    });
 
     test("String patterns", () => {
-        expectError(`
+      expectError(`
             f x = case x of
                     "hello" -> 1
                     "world" -> 2
         `, "Non-exhaustive");
 
-        expectSuccess(`
+      expectSuccess(`
             f x = case x of
                     "hello" -> 1
                     _ -> 0
@@ -69,27 +69,27 @@ describe("Exhaustiveness Checking", () => {
     });
 
     test("Char patterns", () => {
-        expectError(`
+      expectError(`
             f x = case x of
                     'a' -> 1
                     'b' -> 2
         `, "Non-exhaustive");
 
-        expectSuccess(`
+      expectSuccess(`
             f x = case x of
                     'a' -> 1
                     _ -> 0
         `);
     });
-    
+
     test("Float patterns", () => {
-        expectError(`
+      expectError(`
             f x = case x of
                     1.0 -> 1
                     2.0 -> 2
         `, "Non-exhaustive");
 
-        expectSuccess(`
+      expectSuccess(`
             f x = case x of
                     1.0 -> 1
                     _ -> 0
@@ -98,97 +98,97 @@ describe("Exhaustiveness Checking", () => {
   });
 
   describe("Lists", () => {
-     test("Empty list and Cons exhaustive", () => {
-         expectSuccess(`
+    test("Empty list and Cons exhaustive", () => {
+      expectSuccess(`
          f xs = case xs of
                   [] -> 0
                   y :: ys -> 1
          `);
-     });
+    });
 
-     test("Missing empty list", () => {
-         expectError(`
+    test("Missing empty list", () => {
+      expectError(`
          f xs = case xs of
                   y :: ys -> 1
          `, "Non-exhaustive"); // Missing []
-     });
+    });
 
-     test("Missing Cons", () => {
-         expectError(`
+    test("Missing Cons", () => {
+      expectError(`
          f xs = case xs of
                   [] -> 0
          `, "Non-exhaustive"); // Missing _ :: _
-     });
+    });
 
-     test("List literal syntax (sugar for nested cons)", () => {
-        // [1, 2] is 1 :: 2 :: []
-        // To be exhaustive we need to cover all lengths or use wildcard/cons
-        expectError(`
+    test("List literal syntax (sugar for nested cons)", () => {
+      // [1, 2] is 1 :: 2 :: []
+      // To be exhaustive we need to cover all lengths or use wildcard/cons
+      expectError(`
         f xs = case xs of
                  [1, 2] -> 1
                  [] -> 0
         `, "Non-exhaustive");
-     });
+    });
 
-     test("List literal exhaustive with wildcard", () => {
-        expectSuccess(`
+    test("List literal exhaustive with wildcard", () => {
+      expectSuccess(`
         f xs = case xs of
                  [1, 2] -> 1
                  _ -> 0
         `);
-     });
-     
-     test("List literal exhaustive with cons catch-all", () => {
-         expectSuccess(`
+    });
+
+    test("List literal exhaustive with cons catch-all", () => {
+      expectSuccess(`
          f xs = case xs of
                   [1, 2] -> 1
                   [] -> 0
                   _ :: _ -> 2
          `);
-      });
+    });
   });
 
   describe("Tuples", () => {
-      test("Simple tuple exhaustive", () => {
-          expectSuccess(`
+    test("Simple tuple exhaustive", () => {
+      expectSuccess(`
           f p = case p of
                   (True, True) -> 1
                   (True, False) -> 2
                   (False, True) -> 3
                   (False, False) -> 4
           `);
-      });
+    });
 
-      test("Simple tuple non-exhaustive", () => {
-          expectError(`
+    test("Simple tuple non-exhaustive", () => {
+      expectError(`
           f p = case p of
                   (True, True) -> 1
           `, "Non-exhaustive");
-      });
-      
-      test("Tuple with wildcard", () => {
-          expectSuccess(`
+    });
+
+    test("Tuple with wildcard", () => {
+      expectSuccess(`
           f p = case p of
                   (True, _) -> 1
                   (False, _) -> 2
           `);
-      });
+    });
   });
 
   describe("ADTs", () => {
-      test("Maybe exhaustive", () => {
-          expectSuccess(`
+    test("Maybe exhaustive", () => {
+      expectSuccess(`
           f m = case m of
                   Just x -> x
                   Nothing -> 0
           `);
-      });
+    });
 
-      test("Maybe non-exhaustive", () => {
-          expectError(`
+    test("Maybe non-exhaustive", () => {
+      expectError(`
           f m = case m of
                   Just x -> x
           `, "Non-exhaustive");
-      });
+    });
   });
 });

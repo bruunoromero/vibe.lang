@@ -24,7 +24,7 @@ implement Eq Int where
   (/=) = intNeq
 `;
     const basicsProgram = parse(basicsSource);
-    const basicsModule = analyze(basicsProgram);
+    const basicsModule = analyze(basicsProgram, { fileContext: { filePath: "Vibe.Basics", srcDir: "" } });
 
     // 2. Test code using tuples
     const source = `
@@ -37,11 +37,12 @@ main = (1, 2) == (1, 2)
     // We expect this to PASS analysis if Eq is implemented/derived for tuples.
     const program = parse(source);
     const result = analyze(program, {
-        dependencies: new Map([
-            ["Vibe.Basics", basicsModule]
-        ])
+      fileContext: { filePath: "Test", srcDir: "" },
+      dependencies: new Map([
+        ["Vibe.Basics", basicsModule]
+      ])
     });
-    
+
     expect(result).toBeDefined();
   });
 

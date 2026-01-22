@@ -5,7 +5,11 @@ import type { Span } from "@vibe/syntax";
  * Includes source span information for error reporting.
  */
 export class SemanticError extends Error {
-  constructor(message: string, public readonly span: Span) {
+  constructor(
+    message: string,
+    public readonly span: Span,
+    public readonly filePath: string,
+  ) {
     super(message);
   }
 }
@@ -20,7 +24,8 @@ export class ImplementingProtocolError extends SemanticError {
     public readonly protocolName: string,
     public readonly methodsWithoutDefaults: string[],
     public readonly methodsWithDefaults: string[],
-    span: Span
+    span: Span,
+    public override readonly filePath: string,
   ) {
     const missing = methodsWithoutDefaults.join(", ");
     const hasDefaults =
@@ -35,7 +40,7 @@ export class ImplementingProtocolError extends SemanticError {
       `Hint: Either add default implementations for these methods in the protocol,\n` +
       `      or write a manual 'implement' block for this type.`;
 
-    super(message, span);
+    super(message, span, filePath);
     this.name = "ImplementingProtocolError";
   }
 }

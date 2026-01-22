@@ -8,7 +8,7 @@ type Maybe a = Just a | Nothing
 
 const expectError = (source: string, message: string) => {
   const fullSource = "module Test exposing (..)\n" + TYPE_PREAMBLE + "\n" + source;
-  expect(() => analyze(parse(fullSource))).toThrow(message);
+  expect(() => analyze(parse(fullSource), { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(message);
 };
 
 describe("exhaustiveness bug reproduction", () => {

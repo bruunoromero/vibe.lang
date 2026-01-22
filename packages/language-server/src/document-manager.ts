@@ -216,6 +216,10 @@ export class DocumentManager {
       // Analyze with the loaded dependencies
       const analyzed = analyze(program, {
         dependencies: moduleDeps,
+        fileContext: {
+          filePath: resolved.filePath,
+          srcDir: this.projectConfig.srcDir,
+        },
       });
 
       // Cache it
@@ -320,6 +324,10 @@ export class DocumentManager {
         // Build analysis options
         const analyzeOptions: AnalyzeOptions = {
           dependencies,
+          fileContext: {
+            filePath: cache.uri,
+            srcDir: this.projectConfig?.srcDir || "",
+          },
         };
 
         const semanticModule = analyze(cache.parseResult.ast, analyzeOptions);
@@ -450,9 +458,8 @@ export class DocumentManager {
       symbols.push({
         name,
         kind: SymbolKind.Type,
-        documentation: `type ${name}${
-          adtInfo.params.length > 0 ? " " + adtInfo.params.join(" ") : ""
-        }`,
+        documentation: `type ${name}${adtInfo.params.length > 0 ? " " + adtInfo.params.join(" ") : ""
+          }`,
         definitionSpan: adtInfo.span,
         moduleName: adtInfo.moduleName,
       });
@@ -653,9 +660,8 @@ export class DocumentManager {
       const adt = module.adts[name];
       return {
         name,
-        type: `type ${name}${
-          adt.params.length > 0 ? " " + adt.params.join(" ") : ""
-        }`,
+        type: `type ${name}${adt.params.length > 0 ? " " + adt.params.join(" ") : ""
+          }`,
         span: adt.span,
       };
     }
@@ -665,9 +671,8 @@ export class DocumentManager {
       const alias = module.typeAliases[name];
       return {
         name,
-        type: `type alias ${name}${
-          alias.params.length > 0 ? " " + alias.params.join(" ") : ""
-        }`,
+        type: `type alias ${name}${alias.params.length > 0 ? " " + alias.params.join(" ") : ""
+          }`,
         span: alias.span,
       };
     }

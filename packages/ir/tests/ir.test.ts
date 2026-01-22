@@ -40,7 +40,7 @@ function compileToIR(source: string): IRProgram {
     ? source
     : `module Test exposing (..)\n\n${source}`;
   const ast = parse(fullSource);
-  const semantics = analyze(ast);
+  const semantics = analyze(ast, { fileContext: { filePath: "Test", srcDir: "" } });
   return lower(ast, semantics);
 }
 
