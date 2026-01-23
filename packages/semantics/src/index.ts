@@ -26,8 +26,16 @@ import type {
 import { BUILTIN_MODULE_NAME } from "@vibe/syntax";
 
 // Re-export errors for external consumers
-export { SemanticError, ImplementingProtocolError, MultipleSemanticErrors } from "./errors";
-import { SemanticError, ImplementingProtocolError, MultipleSemanticErrors } from "./errors";
+export {
+  SemanticError,
+  ImplementingProtocolError,
+  MultipleSemanticErrors,
+} from "./errors";
+import {
+  SemanticError,
+  ImplementingProtocolError,
+  MultipleSemanticErrors,
+} from "./errors";
 
 // Re-export types for external consumers
 export type {
@@ -39,7 +47,6 @@ export type {
   TypeRecord,
   TypeScheme,
   Constraint,
-  Scope,
   Substitution,
   ConstructorInfo,
   ADTInfo,
@@ -62,7 +69,11 @@ export type {
   TypeVarContext,
   AnnotationResult,
   TypeValidationError,
+  TypeInferenceContext,
 } from "./types";
+
+// Re-export classes for external consumers
+export { Scope, RegistryManager } from "./types";
 
 import type {
   Type,
@@ -70,7 +81,6 @@ import type {
   TypeCon,
   TypeScheme,
   Constraint,
-  Scope,
   Substitution,
   ConstructorInfo,
   ADTInfo,
@@ -90,7 +100,10 @@ import type {
   LookupResult,
   InstanceLookupResult,
   TypeValidationError,
+  TypeInferenceContext,
 } from "./types";
+
+import { Scope, RegistryManager } from "./types";
 
 // Import type utilities
 import {
@@ -173,7 +186,8 @@ class SemanticAnalyzer {
    * Using a module-level context avoids threading a context parameter through
    * all the recursive analysis functions.
    */
-  private currentConstraintContext: ConstraintContext = createConstraintContext();
+  private currentConstraintContext: ConstraintContext =
+    createConstraintContext();
   /**
    * Module-level instance registry for validating concrete constraints.
    * This is set at the start of analyzing a module and used during generalization
@@ -181,7 +195,37 @@ class SemanticAnalyzer {
    */
   private currentInstanceRegistry: InstanceInfo[] = [];
 
-  constructor(private options: AnalyzeOptions) { }
+  /**
+   * Registry manager containing all type and value registries.
+   * Centralizes access to ADTs, constructors, protocols, etc.
+   */
+  private _registry: RegistryManager = new RegistryManager();
+
+  /**
+   * Global scope containing all top-level definitions.
+   */
+  private _globalScope: Scope = new Scope();
+
+  /**
+   * Type substitution for unification.
+   */
+  private _substitution: Substitution = new Map();
+
+  /**
+   * Import declarations for the current module.
+   */
+  private _imports: ImportDeclaration[] = [];
+
+  /**
+   * Dependencies map for looking up pre-analyzed modules.
+   */
+  private _dependencies: Map<string, SemanticModule> = new Map();
+
+  constructor(private options: AnalyzeOptions) {
+    this._dependencies = options.dependencies ?? new Map();
+  }
+
+  // ===== File Context =====
 
   getFilePath(): string {
     return this.options.fileContext.filePath;
@@ -191,12 +235,149 @@ class SemanticAnalyzer {
     return this.options.fileContext.srcDir;
   }
 
+  // ===== Registry Access =====
+
+  get registry(): RegistryManager {
+    return this._registry;
+  }
+
+  // ===== Registry Convenience Accessors =====
+  // These provide direct access to registry data, allowing functions to use
+  // analyzer.adts instead of passing adts as a parameter.
+
+  get adts(): Record<string, ADTInfo> {
+    return this._registry.adts;
+  }
+
+  get constructors(): Record<string, ConstructorInfo> {
+    return this._registry.constructors;
+  }
+
+  get constructorTypes(): Record<string, TypeScheme> {
+    return this._registry.constructorTypes;
+  }
+
+  get typeAliases(): Record<string, TypeAliasInfo> {
+    return this._registry.typeAliases;
+  }
+
+  get records(): Record<string, RecordInfo> {
+    return this._registry.records;
+  }
+
+  get opaqueTypes(): Record<string, OpaqueTypeInfo> {
+    return this._registry.opaqueTypes;
+  }
+
+  get protocols(): Record<string, ProtocolInfo> {
+    return this._registry.protocols;
+  }
+
+  get instances(): InstanceInfo[] {
+    return this._registry.instances;
+  }
+
+  get operators(): OperatorRegistry {
+    return this._registry.operators;
+  }
+
+  get values(): Record<string, ValueInfo> {
+    return this._registry.values;
+  }
+
+  get typeSchemes(): Record<string, TypeScheme> {
+    return this._registry.typeSchemes;
+  }
+
+  get types(): Record<string, Type> {
+    return this._registry.types;
+  }
+
+  get annotations(): Record<string, TypeAnnotationDeclaration> {
+    return this._registry.annotations;
+  }
+
+  get localInstances(): InstanceInfo[] {
+    return this._registry.localInstances;
+  }
+
+  get infixDeclarations(): InfixDeclaration[] {
+    return this._registry.infixDeclarations;
+  }
+
+  get localProtocolMethods(): Set<string> {
+    return this._registry.localProtocolMethods;
+  }
+
+  get importedValues(): Map<string, string> {
+    return this._registry.importedValues;
+  }
+
+  // ===== Scope Management =====
+
+  get globalScope(): Scope {
+    return this._globalScope;
+  }
+
+  /** Create a child scope from the global scope */
+  createScope(): Scope {
+    return this._globalScope.child();
+  }
+
+  // ===== Substitution Access =====
+
+  get substitution(): Substitution {
+    return this._substitution;
+  }
+
+  // ===== Import/Dependency Access =====
+
+  get imports(): ImportDeclaration[] {
+    return this._imports;
+  }
+
+  set imports(value: ImportDeclaration[]) {
+    this._imports = value;
+  }
+
+  get dependencies(): Map<string, SemanticModule> {
+    return this._dependencies;
+  }
+
+  // ===== Error Management =====
+
   /**
    * Get the currently collected errors.
    */
   getErrors(): SemanticError[] {
     return this.currentErrors;
   }
+
+  /**
+   * Add an error to the current error collector.
+   * Uses deduplication by location: same file:line:col won't be added twice.
+   * This prevents duplicate errors from different code paths at the same location.
+   */
+  addError(message: string, span: Span): void {
+    // Dedupe by location only - prevents duplicates from different validation paths
+    const signature = `${this.getFilePath()}:${span.start.line}:${span.start.column}`;
+    if (!this.errorSignatures.has(signature)) {
+      this.errorSignatures.add(signature);
+      this.currentErrors.push(
+        new SemanticError(message, span, this.getFilePath()),
+      );
+    }
+  }
+
+  /**
+   * Reset the error collector for a new module analysis.
+   */
+  resetErrors(): void {
+    this.currentErrors = [];
+    this.errorSignatures = new Set();
+  }
+
+  // ===== Constraint Management =====
 
   /**
    * Get the currently collected constraints.
@@ -210,28 +391,6 @@ class SemanticAnalyzer {
    */
   getInstanceRegistry(): InstanceInfo[] {
     return this.currentInstanceRegistry;
-  }
-
-  /**
-   * Add an error to the current error collector.
-   * Uses deduplication by location: same file:line:col won't be added twice.
-   * This prevents duplicate errors from different code paths at the same location.
-   */
-  addError(message: string, span: Span): void {
-    // Dedupe by location only - prevents duplicates from different validation paths
-    const signature = `${this.getFilePath()}:${span.start.line}:${span.start.column}`;
-    if (!this.errorSignatures.has(signature)) {
-      this.errorSignatures.add(signature);
-      this.currentErrors.push(new SemanticError(message, span, this.getFilePath()));
-    }
-  }
-
-  /**
-   * Reset the error collector for a new module analysis.
-   */
-  resetErrors(): void {
-    this.currentErrors = [];
-    this.errorSignatures = new Set();
   }
 
   /**
@@ -250,6 +409,156 @@ class SemanticAnalyzer {
 
   getConstraintContext(): ConstraintContext {
     return this.currentConstraintContext;
+  }
+
+  // ===== Type Inference Helpers =====
+
+  /**
+   * Analyze an expression using the analyzer's stored registries.
+   * This is a convenience method that reduces parameter passing.
+   *
+   * @param expr - Expression to analyze
+   * @param ctx - Type inference context with scope, substitution, and optional expected type
+   * @returns The inferred type of the expression
+   */
+  inferExpr(expr: Expr, ctx: TypeInferenceContext): Type {
+    return analyzeExpr(
+      this,
+      expr,
+      ctx.scope,
+      ctx.substitution,
+      ctx.expectedType ?? null,
+    );
+  }
+
+  /**
+   * Create a type inference context with the given scope.
+   * Uses the analyzer's substitution by default.
+   */
+  createContext(
+    scope: Scope,
+    expectedType?: Type | null,
+  ): TypeInferenceContext {
+    return {
+      scope,
+      substitution: this._substitution,
+      expectedType,
+    };
+  }
+
+  /**
+   * Bind a pattern to a type, adding bindings to the scope.
+   * Uses the analyzer's stored registries.
+   *
+   * @param pattern - Pattern to bind
+   * @param scope - Scope to add bindings to
+   * @param expected - Expected type of the pattern
+   * @param seen - Set of already-seen variable names (for duplicate detection)
+   * @returns The type of the pattern
+   */
+  bindPatternInScope(
+    pattern: Pattern,
+    scope: Scope,
+    expected: Type,
+    seen: Set<string> = new Set(),
+  ): Type {
+    return bindPattern(
+      this,
+      pattern,
+      scope,
+      this._substitution,
+      seen,
+      expected,
+      this._registry.constructors,
+      this._registry.adts,
+      this._imports,
+      this._dependencies,
+    );
+  }
+
+  /**
+   * Unify two types, updating the substitution.
+   * Uses the analyzer's stored substitution.
+   *
+   * @param a - First type
+   * @param b - Second type
+   * @param span - Source location for error reporting
+   */
+  unifyTypes(a: Type, b: Type, span: Span): void {
+    unify(this, a, b, span, this._substitution);
+  }
+
+  /**
+   * Lookup a symbol in a scope and instantiate its type scheme.
+   *
+   * @param scope - Scope to search in
+   * @param name - Symbol name to look up
+   * @param span - Source location for error reporting
+   * @returns The instantiated type and any constraints
+   */
+  lookupSymbolInScope(scope: Scope, name: string, span: Span): LookupResult {
+    return lookupSymbolWithConstraints(
+      this,
+      scope,
+      name,
+      span,
+      this._substitution,
+    );
+  }
+
+  /**
+   * Apply the current substitution to a type.
+   *
+   * @param type - Type to apply substitution to
+   * @returns The substituted type
+   */
+  resolveType(type: Type): Type {
+    return applySubstitution(type, this._substitution);
+  }
+
+  // ===== Factory Methods =====
+
+  /**
+   * Create a fresh substitution for temporary type inference (e.g., protocol defaults).
+   * This avoids polluting the main substitution with temporary type variables.
+   */
+  createFreshSubstitution(): Substitution {
+    return new Map();
+  }
+
+  /**
+   * Create a child scope from a given parent scope.
+   * If no parent is provided, uses the global scope.
+   */
+  createChildScope(parent?: Scope): Scope {
+    return (parent ?? this._globalScope).child();
+  }
+
+  /**
+   * Create a type inference context with all necessary components.
+   * This is the primary way to create a context for type inference.
+   *
+   * @param scope - The scope to use (defaults to global scope)
+   * @param substitution - The substitution to use (defaults to the analyzer's substitution)
+   * @param expectedType - Optional expected type for bidirectional type checking
+   */
+  createInferenceContext(
+    scope?: Scope,
+    substitution?: Substitution,
+    expectedType?: Type | null,
+  ): TypeInferenceContext {
+    return {
+      scope: scope ?? this._globalScope,
+      substitution: substitution ?? this._substitution,
+      expectedType,
+    };
+  }
+
+  /**
+   * Add a constraint to the current constraint context.
+   */
+  addConstraintToContext(constraint: Constraint): void {
+    addConstraint(this.currentConstraintContext, constraint);
   }
 }
 
@@ -284,7 +593,6 @@ function validateConstraintsEagerly(
     const resolvedTypeArgs = c.typeArgs.map((t) =>
       applySubstitution(t, substitution),
     );
-
 
     // Check if any type arg has become a concrete non-variable type
     // (meaning it's no longer polymorphic and can be validated now)
@@ -389,7 +697,10 @@ function validateConstraintsEagerly(
 function computeExpectedModuleName(analyzer: SemanticAnalyzer): string {
   // Normalize paths to handle different separators
   const normalizedFilePath = analyzer.getFilePath().replace(/\\/g, "/");
-  const normalizedSrcDir = analyzer.getSrcDir().replace(/\\/g, "/").replace(/\/$/, "");
+  const normalizedSrcDir = analyzer
+    .getSrcDir()
+    .replace(/\\/g, "/")
+    .replace(/\/$/, "");
 
   // Get relative path from srcDir
   if (!normalizedFilePath.startsWith(normalizedSrcDir + "/")) {
@@ -435,12 +746,14 @@ function checkTypeCollision(
     existing.moduleName !== importingFrom
   ) {
     throw new SemanticError(
-      `${kind === "type"
-        ? "Type"
-        : kind === "type alias"
-          ? "Type alias"
-          : "Protocol"
-      } '${name}' conflicts with ${kind} from module '${existing.moduleName
+      `${
+        kind === "type"
+          ? "Type"
+          : kind === "type alias"
+            ? "Type alias"
+            : "Protocol"
+      } '${name}' conflicts with ${kind} from module '${
+        existing.moduleName
       }'. ` + `Consider using qualified imports or aliasing one of them.`,
       span,
       analyzer.getFilePath(),
@@ -741,17 +1054,6 @@ function importExportSpec(
   spec: ExportSpec,
   depModule: SemanticModule,
   imp: ImportDeclaration,
-  globalScope: Scope,
-  substitution: Substitution,
-  constructors: Record<string, ConstructorInfo>,
-  constructorTypes: Record<string, TypeScheme>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  protocols: Record<string, ProtocolInfo>,
-  operators: OperatorRegistry,
-  importedValues: Map<string, string>,
-  typeSchemes: Record<string, TypeScheme>,
 ): void {
   switch (spec.kind) {
     case "ExportValue": {
@@ -770,11 +1072,11 @@ function importExportSpec(
             analyzer,
             name,
             imp.moduleName,
-            adts[name],
+            analyzer.adts[name],
             imp.span,
             "type",
           );
-          adts[name] = depADT;
+          analyzer.adts[name] = depADT;
           return;
         }
         if (depModule.typeAliases[name]) {
@@ -782,15 +1084,15 @@ function importExportSpec(
             analyzer,
             name,
             imp.moduleName,
-            typeAliases[name],
+            analyzer.typeAliases[name],
             imp.span,
             "type alias",
           );
-          typeAliases[name] = depModule.typeAliases[name]!;
+          analyzer.typeAliases[name] = depModule.typeAliases[name]!;
           return;
         }
         if (depModule.opaqueTypes[name]) {
-          opaqueTypes[name] = depModule.opaqueTypes[name]!;
+          analyzer.opaqueTypes[name] = depModule.opaqueTypes[name]!;
           return;
         }
         if (
@@ -802,11 +1104,11 @@ function importExportSpec(
             analyzer,
             name,
             imp.moduleName,
-            protocols[name],
+            analyzer.protocols[name],
             imp.span,
             "protocol",
           );
-          protocols[name] = depModule.protocols[name]!;
+          analyzer.protocols[name] = depModule.protocols[name]!;
           return;
         }
         // If nothing matched, the item is not exported
@@ -821,21 +1123,26 @@ function importExportSpec(
       const depValue = depModule.values[name];
       if (depValue && depValue.type) {
         const importedType = depValue.type;
-        const scheme = generalize(analyzer, importedType, globalScope, substitution);
-        globalScope.symbols.set(name, scheme);
+        const scheme = generalize(
+          analyzer,
+          importedType,
+          analyzer.globalScope,
+          analyzer.substitution,
+        );
+        analyzer.globalScope.define(name, scheme);
         // Track for re-export support
-        importedValues.set(name, imp.moduleName);
+        analyzer.importedValues.set(name, imp.moduleName);
       }
 
       // Also check for constructors (might be re-exported)
       if (isExportedFromModule(depModule, name, "constructor")) {
         const depConstructor = depModule.constructors[name];
         if (depConstructor) {
-          constructors[name] = depConstructor;
+          analyzer.constructors[name] = depConstructor;
           const ctorScheme = depModule.constructorTypes[name];
           if (ctorScheme) {
-            globalScope.symbols.set(name, ctorScheme);
-            constructorTypes[name] = ctorScheme;
+            analyzer.globalScope.define(name, ctorScheme);
+            analyzer.constructorTypes[name] = ctorScheme;
           }
         }
       }
@@ -858,16 +1165,21 @@ function importExportSpec(
       const depValue = depModule.values[op];
       if (depValue && depValue.type) {
         const importedType = depValue.type;
-        const scheme = generalize(analyzer, importedType, globalScope, substitution);
-        globalScope.symbols.set(op, scheme);
+        const scheme = generalize(
+          analyzer,
+          importedType,
+          analyzer.globalScope,
+          analyzer.substitution,
+        );
+        analyzer.globalScope.define(op, scheme);
       }
 
       // Import operator info if it exists
       const opInfo = depModule.operators.get(op);
       if (opInfo) {
-        operators.set(op, opInfo);
+        analyzer.operators.set(op, opInfo);
         // Track as imported so we can reject fixity redefinitions
-        importedValues.set(op, imp.moduleName);
+        analyzer.importedValues.set(op, imp.moduleName);
       }
       break;
     }
@@ -886,18 +1198,25 @@ function importExportSpec(
           );
         }
 
-        checkTypeCollision(analyzer, name, imp.moduleName, adts[name], imp.span, "type");
-        adts[name] = depADT;
+        checkTypeCollision(
+          analyzer,
+          name,
+          imp.moduleName,
+          analyzer.adts[name],
+          imp.span,
+          "type",
+        );
+        analyzer.adts[name] = depADT;
 
         // Import all constructors
         for (const ctorName of depADT.constructors) {
           const ctor = depModule.constructors[ctorName];
           if (ctor) {
-            constructors[ctorName] = ctor;
+            analyzer.constructors[ctorName] = ctor;
             const ctorScheme = depModule.constructorTypes[ctorName];
             if (ctorScheme) {
-              globalScope.symbols.set(ctorName, ctorScheme);
-              constructorTypes[ctorName] = ctorScheme;
+              analyzer.globalScope.define(ctorName, ctorScheme);
+              analyzer.constructorTypes[ctorName] = ctorScheme;
             }
           }
         }
@@ -919,20 +1238,20 @@ function importExportSpec(
           analyzer,
           name,
           imp.moduleName,
-          protocols[name],
+          analyzer.protocols[name],
           imp.span,
           "protocol",
         );
-        protocols[name] = depProtocol;
+        analyzer.protocols[name] = depProtocol;
 
         // Add all protocol methods to scope
         const methodSchemes = addProtocolMethodsToScope(
           depProtocol,
-          globalScope,
+          analyzer.globalScope,
         );
         // Store in typeSchemes for LSP hover/completion
         for (const [methodName, scheme] of methodSchemes) {
-          typeSchemes[methodName] = scheme;
+          analyzer.typeSchemes[methodName] = scheme;
         }
         return;
       }
@@ -959,8 +1278,15 @@ function importExportSpec(
           );
         }
 
-        checkTypeCollision(analyzer, name, imp.moduleName, adts[name], imp.span, "type");
-        adts[name] = depADT;
+        checkTypeCollision(
+          analyzer,
+          name,
+          imp.moduleName,
+          analyzer.adts[name],
+          imp.span,
+          "type",
+        );
+        analyzer.adts[name] = depADT;
 
         // Import specific constructors
         for (const ctorName of members) {
@@ -973,11 +1299,11 @@ function importExportSpec(
           }
           const ctor = depModule.constructors[ctorName];
           if (ctor) {
-            constructors[ctorName] = ctor;
+            analyzer.constructors[ctorName] = ctor;
             const ctorScheme = depModule.constructorTypes[ctorName];
             if (ctorScheme) {
-              globalScope.symbols.set(ctorName, ctorScheme);
-              constructorTypes[ctorName] = ctorScheme;
+              analyzer.globalScope.define(ctorName, ctorScheme);
+              analyzer.constructorTypes[ctorName] = ctorScheme;
             }
           }
         }
@@ -999,11 +1325,11 @@ function importExportSpec(
           analyzer,
           name,
           imp.moduleName,
-          protocols[name],
+          analyzer.protocols[name],
           imp.span,
           "protocol",
         );
-        protocols[name] = depProtocol;
+        analyzer.protocols[name] = depProtocol;
 
         // Add specific protocol methods to scope
         for (const methodName of members) {
@@ -1028,7 +1354,7 @@ function importExportSpec(
             ],
             type: methodType,
           };
-          globalScope.symbols.set(methodName, scheme);
+          analyzer.globalScope.define(methodName, scheme);
         }
         return;
       }
@@ -1048,8 +1374,6 @@ export function analyze(
 ): SemanticModule {
   const analyzer = new SemanticAnalyzer(options);
 
-  // Reset error collector for this module analysis
-
   try {
     // ===== Module Declaration Validation =====
     // Every Vibe file MUST have a module declaration as the first statement (enforced by parser).
@@ -1062,98 +1386,60 @@ export function analyze(
     if (declaredModuleName !== expectedModuleName) {
       throw new SemanticError(
         `Module name '${declaredModuleName}' does not match file path.\n` +
-        `Expected: module ${expectedModuleName} [exposing (..)]\n` +
-        `File path: ${analyzer.getFilePath()}`,
+          `Expected: module ${expectedModuleName} [exposing (..)]\n` +
+          `File path: ${analyzer.getFilePath()}`,
         program.module.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
-
-    const values: Record<string, ValueInfo> = {};
-    const annotations: Record<string, TypeAnnotationDeclaration> = {};
-    const types: Record<string, Type> = {};
-    const typeSchemes: Record<string, TypeScheme> = {};
-    const substitution: Substitution = new Map();
 
     // Extract the current module name for qualified naming
     const currentModuleName = program.module?.name;
 
-    // ===== ADT and Type Alias Registries =====
-    // These track user-defined types for constructor validation and exhaustiveness checking.
-    const adts: Record<string, ADTInfo> = {};
-    const constructors: Record<string, ConstructorInfo> = {};
-    const constructorTypes: Record<string, TypeScheme> = {};
-    const typeAliases: Record<string, TypeAliasInfo> = {};
-    const records: Record<string, RecordInfo> = {};
-
-    // ===== Opaque Type Registry =====
-    // These track opaque types for JS interop (no pattern matching or record updates allowed)
-    const opaqueTypes: Record<string, OpaqueTypeInfo> = {};
-
-    // ===== Protocol and Instance Registries =====
-    // These track type class definitions and their implementations.
-    const protocols: Record<string, ProtocolInfo> = {};
-    const instances: InstanceInfo[] = [];
-    // Track instances defined in THIS module (not imported) for validation.
-    // We only need to validate local instances since imported instances were
-    // already validated when their defining module was analyzed.
-    const localInstances: InstanceInfo[] = [];
-
-    // ===== Operator Registries =====
-    // These track custom operator precedence and associativity declarations.
-    const operators: OperatorRegistry = new Map();
-    const infixDeclarations: InfixDeclaration[] = [];
-
-    // ===== Local Protocol Methods =====
-    // Track protocol methods defined in THIS module (for fixity validation).
-    // Fixity can only be declared for operators defined locally, not imported ones.
-    const localProtocolMethods = new Set<string>();
-
-    // ===== Imported Values Registry =====
-    // Track values imported from other modules for re-export support.
-    // Maps value name -> source module name.
-    const importedValues = new Map<string, string>();
-
     // ===== Initialize Builtin Types =====
     // These primitive types are built into the compiler and automatically available.
-    initializeBuiltinADTs(adts, constructors, constructorTypes);
-    initializeBuiltinOpaqueTypes(opaqueTypes);
-
-    const { dependencies = new Map() } = options;
+    initializeBuiltinADTs(
+      analyzer.adts,
+      analyzer.constructors,
+      analyzer.constructorTypes,
+    );
+    initializeBuiltinOpaqueTypes(analyzer.opaqueTypes);
 
     // Build the effective imports list
-    const imports: ImportDeclaration[] = program.imports ?? [];
+    analyzer.imports = program.imports ?? [];
 
-    validateImports(analyzer, imports);
-
-    const globalScope: Scope = { symbols: new Map() };
+    validateImports(analyzer, analyzer.imports);
 
     // Add built-in Bool constructors (True/False) to global scope
-    globalScope.symbols.set("True", constructorTypes["True"]!);
-    globalScope.symbols.set("False", constructorTypes["False"]!);
+    analyzer.globalScope.define("True", analyzer.constructorTypes["True"]!);
+    analyzer.globalScope.define("False", analyzer.constructorTypes["False"]!);
 
     // Seed built-in operators as functions for prefix/infix symmetry.
     // Built-in operators are monomorphic (not polymorphic).
     // Short-circuit operators (&& and ||) are now included here.
     for (const [op, ty] of Object.entries(INFIX_TYPES)) {
-      globalScope.symbols.set(op, { vars: new Set(), constraints: [], type: ty });
+      analyzer.globalScope.define(op, {
+        vars: new Set(),
+        constraints: [],
+        type: ty,
+      });
     }
 
     // Seed built-in operator fixities (precedence and associativity).
     // These are for short-circuit operators that are built into the compiler.
     for (const [op, fixity] of Object.entries(BUILTIN_OPERATOR_FIXITY)) {
-      operators.set(op, fixity);
+      analyzer.operators.set(op, fixity);
     }
 
     // Merge types from imported dependency modules
     // This replaces the previous approach of seeding placeholder types for imports.
     // Now we use actual types from pre-analyzed dependency modules.
-    for (const imp of imports) {
-      const depModule = dependencies.get(imp.moduleName);
+    for (const imp of analyzer.imports) {
+      const depModule = analyzer.dependencies.get(imp.moduleName);
       if (!depModule) {
         // If dependency not provided, seed with placeholder (for backward compatibility)
         if (imp.alias) {
-          globalScope.symbols.set(imp.alias, {
+          analyzer.globalScope.define(imp.alias, {
             vars: new Set(),
             constraints: [],
             type: freshType(),
@@ -1176,7 +1462,7 @@ export function analyze(
       for (const instance of depModule.instances) {
         const isDefinedByDep = instance.moduleName === depModule.module.name;
         if (isDefinedByDep) {
-          instances.push(instance);
+          analyzer.instances.push(instance);
         }
       }
 
@@ -1185,7 +1471,7 @@ export function analyze(
         // Register the alias in scope for qualified name access (e.g., H.div).
         // The type is a placeholder since module namespaces aren't first-class values -
         // actual qualified access is resolved specially in tryResolveModuleFieldAccess.
-        globalScope.symbols.set(imp.alias, {
+        analyzer.globalScope.define(imp.alias, {
           vars: new Set(),
           constraints: [],
           type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
@@ -1200,8 +1486,8 @@ export function analyze(
         const rootModule = moduleParts[0]!;
 
         // Check if we haven't already registered this module root
-        if (!globalScope.symbols.has(rootModule)) {
-          globalScope.symbols.set(rootModule, {
+        if (!analyzer.globalScope.has(rootModule)) {
+          analyzer.globalScope.define(rootModule, {
             vars: new Set(),
             constraints: [],
             type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
@@ -1212,27 +1498,11 @@ export function analyze(
       // Handle explicit exposing with new ExportSpec format
       if (imp.exposing?.kind === "Explicit") {
         for (const spec of imp.exposing.exports) {
-          importExportSpec(
-            analyzer,
-            spec,
-            depModule,
-            imp,
-            globalScope,
-            substitution,
-            constructors,
-            constructorTypes,
-            adts,
-            typeAliases,
-            opaqueTypes,
-            protocols,
-            operators,
-            importedValues,
-            typeSchemes,
-          );
+          importExportSpec(analyzer, spec, depModule, imp);
         }
       }
 
-      // Handle exposing all (e.g., `import Html exposing (..)`) 
+      // Handle exposing all (e.g., `import Html exposing (..)`)
       if (imp.exposing?.kind === "All") {
         // Import all exported values
         for (const [name, depValue] of Object.entries(depModule.values) as [
@@ -1241,10 +1511,15 @@ export function analyze(
         ][]) {
           if (depValue.type && isExportedFromModule(depModule, name, "value")) {
             const importedType = depValue.type;
-            const scheme = generalize(analyzer, importedType, globalScope, substitution);
-            globalScope.symbols.set(name, scheme);
+            const scheme = generalize(
+              analyzer,
+              importedType,
+              analyzer.globalScope,
+              analyzer.substitution,
+            );
+            analyzer.globalScope.define(name, scheme);
             // Track for re-export support
-            importedValues.set(name, imp.moduleName);
+            analyzer.importedValues.set(name, imp.moduleName);
           }
         }
 
@@ -1254,12 +1529,12 @@ export function analyze(
           ConstructorInfo,
         ][]) {
           if (isExportedFromModule(depModule, name, "constructor")) {
-            constructors[name] = ctor;
+            analyzer.constructors[name] = ctor;
             // Also import the type scheme so the constructor can be used as a value
             const ctorScheme = depModule.constructorTypes[name];
             if (ctorScheme) {
-              globalScope.symbols.set(name, ctorScheme);
-              constructorTypes[name] = ctorScheme;
+              analyzer.globalScope.define(name, ctorScheme);
+              analyzer.constructorTypes[name] = ctorScheme;
             }
           }
         }
@@ -1275,11 +1550,11 @@ export function analyze(
               analyzer,
               name,
               imp.moduleName,
-              adts[name],
+              analyzer.adts[name],
               imp.span,
               "type",
             );
-            adts[name] = adt;
+            analyzer.adts[name] = adt;
           }
         }
 
@@ -1294,11 +1569,11 @@ export function analyze(
               analyzer,
               name,
               imp.moduleName,
-              typeAliases[name],
+              analyzer.typeAliases[name],
               imp.span,
               "type alias",
             );
-            typeAliases[name] = alias;
+            analyzer.typeAliases[name] = alias;
           }
         }
 
@@ -1312,18 +1587,19 @@ export function analyze(
             // Allow builtin types to be shadowed by imports (e.g., prelude can re-export Int)
             // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
             if (
-              Object.hasOwn(opaqueTypes, name) &&
-              opaqueTypes[name]!.moduleName !== BUILTIN_MODULE_NAME &&
-              opaqueTypes[name]!.moduleName !== imp.moduleName
+              Object.hasOwn(analyzer.opaqueTypes, name) &&
+              analyzer.opaqueTypes[name]!.moduleName !== BUILTIN_MODULE_NAME &&
+              analyzer.opaqueTypes[name]!.moduleName !== imp.moduleName
             ) {
               throw new SemanticError(
-                `Opaque type '${name}' conflicts with opaque type from module '${opaqueTypes[name]!.moduleName
+                `Opaque type '${name}' conflicts with opaque type from module '${
+                  analyzer.opaqueTypes[name]!.moduleName
                 }'. ` + `Consider using a different name or qualified imports.`,
                 imp.span,
                 analyzer.getFilePath(),
               );
             }
-            opaqueTypes[name] = opaque;
+            analyzer.opaqueTypes[name] = opaque;
           }
         }
 
@@ -1338,35 +1614,35 @@ export function analyze(
               analyzer,
               name,
               imp.moduleName,
-              protocols[name],
+              analyzer.protocols[name],
               imp.span,
               "protocol",
             );
-            protocols[name] = protocol;
+            analyzer.protocols[name] = protocol;
 
             // Add protocol methods to scope so they can be called directly
             const methodSchemes = addProtocolMethodsToScope(
               protocol,
-              globalScope,
+              analyzer.globalScope,
             );
             // Store in typeSchemes for LSP hover/completion
             for (const [methodName, scheme] of methodSchemes) {
-              typeSchemes[methodName] = scheme;
+              analyzer.typeSchemes[methodName] = scheme;
             }
           }
         }
 
         // Import all instances (always imported regardless of exports)
         for (const instance of depModule.instances) {
-          instances.push(instance);
+          analyzer.instances.push(instance);
         }
 
         // Import exported operator declarations
         for (const [op, info] of depModule.operators) {
           if (isExportedFromModule(depModule, op, "operator")) {
-            operators.set(op, info);
+            analyzer.operators.set(op, info);
             // Track for re-export support (operators are also values)
-            importedValues.set(op, imp.moduleName);
+            analyzer.importedValues.set(op, imp.moduleName);
           }
         }
       }
@@ -1377,13 +1653,7 @@ export function analyze(
     // Note: This pass validates declarations but the parser pre-processing handles actual precedence.
     for (const decl of program.declarations) {
       if (decl.kind === "InfixDeclaration") {
-        registerInfixDeclaration(
-          analyzer,
-          decl,
-          operators,
-          infixDeclarations,
-          importedValues,
-        );
+        registerInfixDeclaration(analyzer, decl);
         continue;
       }
     }
@@ -1395,13 +1665,13 @@ export function analyze(
         registerTypeDeclaration(
           analyzer,
           decl,
-          adts,
-          records,
-          constructors,
-          constructorTypes,
-          typeAliases,
-          opaqueTypes,
-          globalScope,
+          analyzer.adts,
+          analyzer.records,
+          analyzer.constructors,
+          analyzer.constructorTypes,
+          analyzer.typeAliases,
+          analyzer.opaqueTypes,
+          analyzer.globalScope,
           currentModuleName,
         );
         continue;
@@ -1415,7 +1685,7 @@ export function analyze(
         registerOpaqueType(
           analyzer,
           decl,
-          opaqueTypes,
+          analyzer.opaqueTypes,
           currentModuleName,
         );
         continue;
@@ -1428,7 +1698,12 @@ export function analyze(
     const typeAliasDecls: TypeAliasDeclaration[] = [];
     for (const decl of program.declarations) {
       if (decl.kind === "TypeAliasDeclaration") {
-        registerTypeAliasWithoutValidation(analyzer, decl, typeAliases, currentModuleName,);
+        registerTypeAliasWithoutValidation(
+          analyzer,
+          decl,
+          analyzer.typeAliases,
+          currentModuleName,
+        );
         typeAliasDecls.push(decl);
         continue;
       }
@@ -1440,12 +1715,12 @@ export function analyze(
       validateTypeAliasReferences(
         analyzer,
         decl,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
+        analyzer.adts,
+        analyzer.typeAliases,
+        analyzer.opaqueTypes,
+        analyzer.records,
         program.imports,
-        dependencies,
+        analyzer.dependencies,
       );
     }
 
@@ -1455,21 +1730,21 @@ export function analyze(
         registerProtocol(
           analyzer,
           decl,
-          protocols,
-          adts,
-          typeAliases,
-          globalScope,
-          constructors,
-          opaqueTypes,
-          substitution,
+          analyzer.protocols,
+          analyzer.adts,
+          analyzer.typeAliases,
+          analyzer.globalScope,
+          analyzer.constructors,
+          analyzer.opaqueTypes,
+          analyzer.substitution,
           currentModuleName,
-          imports,
-          dependencies,
-          records,
+          analyzer.imports,
+          analyzer.dependencies,
+          analyzer.records,
         );
         // Track methods from locally-defined protocols for fixity validation
         for (const method of decl.methods) {
-          localProtocolMethods.add(method.name);
+          analyzer.localProtocolMethods.add(method.name);
         }
         continue;
       }
@@ -1483,11 +1758,11 @@ export function analyze(
         registerImplementation(
           analyzer,
           decl,
-          instances,
-          localInstances,
-          protocols,
-          adts,
-          typeAliases,
+          analyzer.instances,
+          analyzer.localInstances,
+          analyzer.protocols,
+          analyzer.adts,
+          analyzer.typeAliases,
           currentModuleName,
           program.declarations,
         );
@@ -1505,28 +1780,28 @@ export function analyze(
           analyzer,
           "Eq",
           decl,
-          protocols,
-          instances,
+          analyzer.protocols,
+          analyzer.instances,
           program.declarations,
           currentModuleName,
         );
         if (eqInstance) {
-          instances.push(eqInstance);
-          localInstances.push(eqInstance);
+          analyzer.instances.push(eqInstance);
+          analyzer.localInstances.push(eqInstance);
         }
 
         const showInstance = autoImplementProtocolForType(
           analyzer,
           "Show",
           decl,
-          protocols,
-          instances,
+          analyzer.protocols,
+          analyzer.instances,
           program.declarations,
           currentModuleName,
         );
         if (showInstance) {
-          instances.push(showInstance);
-          localInstances.push(showInstance);
+          analyzer.instances.push(showInstance);
+          analyzer.localInstances.push(showInstance);
         }
       }
     }
@@ -1537,20 +1812,20 @@ export function analyze(
         decl.kind === "ValueDeclaration" ||
         decl.kind === "ExternalDeclaration"
       ) {
-        registerValue(analyzer, values, decl);
+        registerValue(analyzer, analyzer.values, decl);
         continue;
       }
 
       if (decl.kind === "TypeAnnotationDeclaration") {
         // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-        if (Object.hasOwn(annotations, decl.name)) {
+        if (Object.hasOwn(analyzer.annotations, decl.name)) {
           throw new SemanticError(
             `Duplicate type annotation for '${decl.name}'`,
             decl.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
-        annotations[decl.name] = decl;
+        analyzer.annotations[decl.name] = decl;
       }
     }
 
@@ -1560,26 +1835,26 @@ export function analyze(
     // Note: Imported operator validation is done earlier in registerInfixDeclaration.
     validateInfixDeclarationsHaveDefinitions(
       analyzer,
-      infixDeclarations,
-      values,
-      localProtocolMethods,
+      analyzer.infixDeclarations,
+      analyzer.values,
+      analyzer.localProtocolMethods,
     );
 
-    for (const [name, ann] of Object.entries(annotations)) {
+    for (const [name, ann] of Object.entries(analyzer.annotations)) {
       // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-      if (!Object.hasOwn(values, name)) {
+      if (!Object.hasOwn(analyzer.values, name)) {
         throw new SemanticError(
           `Type annotation for '${name}' has no matching definition`,
           ann.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
-      const value = values[name]!;
+      const value = analyzer.values[name]!;
       if (value.declaration.kind === "ExternalDeclaration") {
         throw new SemanticError(
           `External declaration '${name}' already includes a type annotation`,
           ann.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       value.annotation = ann.annotation;
@@ -1588,7 +1863,7 @@ export function analyze(
     // Seed global names to enable recursion.
     // We initially seed with monomorphic schemes (empty quantifier set)
     // and will generalize them after full inference.
-    for (const [name, info] of Object.entries(values)) {
+    for (const [name, info] of Object.entries(analyzer.values)) {
       const annotationExpr =
         info.annotation ??
         (info.declaration.kind === "ExternalDeclaration"
@@ -1610,13 +1885,13 @@ export function analyze(
         const validationErrors = validateTypeExpr(
           annotationExpr,
           typeVars,
-          adts,
-          typeAliases,
+          analyzer.adts,
+          analyzer.typeAliases,
           info.declaration.span,
-          opaqueTypes,
-          records,
+          analyzer.opaqueTypes,
+          analyzer.records,
           program.imports,
-          dependencies,
+          analyzer.dependencies,
         );
 
         if (validationErrors.length > 0) {
@@ -1631,12 +1906,6 @@ export function analyze(
           analyzer,
           annotationExpr,
           new Map(),
-          adts,
-          typeAliases,
-          protocols,
-          records,
-          program.imports,
-          dependencies,
         );
         annotationType = result.type;
         annotatedConstraints =
@@ -1649,22 +1918,22 @@ export function analyze(
       }
 
       const seeded =
-        annotationType ?? seedValueType(analyzer, info.declaration, adts, typeAliases);
+        annotationType ?? seedValueType(analyzer, info.declaration);
       // Seed with a monomorphic scheme (no quantified variables yet)
       declareSymbol(
         analyzer,
-        globalScope,
+        analyzer.globalScope,
         name,
         { vars: new Set(), constraints: [], type: seeded },
         info.declaration.span,
       );
-      types[name] = seeded;
+      analyzer.types[name] = seeded;
     }
 
     // Set the instance registry for constraint validation during generalization.
     // This allows validateConcreteConstraints to check if concrete type constraints
     // have matching instances.
-    analyzer.setInstanceRegistry(instances);
+    analyzer.setInstanceRegistry(analyzer.instances);
 
     // ===== PASS 2.0b: Concretize polymorphic instance type args =====
     // Before value inference, analyze each instance's method bodies to determine
@@ -1673,23 +1942,23 @@ export function analyze(
     // where the method body forces `a` to be `List Int`).
     concretizeInstanceTypeArgs(
       analyzer,
-      localInstances,
-      instances,
-      protocols,
-      globalScope,
-      substitution,
-      constructors,
-      adts,
-      typeAliases,
-      opaqueTypes,
-      imports,
-      dependencies,
-      records,
+      analyzer.localInstances,
+      analyzer.instances,
+      analyzer.protocols,
+      analyzer.globalScope,
+      analyzer.substitution,
+      analyzer.constructors,
+      analyzer.adts,
+      analyzer.typeAliases,
+      analyzer.opaqueTypes,
+      analyzer.imports,
+      analyzer.dependencies,
+      analyzer.records,
     );
 
     // Build dependency graph and compute SCCs for proper mutual recursion handling.
     // SCCs are returned in reverse topological order, so we process dependencies first.
-    const depGraph = buildDependencyGraph(values);
+    const depGraph = buildDependencyGraph(analyzer.values);
     const sccs = computeSCCs(depGraph);
 
     // Process each SCC:
@@ -1701,7 +1970,7 @@ export function analyze(
       const valueDecls: string[] = [];
 
       for (const name of scc) {
-        const info = values[name]!;
+        const info = analyzer.values[name]!;
         if (info.declaration.kind === "ExternalDeclaration") {
           externals.push(name);
         } else {
@@ -1711,19 +1980,13 @@ export function analyze(
 
       // Process externals first
       for (const name of externals) {
-        const info = values[name]!;
+        const info = analyzer.values[name]!;
         if (info.declaration.kind === "ExternalDeclaration") {
           // Use typeFromAnnotationWithConstraints for external declarations too
           const result = typeFromAnnotationWithConstraints(
             analyzer,
             info.declaration.annotation,
             new Map(),
-            adts,
-            typeAliases,
-            protocols,
-            records,
-            imports,
-            dependencies,
           );
           info.type = result.type;
 
@@ -1738,9 +2001,9 @@ export function analyze(
             constraints: result.constraints,
             type: info.type,
           };
-          globalScope.symbols.set(info.declaration.name, scheme);
+          analyzer.globalScope.symbols.set(info.declaration.name, scheme);
           // Store the type scheme for external declarations too (needed by IR lowering)
-          typeSchemes[name] = scheme;
+          analyzer.typeSchemes[name] = scheme;
         }
       }
 
@@ -1754,61 +2017,45 @@ export function analyze(
         const inferredTypes: Map<string, Type> = new Map();
 
         for (const name of valueDecls) {
-          const info = values[name]!;
+          const info = analyzer.values[name]!;
           if (info.declaration.kind !== "ValueDeclaration") continue;
 
-          const declaredType = types[name]!;
+          const declaredType = analyzer.types[name]!;
           // Use the pre-computed annotated type (already extracted with constraints during seeding)
           const annotationType = info.annotation
-            ? typeFromAnnotation(
-              analyzer,
-              info.annotation,
-              new Map(),
-              adts,
-              typeAliases,
-              records,
-              program.imports,
-              dependencies,
-            )
+            ? typeFromAnnotation(analyzer, info.annotation, new Map())
             : undefined;
 
           const inferred = analyzeValueDeclaration(
             analyzer,
             info.declaration,
-            globalScope,
-            substitution,
+            analyzer.globalScope,
+            analyzer.substitution,
             declaredType,
             annotationType,
-            constructors,
-            adts,
-            typeAliases,
-            opaqueTypes,
-            records,
-            program.imports,
-            dependencies,
           );
 
           inferredTypes.set(name, inferred);
-          types[name] = inferred;
+          analyzer.types[name] = inferred;
           info.type = inferred;
         }
 
         // After inferring all in the SCC, generalize all together
         // This ensures mutually recursive functions get proper polymorphic types
         for (const name of valueDecls) {
-          const info = values[name]!;
+          const info = analyzer.values[name]!;
           const inferred = inferredTypes.get(name)!;
           const generalizedScheme = generalizeWithAnnotatedConstraints(
             analyzer,
             inferred,
-            { symbols: new Map(), parent: globalScope.parent },
-            substitution,
+            new Scope(analyzer.globalScope.parent),
+            analyzer.substitution,
             info.annotatedConstraints,
             info.declaration.span,
           );
-          globalScope.symbols.set(name, generalizedScheme);
+          analyzer.globalScope.define(name, generalizedScheme);
           // Store the type scheme with constraints for dictionary-passing
-          typeSchemes[name] = generalizedScheme;
+          analyzer.typeSchemes[name] = generalizedScheme;
         }
       }
     }
@@ -1819,12 +2066,12 @@ export function analyze(
     // instances were already validated in their defining module.
     validateImplementationMethodExpressions(
       analyzer,
-      localInstances,
-      globalScope,
-      constructors,
-      imports,
-      dependencies,
-      records,
+      analyzer.localInstances,
+      analyzer.globalScope,
+      analyzer.constructors,
+      analyzer.imports,
+      analyzer.dependencies,
+      analyzer.records,
     );
 
     // ===== PASS 2.5b: Validate implementation method types =====
@@ -1832,18 +2079,18 @@ export function analyze(
     // declared method signature (with type parameters substituted).
     validateImplementationMethodTypes(
       analyzer,
-      localInstances,
-      instances,
-      protocols,
-      globalScope,
-      substitution,
-      constructors,
-      adts,
-      typeAliases,
-      opaqueTypes,
-      imports,
-      dependencies,
-      records,
+      analyzer.localInstances,
+      analyzer.instances,
+      analyzer.protocols,
+      analyzer.globalScope,
+      analyzer.substitution,
+      analyzer.constructors,
+      analyzer.adts,
+      analyzer.typeAliases,
+      analyzer.opaqueTypes,
+      analyzer.imports,
+      analyzer.dependencies,
+      analyzer.records,
     );
 
     // ===== PASS 2.5c: Validate instance constraint satisfiability =====
@@ -1852,10 +2099,10 @@ export function analyze(
     // This catches cases where a constraint references a protocol with no instances.
     validateInstanceConstraintSatisfiability(
       analyzer,
-      localInstances,
-      instances,
-      protocols,
-      adts,
+      analyzer.localInstances,
+      analyzer.instances,
+      analyzer.protocols,
+      analyzer.adts,
     );
 
     // ===== PASS 2.5d: Validate concrete constraint instances exist =====
@@ -1864,10 +2111,10 @@ export function analyze(
     // instance declarations. This provides early error detection for missing instances.
     validateConcreteConstraintInstances(
       analyzer,
-      values,
-      instances,
-      protocols,
-      substitution,
+      analyzer.values,
+      analyzer.instances,
+      analyzer.protocols,
+      analyzer.substitution,
     );
 
     // ===== PASS 2.6: Validate protocol default implementations =====
@@ -1875,46 +2122,46 @@ export function analyze(
     // This is done after all values are registered so forward references work.
     validateProtocolDefaultImplementations(
       analyzer,
-      protocols,
-      globalScope,
-      constructors,
-      imports,
-      dependencies,
+      analyzer.protocols,
+      analyzer.globalScope,
+      analyzer.constructors,
+      analyzer.imports,
+      analyzer.dependencies,
       currentModuleName,
-      records,
+      analyzer.records,
     );
 
     // Compute export information for this module
     const exports = computeModuleExports(
       analyzer,
       program.module,
-      values,
-      adts,
-      constructors,
-      typeAliases,
-      opaqueTypes,
-      protocols,
-      operators,
-      importedValues,
+      analyzer.values,
+      analyzer.adts,
+      analyzer.constructors,
+      analyzer.typeAliases,
+      analyzer.opaqueTypes,
+      analyzer.protocols,
+      analyzer.operators,
+      analyzer.importedValues,
     );
 
     const result: SemanticModule = {
-      values,
-      annotations,
+      values: analyzer.values,
+      annotations: analyzer.annotations,
       module: program.module,
-      imports,
-      types,
-      typeSchemes,
-      adts,
-      constructors,
-      constructorTypes,
-      typeAliases,
-      records,
-      opaqueTypes,
-      protocols,
-      instances,
-      operators,
-      infixDeclarations,
+      imports: analyzer.imports,
+      types: analyzer.types,
+      typeSchemes: analyzer.typeSchemes,
+      adts: analyzer.adts,
+      constructors: analyzer.constructors,
+      constructorTypes: analyzer.constructorTypes,
+      typeAliases: analyzer.typeAliases,
+      records: analyzer.records,
+      opaqueTypes: analyzer.opaqueTypes,
+      protocols: analyzer.protocols,
+      instances: analyzer.instances,
+      operators: analyzer.operators,
+      infixDeclarations: analyzer.infixDeclarations,
       exports,
       errors: analyzer.getErrors(),
     };
@@ -1932,7 +2179,11 @@ export function analyze(
     }
     // Enrich SemanticError with file path if available
     if (error instanceof SemanticError && !error.filePath) {
-      throw new SemanticError(error.message, error.span, analyzer.getFilePath());
+      throw new SemanticError(
+        error.message,
+        error.span,
+        analyzer.getFilePath(),
+      );
     }
     throw error;
   }
@@ -1948,7 +2199,7 @@ function registerValue(
     throw new SemanticError(
       `Duplicate definition for '${decl.name}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
   values[decl.name] = {
@@ -1997,15 +2248,15 @@ function registerTypeDeclaration(
     if (existingADT.moduleName && existingADT.moduleName !== moduleName) {
       throw new SemanticError(
         `Type '${decl.name}' conflicts with type from module '${existingADT.moduleName}'. ` +
-        `Consider using a different name or qualified imports.`,
+          `Consider using a different name or qualified imports.`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     throw new SemanticError(
       `Duplicate type declaration for '${decl.name}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -2016,7 +2267,7 @@ function registerTypeDeclaration(
       throw new SemanticError(
         `Duplicate type parameter '${param}' in type '${decl.name}'`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     paramSet.add(param);
@@ -2041,7 +2292,7 @@ function registerTypeDeclaration(
     throw new SemanticError(
       `Type '${decl.name}' must have at least one constructor`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -2058,7 +2309,9 @@ function registerTypeDeclaration(
     for (const c of decl.constraints) {
       semanticConstraints.push({
         protocolName: c.protocolName,
-        typeArgs: c.typeArgs.map((t) => constructorArgToType(analyzer, t, paramTypeVars)),
+        typeArgs: c.typeArgs.map((t) =>
+          constructorArgToType(analyzer, t, paramTypeVars),
+        ),
       });
     }
   }
@@ -2091,7 +2344,7 @@ function registerTypeDeclaration(
       throw new SemanticError(
         `Duplicate constructor '${ctor.name}' (constructor names must be unique within a module)`,
         ctor.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
 
@@ -2111,7 +2364,12 @@ function registerTypeDeclaration(
     // Build the constructor's type and register it in global scope
     // For Just: a -> Maybe a
     // For Nothing: Maybe a
-    const ctorType = buildConstructorType(analyzer, ctor, resultType, paramTypeVars);
+    const ctorType = buildConstructorType(
+      analyzer,
+      ctor,
+      resultType,
+      paramTypeVars,
+    );
 
     // Generalize over all type parameters to make it polymorphic
     const quantifiedVars = new Set<number>();
@@ -2177,28 +2435,28 @@ function registerRecordTypeDeclaration(
     throw new SemanticError(
       `Duplicate record type declaration for '${decl.name}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
   if (adts[decl.name]) {
     throw new SemanticError(
       `Record type '${decl.name}' conflicts with ADT '${decl.name}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
   if (typeAliases[decl.name]) {
     throw new SemanticError(
       `Record type '${decl.name}' conflicts with type alias '${decl.name}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
   if (opaqueTypes[decl.name]) {
     throw new SemanticError(
       `Record type '${decl.name}' conflicts with opaque type '${decl.name}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -2206,9 +2464,9 @@ function registerRecordTypeDeclaration(
   if (decl.constructors && decl.constructors.length > 0) {
     throw new SemanticError(
       `Type '${decl.name}' cannot have both constructors and record fields. ` +
-      `Use 'type' for ADTs or record types separately.`,
+        `Use 'type' for ADTs or record types separately.`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -2217,7 +2475,7 @@ function registerRecordTypeDeclaration(
     throw new SemanticError(
       `Record type '${decl.name}' is missing field definitions`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -2228,7 +2486,7 @@ function registerRecordTypeDeclaration(
       throw new SemanticError(
         `Duplicate field '${field.name}' in record type '${decl.name}'`,
         field.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     fieldNames.add(field.name);
@@ -2246,7 +2504,9 @@ function registerRecordTypeDeclaration(
     for (const c of decl.constraints) {
       semanticConstraints.push({
         protocolName: c.protocolName,
-        typeArgs: c.typeArgs.map((t) => constructorArgToType(analyzer, t, paramTypeVars)),
+        typeArgs: c.typeArgs.map((t) =>
+          constructorArgToType(analyzer, t, paramTypeVars),
+        ),
       });
     }
   }
@@ -2256,9 +2516,9 @@ function registerRecordTypeDeclaration(
     if (containsRecordType(field.type)) {
       throw new SemanticError(
         `Record types cannot be used directly in type annotations. ` +
-        `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
+          `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
         field.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
   }
@@ -2373,7 +2633,11 @@ function constructorArgToType(
       );
       const fields: Record<string, Type> = {};
       for (const field of sortedFields) {
-        fields[field.name] = constructorArgToType(analyzer, field.type, paramTypeVars);
+        fields[field.name] = constructorArgToType(
+          analyzer,
+          field.type,
+          paramTypeVars,
+        );
       }
       return {
         kind: "record",
@@ -2386,7 +2650,7 @@ function constructorArgToType(
       throw new SemanticError(
         "Constructor arguments cannot have constraints",
         expr.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
   }
@@ -2666,12 +2930,16 @@ function registerTypeAliasWithoutValidation(
     if (existingAlias.moduleName && existingAlias.moduleName !== moduleName) {
       throw new SemanticError(
         `Type alias '${decl.name}' conflicts with type alias from module '${existingAlias.moduleName}'. ` +
-        `Consider using a different name or qualified imports.`,
+          `Consider using a different name or qualified imports.`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
-    throw new SemanticError(`Duplicate type alias '${decl.name}'`, decl.span, analyzer.getFilePath());
+    throw new SemanticError(
+      `Duplicate type alias '${decl.name}'`,
+      decl.span,
+      analyzer.getFilePath(),
+    );
   }
 
   // Validate type parameters are unique
@@ -2681,7 +2949,7 @@ function registerTypeAliasWithoutValidation(
       throw new SemanticError(
         `Duplicate type parameter '${param}' in type alias '${decl.name}'`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     paramSet.add(param);
@@ -2716,9 +2984,9 @@ function validateTypeAliasReferences(
   if (decl.value.kind === "RecordType") {
     throw new SemanticError(
       `Type alias '${decl.name}' cannot directly define a record type. ` +
-      `Use 'type ${decl.name} = { ... }' instead of 'type alias'.`,
+        `Use 'type ${decl.name} = { ... }' instead of 'type alias'.`,
       decl.value.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -2768,15 +3036,15 @@ function registerOpaqueType(
     if (existing.moduleName && existing.moduleName !== moduleName) {
       throw new SemanticError(
         `Opaque type '${decl.name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
-        `Consider using a different name or qualified imports.`,
+          `Consider using a different name or qualified imports.`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     throw new SemanticError(
       `Duplicate opaque type declaration for '${decl.name}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -2787,7 +3055,7 @@ function registerOpaqueType(
       throw new SemanticError(
         `Duplicate type parameter '${param}' in opaque type '${decl.name}'`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     paramSet.add(param);
@@ -2833,24 +3101,21 @@ function registerTypeAlias(
 function registerInfixDeclaration(
   analyzer: SemanticAnalyzer,
   decl: InfixDeclaration,
-  operators: OperatorRegistry,
-  infixDeclarations: InfixDeclaration[],
-  importedValues: Map<string, string>,
 ) {
   // Check if operator is imported - if so, reject the fixity declaration
   // because fixity is intrinsic and travels with the operator
-  if (importedValues.has(decl.operator)) {
-    const sourceModule = importedValues.get(decl.operator)!;
+  if (analyzer.importedValues.has(decl.operator)) {
+    const sourceModule = analyzer.importedValues.get(decl.operator)!;
     throw new SemanticError(
       `Cannot declare fixity for imported operator '${decl.operator}' from module '${sourceModule}'. ` +
-      `Fixity is an intrinsic property of the operator and cannot be redefined.`,
+        `Fixity is an intrinsic property of the operator and cannot be redefined.`,
       decl.span,
       analyzer.getFilePath(),
     );
   }
 
   // Check for duplicate local operator declaration
-  if (operators.has(decl.operator)) {
+  if (analyzer.operators.has(decl.operator)) {
     throw new SemanticError(
       `Duplicate infix declaration for operator '${decl.operator}'`,
       decl.span,
@@ -2876,13 +3141,13 @@ function registerInfixDeclaration(
   }
 
   // Register the operator
-  operators.set(decl.operator, {
+  analyzer.operators.set(decl.operator, {
     precedence: decl.precedence,
     associativity,
   });
 
   // Store the declaration for later reference
-  infixDeclarations.push(decl);
+  analyzer.infixDeclarations.push(decl);
 }
 
 /**
@@ -2920,9 +3185,9 @@ function validateInfixDeclarationsHaveDefinitions(
     if (!hasLocalDefinition && !isLocalProtocolMethod) {
       throw new SemanticError(
         `Infix declaration for operator '${op}' has no corresponding function definition. ` +
-        `Define the operator in this module or remove the fixity declaration.`,
+          `Define the operator in this module or remove the fixity declaration.`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
   }
@@ -3049,12 +3314,16 @@ function registerProtocol(
     ) {
       throw new SemanticError(
         `Protocol '${decl.name}' conflicts with protocol from module '${existingProtocol.moduleName}'. ` +
-        `Consider using a different name or qualified imports.`,
+          `Consider using a different name or qualified imports.`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
-    throw new SemanticError(`Duplicate protocol '${decl.name}'`, decl.span, analyzer.getFilePath());
+    throw new SemanticError(
+      `Duplicate protocol '${decl.name}'`,
+      decl.span,
+      analyzer.getFilePath(),
+    );
   }
 
   // Validate type parameters are unique
@@ -3064,7 +3333,7 @@ function registerProtocol(
       throw new SemanticError(
         `Duplicate type parameter '${param}' in protocol '${decl.name}'`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     paramSet.add(param);
@@ -3075,7 +3344,7 @@ function registerProtocol(
     throw new SemanticError(
       `Protocol '${decl.name}' must have at least one method`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -3108,7 +3377,7 @@ function registerProtocol(
       throw new SemanticError(
         `Duplicate method '${method.name}' in protocol '${decl.name}'`,
         method.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     methodNames.add(method.name);
@@ -3118,13 +3387,7 @@ function registerProtocol(
     if (method.type) {
       // Has explicit type annotation - convert from AST to internal representation
       // Use the shared type variable context so all methods use same var IDs
-      methodType = typeFromAnnotation(
-        analyzer,
-        method.type,
-        sharedTypeVarCtx,
-        adts,
-        typeAliases,
-      );
+      methodType = typeFromAnnotation(analyzer, method.type, sharedTypeVarCtx);
     } else if (method.defaultImpl) {
       // No explicit type annotation, but has default implementation
       // Infer the type from the default implementation by analyzing it as a lambda
@@ -3135,23 +3398,14 @@ function registerProtocol(
       );
 
       // Create a temporary scope for type inference
-      const tempScope: Scope = { parent: globalScope, symbols: new Map() };
+      const tempScope = new Scope(globalScope);
 
       // Infer the type of the lambda
       const inferredType = analyzeExpr(
         analyzer,
         lambdaExpr,
-        null, // expectedType
         tempScope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
 
       // Apply substitutions to get the final type
@@ -3165,7 +3419,7 @@ function registerProtocol(
       throw new SemanticError(
         `Protocol method '${method.name}' must have either a type annotation or a default implementation`,
         method.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
 
@@ -3194,7 +3448,7 @@ function registerProtocol(
         ...decl.constraints.map((c) => ({
           protocolName: c.protocolName,
           typeArgs: c.typeArgs.map((ta) =>
-            typeFromAnnotation(analyzer, ta, sharedTypeVarCtx, adts, typeAliases),
+            typeFromAnnotation(analyzer, ta, sharedTypeVarCtx),
           ),
         })),
       ];
@@ -3211,7 +3465,7 @@ function registerProtocol(
   const superclassConstraints: Constraint[] = decl.constraints.map((c) => ({
     protocolName: c.protocolName,
     typeArgs: c.typeArgs.map((ta) =>
-      typeFromAnnotation(analyzer, ta, sharedTypeVarCtx, adts, typeAliases),
+      typeFromAnnotation(analyzer, ta, sharedTypeVarCtx),
     ),
   }));
 
@@ -3501,7 +3755,13 @@ function autoImplementProtocolForType(
 
   // Check if type can implement protocol
   if (
-    !canDeclImplementProtocol(decl, protocolName, declarations, instances, protocols)
+    !canDeclImplementProtocol(
+      decl,
+      protocolName,
+      declarations,
+      instances,
+      protocols,
+    )
   ) {
     return undefined;
   }
@@ -3552,10 +3812,12 @@ function generateShowImplementation(
     {
       kind: "con",
       name: decl.name,
-      args: decl.params.map((param): TypeVar => ({
-        kind: "var",
-        id: freshType().id,
-      })),
+      args: decl.params.map(
+        (param): TypeVar => ({
+          kind: "var",
+          id: freshType().id,
+        }),
+      ),
     },
   ];
 
@@ -3579,13 +3841,17 @@ function generateShowImplementation(
 
   const str = (s: string): Expr => ({ kind: "String", value: `"${s}"`, span });
   const append = (a: Expr, b: Expr): Expr => ({
-    kind: "Infix", left: a, operator: "++", right: b, span
+    kind: "Infix",
+    left: a,
+    operator: "++",
+    right: b,
+    span,
   });
   const toString = (val: Expr): Expr => ({
     kind: "Apply",
     callee: { kind: "Var", name: "toString", namespace: "lower", span },
     args: [val],
-    span
+    span,
   });
 
   if (decl.recordFields) {
@@ -3601,7 +3867,7 @@ function generateShowImplementation(
         kind: "FieldAccess",
         target: { kind: "Var", name: "x_impl", namespace: "lower", span },
         field: field.name,
-        span
+        span,
       };
       expr = append(expr, toString(fieldAccess));
     });
@@ -3610,13 +3876,13 @@ function generateShowImplementation(
     body = expr;
   } else if (decl.constructors) {
     // case x_impl of ...
-    const branches = decl.constructors.map(ctor => {
+    const branches = decl.constructors.map((ctor) => {
       const args = ctor.args.map((_, i) => `a${i}`);
       const pattern: Pattern = {
         kind: "ConstructorPattern",
         name: ctor.name,
-        args: args.map(a => ({ kind: "VarPattern", name: a, span })),
-        span
+        args: args.map((a) => ({ kind: "VarPattern", name: a, span })),
+        span,
       };
 
       let expr: Expr;
@@ -3626,7 +3892,10 @@ function generateShowImplementation(
         expr = str(`${ctor.name}(`);
         args.forEach((a, i) => {
           if (i > 0) expr = append(expr, str(", "));
-          expr = append(expr, toString({ kind: "Var", name: a, namespace: "lower", span }));
+          expr = append(
+            expr,
+            toString({ kind: "Var", name: a, namespace: "lower", span }),
+          );
         });
         expr = append(expr, str(")"));
       }
@@ -3638,7 +3907,7 @@ function generateShowImplementation(
       kind: "Case",
       discriminant: { kind: "Var", name: "x_impl", namespace: "lower", span },
       branches,
-      span
+      span,
     };
   } else {
     // Should not happen for valid types? Opaque?
@@ -3649,7 +3918,7 @@ function generateShowImplementation(
     kind: "Lambda",
     args: [{ kind: "VarPattern", name: "x_impl", span }],
     body,
-    span
+    span,
   });
 
   return {
@@ -3686,7 +3955,7 @@ function validateTypeImplementsEq(
       throw new SemanticError(
         `Type mismatch: cannot unify 'Int' with 'Int -> Int'. No instance of Eq for function type.`,
         declSpan,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     case "TypeRef":
       const firstChar = type.name.charAt(0);
@@ -3720,7 +3989,8 @@ function validateTypeImplementsEq(
         // Strict check for local types
         const localDecl = declarations.find(
           (d) =>
-            (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
+            (d.kind === "TypeDeclaration" ||
+              d.kind === "TypeAliasDeclaration") &&
             d.name === type.name,
         );
 
@@ -3742,7 +4012,7 @@ function validateTypeImplementsEq(
             throw new SemanticError(
               `Type '${type.name}' does not implement 'Eq'. Implicit 'Eq' requires all fields to implement 'Eq'.`,
               declSpan,
-              analyzer.getFilePath()
+              analyzer.getFilePath(),
             );
           }
         }
@@ -3759,7 +4029,8 @@ function validateTypeImplementsEq(
           ),
         );
         break;
-      } return; // End of TypeRef case block scope (implicit in how code was structured, but cleaner with break or return)
+      }
+      return; // End of TypeRef case block scope (implicit in how code was structured, but cleaner with break or return)
 
     case "TupleType":
       type.elements.forEach((elem) =>
@@ -3817,14 +4088,30 @@ function generateEqImplementation(
 
   if (decl.recordFields) {
     for (const field of decl.recordFields) {
-      validateTypeImplementsEq(analyzer, field.type, decl.span, typeParams, declarations, instances, new Set());
+      validateTypeImplementsEq(
+        analyzer,
+        field.type,
+        decl.span,
+        typeParams,
+        declarations,
+        instances,
+        new Set(),
+      );
     }
   }
 
   if (decl.constructors) {
     for (const ctor of decl.constructors) {
       for (const arg of ctor.args) {
-        validateTypeImplementsEq(analyzer, arg, decl.span, typeParams, declarations, instances, new Set());
+        validateTypeImplementsEq(
+          analyzer,
+          arg,
+          decl.span,
+          typeParams,
+          declarations,
+          instances,
+          new Set(),
+        );
       }
     }
   }
@@ -4033,7 +4320,7 @@ function registerImplementation(
     throw new SemanticError(
       `Unknown protocol '${decl.protocolName}'`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -4042,7 +4329,7 @@ function registerImplementation(
     throw new SemanticError(
       `Protocol '${decl.protocolName}' expects ${protocol.params.length} type argument(s), but got ${decl.typeArgs.length}`,
       decl.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 
@@ -4052,7 +4339,7 @@ function registerImplementation(
   // Convert type arguments from AST to internal representation
   const typeArgs: Type[] = [];
   for (const typeArg of decl.typeArgs) {
-    typeArgs.push(typeFromAnnotation(analyzer, typeArg, typeVarCtx, adts, typeAliases));
+    typeArgs.push(typeFromAnnotation(analyzer, typeArg, typeVarCtx));
   }
 
   // Convert constraints
@@ -4063,13 +4350,13 @@ function registerImplementation(
       throw new SemanticError(
         `Unknown protocol '${astConstraint.protocolName}' in constraint`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     const constraintTypeArgs: Type[] = [];
     for (const typeArg of astConstraint.typeArgs) {
       constraintTypeArgs.push(
-        typeFromAnnotation(analyzer, typeArg, typeVarCtx, adts, typeAliases),
+        typeFromAnnotation(analyzer, typeArg, typeVarCtx),
       );
     }
     constraints.push({
@@ -4083,23 +4370,41 @@ function registerImplementation(
   const allMethods = new Set(protocol.methods.keys());
 
   // Check for auto-derivation request: implement Eq/Show with no methods
-  if (decl.methods.length === 0 && (decl.protocolName === "Eq" || decl.protocolName === "Show")) {
+  if (
+    decl.methods.length === 0 &&
+    (decl.protocolName === "Eq" || decl.protocolName === "Show")
+  ) {
     // Ensure we have a valid type arg
     if (typeArgs.length === 1 && typeArgs[0]!.kind === "con") {
       const typeName = (typeArgs[0] as TypeCon).name;
       // Find declaration
-      const typeDecl = programDeclarations.find(d =>
-        (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
-        d.name === typeName
+      const typeDecl = programDeclarations.find(
+        (d) =>
+          (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
+          d.name === typeName,
       );
 
       if (typeDecl && typeDecl.kind === "TypeDeclaration") {
         // Generate synthetic instance
         let synthetic: InstanceInfo | undefined;
         if (decl.protocolName === "Eq") {
-          synthetic = generateEqImplementation(analyzer, typeDecl, protocol, currentModuleName, instances, {}, programDeclarations);
+          synthetic = generateEqImplementation(
+            analyzer,
+            typeDecl,
+            protocol,
+            currentModuleName,
+            instances,
+            {},
+            programDeclarations,
+          );
         } else {
-          synthetic = generateShowImplementation(analyzer, typeDecl, protocol, currentModuleName, programDeclarations);
+          synthetic = generateShowImplementation(
+            analyzer,
+            typeDecl,
+            protocol,
+            currentModuleName,
+            programDeclarations,
+          );
         }
 
         // Populate implemented methods from synthetic instance
@@ -4127,7 +4432,7 @@ function registerImplementation(
             decl.methods.push({
               name: name,
               implementation: impl,
-              span: decl.span // Synthetic span
+              span: decl.span, // Synthetic span
             });
 
             // Also update implementedMethods set so validation passes
@@ -4145,7 +4450,7 @@ function registerImplementation(
       throw new SemanticError(
         `Instance is missing implementation for method '${methodName}'`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
   }
@@ -4156,7 +4461,7 @@ function registerImplementation(
       throw new SemanticError(
         `Method '${implemented}' is not part of protocol '${decl.protocolName}'`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
   }
@@ -4218,7 +4523,7 @@ function registerImplementation(
       throw new SemanticError(
         `Overlapping implementation for protocol '${decl.protocolName}'`,
         decl.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
   }
@@ -4281,26 +4586,23 @@ function concretizeInstanceTypeArgs(
       const inferSubstitution: Substitution = new Map(substitution);
 
       // Infer the type of the implementation expression
-      const tempScope: Scope = { symbols: new Map(), parent: globalScope };
+      const tempScope = new Scope(globalScope);
       try {
         const inferredType = analyzeExpr(
           analyzer,
           methodExpr,
-          null, // expectedType
           tempScope,
           inferSubstitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
         );
 
         // Unify to get concrete types
-        unify(analyzer, inferredType, expectedType, methodExpr.span, inferSubstitution);
+        unify(
+          analyzer,
+          inferredType,
+          expectedType,
+          methodExpr.span,
+          inferSubstitution,
+        );
 
         // Apply the inference results back to the instance's typeArgs
         for (let i = 0; i < instance.typeArgs.length; i++) {
@@ -4453,7 +4755,7 @@ function validateImplementationMethodTypes(
       // Infer the type of the implementation expression
       // For Lambda expressions, use bidirectional type checking - bind parameter types
       // from the expected function type before analyzing the body
-      const tempScope: Scope = { symbols: new Map(), parent: globalScope };
+      const tempScope = new Scope(globalScope);
       let inferredType: Type;
 
       if (methodExpr.kind === "Lambda" && expectedType.kind === "fun") {
@@ -4485,17 +4787,8 @@ function validateImplementationMethodTypes(
         const bodyType = analyzeExpr(
           analyzer,
           methodExpr.body,
-          null, // expectedType (could use return type of function from expectedType)
           tempScope,
           inferSubstitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
         );
 
         inferredType = fnChain(expectedParamTypes, bodyType);
@@ -4503,32 +4796,31 @@ function validateImplementationMethodTypes(
         inferredType = analyzeExpr(
           analyzer,
           methodExpr,
-          expectedType, // We have expectedType here!
           tempScope,
           inferSubstitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
+          expectedType,
         );
       }
 
       // Try to unify the inferred type with the expected type
       try {
-        unify(analyzer, inferredType, expectedType, methodExpr.span, inferSubstitution);
+        unify(
+          analyzer,
+          inferredType,
+          expectedType,
+          methodExpr.span,
+          inferSubstitution,
+        );
       } catch (e) {
         if (e instanceof SemanticError) {
           throw new SemanticError(
-            `Implementation of '${methodName}' for '${instance.protocolName
+            `Implementation of '${methodName}' for '${
+              instance.protocolName
             }' has type '${formatType(
               applySubstitution(inferredType, inferSubstitution),
             )}' but protocol expects '${formatType(expectedType)}'`,
             methodExpr.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         throw e;
@@ -4556,13 +4848,13 @@ function validateImplementationMethodTypes(
             if (!hasInstance) {
               throw new SemanticError(
                 `Implementation of '${methodName}' for '${instance.protocolName}' ` +
-                `requires '${constraint.protocolName}' constraint on type parameter, ` +
-                `but the implementation uses type '${formatType(
-                  resolvedType,
-                )}' ` +
-                `which does not implement '${constraint.protocolName}'`,
+                  `requires '${constraint.protocolName}' constraint on type parameter, ` +
+                  `but the implementation uses type '${formatType(
+                    resolvedType,
+                  )}' ` +
+                  `which does not implement '${constraint.protocolName}'`,
                 methodExpr.span,
-                analyzer.getFilePath()
+                analyzer.getFilePath(),
               );
             }
           }
@@ -4698,7 +4990,7 @@ function validateInstanceConstraintSatisfiability(
         throw new SemanticError(
           `Instance constraint references unknown protocol '${constraint.protocolName}'`,
           instance.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
@@ -4755,12 +5047,14 @@ function validateConcreteConstraintInstances(
             if (!hasInstance) {
               const span = valueInfo.span ?? valueInfo.declaration.span;
               throw new SemanticError(
-                `No instance of '${constraint.protocolName
+                `No instance of '${
+                  constraint.protocolName
                 }' for type '${formatType(typeArg)}'. ` +
-                `Add an implementation: implement ${constraint.protocolName
-                } ${formatType(typeArg)} where ...`,
+                  `Add an implementation: implement ${
+                    constraint.protocolName
+                  } ${formatType(typeArg)} where ...`,
                 span,
-                analyzer.getFilePath()
+                analyzer.getFilePath(),
               );
             }
           }
@@ -4900,7 +5194,10 @@ function checkConstraintSatisfiability(
     }
 
     if (shape === "tuple") {
-      if (constraint.protocolName === "Eq" || constraint.protocolName === "Show") {
+      if (
+        constraint.protocolName === "Eq" ||
+        constraint.protocolName === "Show"
+      ) {
         return { possible: true };
       }
       // Similar check for tuple types
@@ -4917,7 +5214,10 @@ function checkConstraintSatisfiability(
     }
 
     if (shape === "record") {
-      if (constraint.protocolName === "Eq" || constraint.protocolName === "Show") {
+      if (
+        constraint.protocolName === "Eq" ||
+        constraint.protocolName === "Show"
+      ) {
         return { possible: true };
       }
       // Similar check for record types
@@ -5074,7 +5374,13 @@ function validateConstraintSatisfiable(
 
   // Attempt synthetic derivation (Tuple/Record)
   if (constraint.typeArgs.length === 1) {
-    if (trySynthesizeInstance(constraint.protocolName, constraint.typeArgs[0]!, instances)) {
+    if (
+      trySynthesizeInstance(
+        constraint.protocolName,
+        constraint.typeArgs[0]!,
+        instances,
+      )
+    ) {
       return { found: true };
     }
   }
@@ -5142,7 +5448,13 @@ function matchTypeArgForInstance(
   if (instArg.kind === "tuple" && constraintArg.kind === "tuple") {
     if (instArg.elements.length !== constraintArg.elements.length) return false;
     for (let i = 0; i < instArg.elements.length; i++) {
-      if (!matchTypeArgForInstance(instArg.elements[i]!, constraintArg.elements[i]!, substitution)) {
+      if (
+        !matchTypeArgForInstance(
+          instArg.elements[i]!,
+          constraintArg.elements[i]!,
+          substitution,
+        )
+      ) {
         return false;
       }
     }
@@ -5157,7 +5469,13 @@ function matchTypeArgForInstance(
     for (let i = 0; i < instKeys.length; i++) {
       const key = instKeys[i]!;
       if (key !== constraintKeys[i]) return false;
-      if (!matchTypeArgForInstance(instArg.fields[key]!, constraintArg.fields[key]!, substitution)) {
+      if (
+        !matchTypeArgForInstance(
+          instArg.fields[key]!,
+          constraintArg.fields[key]!,
+          substitution,
+        )
+      ) {
         return false;
       }
     }
@@ -5194,16 +5512,25 @@ function findInstanceForTypeWithReason(
 
     if (instTypeArg.kind === concreteType.kind) {
       if (instTypeArg.kind === "con" && concreteType.kind === "con") {
-        matchesStructure = instTypeArg.name === concreteType.name &&
+        matchesStructure =
+          instTypeArg.name === concreteType.name &&
           instTypeArg.args.length === concreteType.args.length;
-      } else if (instTypeArg.kind === "tuple" && concreteType.kind === "tuple") {
-        matchesStructure = instTypeArg.elements.length === concreteType.elements.length;
-      } else if (instTypeArg.kind === "record" && concreteType.kind === "record") {
+      } else if (
+        instTypeArg.kind === "tuple" &&
+        concreteType.kind === "tuple"
+      ) {
+        matchesStructure =
+          instTypeArg.elements.length === concreteType.elements.length;
+      } else if (
+        instTypeArg.kind === "record" &&
+        concreteType.kind === "record"
+      ) {
         // Exact record match is strict, usually relying on structural matching below
         // But for safety, we can check keys
         const k1 = Object.keys(instTypeArg.fields).sort();
         const k2 = Object.keys(concreteType.fields).sort();
-        matchesStructure = k1.length === k2.length && k1.every((k, i) => k === k2[i]);
+        matchesStructure =
+          k1.length === k2.length && k1.every((k, i) => k === k2[i]);
       } else {
         // Functions etc
         matchesStructure = true;
@@ -5298,8 +5625,10 @@ function findInstanceForTypeInternal(
 
  */
 
-
-const syntheticSpan: Span = { start: { offset: 0, line: 0, column: 0 }, end: { offset: 0, line: 0, column: 0 } };
+const syntheticSpan: Span = {
+  start: { offset: 0, line: 0, column: 0 },
+  end: { offset: 0, line: 0, column: 0 },
+};
 
 function trySynthesizeInstance(
   protocolName: string,
@@ -5360,7 +5689,7 @@ function generateSyntheticInstance(
     moduleName: "Synthetic",
     typeArgs: [type],
     constraints: [], // Constraints checked at synthesis time, effectively monomorphic instance?
-    // Wait, if we use type variables? 
+    // Wait, if we use type variables?
     // findInstanceForTypeInternal takes CONCRETE type. So we generate CONCRETE instance.
     // e.g. Instance Eq (Int, Int)
     methods,
@@ -5394,36 +5723,47 @@ function generateSyntheticEq(type: Type): Expr {
         left: acc,
         operator: "&&",
         right: check,
-        span
+        span,
       }));
     }
 
     const pattern: Pattern = {
       kind: "TuplePattern",
       elements: [
-        { kind: "TuplePattern", elements: xVars.map(v => ({ kind: "VarPattern", name: v, span })), span },
-        { kind: "TuplePattern", elements: yVars.map(v => ({ kind: "VarPattern", name: v, span })), span },
+        {
+          kind: "TuplePattern",
+          elements: xVars.map((v) => ({ kind: "VarPattern", name: v, span })),
+          span,
+        },
+        {
+          kind: "TuplePattern",
+          elements: yVars.map((v) => ({ kind: "VarPattern", name: v, span })),
+          span,
+        },
       ],
-      span
+      span,
     };
 
     return {
       kind: "Lambda",
-      args: [{ kind: "VarPattern", name: "x_impl", span }, { kind: "VarPattern", name: "y_impl", span }],
+      args: [
+        { kind: "VarPattern", name: "x_impl", span },
+        { kind: "VarPattern", name: "y_impl", span },
+      ],
       body: {
         kind: "Case",
         discriminant: {
           kind: "Tuple",
           elements: [
             { kind: "Var", name: "x_impl", namespace: "lower", span },
-            { kind: "Var", name: "y_impl", namespace: "lower", span }
+            { kind: "Var", name: "y_impl", namespace: "lower", span },
           ],
-          span
+          span,
         },
         branches: [{ pattern, body, span }],
-        span
+        span,
       },
-      span
+      span,
     };
   } else if (type.kind === "record") {
     // x.f1 == y.f1 && ...
@@ -5431,20 +5771,20 @@ function generateSyntheticEq(type: Type): Expr {
     let body: Expr = { kind: "Var", name: "True", namespace: "upper", span };
 
     if (fields.length > 0) {
-      const checks: Expr[] = fields.map(f => ({
+      const checks: Expr[] = fields.map((f) => ({
         kind: "Infix",
         left: {
           kind: "FieldAccess",
           target: { kind: "Var", name: "x_impl", namespace: "lower", span },
           field: f,
-          span
+          span,
         },
         operator: "==",
         right: {
           kind: "FieldAccess",
           target: { kind: "Var", name: "y_impl", namespace: "lower", span },
           field: f,
-          span
+          span,
         },
         span,
       }));
@@ -5453,15 +5793,18 @@ function generateSyntheticEq(type: Type): Expr {
         left: acc,
         operator: "&&",
         right: check,
-        span
+        span,
       }));
     }
 
     return {
       kind: "Lambda",
-      args: [{ kind: "VarPattern", name: "x_impl", span }, { kind: "VarPattern", name: "y_impl", span }],
+      args: [
+        { kind: "VarPattern", name: "x_impl", span },
+        { kind: "VarPattern", name: "y_impl", span },
+      ],
       body,
-      span
+      span,
     };
   }
   throw new Error("Unsupported type for synthetic Eq");
@@ -5477,17 +5820,25 @@ function generateSyntheticShow(type: Type): Expr {
     const vars = Array.from({ length: arity }, (_, i) => `x${i}`);
 
     // Helper to make string literal expr
-    const str = (s: string): Expr => ({ kind: "String", value: `"${s}"`, span });
+    const str = (s: string): Expr => ({
+      kind: "String",
+      value: `"${s}"`,
+      span,
+    });
     // Helper for append: a ++ b
     const append = (a: Expr, b: Expr): Expr => ({
-      kind: "Infix", left: a, operator: "++", right: b, span
+      kind: "Infix",
+      left: a,
+      operator: "++",
+      right: b,
+      span,
     });
     // Helper for toString call: toString val
     const toStringCall = (valName: string): Expr => ({
       kind: "Apply",
       callee: { kind: "Var", name: "toString", namespace: "lower", span },
       args: [{ kind: "Var", name: valName, namespace: "lower", span }],
-      span
+      span,
     });
 
     let body: Expr = str("(");
@@ -5501,8 +5852,8 @@ function generateSyntheticShow(type: Type): Expr {
 
     const pattern: Pattern = {
       kind: "TuplePattern",
-      elements: vars.map(v => ({ kind: "VarPattern", name: v, span })),
-      span
+      elements: vars.map((v) => ({ kind: "VarPattern", name: v, span })),
+      span,
     };
 
     return {
@@ -5512,11 +5863,10 @@ function generateSyntheticShow(type: Type): Expr {
         kind: "Case",
         discriminant: { kind: "Var", name: "x_impl", namespace: "lower", span },
         branches: [{ pattern, body, span }],
-        span
+        span,
       },
-      span
+      span,
     };
-
   } else if (type.kind === "record") {
     // "Record(x = " ++ toString x.x ++ ", ...)"
     // But anonymous records usually printed as { x = ..., y = ... }
@@ -5526,15 +5876,30 @@ function generateSyntheticShow(type: Type): Expr {
     // I'll emit `{ x = ..., ... }`.
 
     const fields = Object.keys(type.fields).sort();
-    const str = (s: string): Expr => ({ kind: "String", value: `"${s}"`, span });
+    const str = (s: string): Expr => ({
+      kind: "String",
+      value: `"${s}"`,
+      span,
+    });
     const append = (a: Expr, b: Expr): Expr => ({
-      kind: "Infix", left: a, operator: "++", right: b, span
+      kind: "Infix",
+      left: a,
+      operator: "++",
+      right: b,
+      span,
     });
     const toStringField = (f: string): Expr => ({
       kind: "Apply",
       callee: { kind: "Var", name: "toString", namespace: "lower", span },
-      args: [{ kind: "FieldAccess", target: { kind: "Var", name: "x_impl", namespace: "lower", span }, field: f, span }],
-      span
+      args: [
+        {
+          kind: "FieldAccess",
+          target: { kind: "Var", name: "x_impl", namespace: "lower", span },
+          field: f,
+          span,
+        },
+      ],
+      span,
     });
 
     let body: Expr = str("{ ");
@@ -5549,7 +5914,7 @@ function generateSyntheticShow(type: Type): Expr {
       kind: "Lambda",
       args: [{ kind: "VarPattern", name: "x_impl", span }],
       body,
-      span
+      span,
     };
   }
   throw new Error("Unsupported type for synthetic Show");
@@ -5572,7 +5937,7 @@ function validateProtocolDefaultImplementations(
     for (const [methodName, methodInfo] of protocol.methods) {
       if (methodInfo.defaultImpl) {
         // Create a scope with the method parameters bound
-        const methodScope: Scope = { symbols: new Map(), parent: globalScope };
+        const methodScope = new Scope(globalScope);
         for (const arg of methodInfo.defaultImpl.args) {
           bindPatternNames(arg, methodScope);
         }
@@ -5635,7 +6000,7 @@ function validateExpressionIdentifiers(
     }
     case "Lambda": {
       // Create a child scope with the lambda arguments
-      const childScope: Scope = { symbols: new Map(), parent: scope };
+      const childScope = new Scope(scope);
       for (const arg of expr.args) {
         bindPatternNames(arg, childScope);
       }
@@ -5717,7 +6082,7 @@ function validateExpressionIdentifiers(
     }
     case "LetIn": {
       // Create a child scope for let bindings
-      const childScope: Scope = { symbols: new Map(), parent: scope };
+      const childScope = new Scope(scope);
       for (const binding of expr.bindings) {
         // First validate the binding body in the parent scope
         validateExpressionIdentifiers(
@@ -5765,7 +6130,7 @@ function validateExpressionIdentifiers(
       );
       for (const branch of expr.branches) {
         // Create a child scope with pattern bindings
-        const branchScope: Scope = { symbols: new Map(), parent: scope };
+        const branchScope = new Scope(scope);
         bindPatternNames(branch.pattern, branchScope);
         validateExpressionIdentifiers(
           analyzer,
@@ -5788,7 +6153,7 @@ function validateExpressionIdentifiers(
         throw new SemanticError(
           `Undefined operator '${expr.operator}' in implementation of '${methodName}' for protocol '${protocolName}'`,
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       validateExpressionIdentifiers(
@@ -5948,7 +6313,7 @@ function validateExpressionIdentifiers(
         imports,
         dependencies,
         protocolName,
-        methodName
+        methodName,
       );
       if (!resolved) {
         // Not a module access, validate the target expression normally
@@ -6016,7 +6381,7 @@ function validateModuleFieldAccess(
         throw new SemanticError(
           `Module '${imp.moduleName}' (aliased as '${imp.alias}') not found in implementation of '${methodName}' for protocol '${protocolName}'`,
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
@@ -6031,7 +6396,7 @@ function validateModuleFieldAccess(
           throw new SemanticError(
             `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
             expr.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         return true;
@@ -6044,7 +6409,7 @@ function validateModuleFieldAccess(
           throw new SemanticError(
             `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
             expr.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         return true;
@@ -6054,7 +6419,7 @@ function validateModuleFieldAccess(
       throw new SemanticError(
         `'${fieldName}' is not defined in module '${imp.moduleName}' (aliased as '${imp.alias}') in implementation of '${methodName}' for protocol '${protocolName}'`,
         expr.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
 
@@ -6075,7 +6440,7 @@ function validateModuleFieldAccess(
           throw new SemanticError(
             `Module '${imp.moduleName}' not found in implementation of '${methodName}' for protocol '${protocolName}'`,
             expr.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
 
@@ -6092,7 +6457,7 @@ function validateModuleFieldAccess(
               throw new SemanticError(
                 `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
                 expr.span,
-                analyzer.getFilePath()
+                analyzer.getFilePath(),
               );
             }
             return true;
@@ -6105,7 +6470,7 @@ function validateModuleFieldAccess(
               throw new SemanticError(
                 `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
                 expr.span,
-                analyzer.getFilePath()
+                analyzer.getFilePath(),
               );
             }
             return true;
@@ -6115,7 +6480,7 @@ function validateModuleFieldAccess(
           throw new SemanticError(
             `'${fieldName}' is not defined in module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
             expr.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
       }
@@ -6130,13 +6495,7 @@ function validateModuleFieldAccess(
  * Check if a symbol exists in the scope hierarchy (without throwing).
  */
 function symbolExists(scope: Scope, name: string): boolean {
-  if (scope.symbols.has(name)) {
-    return true;
-  }
-  if (scope.parent) {
-    return symbolExists(scope.parent, name);
-  }
-  return false;
+  return scope.lookup(name) !== undefined;
 }
 
 /**
@@ -6146,7 +6505,7 @@ function symbolExists(scope: Scope, name: string): boolean {
 function bindPatternNames(pattern: Pattern, scope: Scope): void {
   switch (pattern.kind) {
     case "VarPattern":
-      scope.symbols.set(pattern.name, {
+      scope.define(pattern.name, {
         vars: new Set(),
         constraints: [],
         type: { kind: "var", id: -1 }, // Placeholder
@@ -6513,7 +6872,7 @@ function computeModuleExports(
         throw new SemanticError(
           `Module exposes '${name}' which is not defined`,
           spec.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
@@ -6530,7 +6889,7 @@ function computeModuleExports(
           throw new SemanticError(
             `Module exposes operator '${op}' which is not defined`,
             spec.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
 
@@ -6575,21 +6934,21 @@ function computeModuleExports(
           throw new SemanticError(
             `Type alias '${name}' cannot use (..) syntax - type aliases have no constructors`,
             spec.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         if (Object.hasOwn(opaqueTypes, name)) {
           throw new SemanticError(
             `Opaque type '${name}' cannot use (..) syntax - opaque types have no constructors`,
             spec.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
 
         throw new SemanticError(
           `Module exposes '${name}(..)' but '${name}' is not a type or protocol`,
           spec.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
@@ -6608,7 +6967,7 @@ function computeModuleExports(
               throw new SemanticError(
                 `Constructor '${memberName}' is not defined in type '${name}'`,
                 spec.span,
-                analyzer.getFilePath()
+                analyzer.getFilePath(),
               );
             }
             exportedCtors.add(memberName);
@@ -6631,7 +6990,7 @@ function computeModuleExports(
               throw new SemanticError(
                 `Method '${memberName}' is not defined in protocol '${name}'`,
                 spec.span,
-                analyzer.getFilePath()
+                analyzer.getFilePath(),
               );
             }
             exportedMethods.add(memberName);
@@ -6649,7 +7008,7 @@ function computeModuleExports(
         throw new SemanticError(
           `Module exposes '${name}(...)' but '${name}' is not a type or protocol`,
           spec.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
     }
@@ -6658,7 +7017,10 @@ function computeModuleExports(
   return exports;
 }
 
-function validateImports(analyzer: SemanticAnalyzer, imports: ImportDeclaration[]) {
+function validateImports(
+  analyzer: SemanticAnalyzer,
+  imports: ImportDeclaration[],
+) {
   const byModule = new Map<string, ImportDeclaration>();
   const byAlias = new Map<string, ImportDeclaration>();
 
@@ -6668,7 +7030,7 @@ function validateImports(analyzer: SemanticAnalyzer, imports: ImportDeclaration[
       throw new SemanticError(
         `Duplicate import of module '${imp.moduleName}'`,
         imp.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     byModule.set(imp.moduleName, imp);
@@ -6679,7 +7041,7 @@ function validateImports(analyzer: SemanticAnalyzer, imports: ImportDeclaration[
         throw new SemanticError(
           `Duplicate import alias '${imp.alias}'`,
           imp.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       byAlias.set(imp.alias, imp);
@@ -6690,18 +7052,13 @@ function validateImports(analyzer: SemanticAnalyzer, imports: ImportDeclaration[
 function analyzeValueDeclaration(
   analyzer: SemanticAnalyzer,
   decl: ValueDeclaration,
-  globalScope: Scope,
+  scope: Scope,
   substitution: Substitution,
   declaredType: Type,
-  annotationType: Type | undefined,
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  records: Record<string, RecordInfo>,
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map(),
+  annotationType?: Type,
 ): Type {
+  const { constructors, adts, imports, dependencies } = analyzer;
+
   // Validate function parameter patterns (single-constructor ADTs, tuples, records)
   validateFunctionParamPatterns(analyzer, decl.args, constructors, adts);
 
@@ -6715,7 +7072,7 @@ function analyzeValueDeclaration(
 
   unify(analyzer, expected, declaredType, decl.span, substitution);
 
-  const fnScope: Scope = { parent: globalScope, symbols: new Map() };
+  const fnScope = new Scope(scope);
   bindPatterns(
     analyzer,
     fnScope,
@@ -6731,17 +7088,9 @@ function analyzeValueDeclaration(
   const bodyType = analyzeExpr(
     analyzer,
     decl.body,
-    returnType,
     fnScope,
     substitution,
-    globalScope,
-    constructors,
-    adts,
-    typeAliases,
-    opaqueTypes,
-    records,
-    imports,
-    dependencies,
+    returnType,
   );
   unify(analyzer, bodyType, returnType, decl.body.span, substitution);
 
@@ -6867,18 +7216,14 @@ function tryResolveModuleFieldAccess(
 function analyzeExpr(
   analyzer: SemanticAnalyzer,
   expr: Expr,
-  expectedType: Type | null,
   scope: Scope,
   substitution: Substitution,
-  globalScope: Scope,
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo> = {},
-  records: Record<string, RecordInfo> = {},
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map(),
+  expectedType: Type | null = null,
 ): Type {
+  // Access registry properties from analyzer
+  const { constructors, adts, typeAliases, opaqueTypes, records } = analyzer;
+  const { imports, dependencies } = analyzer;
+
   switch (expr.kind) {
     case "Var": {
       // Look up the symbol and collect any protocol constraints
@@ -6904,7 +7249,7 @@ function analyzeExpr(
         throw new SemanticError(
           `Type '${typeName}' not found. Make sure the prelude is imported.`,
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       return { kind: "con", name: typeName, args: [] };
@@ -6915,7 +7260,7 @@ function analyzeExpr(
         throw new SemanticError(
           "Type 'String' not found. Make sure the prelude is imported.",
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       return { kind: "con", name: "String", args: [] };
@@ -6926,7 +7271,7 @@ function analyzeExpr(
         throw new SemanticError(
           "Type 'Char' not found. Make sure the prelude is imported.",
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       return { kind: "con", name: "Char", args: [] };
@@ -6938,28 +7283,14 @@ function analyzeExpr(
         throw new SemanticError(
           "Type 'Unit' not found. Make sure the prelude is imported.",
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       return { kind: "con", name: "Unit", args: [] };
     }
     case "Tuple": {
       const elements = expr.elements.map((el) =>
-        analyzeExpr(
-          analyzer,
-          el,
-          null,
-          scope,
-          substitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
-        ),
+        analyzeExpr(analyzer, el, scope, substitution),
       );
       return { kind: "tuple", elements };
     }
@@ -6970,69 +7301,18 @@ function analyzeExpr(
       const first = analyzeExpr(
         analyzer,
         expr.elements[0]!,
-        null,
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
       for (const el of expr.elements.slice(1)) {
-        const elType = analyzeExpr(
-          analyzer,
-          el,
-          null,
-          scope,
-          substitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
-        );
+        const elType = analyzeExpr(analyzer, el, scope, substitution);
         unify(analyzer, first, elType, el.span, substitution);
       }
       return listType(applySubstitution(first, substitution));
     }
     case "ListRange": {
-      const startType = analyzeExpr(
-        analyzer,
-        expr.start,
-        null,
-        scope,
-        substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
-      );
-      const endType = analyzeExpr(
-        analyzer,
-        expr.end,
-        null,
-        scope,
-        substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
-      );
+      const startType = analyzeExpr(analyzer, expr.start, scope, substitution);
+      const endType = analyzeExpr(analyzer, expr.end, scope, substitution);
       unify(analyzer, startType, endType, expr.span, substitution);
       return listType(applySubstitution(startType, substitution));
     }
@@ -7044,35 +7324,32 @@ function analyzeExpr(
           throw new SemanticError(
             `Duplicate record field '${field.name}'`,
             field.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         fields[field.name] = analyzeExpr(
           analyzer,
           field.value,
-          null,
           scope,
           substitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
         );
       }
       return { kind: "record", fields };
     }
     case "RecordUpdate": {
-      const baseType = lookupSymbol(analyzer, scope, expr.base, expr.span, substitution);
+      const baseType = lookupSymbol(
+        analyzer,
+        scope,
+        expr.base,
+        expr.span,
+        substitution,
+      );
       const concreteBase = applySubstitution(baseType, substitution);
       if (concreteBase.kind !== "record") {
         throw new SemanticError(
           `Cannot update non-record '${expr.base}'`,
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       const updatedFields: Record<string, Type> = { ...concreteBase.fields };
@@ -7081,25 +7358,22 @@ function analyzeExpr(
           throw new SemanticError(
             `Record '${expr.base}' has no field '${field.name}'`,
             field.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         const fieldType = analyzeExpr(
           analyzer,
           field.value,
-          null,
           scope,
           substitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
         );
-        unify(analyzer, updatedFields[field.name]!, fieldType, field.span, substitution);
+        unify(
+          analyzer,
+          updatedFields[field.name]!,
+          fieldType,
+          field.span,
+          substitution,
+        );
         updatedFields[field.name] = applySubstitution(
           updatedFields[field.name]!,
           substitution,
@@ -7122,17 +7396,8 @@ function analyzeExpr(
       const targetType = analyzeExpr(
         analyzer,
         expr.target,
-        null,
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
       const concrete = applySubstitution(targetType, substitution);
 
@@ -7164,11 +7429,6 @@ function analyzeExpr(
               analyzer,
               fieldInfo.typeExpr,
               resolveCtx,
-              adts,
-              typeAliases,
-              records,
-              imports,
-              dependencies,
             );
 
             const instSub = new Map<number, Type>();
@@ -7189,20 +7449,20 @@ function analyzeExpr(
           throw new SemanticError(
             `Cannot access field '${expr.field}' on non-record value '${formatType(concrete)}'`,
             expr.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         throw new SemanticError(
           `Record has no field '${expr.field}'`,
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       return applySubstitution(fieldType, substitution);
     }
     case "Lambda": {
       const paramTypes = expr.args.map(() => freshType());
-      const fnScope: Scope = { parent: scope, symbols: new Map() };
+      const fnScope = new Scope(scope);
       bindPatterns(
         analyzer,
         fnScope,
@@ -7214,57 +7474,21 @@ function analyzeExpr(
         imports,
         dependencies,
       );
-      const bodyType = analyzeExpr(
-        analyzer,
-        expr.body,
-        null, // expectedType could be derived from context? But simpler to infer.
-        fnScope,
-        substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
-      );
+      const bodyType = analyzeExpr(analyzer, expr.body, fnScope, substitution);
       return fnChain(paramTypes, bodyType);
     }
     case "Apply": {
-      let calleeType = analyzeExpr(
-        analyzer,
-        expr.callee,
-        null, // expectedType
-        scope,
-        substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
-      );
+      let calleeType = analyzeExpr(analyzer, expr.callee, scope, substitution);
       for (const arg of expr.args) {
-        const argType = analyzeExpr(
-          analyzer,
-          arg,
-          null,
-          scope,
-          substitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
-        );
+        const argType = analyzeExpr(analyzer, arg, scope, substitution);
         const resultType = freshType();
-        unify(analyzer, calleeType, fn(argType, resultType), expr.span, substitution);
+        unify(
+          analyzer,
+          calleeType,
+          fn(argType, resultType),
+          expr.span,
+          substitution,
+        );
         // Eagerly validate constraints after unification to catch type mismatches
         // where a protocol method's return type gets unified with a function type
         // due to over-application
@@ -7277,17 +7501,8 @@ function analyzeExpr(
       const condType = analyzeExpr(
         analyzer,
         expr.condition,
-        null,
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
       // Bool type must be defined in the prelude
       const boolAdt = adts["Bool"];
@@ -7295,7 +7510,7 @@ function analyzeExpr(
         throw new SemanticError(
           "Type 'Bool' not found. Make sure the prelude is imported.",
           expr.condition.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
       const tBool: Type = { kind: "con", name: "Bool", args: [] };
@@ -7303,38 +7518,20 @@ function analyzeExpr(
       const thenType = analyzeExpr(
         analyzer,
         expr.thenBranch,
-        null, // Could pass expectedType from parent if available? But here null is safe for inference.
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
       const elseType = analyzeExpr(
         analyzer,
         expr.elseBranch,
-        null,
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
       unify(analyzer, thenType, elseType, expr.span, substitution);
       return applySubstitution(thenType, substitution);
     }
     case "LetIn": {
-      const letScope: Scope = { parent: scope, symbols: new Map() };
+      const letScope = new Scope(scope);
 
       // First pass: seed the scope with monomorphic schemes to enable recursion
       for (const binding of expr.bindings) {
@@ -7342,10 +7539,10 @@ function analyzeExpr(
           throw new SemanticError(
             `Duplicate let-binding '${binding.name}'`,
             binding.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
-        const seeded = seedValueType(analyzer, binding, adts, typeAliases);
+        const seeded = seedValueType(analyzer, binding);
         // Seed with monomorphic scheme (empty quantifier set)
         declareSymbol(
           analyzer,
@@ -7372,58 +7569,38 @@ function analyzeExpr(
           letScope,
           substitution,
           declared,
-          undefined,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
         );
         // Generalize the inferred type for polymorphic let-bindings
         // Note: We generalize with respect to the parent scope, not letScope,
         // to allow quantifying over variables not bound in the parent
-        const generalizedScheme = generalize(analyzer, inferred, scope, substitution);
+        const generalizedScheme = generalize(
+          analyzer,
+          inferred,
+          scope,
+          substitution,
+        );
         letScope.symbols.set(binding.name, generalizedScheme);
       }
 
       return analyzeExpr(
         analyzer,
         expr.body,
-        expectedType, // Pass through expectedType if available in scope? Wait, analyzeExpr has expectedType arg now!
         letScope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
+        expectedType,
       );
     }
     case "Case": {
       const discriminantType = analyzeExpr(
         analyzer,
         expr.discriminant,
-        null,
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
       const branchTypes: Type[] = [];
 
       expr.branches.forEach((branch, index) => {
-        const branchScope: Scope = { parent: scope, symbols: new Map() };
+        const branchScope = new Scope(scope);
         const patternType = bindPattern(
           analyzer,
           branch.pattern,
@@ -7436,21 +7613,19 @@ function analyzeExpr(
           imports,
           dependencies,
         );
-        unify(analyzer, discriminantType, patternType, branch.pattern.span, substitution);
+        unify(
+          analyzer,
+          discriminantType,
+          patternType,
+          branch.pattern.span,
+          substitution,
+        );
         const bodyType = analyzeExpr(
           analyzer,
           branch.body,
-          expectedType, // Pass through expected type to branches!
           branchScope,
           substitution,
-          globalScope,
-          constructors,
-          adts,
-          typeAliases,
-          opaqueTypes,
-          records,
-          imports,
-          dependencies,
+          expectedType,
         );
         branchTypes.push(bodyType);
 
@@ -7459,7 +7634,7 @@ function analyzeExpr(
             throw new SemanticError(
               "Wildcard pattern makes following branches unreachable",
               branch.pattern.span,
-              analyzer.getFilePath()
+              analyzer.getFilePath(),
             );
           }
         }
@@ -7469,7 +7644,11 @@ function analyzeExpr(
       });
 
       if (branchTypes.length === 0) {
-        throw new SemanticError("Case expression has no branches", expr.span, analyzer.getFilePath());
+        throw new SemanticError(
+          "Case expression has no branches",
+          expr.span,
+          analyzer.getFilePath(),
+        );
       }
 
       const firstType = branchTypes[0]!;
@@ -7498,50 +7677,26 @@ function analyzeExpr(
         throw new SemanticError(
           `Non-exhaustive case expression (missing: ${result.missing})`,
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
       return applySubstitution(firstType, substitution);
     }
     case "Infix": {
-      const leftType = analyzeExpr(
-        analyzer,
-        expr.left,
-        null,
-        scope,
-        substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
-      );
-      const rightType = analyzeExpr(
-        analyzer,
-        expr.right,
-        null,
-        scope,
-        substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
-      );
+      const leftType = analyzeExpr(analyzer, expr.left, scope, substitution);
+      const rightType = analyzeExpr(analyzer, expr.right, scope, substitution);
       const opType = INFIX_TYPES[expr.operator];
 
       if (opType) {
         const expected = applySubstitution(opType, substitution);
         const params = flattenFunctionParams(expected);
         if (params.length < 2) {
-          throw new SemanticError("Invalid operator type", expr.span, analyzer.getFilePath());
+          throw new SemanticError(
+            "Invalid operator type",
+            expr.span,
+            analyzer.getFilePath(),
+          );
         }
         unify(analyzer, params[0]!, leftType, expr.left.span, substitution);
         unify(analyzer, params[1]!, rightType, expr.right.span, substitution);
@@ -7566,51 +7721,26 @@ function analyzeExpr(
       return analyzeExpr(
         analyzer,
         applyExpr,
-        expectedType, // Pass through expected type
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
+        expectedType,
       );
     }
     case "Paren":
       return analyzeExpr(
         analyzer,
         expr.expression,
-        expectedType, // Pass through expected type
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
+        expectedType,
       );
     case "Unary": {
       // Unary negation: only allowed for Int and Float
       const operandType = analyzeExpr(
         analyzer,
         expr.operand,
-        null,
         scope,
         substitution,
-        globalScope,
-        constructors,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        records,
-        imports,
-        dependencies,
       );
       const concreteType = applySubstitution(operandType, substitution);
 
@@ -7627,7 +7757,7 @@ function analyzeExpr(
         throw new SemanticError(
           `Unary negation requires a concrete numeric type (Int or Float), but got an unknown type. Add a type annotation to disambiguate.`,
           expr.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
@@ -7636,7 +7766,7 @@ function analyzeExpr(
           concreteType,
         )}'`,
         expr.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     default: {
@@ -7644,7 +7774,7 @@ function analyzeExpr(
       throw new SemanticError(
         "Unsupported expression",
         (expr as { span: Span }).span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
   }
@@ -7780,7 +7910,12 @@ function validateFunctionParamPattern(
       // Allowed, but validate nested patterns
       for (const field of pattern.fields) {
         if (field.pattern) {
-          validateFunctionParamPattern(analyzer, field.pattern, constructors, adts);
+          validateFunctionParamPattern(
+            analyzer,
+            field.pattern,
+            constructors,
+            adts,
+          );
         }
       }
       return;
@@ -7805,10 +7940,10 @@ function validateFunctionParamPattern(
         const constructorNames = adtInfo.constructors.join(", ");
         throw new SemanticError(
           `Constructor pattern '${pattern.name}' is not allowed in function parameters. ` +
-          `The type '${ctorInfo.parentType}' has multiple constructors (${constructorNames}). ` +
-          `Use a case expression in the function body instead.`,
+            `The type '${ctorInfo.parentType}' has multiple constructors (${constructorNames}). ` +
+            `Use a case expression in the function body instead.`,
           pattern.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
@@ -7824,9 +7959,9 @@ function validateFunctionParamPattern(
       // These should have been rejected by the parser, but check anyway
       throw new SemanticError(
         `List patterns are not allowed in function parameters. ` +
-        `Use a case expression in the function body instead.`,
+          `Use a case expression in the function body instead.`,
         pattern.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
   }
 }
@@ -8174,7 +8309,7 @@ function validateConstructorArity(
       throw new SemanticError(
         `Constructor '${pattern.name}' expects ${ctorInfo.arity} argument(s), got ${pattern.args.length}`,
         pattern.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     return;
@@ -8186,7 +8321,7 @@ function validateConstructorArity(
     throw new SemanticError(
       `Constructor '${pattern.name}' expects ${expected} argument(s)`,
       pattern.span,
-      analyzer.getFilePath()
+      analyzer.getFilePath(),
     );
   }
 }
@@ -8203,10 +8338,14 @@ function declareSymbol(
   scheme: TypeScheme,
   span: Span,
 ) {
-  if (scope.symbols.has(name)) {
-    throw new SemanticError(`Duplicate definition for '${name}'`, span, analyzer.getFilePath());
+  if (scope.has(name)) {
+    throw new SemanticError(
+      `Duplicate definition for '${name}'`,
+      span,
+      analyzer.getFilePath(),
+    );
   }
-  scope.symbols.set(name, scheme);
+  scope.define(name, scheme);
 }
 
 /**
@@ -8229,17 +8368,14 @@ function lookupSymbolWithConstraints(
   span: Span,
   substitution: Substitution,
 ): LookupResult {
-  if (scope.symbols.has(name)) {
-    const scheme = scope.symbols.get(name)!;
+  const scheme = scope.lookup(name);
+  if (scheme) {
     // Instantiate the scheme to get a fresh type for this use site
     const { type, constraints } = instantiateWithConstraints(
       scheme,
       substitution,
     );
     return { type, constraints };
-  }
-  if (scope.parent) {
-    return lookupSymbolWithConstraints(analyzer, scope.parent, name, span, substitution);
   }
   // Undefined name - add error and return ERROR_TYPE for recovery
   // This allows analysis to continue for other definitions (Elm-style per-definition isolation)
@@ -8263,17 +8399,16 @@ function lookupSymbol(
   span: Span,
   substitution: Substitution,
 ): Type {
-  return lookupSymbolWithConstraints(analyzer, scope, name, span, substitution).type;
+  return lookupSymbolWithConstraints(analyzer, scope, name, span, substitution)
+    .type;
 }
 
 function seedValueType(
   analyzer: SemanticAnalyzer,
   decl: ValueDeclaration | ExternalDeclaration,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
 ): Type {
   if (decl.kind === "ExternalDeclaration") {
-    return typeFromAnnotation(analyzer, decl.annotation, new Map(), adts, typeAliases);
+    return typeFromAnnotation(analyzer, decl.annotation, new Map());
   }
   const argTypes = decl.args.map(() => freshType());
   const resultType = freshType();
@@ -8439,17 +8574,17 @@ function generalizeWithAnnotatedConstraints(
       if (lookupResult.reason === "unsatisfied-constraint") {
         throw new SemanticError(
           `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
-          `The instance requires '${lookupResult.constraint}' for '${lookupResult.forType}', ` +
-          `but no such instance exists.`,
+            `The instance requires '${lookupResult.constraint}' for '${lookupResult.forType}', ` +
+            `but no such instance exists.`,
           span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       } else {
         throw new SemanticError(
           `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
-          `Add an implementation: implement ${c.protocolName} ${typeArgsStr} where ...`,
+            `Add an implementation: implement ${c.protocolName} ${typeArgsStr} where ...`,
           span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
     }
@@ -8486,11 +8621,11 @@ function generalizeWithAnnotatedConstraints(
       const typeArgsStr = c.typeArgs.map((t) => formatType(t)).join(", ");
       throw new SemanticError(
         `Ambiguous type variable in '${c.protocolName}' constraint. ` +
-        `The type '${typeArgsStr}' contains type variable(s) that do not appear ` +
-        `in the expression's type, so they cannot be determined. ` +
-        `Consider adding a type annotation to make the type concrete.`,
+          `The type '${typeArgsStr}' contains type variable(s) that do not appear ` +
+          `in the expression's type, so they cannot be determined. ` +
+          `Consider adding a type annotation to make the type concrete.`,
         span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
 
@@ -8526,7 +8661,7 @@ function generalizeWithAnnotatedConstraints(
           throw new SemanticError(
             `Constraint '${c.protocolName}' is on a concrete type, which is not allowed in type annotations`,
             span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
         // If the constraint references a type variable not in the function's type,
@@ -8535,7 +8670,7 @@ function generalizeWithAnnotatedConstraints(
           throw new SemanticError(
             `Constraint '${c.protocolName}' references type variables not used in the function type`,
             span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
       }
@@ -8586,27 +8721,29 @@ function generalizeWithAnnotatedConstraints(
     // If we have at least one concrete type arg and at least one type variable,
     // try to find a unique matching instance
     if (concretePositions.length > 0 && varPositions.length > 0) {
-      const matchingInstances = analyzer.getInstanceRegistry().filter((inst) => {
-        if (inst.protocolName !== c.protocolName) return false;
-        if (inst.typeArgs.length !== resolvedTypeArgs.length) return false;
+      const matchingInstances = analyzer
+        .getInstanceRegistry()
+        .filter((inst) => {
+          if (inst.protocolName !== c.protocolName) return false;
+          if (inst.typeArgs.length !== resolvedTypeArgs.length) return false;
 
-        // Check that all concrete positions match
-        for (const pos of concretePositions) {
-          const instArg = inst.typeArgs[pos]!;
-          const constraintArg = resolvedTypeArgs[pos]!;
-          if (!instanceTypeMatches(instArg, constraintArg)) return false;
-        }
+          // Check that all concrete positions match
+          for (const pos of concretePositions) {
+            const instArg = inst.typeArgs[pos]!;
+            const constraintArg = resolvedTypeArgs[pos]!;
+            if (!instanceTypeMatches(instArg, constraintArg)) return false;
+          }
 
-        // Check that the instance has concrete types for the variable positions
-        // (so we can actually resolve the type variable)
-        for (const pos of varPositions) {
-          const instArg = inst.typeArgs[pos]!;
-          // Instance type arg must be concrete (not a bare type variable)
-          if (instArg.kind === "var") return false;
-        }
+          // Check that the instance has concrete types for the variable positions
+          // (so we can actually resolve the type variable)
+          for (const pos of varPositions) {
+            const instArg = inst.typeArgs[pos]!;
+            // Instance type arg must be concrete (not a bare type variable)
+            if (instArg.kind === "var") return false;
+          }
 
-        return true;
-      });
+          return true;
+        });
 
       // If exactly one matching instance, unify the type variables with instance types
       if (matchingInstances.length === 1) {
@@ -8653,11 +8790,11 @@ function generalizeWithAnnotatedConstraints(
         if (!finalTypeFreeVars.has(v)) {
           throw new SemanticError(
             `Ambiguous type variable in '${c.protocolName}' constraint. ` +
-            `The type variable does not appear in the expression's type, ` +
-            `so it cannot be determined. Consider adding a type annotation ` +
-            `to make the type concrete.`,
+              `The type variable does not appear in the expression's type, ` +
+              `so it cannot be determined. Consider adding a type annotation ` +
+              `to make the type concrete.`,
             span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
       }
@@ -8910,13 +9047,10 @@ function typeFromAnnotationWithConstraints(
   analyzer: SemanticAnalyzer,
   annotation: TypeExpr,
   context: TypeVarContext = new Map(),
-  adts: Record<string, ADTInfo> = {},
-  typeAliases: Record<string, TypeAliasInfo> = {},
-  protocols: Record<string, ProtocolInfo> = {},
-  records: Record<string, RecordInfo> = {},
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map(),
 ): AnnotationResult {
+  // Access registries from analyzer
+  const { protocols } = analyzer;
+
   // Handle QualifiedType at the top level to extract constraints
   if (annotation.kind === "QualifiedType") {
     // Convert AST constraints to internal constraints
@@ -8929,7 +9063,7 @@ function typeFromAnnotationWithConstraints(
         throw new SemanticError(
           `Unknown protocol '${astConstraint.protocolName}' in type constraint`,
           astConstraint.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
@@ -8938,25 +9072,14 @@ function typeFromAnnotationWithConstraints(
         throw new SemanticError(
           `Protocol '${astConstraint.protocolName}' expects ${protocol.params.length} type argument(s), but constraint has ${astConstraint.typeArgs.length}`,
           astConstraint.span,
-          analyzer.getFilePath()
+          analyzer.getFilePath(),
         );
       }
 
       // Convert constraint type arguments
       const constraintTypeArgs: Type[] = [];
       for (const typeArg of astConstraint.typeArgs) {
-        constraintTypeArgs.push(
-          typeFromAnnotation(
-            analyzer,
-            typeArg,
-            context,
-            adts,
-            typeAliases,
-            records,
-            imports,
-            dependencies,
-          ),
-        );
+        constraintTypeArgs.push(typeFromAnnotation(analyzer, typeArg, context));
       }
 
       // Validate that constraint type arguments are type variables
@@ -8967,7 +9090,7 @@ function typeFromAnnotationWithConstraints(
           throw new SemanticError(
             `Constraint '${astConstraint.protocolName}' must be applied to type variables, not concrete types`,
             astConstraint.span,
-            analyzer.getFilePath()
+            analyzer.getFilePath(),
           );
         }
       }
@@ -8983,12 +9106,6 @@ function typeFromAnnotationWithConstraints(
       analyzer,
       annotation.type,
       context,
-      adts,
-      typeAliases,
-      protocols,
-      records,
-      imports,
-      dependencies,
     );
 
     // Merge constraints from nested qualified types
@@ -8999,16 +9116,7 @@ function typeFromAnnotationWithConstraints(
   }
 
   // For non-qualified types, delegate to the simpler function
-  const type = typeFromAnnotation(
-    analyzer,
-    annotation,
-    context,
-    adts,
-    typeAliases,
-    records,
-    imports,
-    dependencies,
-  );
+  const type = typeFromAnnotation(analyzer, annotation, context);
   return { type, constraints: [] };
 }
 
@@ -9035,12 +9143,10 @@ function typeFromAnnotation(
   analyzer: SemanticAnalyzer,
   annotation: TypeExpr,
   context: TypeVarContext = new Map(),
-  adts: Record<string, ADTInfo> = {},
-  typeAliases: Record<string, TypeAliasInfo> = {},
-  records: Record<string, RecordInfo> = {},
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map(),
 ): Type {
+  // Access registries from analyzer
+  const { adts, typeAliases, records, imports, dependencies } = analyzer;
+
   // Helper to resolve type names (qualified or unqualified)
   function resolve(name: string) {
     return resolveQualifiedType(
@@ -9070,15 +9176,15 @@ function typeFromAnnotation(
           context.set(annotation.name, typeVar);
         }
         if (annotation.args.length > 0) {
-          // Treating as type constructor if it has args - fall through? 
+          // Treating as type constructor if it has args - fall through?
           // Existing logic returns var immediately.
           // If 'a' has args, it's invalid syntax usually, but parser allows?
           // Actually, if it has args it shouldn't be a var.
           // But isTypeVariable check is just lowercase.
           // 'list' is lowercase but is type alias/con?
           // Vibe types must be Uppercase.
-          // So lowercase implies var. 
-          // If dot present? 'a.b' is not lowercase? 
+          // So lowercase implies var.
+          // If dot present? 'a.b' is not lowercase?
           // 'R.Result' starts with Upper.
         } else {
           return typeVar;
@@ -9101,11 +9207,6 @@ function typeFromAnnotation(
               analyzer,
               annotation.args[i]!,
               context,
-              adts,
-              typeAliases,
-              records,
-              imports,
-              dependencies,
             );
             argTypes.push(argType);
           }
@@ -9125,11 +9226,6 @@ function typeFromAnnotation(
             analyzer,
             aliasInfo.value,
             aliasContext,
-            adts,
-            typeAliases,
-            records,
-            imports,
-            dependencies,
           );
 
           return applySubstitution(expandedType, substitutionMap);
@@ -9142,7 +9238,9 @@ function typeFromAnnotation(
           // Convert args
           const argTypes: Type[] = [];
           for (let i = 0; i < recordInfo.params.length; i++) {
-            argTypes.push(typeFromAnnotation(analyzer, annotation.args[i]!, context, adts, typeAliases, records, imports, dependencies));
+            argTypes.push(
+              typeFromAnnotation(analyzer, annotation.args[i]!, context),
+            );
           }
           // Subst map
           const recordContext: TypeVarContext = new Map(context);
@@ -9156,19 +9254,10 @@ function typeFromAnnotation(
           // Build fields
           const fields: Record<string, Type> = {};
           for (const field of recordInfo.fields) {
-            // We need to resolve field type expr with record context
-            // But wait, typeFromAnnotation recursion needs global context?
-            // No, field.typeExpr is static. 
-            // We need `imports` and `dependencies` here too!
             const fieldType = typeFromAnnotation(
               analyzer,
               field.typeExpr,
               recordContext,
-              adts,
-              typeAliases,
-              records,
-              imports,
-              dependencies
             );
             fields[field.name] = applySubstitution(fieldType, substitutionMap);
           }
@@ -9184,38 +9273,20 @@ function typeFromAnnotation(
         kind: "con",
         name: canonicalName,
         args: annotation.args.map((arg) =>
-          typeFromAnnotation(analyzer, arg, context, adts, typeAliases, records, imports, dependencies),
+          typeFromAnnotation(analyzer, arg, context),
         ),
       };
     }
     case "FunctionType": {
-      const from = typeFromAnnotation(
-        analyzer,
-        annotation.from,
-        context,
-        adts,
-        typeAliases,
-        records,
-        imports,
-        dependencies,
-      );
-      const to = typeFromAnnotation(
-        analyzer,
-        annotation.to,
-        context,
-        adts,
-        typeAliases,
-        records,
-        imports,
-        dependencies,
-      );
+      const from = typeFromAnnotation(analyzer, annotation.from, context);
+      const to = typeFromAnnotation(analyzer, annotation.to, context);
       return fn(from, to);
     }
     case "TupleType": {
       return {
         kind: "tuple",
         elements: annotation.elements.map((el) =>
-          typeFromAnnotation(analyzer, el, context, adts, typeAliases, records, imports, dependencies),
+          typeFromAnnotation(analyzer, el, context),
         ),
       };
     }
@@ -9224,25 +9295,16 @@ function typeFromAnnotation(
       // Record types must be defined using `type Name = { ... }` and then referenced by name
       throw new SemanticError(
         `Record types cannot be used directly in type annotations. ` +
-        `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
+          `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
         annotation.span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     case "QualifiedType": {
       // For the simple typeFromAnnotation function, we extract only the underlying type.
       // Use typeFromAnnotationWithConstraints() to also extract constraints.
       // This maintains backwards compatibility with call sites that only need the type.
-      return typeFromAnnotation(
-        analyzer,
-        annotation.type,
-        context,
-        adts,
-        typeAliases,
-        records,
-        imports,
-        dependencies,
-      );
+      return typeFromAnnotation(analyzer, annotation.type, context);
     }
   }
 }
@@ -9271,7 +9333,13 @@ function occursIn(id: number, type: Type, substitution: Substitution): boolean {
   }
 }
 
-function unify(analyzer: SemanticAnalyzer, a: Type, b: Type, span: Span, substitution: Substitution) {
+function unify(
+  analyzer: SemanticAnalyzer,
+  a: Type,
+  b: Type,
+  span: Span,
+  substitution: Substitution,
+) {
   const left = applySubstitution(a, substitution);
   const right = applySubstitution(b, substitution);
 
@@ -9283,7 +9351,11 @@ function unify(analyzer: SemanticAnalyzer, a: Type, b: Type, span: Span, substit
   if (left.kind === "var") {
     if (!typesEqual(left, right)) {
       if (occursIn(left.id, right, substitution)) {
-        throw new SemanticError("Recursive type detected", span, analyzer.getFilePath());
+        throw new SemanticError(
+          "Recursive type detected",
+          span,
+          analyzer.getFilePath(),
+        );
       }
       substitution.set(left.id, right);
     }
@@ -9301,7 +9373,7 @@ function unify(analyzer: SemanticAnalyzer, a: Type, b: Type, span: Span, substit
           right,
         )}'`,
         span,
-        analyzer.getFilePath()
+        analyzer.getFilePath(),
       );
     }
     left.args.forEach((arg, idx) =>
@@ -9318,7 +9390,11 @@ function unify(analyzer: SemanticAnalyzer, a: Type, b: Type, span: Span, substit
 
   if (left.kind === "tuple" && right.kind === "tuple") {
     if (left.elements.length !== right.elements.length) {
-      throw new SemanticError("Tuple length mismatch", span, analyzer.getFilePath());
+      throw new SemanticError(
+        "Tuple length mismatch",
+        span,
+        analyzer.getFilePath(),
+      );
     }
     left.elements.forEach((el, idx) =>
       unify(analyzer, el, right.elements[idx]!, span, substitution),
@@ -9331,7 +9407,13 @@ function unify(analyzer: SemanticAnalyzer, a: Type, b: Type, span: Span, substit
       (k) => right.fields[k] !== undefined,
     );
     for (const key of shared) {
-      unify(analyzer, left.fields[key]!, right.fields[key]!, span, substitution);
+      unify(
+        analyzer,
+        left.fields[key]!,
+        right.fields[key]!,
+        span,
+        substitution,
+      );
     }
     // Row-typed approximation: allow extra fields on either side.
     return;
@@ -9342,7 +9424,7 @@ function unify(analyzer: SemanticAnalyzer, a: Type, b: Type, span: Span, substit
       right,
     )}'`,
     span,
-    analyzer.getFilePath()
+    analyzer.getFilePath(),
   );
 }
 /**
@@ -9478,4 +9560,3 @@ function resolveQualifiedConstructor(
   }
   return null;
 }
-

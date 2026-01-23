@@ -77,7 +77,7 @@ export const BUILTIN_SPAN: Span = {
 export function initializeBuiltinADTs(
   adts: Record<string, ADTInfo>,
   constructors: Record<string, ConstructorInfo>,
-  constructorTypes: Record<string, TypeScheme>
+  constructorTypes: Record<string, TypeScheme>,
 ): void {
   // Bool ADT: True | False (still an ADT for pattern matching)
   adts["Bool"] = {
@@ -129,7 +129,7 @@ export function initializeBuiltinADTs(
  * Initialize built-in opaque types in the registry.
  */
 export function initializeBuiltinOpaqueTypes(
-  opaqueTypes: Record<string, OpaqueTypeInfo>
+  opaqueTypes: Record<string, OpaqueTypeInfo>,
 ): void {
   // Primitive opaque types - no pattern matching allowed
   opaqueTypes["Unit"] = {

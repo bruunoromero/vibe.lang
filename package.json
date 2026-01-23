@@ -19,6 +19,7 @@
   "scripts": {
     "build": "bun install && turbo run build",
     "start": "bun ./packages/example-app/main.ts",
-    "typecheck": "turbo run typecheck"
+    "typecheck": "turbo run typecheck",
+    "validate": "bun test && bun run typecheck && bun run build && bun run start"
   }
 }

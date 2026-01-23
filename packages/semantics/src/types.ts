@@ -8,7 +8,9 @@ import type {
   ModuleDeclaration,
   ImportDeclaration,
   InfixDeclaration,
+  TypeAnnotationDeclaration,
   OperatorRegistry,
+  OperatorInfo,
 } from "@vibe/syntax";
 
 // Re-export Span for use by other modules
@@ -28,7 +30,13 @@ export type TypeRecord = { kind: "record"; fields: Record<string, Type> };
  * Inspired by Rust's ty::Error / TypeScript's ErrorType.
  */
 export type TypeError = { kind: "error" };
-export type Type = TypeVar | TypeCon | TypeFun | TypeTuple | TypeRecord | TypeError;
+export type Type =
+  | TypeVar
+  | TypeCon
+  | TypeFun
+  | TypeTuple
+  | TypeRecord
+  | TypeError;
 
 /**
  * Constraint represents a protocol requirement on a type.
@@ -68,10 +76,61 @@ export type Substitution = Map<number, Type>;
  * Type schemes enable let-polymorphism: bindings can be polymorphic,
  * and each use site gets a fresh instantiation of the type.
  */
-export type Scope = {
-  parent?: Scope;
-  symbols: Map<string, TypeScheme>; // Maps names to their polymorphic type schemes
-};
+export class Scope {
+  private _parent?: Scope;
+  private _symbols: Map<string, TypeScheme>;
+
+  constructor(parent?: Scope) {
+    this._parent = parent;
+    this._symbols = new Map();
+  }
+
+  /** Get the parent scope (for scope chain traversal) */
+  get parent(): Scope | undefined {
+    return this._parent;
+  }
+
+  /** Get the symbols map (for backward compatibility) */
+  get symbols(): Map<string, TypeScheme> {
+    return this._symbols;
+  }
+
+  /** Define a symbol in this scope */
+  define(name: string, scheme: TypeScheme): void {
+    this._symbols.set(name, scheme);
+  }
+
+  /** Check if a symbol exists in this scope only (not parents) */
+  has(name: string): boolean {
+    return this._symbols.has(name);
+  }
+
+  /** Get a symbol from this scope only (not parents) */
+  get(name: string): TypeScheme | undefined {
+    return this._symbols.get(name);
+  }
+
+  /** Look up a symbol in this scope or any parent scope */
+  lookup(name: string): TypeScheme | undefined {
+    if (this._symbols.has(name)) {
+      return this._symbols.get(name);
+    }
+    if (this._parent) {
+      return this._parent.lookup(name);
+    }
+    return undefined;
+  }
+
+  /** Create a child scope with this scope as parent */
+  child(): Scope {
+    return new Scope(this);
+  }
+
+  /** Get all symbol names defined in this scope (not including parents) */
+  getLocalNames(): string[] {
+    return Array.from(this._symbols.keys());
+  }
+}
 
 /**
  * Information about a single constructor in an ADT.
@@ -433,11 +492,11 @@ export type InstanceLookupResult =
   | { found: true }
   | { found: false; reason: "no-instance" }
   | {
-    found: false;
-    reason: "unsatisfied-constraint";
-    constraint: string;
-    forType: string;
-  };
+      found: false;
+      reason: "unsatisfied-constraint";
+      constraint: string;
+      forType: string;
+    };
 
 /**
  * Result of instantiation including both type and instantiated constraints.
@@ -478,3 +537,236 @@ export type TypeValidationError = {
   span: Span;
   suggestion?: string;
 };
+
+/**
+ * RegistryManager centralizes all type and value registries used during semantic analysis.
+ * This eliminates the need to pass 8-10 registry parameters through every function call.
+ *
+ * Registries included:
+ * - adts: Algebraic Data Type definitions
+ * - constructors: ADT constructor info (arity, types, parent)
+ * - constructorTypes: Type schemes for constructors
+ * - typeAliases: Type alias definitions
+ * - records: Named record type definitions
+ * - opaqueTypes: Opaque type declarations (JS interop)
+ * - protocols: Protocol (type class) definitions
+ * - instances: Instance implementations
+ * - operators: Custom operator fixity
+ * - values: Value declarations with type info
+ * - typeSchemes: Generalized type schemes for values
+ * - types: Inferred types for values
+ */
+export class RegistryManager {
+  readonly adts: Record<string, ADTInfo> = {};
+  readonly constructors: Record<string, ConstructorInfo> = {};
+  readonly constructorTypes: Record<string, TypeScheme> = {};
+  readonly typeAliases: Record<string, TypeAliasInfo> = {};
+  readonly records: Record<string, RecordInfo> = {};
+  readonly opaqueTypes: Record<string, OpaqueTypeInfo> = {};
+  readonly protocols: Record<string, ProtocolInfo> = {};
+  readonly instances: InstanceInfo[] = [];
+  readonly operators: OperatorRegistry = new Map();
+  readonly values: Record<string, ValueInfo> = {};
+  readonly typeSchemes: Record<string, TypeScheme> = {};
+  readonly types: Record<string, Type> = {};
+  readonly annotations: Record<string, TypeAnnotationDeclaration> = {};
+  /** Instances defined in THIS module (not imported) for validation */
+  readonly localInstances: InstanceInfo[] = [];
+  /** Infix declarations for this module */
+  readonly infixDeclarations: InfixDeclaration[] = [];
+  /** Protocol methods defined in THIS module (for fixity validation) */
+  readonly localProtocolMethods: Set<string> = new Set();
+  /** Values imported from other modules (name -> source module) for re-export support */
+  readonly importedValues: Map<string, string> = new Map();
+
+  /** Register an ADT */
+  registerADT(info: ADTInfo): void {
+    this.adts[info.name] = info;
+  }
+
+  /** Register a constructor */
+  registerConstructor(name: string, info: ConstructorInfo): void {
+    this.constructors[name] = info;
+  }
+
+  /** Register a constructor type scheme */
+  registerConstructorType(name: string, scheme: TypeScheme): void {
+    this.constructorTypes[name] = scheme;
+  }
+
+  /** Register a type alias */
+  registerTypeAlias(info: TypeAliasInfo): void {
+    this.typeAliases[info.name] = info;
+  }
+
+  /** Register a record type */
+  registerRecord(info: RecordInfo): void {
+    this.records[info.name] = info;
+  }
+
+  /** Register an opaque type */
+  registerOpaqueType(info: OpaqueTypeInfo): void {
+    this.opaqueTypes[info.name] = info;
+  }
+
+  /** Register a protocol */
+  registerProtocol(info: ProtocolInfo): void {
+    this.protocols[info.name] = info;
+  }
+
+  /** Register an instance */
+  registerInstance(info: InstanceInfo): void {
+    this.instances.push(info);
+  }
+
+  /** Register an operator fixity */
+  registerOperator(name: string, info: OperatorInfo): void {
+    this.operators.set(name, info);
+  }
+
+  /** Register a value */
+  registerValue(name: string, info: ValueInfo): void {
+    this.values[name] = info;
+  }
+
+  /** Register a type scheme */
+  registerTypeScheme(name: string, scheme: TypeScheme): void {
+    this.typeSchemes[name] = scheme;
+  }
+
+  /** Register an inferred type */
+  registerType(name: string, type: Type): void {
+    this.types[name] = type;
+  }
+
+  /** Check if an ADT exists */
+  hasADT(name: string): boolean {
+    return name in this.adts;
+  }
+
+  /** Check if a constructor exists */
+  hasConstructor(name: string): boolean {
+    return name in this.constructors;
+  }
+
+  /** Check if a type alias exists */
+  hasTypeAlias(name: string): boolean {
+    return name in this.typeAliases;
+  }
+
+  /** Check if an opaque type exists */
+  hasOpaqueType(name: string): boolean {
+    return name in this.opaqueTypes;
+  }
+
+  /** Check if a protocol exists */
+  hasProtocol(name: string): boolean {
+    return name in this.protocols;
+  }
+
+  /** Check if a record type exists */
+  hasRecord(name: string): boolean {
+    return name in this.records;
+  }
+
+  /** Get ADT info */
+  getADT(name: string): ADTInfo | undefined {
+    return this.adts[name];
+  }
+
+  /** Get constructor info */
+  getConstructor(name: string): ConstructorInfo | undefined {
+    return this.constructors[name];
+  }
+
+  /** Get constructor type scheme */
+  getConstructorType(name: string): TypeScheme | undefined {
+    return this.constructorTypes[name];
+  }
+
+  /** Get type alias info */
+  getTypeAlias(name: string): TypeAliasInfo | undefined {
+    return this.typeAliases[name];
+  }
+
+  /** Get record info */
+  getRecord(name: string): RecordInfo | undefined {
+    return this.records[name];
+  }
+
+  /** Get opaque type info */
+  getOpaqueType(name: string): OpaqueTypeInfo | undefined {
+    return this.opaqueTypes[name];
+  }
+
+  /** Get protocol info */
+  getProtocol(name: string): ProtocolInfo | undefined {
+    return this.protocols[name];
+  }
+
+  /** Register an annotation */
+  registerAnnotation(name: string, ann: TypeAnnotationDeclaration): void {
+    this.annotations[name] = ann;
+  }
+
+  /** Get an annotation */
+  getAnnotation(name: string): TypeAnnotationDeclaration | undefined {
+    return this.annotations[name];
+  }
+
+  /** Register a local instance */
+  registerLocalInstance(info: InstanceInfo): void {
+    this.localInstances.push(info);
+  }
+
+  /** Register an infix declaration */
+  registerInfixDeclaration(decl: InfixDeclaration): void {
+    this.infixDeclarations.push(decl);
+  }
+
+  /** Register a local protocol method */
+  registerLocalProtocolMethod(name: string): void {
+    this.localProtocolMethods.add(name);
+  }
+
+  /** Check if a protocol method is local */
+  hasLocalProtocolMethod(name: string): boolean {
+    return this.localProtocolMethods.has(name);
+  }
+
+  /** Register an imported value */
+  registerImportedValue(name: string, moduleName: string): void {
+    this.importedValues.set(name, moduleName);
+  }
+
+  /** Get the source module of an imported value */
+  getImportedValueSource(name: string): string | undefined {
+    return this.importedValues.get(name);
+  }
+
+  /** Check if a value is imported */
+  isValueImported(name: string): boolean {
+    return this.importedValues.has(name);
+  }
+}
+
+/**
+ * TypeInferenceContext bundles parameters commonly passed through type inference functions.
+ * This reduces the number of parameters from 10+ to just an analyzer and context object.
+ *
+ * The context contains:
+ * - scope: Current lexical scope for symbol lookup
+ * - substitution: Type variable substitutions from unification
+ * - expectedType: Bidirectional type hint (optional)
+ *
+ * Registry data (ADTs, constructors, etc.) is accessed via analyzer.registry.
+ * Import/dependency data is accessed via analyzer.imports/dependencies.
+ */
+export interface TypeInferenceContext {
+  /** Current lexical scope for symbol lookup */
+  scope: Scope;
+  /** Type substitution for unification */
+  substitution: Substitution;
+  /** Optional expected type for bidirectional type checking */
+  expectedType?: Type | null;
+}
