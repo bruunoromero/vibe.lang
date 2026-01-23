@@ -469,10 +469,6 @@ class SemanticAnalyzer {
       this._substitution,
       seen,
       expected,
-      this._registry.constructors,
-      this._registry.adts,
-      this._imports,
-      this._dependencies,
     );
   }
 
@@ -1712,36 +1708,13 @@ export function analyze(
     // ===== PASS 1c: Validate type alias references =====
     // Now that all ADTs and aliases are registered, validate that type references exist.
     for (const decl of typeAliasDecls) {
-      validateTypeAliasReferences(
-        analyzer,
-        decl,
-        analyzer.adts,
-        analyzer.typeAliases,
-        analyzer.opaqueTypes,
-        analyzer.records,
-        program.imports,
-        analyzer.dependencies,
-      );
+      validateTypeAliasReferences(analyzer, decl);
     }
 
     // ===== PASS 1d: Register protocols =====
     for (const decl of program.declarations) {
       if (decl.kind === "ProtocolDeclaration") {
-        registerProtocol(
-          analyzer,
-          decl,
-          analyzer.protocols,
-          analyzer.adts,
-          analyzer.typeAliases,
-          analyzer.globalScope,
-          analyzer.constructors,
-          analyzer.opaqueTypes,
-          analyzer.substitution,
-          currentModuleName,
-          analyzer.imports,
-          analyzer.dependencies,
-          analyzer.records,
-        );
+        registerProtocol(analyzer, decl, currentModuleName);
         // Track methods from locally-defined protocols for fixity validation
         for (const method of decl.methods) {
           analyzer.localProtocolMethods.add(method.name);
@@ -1883,15 +1856,10 @@ export function analyze(
         // so we collect them first to treat as "defined params".
         const typeVars = collectTypeVariables(annotationExpr);
         const validationErrors = validateTypeExpr(
+          analyzer,
           annotationExpr,
           typeVars,
-          analyzer.adts,
-          analyzer.typeAliases,
           info.declaration.span,
-          analyzer.opaqueTypes,
-          analyzer.records,
-          program.imports,
-          analyzer.dependencies,
         );
 
         if (validationErrors.length > 0) {
@@ -1940,21 +1908,7 @@ export function analyze(
     // if polymorphic type args can be concretized. This is important for multi-parameter
     // protocols where the return type is constrained (e.g., `implement Appendable a => Proto Float a`
     // where the method body forces `a` to be `List Int`).
-    concretizeInstanceTypeArgs(
-      analyzer,
-      analyzer.localInstances,
-      analyzer.instances,
-      analyzer.protocols,
-      analyzer.globalScope,
-      analyzer.substitution,
-      analyzer.constructors,
-      analyzer.adts,
-      analyzer.typeAliases,
-      analyzer.opaqueTypes,
-      analyzer.imports,
-      analyzer.dependencies,
-      analyzer.records,
-    );
+    concretizeInstanceTypeArgs(analyzer);
 
     // Build dependency graph and compute SCCs for proper mutual recursion handling.
     // SCCs are returned in reverse topological order, so we process dependencies first.
@@ -2064,72 +2018,29 @@ export function analyze(
     // Now that all values are registered, validate that method implementations
     // reference defined identifiers. Only validate localInstances since imported
     // instances were already validated in their defining module.
-    validateImplementationMethodExpressions(
-      analyzer,
-      analyzer.localInstances,
-      analyzer.globalScope,
-      analyzer.constructors,
-      analyzer.imports,
-      analyzer.dependencies,
-      analyzer.records,
-    );
+    validateImplementationMethodExpressions(analyzer, analyzer.localInstances);
 
     // ===== PASS 2.5b: Validate implementation method types =====
     // Validate that each method implementation's type matches the protocol's
     // declared method signature (with type parameters substituted).
-    validateImplementationMethodTypes(
-      analyzer,
-      analyzer.localInstances,
-      analyzer.instances,
-      analyzer.protocols,
-      analyzer.globalScope,
-      analyzer.substitution,
-      analyzer.constructors,
-      analyzer.adts,
-      analyzer.typeAliases,
-      analyzer.opaqueTypes,
-      analyzer.imports,
-      analyzer.dependencies,
-      analyzer.records,
-    );
+    validateImplementationMethodTypes(analyzer);
 
     // ===== PASS 2.5c: Validate instance constraint satisfiability =====
     // For polymorphic instances with constraints (e.g., `implement Eq a => ExampleProtocol a`),
     // validate that the constraint protocols have instances that could satisfy the constraint.
     // This catches cases where a constraint references a protocol with no instances.
-    validateInstanceConstraintSatisfiability(
-      analyzer,
-      analyzer.localInstances,
-      analyzer.instances,
-      analyzer.protocols,
-      analyzer.adts,
-    );
+    validateInstanceConstraintSatisfiability(analyzer);
 
     // ===== PASS 2.5d: Validate concrete constraint instances exist =====
     // After type inference, check that any protocol constraints on concrete types
     // (e.g., `Eq A` when calling a function that requires `Eq a`) have corresponding
     // instance declarations. This provides early error detection for missing instances.
-    validateConcreteConstraintInstances(
-      analyzer,
-      analyzer.values,
-      analyzer.instances,
-      analyzer.protocols,
-      analyzer.substitution,
-    );
+    validateConcreteConstraintInstances(analyzer);
 
     // ===== PASS 2.6: Validate protocol default implementations =====
     // Validate that default implementations in protocols reference defined identifiers.
     // This is done after all values are registered so forward references work.
-    validateProtocolDefaultImplementations(
-      analyzer,
-      analyzer.protocols,
-      analyzer.globalScope,
-      analyzer.constructors,
-      analyzer.imports,
-      analyzer.dependencies,
-      currentModuleName,
-      analyzer.records,
-    );
+    validateProtocolDefaultImplementations(analyzer, currentModuleName);
 
     // Compute export information for this module
     const exports = computeModuleExports(
@@ -2713,24 +2624,19 @@ function collectTypeVariables(expr: TypeExpr): Set<string> {
  * Validate that all type references in a type expression are defined.
  * Returns an array of validation errors found.
  *
+ * @param analyzer - The semantic analyzer (for accessing registries)
  * @param expr - The type expression to validate
  * @param definedParams - Set of type parameters that are in scope (e.g., from the alias declaration)
- * @param adts - Registry of defined ADT types
- * @param typeAliases - Registry of defined type aliases
  * @param parentSpan - Span to use for error reporting if the expression has no span
- * @param opaqueTypes - Registry of opaque types (optional)
  */
 function validateTypeExpr(
+  analyzer: SemanticAnalyzer,
   expr: TypeExpr,
   definedParams: Set<string>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
   parentSpan: Span,
-  opaqueTypes: Record<string, OpaqueTypeInfo> = {},
-  records: Record<string, RecordInfo> = {},
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map(),
 ): TypeValidationError[] {
+  const { adts, typeAliases, opaqueTypes, records, imports, dependencies } =
+    analyzer;
   const errors: TypeValidationError[] = [];
 
   function resolve(name: string) {
@@ -2972,12 +2878,6 @@ function registerTypeAliasWithoutValidation(
 function validateTypeAliasReferences(
   analyzer: SemanticAnalyzer,
   decl: TypeAliasDeclaration,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo> = {},
-  records: Record<string, RecordInfo> = {},
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map(),
 ) {
   // Reject bare record types in type alias declarations
   // Record types must be defined using `type Name = { ... }` syntax
@@ -2993,15 +2893,10 @@ function validateTypeAliasReferences(
   const paramSet = new Set<string>(decl.params);
 
   const validationErrors = validateTypeExpr(
+    analyzer,
     decl.value,
     paramSet,
-    adts,
-    typeAliases,
     decl.span,
-    opaqueTypes,
-    records,
-    imports,
-    dependencies,
   );
 
   if (validationErrors.length > 0) {
@@ -3084,12 +2979,15 @@ function registerOpaqueType(
 function registerTypeAlias(
   analyzer: SemanticAnalyzer,
   decl: TypeAliasDeclaration,
-  typeAliases: Record<string, TypeAliasInfo>,
-  adts: Record<string, ADTInfo>,
   moduleName: string,
 ) {
-  registerTypeAliasWithoutValidation(analyzer, decl, typeAliases, moduleName);
-  validateTypeAliasReferences(analyzer, decl, adts, typeAliases);
+  registerTypeAliasWithoutValidation(
+    analyzer,
+    decl,
+    analyzer.typeAliases,
+    moduleName,
+  );
+  validateTypeAliasReferences(analyzer, decl);
 }
 
 /**
@@ -3292,18 +3190,10 @@ function substituteProtocolVars(
 function registerProtocol(
   analyzer: SemanticAnalyzer,
   decl: ProtocolDeclaration,
-  protocols: Record<string, ProtocolInfo>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  globalScope: Scope,
-  constructors: Record<string, ConstructorInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  substitution: Substitution,
   moduleName: string,
-  imports: ImportDeclaration[] = [],
-  dependencies: Map<string, SemanticModule> = new Map(),
-  records: Record<string, RecordInfo> = {},
 ) {
+  const { protocols, globalScope, substitution } = analyzer;
+
   // Check for duplicate protocol name
   const existingProtocol = protocols[decl.name];
   if (existingProtocol) {
@@ -4545,21 +4435,15 @@ function registerImplementation(
  *
  * This fixes hover showing `ExampleProtocol3 Float t402 => t402` instead of `List Int`.
  */
-function concretizeInstanceTypeArgs(
-  analyzer: SemanticAnalyzer,
-  localInstances: InstanceInfo[],
-  allInstances: InstanceInfo[],
-  protocols: Record<string, ProtocolInfo>,
-  globalScope: Scope,
-  substitution: Substitution,
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
-  records: Record<string, RecordInfo> = {},
-): void {
+function concretizeInstanceTypeArgs(analyzer: SemanticAnalyzer): void {
+  const {
+    localInstances,
+    instances: allInstances,
+    protocols,
+    globalScope,
+    substitution,
+  } = analyzer;
+
   for (const instance of localInstances) {
     const protocol = protocols[instance.protocolName];
     if (!protocol) continue;
@@ -4698,21 +4582,15 @@ function findInstanceForConstraint(
  * For example, if Show declares `toString : a -> String`, and we're implementing
  * `Show A`, then the implementation must have type `A -> String`, not `String`.
  */
-function validateImplementationMethodTypes(
-  analyzer: SemanticAnalyzer,
-  localInstances: InstanceInfo[],
-  allInstances: InstanceInfo[],
-  protocols: Record<string, ProtocolInfo>,
-  globalScope: Scope,
-  substitution: Substitution,
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
-  records: Record<string, RecordInfo>,
-): void {
+function validateImplementationMethodTypes(analyzer: SemanticAnalyzer): void {
+  const {
+    localInstances,
+    instances: allInstances,
+    protocols,
+    globalScope,
+    substitution,
+  } = analyzer;
+
   for (const instance of localInstances) {
     const protocol = protocols[instance.protocolName];
     if (!protocol) continue;
@@ -4777,10 +4655,6 @@ function validateImplementationMethodTypes(
           methodExpr.args,
           expectedParamTypes,
           inferSubstitution,
-          constructors,
-          adts,
-          imports,
-          dependencies,
         );
 
         // Analyze the body
@@ -4933,12 +4807,9 @@ function substituteTypeParams(
 function validateImplementationMethodExpressions(
   analyzer: SemanticAnalyzer,
   instances: InstanceInfo[],
-  globalScope: Scope,
-  constructors: Record<string, ConstructorInfo>,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
-  records: Record<string, RecordInfo> = {},
 ): void {
+  const { globalScope, constructors } = analyzer;
+
   for (const instance of instances) {
     // Only validate methods that were explicitly provided in the implement block
     // Default implementations from protocols are validated during protocol registration
@@ -4952,9 +4823,6 @@ function validateImplementationMethodExpressions(
           constructors,
           instance.protocolName,
           methodName,
-          imports,
-          dependencies,
-          records,
         );
       }
     }
@@ -4974,11 +4842,9 @@ function validateImplementationMethodExpressions(
  */
 function validateInstanceConstraintSatisfiability(
   analyzer: SemanticAnalyzer,
-  localInstances: InstanceInfo[],
-  allInstances: InstanceInfo[],
-  protocols: Record<string, ProtocolInfo>,
-  _adts: Record<string, ADTInfo>,
 ): void {
+  const { localInstances, protocols } = analyzer;
+
   for (const instance of localInstances) {
     // Skip instances without constraints
     if (instance.constraints.length === 0) continue;
@@ -5014,13 +4880,9 @@ function validateInstanceConstraintSatisfiability(
  *
  * This function detects that `Eq A` is required but no such instance exists.
  */
-function validateConcreteConstraintInstances(
-  analyzer: SemanticAnalyzer,
-  values: Record<string, ValueInfo>,
-  instances: InstanceInfo[],
-  protocols: Record<string, ProtocolInfo>,
-  substitution: Substitution,
-): void {
+function validateConcreteConstraintInstances(analyzer: SemanticAnalyzer): void {
+  const { values, instances, substitution } = analyzer;
+
   for (const [valueName, valueInfo] of Object.entries(values)) {
     // Skip synthetic values and values without inferred constraints
     if (valueName.startsWith("$")) continue;
@@ -5922,14 +5784,10 @@ function generateSyntheticShow(type: Type): Expr {
 
 function validateProtocolDefaultImplementations(
   analyzer: SemanticAnalyzer,
-  protocols: Record<string, ProtocolInfo>,
-  globalScope: Scope,
-  constructors: Record<string, ConstructorInfo>,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
   currentModuleName: string,
-  records: Record<string, RecordInfo> = {},
 ): void {
+  const { protocols, globalScope, constructors } = analyzer;
+
   for (const [protocolName, protocol] of Object.entries(protocols)) {
     // Only validate protocols defined in this module
     if (protocol.moduleName !== currentModuleName) continue;
@@ -5950,9 +5808,6 @@ function validateProtocolDefaultImplementations(
           constructors,
           protocolName,
           methodName,
-          imports,
-          dependencies,
-          records,
         );
       }
     }
@@ -5968,8 +5823,6 @@ function validateProtocolDefaultImplementations(
  * @param constructors Known constructors (for distinguishing value vs constructor refs)
  * @param protocolName Protocol name for error context
  * @param methodName Method name for error context
- * @param imports Import declarations for module resolution
- * @param dependencies Dependency modules for module-qualified access validation
  */
 function validateExpressionIdentifiers(
   analyzer: SemanticAnalyzer,
@@ -5978,10 +5831,18 @@ function validateExpressionIdentifiers(
   constructors: Record<string, ConstructorInfo>,
   protocolName: string,
   methodName: string,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
-  records: Record<string, RecordInfo>,
 ): void {
+  // Helper for recursive calls
+  const validate = (e: Expr, s: Scope = scope) =>
+    validateExpressionIdentifiers(
+      analyzer,
+      e,
+      s,
+      constructors,
+      protocolName,
+      methodName,
+    );
+
   switch (expr.kind) {
     case "Var": {
       const name = expr.name;
@@ -6004,80 +5865,20 @@ function validateExpressionIdentifiers(
       for (const arg of expr.args) {
         bindPatternNames(arg, childScope);
       }
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.body,
-        childScope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.body, childScope);
       return;
     }
     case "Apply": {
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.callee,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.callee);
       for (const arg of expr.args) {
-        validateExpressionIdentifiers(
-          analyzer,
-          arg,
-          scope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(arg);
       }
       return;
     }
     case "If": {
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.condition,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.thenBranch,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.elseBranch,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.condition);
+      validate(expr.thenBranch);
+      validate(expr.elseBranch);
       return;
     }
     case "LetIn": {
@@ -6085,17 +5886,7 @@ function validateExpressionIdentifiers(
       const childScope = new Scope(scope);
       for (const binding of expr.bindings) {
         // First validate the binding body in the parent scope
-        validateExpressionIdentifiers(
-          analyzer,
-          binding.body,
-          scope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(binding.body);
         // Then add the binding name to the child scope
         childScope.symbols.set(binding.name, {
           vars: new Set(),
@@ -6103,46 +5894,16 @@ function validateExpressionIdentifiers(
           type: { kind: "var", id: -1 }, // Placeholder type
         });
       }
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.body,
-        childScope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.body, childScope);
       return;
     }
     case "Case": {
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.discriminant,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.discriminant);
       for (const branch of expr.branches) {
         // Create a child scope with pattern bindings
         const branchScope = new Scope(scope);
         bindPatternNames(branch.pattern, branchScope);
-        validateExpressionIdentifiers(
-          analyzer,
-          branch.body,
-          branchScope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(branch.body, branchScope);
       }
       return;
     }
@@ -6156,128 +5917,38 @@ function validateExpressionIdentifiers(
           analyzer.getFilePath(),
         );
       }
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.left,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.right,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.left);
+      validate(expr.right);
       return;
     }
     case "Unary": {
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.operand,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.operand);
       return;
     }
     case "Paren": {
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.expression,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.expression);
       return;
     }
     case "Tuple": {
       for (const element of expr.elements) {
-        validateExpressionIdentifiers(
-          analyzer,
-          element,
-          scope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(element);
       }
       return;
     }
     case "List": {
       for (const element of expr.elements) {
-        validateExpressionIdentifiers(
-          analyzer,
-          element,
-          scope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(element);
       }
       return;
     }
     case "ListRange": {
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.start,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
-      validateExpressionIdentifiers(
-        analyzer,
-        expr.end,
-        scope,
-        constructors,
-        protocolName,
-        methodName,
-        imports,
-        dependencies,
-        records,
-      );
+      validate(expr.start);
+      validate(expr.end);
       return;
     }
     case "Record": {
       for (const field of expr.fields) {
-        validateExpressionIdentifiers(
-          analyzer,
-          field.value,
-          scope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(field.value);
       }
       return;
     }
@@ -6290,17 +5961,7 @@ function validateExpressionIdentifiers(
         );
       }
       for (const field of expr.fields) {
-        validateExpressionIdentifiers(
-          analyzer,
-          field.value,
-          scope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(field.value);
       }
       return;
     }
@@ -6310,24 +5971,12 @@ function validateExpressionIdentifiers(
       const resolved = validateModuleFieldAccess(
         analyzer,
         expr,
-        imports,
-        dependencies,
         protocolName,
         methodName,
       );
       if (!resolved) {
         // Not a module access, validate the target expression normally
-        validateExpressionIdentifiers(
-          analyzer,
-          expr.target,
-          scope,
-          constructors,
-          protocolName,
-          methodName,
-          imports,
-          dependencies,
-          records,
-        );
+        validate(expr.target);
       }
       return;
     }
@@ -6348,11 +5997,11 @@ function validateExpressionIdentifiers(
 function validateModuleFieldAccess(
   analyzer: SemanticAnalyzer,
   expr: Extract<Expr, { kind: "FieldAccess" }>,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
   protocolName: string,
   methodName: string,
 ): boolean {
+  const { imports, dependencies } = analyzer;
+
   // Collect the chain of field accesses to reconstruct the module path
   const parts: string[] = [];
   let current: Expr = expr;
@@ -7057,10 +6706,8 @@ function analyzeValueDeclaration(
   declaredType: Type,
   annotationType?: Type,
 ): Type {
-  const { constructors, adts, imports, dependencies } = analyzer;
-
   // Validate function parameter patterns (single-constructor ADTs, tuples, records)
-  validateFunctionParamPatterns(analyzer, decl.args, constructors, adts);
+  validateFunctionParamPatterns(analyzer, decl.args);
 
   const paramTypes = annotationType
     ? extractAnnotationParams(annotationType, decl.args.length, decl.span)
@@ -7073,17 +6720,7 @@ function analyzeValueDeclaration(
   unify(analyzer, expected, declaredType, decl.span, substitution);
 
   const fnScope = new Scope(scope);
-  bindPatterns(
-    analyzer,
-    fnScope,
-    decl.args,
-    paramTypes,
-    substitution,
-    constructors,
-    adts,
-    imports,
-    dependencies,
-  );
+  bindPatterns(analyzer, fnScope, decl.args, paramTypes, substitution);
 
   const bodyType = analyzeExpr(
     analyzer,
@@ -7463,17 +7100,7 @@ function analyzeExpr(
     case "Lambda": {
       const paramTypes = expr.args.map(() => freshType());
       const fnScope = new Scope(scope);
-      bindPatterns(
-        analyzer,
-        fnScope,
-        expr.args,
-        paramTypes,
-        substitution,
-        constructors,
-        adts,
-        imports,
-        dependencies,
-      );
+      bindPatterns(analyzer, fnScope, expr.args, paramTypes, substitution);
       const bodyType = analyzeExpr(analyzer, expr.body, fnScope, substitution);
       return fnChain(paramTypes, bodyType);
     }
@@ -7608,10 +7235,6 @@ function analyzeExpr(
           substitution,
           new Set(),
           freshType(),
-          constructors,
-          adts,
-          imports,
-          dependencies,
         );
         unify(
           analyzer,
@@ -7639,7 +7262,7 @@ function analyzeExpr(
           }
         }
         if (branch.pattern.kind === "ConstructorPattern") {
-          validateConstructorArity(analyzer, branch.pattern, constructors);
+          validateConstructorArity(analyzer, branch.pattern);
         }
       });
 
@@ -7876,11 +7499,9 @@ function constructorCoverage(
 function validateFunctionParamPatterns(
   analyzer: SemanticAnalyzer,
   patterns: Pattern[],
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
 ): void {
   for (const pattern of patterns) {
-    validateFunctionParamPattern(analyzer, pattern, constructors, adts);
+    validateFunctionParamPattern(analyzer, pattern);
   }
 }
 
@@ -7890,9 +7511,9 @@ function validateFunctionParamPatterns(
 function validateFunctionParamPattern(
   analyzer: SemanticAnalyzer,
   pattern: Pattern,
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
 ): void {
+  const { constructors, adts } = analyzer;
+
   switch (pattern.kind) {
     case "VarPattern":
     case "WildcardPattern":
@@ -7902,7 +7523,7 @@ function validateFunctionParamPattern(
     case "TuplePattern":
       // Allowed, but validate nested patterns
       for (const element of pattern.elements) {
-        validateFunctionParamPattern(analyzer, element, constructors, adts);
+        validateFunctionParamPattern(analyzer, element);
       }
       return;
 
@@ -7910,12 +7531,7 @@ function validateFunctionParamPattern(
       // Allowed, but validate nested patterns
       for (const field of pattern.fields) {
         if (field.pattern) {
-          validateFunctionParamPattern(
-            analyzer,
-            field.pattern,
-            constructors,
-            adts,
-          );
+          validateFunctionParamPattern(analyzer, field.pattern);
         }
       }
       return;
@@ -7949,7 +7565,7 @@ function validateFunctionParamPattern(
 
       // Validate nested patterns
       for (const arg of pattern.args) {
-        validateFunctionParamPattern(analyzer, arg, constructors, adts);
+        validateFunctionParamPattern(analyzer, arg);
       }
       return;
     }
@@ -7972,10 +7588,6 @@ function bindPatterns(
   patterns: Pattern[],
   paramTypes: Type[],
   substitution: Substitution,
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
 ) {
   if (patterns.length !== paramTypes.length) {
     throw new Error("Internal arity mismatch during pattern binding");
@@ -7983,18 +7595,7 @@ function bindPatterns(
   const seen = new Set<string>();
   patterns.forEach((pattern, idx) => {
     const paramType = paramTypes[idx]!;
-    bindPattern(
-      analyzer,
-      pattern,
-      scope,
-      substitution,
-      seen,
-      paramType,
-      constructors,
-      adts,
-      imports,
-      dependencies,
-    );
+    bindPattern(analyzer, pattern, scope, substitution, seen, paramType);
     if (pattern.kind === "VarPattern") {
       // Pattern variables are monomorphic
       scope.symbols.set(pattern.name, {
@@ -8025,11 +7626,13 @@ function bindPattern(
   substitution: Substitution,
   seen: Set<string>,
   expected: Type,
-  constructors: Record<string, ConstructorInfo>,
-  adts: Record<string, ADTInfo>,
-  imports: ImportDeclaration[],
-  dependencies: Map<string, SemanticModule>,
 ): Type {
+  const { constructors, adts, imports, dependencies } = analyzer;
+
+  // Helper for recursive calls
+  const bind = (p: Pattern, exp: Type) =>
+    bindPattern(analyzer, p, scope, substitution, seen, exp);
+
   switch (pattern.kind) {
     case "VarPattern": {
       if (seen.has(pattern.name)) {
@@ -8062,20 +7665,7 @@ function bindPattern(
         pattern.span,
         substitution,
       );
-      pattern.elements.forEach((el, idx) =>
-        bindPattern(
-          analyzer,
-          el,
-          scope,
-          substitution,
-          seen,
-          subTypes[idx]!,
-          constructors,
-          adts,
-          imports,
-          dependencies,
-        ),
-      );
+      pattern.elements.forEach((el, idx) => bind(el, subTypes[idx]!));
       return applySubstitution(
         { kind: "tuple", elements: subTypes },
         substitution,
@@ -8083,7 +7673,7 @@ function bindPattern(
     }
     case "ConstructorPattern": {
       // Validate constructor arity
-      validateConstructorArity(analyzer, pattern, constructors);
+      validateConstructorArity(analyzer, pattern);
 
       // Look up constructor info to get proper types (supports qualified names)
       const resolved = resolveQualifiedConstructor(
@@ -8130,18 +7720,7 @@ function bindPattern(
         // Recursively bind pattern arguments
         pattern.args.forEach((arg, idx) => {
           const argType = applySubstitution(argTypes[idx]!, substitution);
-          bindPattern(
-            analyzer,
-            arg,
-            scope,
-            substitution,
-            seen,
-            argType,
-            constructors,
-            adts,
-            imports,
-            dependencies,
-          );
+          bind(arg, argType);
         });
 
         return applySubstitution(resultType, substitution);
@@ -8150,20 +7729,7 @@ function bindPattern(
         const argTypes = pattern.args.map(() => freshType());
         const constructed: Type = fnChain(argTypes, freshType());
         unify(analyzer, constructed, expected, pattern.span, substitution);
-        pattern.args.forEach((arg, idx) =>
-          bindPattern(
-            analyzer,
-            arg,
-            scope,
-            substitution,
-            seen,
-            argTypes[idx]!,
-            constructors,
-            adts,
-            imports,
-            dependencies,
-          ),
-        );
+        pattern.args.forEach((arg, idx) => bind(arg, argTypes[idx]!));
         return applySubstitution(expected, substitution);
       }
     }
@@ -8176,18 +7742,7 @@ function bindPattern(
 
       // Bind each element pattern to the element type
       pattern.elements.forEach((el) =>
-        bindPattern(
-          analyzer,
-          el,
-          scope,
-          substitution,
-          seen,
-          applySubstitution(elemType, substitution),
-          constructors,
-          adts,
-          imports,
-          dependencies,
-        ),
+        bind(el, applySubstitution(elemType, substitution)),
       );
       return applySubstitution(lt, substitution);
     }
@@ -8199,32 +7754,10 @@ function bindPattern(
       unify(analyzer, lt, expected, pattern.span, substitution);
 
       // Head pattern binds to element type
-      bindPattern(
-        analyzer,
-        pattern.head,
-        scope,
-        substitution,
-        seen,
-        applySubstitution(elemType, substitution),
-        constructors,
-        adts,
-        imports,
-        dependencies,
-      );
+      bind(pattern.head, applySubstitution(elemType, substitution));
 
       // Tail pattern binds to list type
-      bindPattern(
-        analyzer,
-        pattern.tail,
-        scope,
-        substitution,
-        seen,
-        applySubstitution(lt, substitution),
-        constructors,
-        adts,
-        imports,
-        dependencies,
-      );
+      bind(pattern.tail, applySubstitution(lt, substitution));
 
       return applySubstitution(lt, substitution);
     }
@@ -8252,18 +7785,7 @@ function bindPattern(
 
         if (field.pattern) {
           // Field has an explicit pattern: { x = pat }
-          bindPattern(
-            analyzer,
-            field.pattern,
-            scope,
-            substitution,
-            seen,
-            appliedFieldType,
-            constructors,
-            adts,
-            imports,
-            dependencies,
-          );
+          bind(field.pattern, appliedFieldType);
         } else {
           // Field without pattern becomes a variable: { x } === { x = x }
           if (seen.has(field.name)) {
@@ -8300,10 +7822,9 @@ function bindPattern(
 function validateConstructorArity(
   analyzer: SemanticAnalyzer,
   pattern: Extract<Pattern, { kind: "ConstructorPattern" }>,
-  constructors: Record<string, ConstructorInfo>,
 ) {
   // First check user-defined constructors
-  const ctorInfo = constructors[pattern.name];
+  const ctorInfo = analyzer.constructors[pattern.name];
   if (ctorInfo) {
     if (ctorInfo.arity !== pattern.args.length) {
       throw new SemanticError(
