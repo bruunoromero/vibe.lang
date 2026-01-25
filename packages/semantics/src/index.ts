@@ -132,8 +132,6 @@ import {
   INFIX_TYPES,
   BUILTIN_SPAN,
   BUILTIN_OPERATOR_FIXITY,
-  initializeBuiltinADTs,
-  initializeBuiltinOpaqueTypes,
 } from "./builtins";
 
 import { checkExhaustiveness } from "./exhaustiveness";
@@ -188,12 +186,6 @@ class SemanticAnalyzer {
    */
   private currentConstraintContext: ConstraintContext =
     createConstraintContext();
-  /**
-   * Module-level instance registry for validating concrete constraints.
-   * This is set at the start of analyzing a module and used during generalization
-   * to validate that constraints on concrete types have matching instances.
-   */
-  private currentInstanceRegistry: InstanceInfo[] = [];
 
   /**
    * Registry manager containing all type and value registries.
@@ -212,17 +204,92 @@ class SemanticAnalyzer {
   private _substitution: Substitution = new Map();
 
   /**
-   * Import declarations for the current module.
-   */
-  private _imports: ImportDeclaration[] = [];
-
-  /**
    * Dependencies map for looking up pre-analyzed modules.
    */
   private _dependencies: Map<string, SemanticModule> = new Map();
 
-  constructor(private options: AnalyzeOptions) {
+  constructor(
+    private program: Program,
+    private options: AnalyzeOptions,
+  ) {
     this._dependencies = options.dependencies ?? new Map();
+  }
+
+  analyze() {
+    this.ensureModuleNameConsistency();
+    this.initializeBuiltinADTs();
+    this.initializeBuiltinOpaqueTypes();
+    this.validateImports();
+    this.seedBuiltinOperators();
+    this.mergeImportedModules();
+
+    // ===== PASS 0: Register infix declarations =====
+    // We process infix declarations first so operator precedence is known during parsing.
+    // Note: This pass validates declarations but the parser pre-processing handles actual precedence.
+    this.registerInfixDeclarations();
+
+    // ===== PASS 1a: Register type declarations (ADTs only) =====
+    // We register ADTs first so type aliases can reference them.
+    this.registerADTTypeDeclarations();
+
+    // ===== PASS 1a2: Register opaque type declarations =====
+    // Opaque types are registered before type aliases since aliases may reference them.
+    this.registerOpaqueTypeDeclarations();
+
+    // ===== PASS 1b: Register type aliases =====
+    // Type aliases are registered after ADTs so they can reference them.
+    // Aliases are also registered without validation first so they can reference each other.
+    const typeAliasDecls = this.registerTypeAliasDeclarations();
+
+    // ===== PASS 1c: Validate type alias references =====
+    // Now that all ADTs and aliases are registered, validate that type references exist.
+    this.validateTypeAliasDeclarations(typeAliasDecls);
+
+    // ===== PASS 1d: Register protocols =====
+    this.registerProtocolDeclarations();
+
+    // ===== PASS 1.5: Register implementation declarations =====
+    // Implementations are registered after protocols but before value inference
+    // so that we can resolve constraints during type checking.
+    this.registerImplementationDeclarations();
+
+    // ===== PASS 1.6: Auto-implement Eq for all type declarations =====
+    // After explicit implementations are registered, auto-generate Eq for types that:
+    // 1. Don't already have an Eq implementation
+    // 2. Can implement Eq (no function fields, all fields can implement Eq)
+    this.autoImplementProtocols();
+
+    // ===== PASS 2: Register value declarations =====
+    this.registerValueDeclarations();
+
+    // ===== PASS 2a+: Validate annotations and seed global names =====
+    this.validateAnnotationsAndSeedGlobalNames();
+
+    // ===== PASS 2.0a-2.0b: Infer value declarations =====
+    this.inferValueDeclarations();
+
+    // ===== PASS 2.5: Validate implementation method expressions =====
+    this.validateImplementationMethodExpressions();
+
+    // ===== PASS 2.5b: Validate implementation method types =====
+    this.validateImplementationMethodTypes();
+
+    // ===== PASS 2.5c: Validate instance constraint satisfiability =====
+    this.validateInstanceConstraintSatisfiability();
+
+    // ===== PASS 2.5d: Validate concrete constraint instances exist =====
+    this.validateConcreteConstraintInstances();
+
+    // ===== PASS 2.6: Validate protocol default implementations =====
+    this.validateProtocolDefaultImplementations();
+
+    const result = this.buildSemanticModule();
+
+    if (this.getErrors().length > 0) {
+      throw new MultipleSemanticErrors(this.getErrors());
+    }
+
+    return result;
   }
 
   // ===== File Context =====
@@ -233,6 +300,18 @@ class SemanticAnalyzer {
 
   getSrcDir(): string {
     return this.options.fileContext.srcDir;
+  }
+
+  getDeclarations(): Declaration[] {
+    return this.program.declarations;
+  }
+
+  getModule(): ModuleDeclaration {
+    return this.program.module;
+  }
+
+  getModuleName(): string {
+    return this.getModule().name;
   }
 
   // ===== Registry Access =====
@@ -333,11 +412,7 @@ class SemanticAnalyzer {
   // ===== Import/Dependency Access =====
 
   get imports(): ImportDeclaration[] {
-    return this._imports;
-  }
-
-  set imports(value: ImportDeclaration[]) {
-    this._imports = value;
+    return this.program.imports;
   }
 
   get dependencies(): Map<string, SemanticModule> {
@@ -387,20 +462,6 @@ class SemanticAnalyzer {
   }
 
   /**
-   * Get the currently collected instance registry.
-   */
-  getInstanceRegistry(): InstanceInfo[] {
-    return this.currentInstanceRegistry;
-  }
-
-  /**
-   * Set the instance registry for constraint validation.
-   */
-  setInstanceRegistry(instances: InstanceInfo[]): void {
-    this.currentInstanceRegistry = instances;
-  }
-
-  /**
    * Reset the constraint context for a new value analysis.
    */
   resetConstraintContext(): void {
@@ -421,55 +482,1173 @@ class SemanticAnalyzer {
    * @param ctx - Type inference context with scope, substitution, and optional expected type
    * @returns The inferred type of the expression
    */
-  inferExpr(expr: Expr, ctx: TypeInferenceContext): Type {
-    return analyzeExpr(
-      this,
-      expr,
-      ctx.scope,
-      ctx.substitution,
-      ctx.expectedType ?? null,
-    );
+  analyzeExpr(
+    expr: Expr,
+    { scope, substitution, expectedType = null }: TypeInferenceContext,
+  ): Type {
+    // Access registry properties from analyzer
+    const { constructors, adts, typeAliases, opaqueTypes, records } = this;
+    const { imports, dependencies } = this;
+
+    switch (expr.kind) {
+      case "Var": {
+        // Look up the symbol and collect any protocol constraints
+        const { type: resolved, constraints } =
+          this.lookupSymbolWithConstraints(
+            scope,
+            expr.name,
+            expr.span,
+            substitution,
+          );
+        // Add any constraints from the symbol to the current context
+        for (const constraint of constraints) {
+          addConstraint(this.getConstraintContext(), constraint);
+        }
+        return applySubstitution(resolved, substitution);
+      }
+      case "Number": {
+        // Number literals are treated as Int or Float based on decimal point
+        const hasDecimal = expr.value.includes(".");
+        const typeName = hasDecimal ? "Float" : "Int";
+        const opaque = opaqueTypes[typeName];
+        if (!opaque && !adts[typeName]) {
+          throw new SemanticError(
+            `Type '${typeName}' not found. Make sure the prelude is imported.`,
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+        return { kind: "con", name: typeName, args: [] };
+      }
+      case "String": {
+        const opaque = opaqueTypes["String"];
+        if (!opaque && !adts["String"]) {
+          throw new SemanticError(
+            "Type 'String' not found. Make sure the prelude is imported.",
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+        return { kind: "con", name: "String", args: [] };
+      }
+      case "Char": {
+        const opaque = opaqueTypes["Char"];
+        if (!opaque && !adts["Char"]) {
+          throw new SemanticError(
+            "Type 'Char' not found. Make sure the prelude is imported.",
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+        return { kind: "con", name: "Char", args: [] };
+      }
+      case "Unit": {
+        // () is syntax sugar for the Unit constructor from the prelude
+        const opaque = opaqueTypes["Unit"];
+        if (!opaque && !adts["Unit"]) {
+          throw new SemanticError(
+            "Type 'Unit' not found. Make sure the prelude is imported.",
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+        return { kind: "con", name: "Unit", args: [] };
+      }
+      case "Tuple": {
+        const elements = expr.elements.map((el) =>
+          this.analyzeExpr(el, { scope, substitution }),
+        );
+        return { kind: "tuple", elements };
+      }
+      case "List": {
+        if (expr.elements.length === 0) {
+          return listType(freshType());
+        }
+        const first = this.analyzeExpr(expr.elements[0]!, {
+          scope,
+          substitution,
+          expectedType: null,
+        });
+        for (const el of expr.elements.slice(1)) {
+          const elType = this.analyzeExpr(el, { scope, substitution });
+          this.unify(first, elType, el.span, substitution);
+        }
+        return listType(applySubstitution(first, substitution));
+      }
+      case "ListRange": {
+        const startType = this.analyzeExpr(expr.start, { scope, substitution });
+        const endType = this.analyzeExpr(expr.end, { scope, substitution });
+        this.unify(startType, endType, expr.span, substitution);
+        return listType(applySubstitution(startType, substitution));
+      }
+      case "Record": {
+        const fields: Record<string, Type> = {};
+        for (const field of expr.fields) {
+          // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+          if (Object.hasOwn(fields, field.name)) {
+            throw new SemanticError(
+              `Duplicate record field '${field.name}'`,
+              field.span,
+              this.getFilePath(),
+            );
+          }
+          fields[field.name] = this.analyzeExpr(field.value, {
+            scope,
+            substitution,
+          });
+        }
+        return { kind: "record", fields };
+      }
+      case "RecordUpdate": {
+        const baseType = this.lookupSymbol(
+          scope,
+          expr.base,
+          expr.span,
+          substitution,
+        );
+        const concreteBase = applySubstitution(baseType, substitution);
+        if (concreteBase.kind !== "record") {
+          throw new SemanticError(
+            `Cannot update non-record '${expr.base}'`,
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+        const updatedFields: Record<string, Type> = { ...concreteBase.fields };
+        for (const field of expr.fields) {
+          if (!updatedFields[field.name]) {
+            throw new SemanticError(
+              `Record '${expr.base}' has no field '${field.name}'`,
+              field.span,
+              this.getFilePath(),
+            );
+          }
+          const fieldType = this.analyzeExpr(field.value, {
+            scope,
+            substitution,
+          });
+          this.unify(
+            updatedFields[field.name]!,
+            fieldType,
+            field.span,
+            substitution,
+          );
+          updatedFields[field.name] = applySubstitution(
+            updatedFields[field.name]!,
+            substitution,
+          );
+        }
+        return { kind: "record", fields: updatedFields };
+      }
+      case "FieldAccess": {
+        // First, try to resolve module-qualified access (e.g., Vibe.JS.null)
+        const moduleAccess = tryResolveModuleFieldAccess(
+          expr,
+          imports,
+          dependencies,
+        );
+        if (moduleAccess) {
+          return moduleAccess;
+        }
+
+        // Otherwise, handle as record field access
+        const targetType = this.analyzeExpr(expr.target, {
+          scope,
+          substitution,
+        });
+        const concrete = applySubstitution(targetType, substitution);
+
+        // If target is error type, propagate without additional errors (prevent cascading)
+        if (concrete.kind === "error") {
+          return ERROR_TYPE;
+        }
+
+        let fieldType: Type | undefined;
+
+        if (concrete.kind === "record") {
+          fieldType = concrete.fields[expr.field];
+        } else if (concrete.kind === "con") {
+          const recordInfo = records[concrete.name];
+          if (recordInfo) {
+            const fieldInfo = recordInfo.fields.find(
+              (f) => f.name === expr.field,
+            );
+            if (fieldInfo) {
+              const resolveCtx = new Map<string, TypeVar>();
+              const freshVars: TypeVar[] = [];
+              recordInfo.params.forEach((p) => {
+                const v: TypeVar = { kind: "var", id: freshType().id };
+                resolveCtx.set(p, v);
+                freshVars.push(v);
+              });
+
+              const genericFieldType = this.typeFromAnnotation(
+                fieldInfo.typeExpr,
+                resolveCtx,
+              );
+
+              const instSub = new Map<number, Type>();
+              freshVars.forEach((v, i) => {
+                instSub.set(v.id, concrete.args[i]!);
+              });
+
+              fieldType = applySubstitution(genericFieldType, instSub);
+            }
+          }
+        }
+
+        if (!fieldType) {
+          if (
+            concrete.kind !== "record" &&
+            (concrete.kind !== "con" || !records[concrete.name])
+          ) {
+            throw new SemanticError(
+              `Cannot access field '${expr.field}' on non-record value '${formatType(concrete)}'`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          throw new SemanticError(
+            `Record has no field '${expr.field}'`,
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+        return applySubstitution(fieldType, substitution);
+      }
+      case "Lambda": {
+        const paramTypes = expr.args.map(() => freshType());
+        const fnScope = scope.child();
+        this.bindPatterns(fnScope, expr.args, paramTypes, substitution);
+        const bodyType = this.analyzeExpr(expr.body, {
+          scope: fnScope,
+          substitution,
+        });
+        return fnChain(paramTypes, bodyType);
+      }
+      case "Apply": {
+        let calleeType = this.analyzeExpr(expr.callee, { scope, substitution });
+        for (const arg of expr.args) {
+          const argType = this.analyzeExpr(arg, { scope, substitution });
+          const resultType = freshType();
+          this.unify(
+            calleeType,
+            fn(argType, resultType),
+            expr.span,
+            substitution,
+          );
+          // Eagerly validate constraints after unification to catch type mismatches
+          // where a protocol method's return type gets unified with a function type
+          // due to over-application
+          this.validateConstraintsEagerly(substitution, arg.span);
+          calleeType = applySubstitution(resultType, substitution);
+        }
+        return applySubstitution(calleeType, substitution);
+      }
+      case "If": {
+        const condType = this.analyzeExpr(expr.condition, {
+          scope,
+          substitution,
+        });
+        // Bool type must be defined in the prelude
+        const boolAdt = adts["Bool"];
+        if (!boolAdt) {
+          throw new SemanticError(
+            "Type 'Bool' not found. Make sure the prelude is imported.",
+            expr.condition.span,
+            this.getFilePath(),
+          );
+        }
+        const tBool: Type = { kind: "con", name: "Bool", args: [] };
+        this.unify(condType, tBool, expr.condition.span, substitution);
+        const thenType = this.analyzeExpr(expr.thenBranch, {
+          scope,
+          substitution,
+        });
+        const elseType = this.analyzeExpr(expr.elseBranch, {
+          scope,
+          substitution,
+        });
+        this.unify(thenType, elseType, expr.span, substitution);
+        return applySubstitution(thenType, substitution);
+      }
+      case "LetIn": {
+        const letScope = scope.child();
+
+        // First pass: seed the scope with monomorphic schemes to enable recursion
+        for (const binding of expr.bindings) {
+          if (letScope.symbols.has(binding.name)) {
+            throw new SemanticError(
+              `Duplicate let-binding '${binding.name}'`,
+              binding.span,
+              this.getFilePath(),
+            );
+          }
+          const seeded = this.seedValueType(binding);
+          // Seed with monomorphic scheme (empty quantifier set)
+          this.declareSymbol(
+            letScope,
+            binding.name,
+            { vars: new Set(), constraints: [], type: seeded },
+            binding.span,
+          );
+        }
+
+        // Second pass: analyze each binding and generalize its type
+        // This is where let-polymorphism happens for local bindings
+        for (const binding of expr.bindings) {
+          const declared = this.lookupSymbol(
+            letScope,
+            binding.name,
+            binding.span,
+            substitution,
+          );
+          const inferred = this.analyzeValueDeclaration(
+            binding,
+            letScope,
+            substitution,
+            declared,
+          );
+          // Generalize the inferred type for polymorphic let-bindings
+          // Note: We generalize with respect to the parent scope, not letScope,
+          // to allow quantifying over variables not bound in the parent
+          const generalizedScheme = this.generalize(
+            inferred,
+            scope,
+            substitution,
+          );
+          letScope.symbols.set(binding.name, generalizedScheme);
+        }
+
+        return this.analyzeExpr(expr.body, {
+          scope: letScope,
+          substitution,
+          expectedType,
+        });
+      }
+      case "Case": {
+        const discriminantType = this.analyzeExpr(expr.discriminant, {
+          scope,
+          substitution,
+        });
+        const branchTypes: Type[] = [];
+
+        expr.branches.forEach((branch, index) => {
+          const branchScope = new Scope(scope);
+          const patternType = this.bindPattern(
+            branch.pattern,
+            branchScope,
+            new Set(),
+            freshType(),
+            substitution,
+          );
+          this.unify(
+            discriminantType,
+            patternType,
+            branch.pattern.span,
+            substitution,
+          );
+          const bodyType = this.analyzeExpr(branch.body, {
+            scope: branchScope,
+            substitution,
+            expectedType,
+          });
+          branchTypes.push(bodyType);
+
+          if (branch.pattern.kind === "WildcardPattern") {
+            if (index !== expr.branches.length - 1) {
+              throw new SemanticError(
+                "Wildcard pattern makes following branches unreachable",
+                branch.pattern.span,
+                this.getFilePath(),
+              );
+            }
+          }
+          if (branch.pattern.kind === "ConstructorPattern") {
+            this.validateConstructorArity(branch.pattern);
+          }
+        });
+
+        if (branchTypes.length === 0) {
+          throw new SemanticError(
+            "Case expression has no branches",
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+
+        const firstType = branchTypes[0]!;
+        for (const bt of branchTypes.slice(1)) {
+          this.unify(firstType, bt, expr.span, substitution);
+        }
+
+        // Exhaustiveness checking
+        const patterns = expr.branches.map((b) => b.pattern);
+        const result = checkExhaustiveness(
+          patterns,
+          discriminantType,
+          adts,
+          constructors,
+          (name) =>
+            resolveQualifiedConstructor(
+              name,
+              constructors,
+              adts,
+              imports,
+              dependencies,
+            ) || undefined,
+        );
+
+        if (!result.exhaustive) {
+          throw new SemanticError(
+            `Non-exhaustive case expression (missing: ${result.missing})`,
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+
+        return applySubstitution(firstType, substitution);
+      }
+      case "Infix": {
+        const leftType = this.analyzeExpr(expr.left, { scope, substitution });
+        const rightType = this.analyzeExpr(expr.right, { scope, substitution });
+        const opType = INFIX_TYPES[expr.operator];
+
+        if (opType) {
+          const expected = applySubstitution(opType, substitution);
+          const params = flattenFunctionParams(expected);
+          if (params.length < 2) {
+            throw new SemanticError(
+              "Invalid operator type",
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          this.unify(params[0]!, leftType, expr.left.span, substitution);
+          this.unify(params[1]!, rightType, expr.right.span, substitution);
+          return applySubstitution(
+            extractAnnotationReturn(expected, 2),
+            substitution,
+          );
+        }
+
+        const callee: Expr = {
+          kind: "Var",
+          name: expr.operator,
+          namespace: "lower",
+          span: expr.span,
+        };
+        const applyExpr: Expr = {
+          kind: "Apply",
+          callee,
+          args: [expr.left, expr.right],
+          span: expr.span,
+        };
+        return this.analyzeExpr(applyExpr, {
+          scope,
+          substitution,
+          expectedType,
+        });
+      }
+      case "Paren":
+        return this.analyzeExpr(expr.expression, {
+          scope,
+          substitution,
+          expectedType,
+        });
+      case "Unary": {
+        // Unary negation: only allowed for Int and Float
+        const operandType = this.analyzeExpr(expr.operand, {
+          scope,
+          substitution,
+        });
+        const concreteType = applySubstitution(operandType, substitution);
+
+        // Check if the operand is Int or Float
+        if (concreteType.kind === "con") {
+          if (concreteType.name === "Int" || concreteType.name === "Float") {
+            return concreteType;
+          }
+        }
+
+        // For type variables, we need to defer the check or constrain the type
+        // For now, we require the type to be known as Int or Float
+        if (concreteType.kind === "var") {
+          throw new SemanticError(
+            `Unary negation requires a concrete numeric type (Int or Float), but got an unknown type. Add a type annotation to disambiguate.`,
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+
+        throw new SemanticError(
+          `Unary negation is only allowed for Int and Float, but got '${formatType(
+            concreteType,
+          )}'`,
+          expr.span,
+          this.getFilePath(),
+        );
+      }
+      default: {
+        const _exhaustive: never = expr;
+        throw new SemanticError(
+          "Unsupported expression",
+          (expr as { span: Span }).span,
+          this.getFilePath(),
+        );
+      }
+    }
+  }
+
+  seedValueType(decl: ValueDeclaration | ExternalDeclaration): Type {
+    if (decl.kind === "ExternalDeclaration") {
+      return this.typeFromAnnotation(decl.annotation, new Map());
+    }
+    const argTypes = decl.args.map(() => freshType());
+    const resultType = freshType();
+    return fnChain(argTypes, resultType);
   }
 
   /**
-   * Create a type inference context with the given scope.
-   * Uses the analyzer's substitution by default.
-   */
-  createContext(
-    scope: Scope,
-    expectedType?: Type | null,
-  ): TypeInferenceContext {
-    return {
-      scope,
-      substitution: this._substitution,
-      expectedType,
-    };
-  }
-
-  /**
-   * Bind a pattern to a type, adding bindings to the scope.
-   * Uses the analyzer's stored registries.
+   * Convert a type expression (from source annotation) to an internal type.
+   * Handles type variables by maintaining a context of variable names to TypeVar IDs.
    *
-   * @param pattern - Pattern to bind
-   * @param scope - Scope to add bindings to
-   * @param expected - Expected type of the pattern
-   * @param seen - Set of already-seen variable names (for duplicate detection)
-   * @returns The type of the pattern
+   * NOTE: This function does NOT extract constraints from QualifiedType annotations.
+   * Use typeFromAnnotationWithConstraints() when you need constraint extraction.
+   *
+   * Type variables (lowercase identifiers like 'a', 'b') get mapped to fresh TypeVars
+   * consistently within the same annotation. For example:
+   *   a -> a        maps both 'a' to the same TypeVar
+   *   (a -> b) -> a maps 'a' consistently, 'b' to a different TypeVar
+   *
+   * Also handles type aliases by expanding them to their underlying types.
    */
-  bindPatternInScope(
+  typeFromAnnotation(
+    annotation: TypeExpr,
+    context: TypeVarContext = new Map(),
+  ): Type {
+    // Access registries from analyzer
+    const { adts, typeAliases, records, imports, dependencies } = this;
+
+    // Helper to resolve type names (qualified or unqualified)
+    function resolve(name: string) {
+      return resolveQualifiedType(
+        name,
+        adts,
+        typeAliases,
+        {}, // Opaque types not passed but usually in adts/aliases? wait, typeFromAnnotation signature doesn't take opaque types
+        records,
+        imports,
+        dependencies,
+      );
+    }
+
+    // Need to add opaque types to typeFromAnnotation signature if we want to resolve them properly
+    // For now, assuming adts covers most? No, opaque types are separate.
+    // I will check resolveQualifiedType definition below.
+
+    switch (annotation.kind) {
+      case "TypeRef": {
+        // Check if this is a type variable (lowercase identifier)
+        if (isTypeVariable(annotation.name)) {
+          // ... (existing logic)
+          // Check local context
+          let typeVar = context.get(annotation.name);
+          if (!typeVar) {
+            typeVar = freshType();
+            context.set(annotation.name, typeVar);
+          }
+          if (annotation.args.length > 0) {
+            // Treating as type constructor if it has args - fall through?
+            // Existing logic returns var immediately.
+            // If 'a' has args, it's invalid syntax usually, but parser allows?
+            // Actually, if it has args it shouldn't be a var.
+            // But isTypeVariable check is just lowercase.
+            // 'list' is lowercase but is type alias/con?
+            // Vibe types must be Uppercase.
+            // So lowercase implies var.
+            // If dot present? 'a.b' is not lowercase?
+            // 'R.Result' starts with Upper.
+          } else {
+            return typeVar;
+          }
+        }
+
+        // Try to resolve reference (handles qualified names and aliases including imported ones)
+        const resolved = resolve(annotation.name);
+
+        if (resolved && resolved.kind === "alias") {
+          const aliasInfo = resolved.info as TypeAliasInfo;
+          // Expand the type alias
+          if (annotation.args.length !== aliasInfo.params.length) {
+            // Mismatch - fall back to constructor
+          } else {
+            // Convert all argument types first
+            const argTypes: Type[] = [];
+            for (let i = 0; i < aliasInfo.params.length; i++) {
+              const argType = this.typeFromAnnotation(
+                annotation.args[i]!,
+                context,
+              );
+              argTypes.push(argType);
+            }
+
+            // Create fresh type variables and substitution
+            const aliasContext: TypeVarContext = new Map(context);
+            const substitutionMap = new Map<number, Type>();
+
+            for (let i = 0; i < aliasInfo.params.length; i++) {
+              const paramName = aliasInfo.params[i]!;
+              const fresh = freshType();
+              aliasContext.set(paramName, fresh);
+              substitutionMap.set(fresh.id, argTypes[i]!);
+            }
+
+            const expandedType = this.typeFromAnnotation(
+              aliasInfo.value,
+              aliasContext,
+            );
+
+            return applySubstitution(expandedType, substitutionMap);
+          }
+        }
+
+        if (resolved && resolved.kind === "record") {
+          const recordInfo = resolved.info as RecordInfo;
+          if (annotation.args.length === recordInfo.params.length) {
+            // Convert args
+            const argTypes: Type[] = [];
+            for (let i = 0; i < recordInfo.params.length; i++) {
+              argTypes.push(
+                this.typeFromAnnotation(annotation.args[i]!, context),
+              );
+            }
+            // Subst map
+            const recordContext: TypeVarContext = new Map(context);
+            const substitutionMap = new Map<number, Type>();
+            for (let i = 0; i < recordInfo.params.length; i++) {
+              const pname = recordInfo.params[i]!;
+              const fresh = freshType();
+              recordContext.set(pname, fresh);
+              substitutionMap.set(fresh.id, argTypes[i]!);
+            }
+            // Build fields
+            const fields: Record<string, Type> = {};
+            for (const field of recordInfo.fields) {
+              const fieldType = this.typeFromAnnotation(
+                field.typeExpr,
+                recordContext,
+              );
+              fields[field.name] = applySubstitution(
+                fieldType,
+                substitutionMap,
+              );
+            }
+            return { kind: "record", fields };
+          }
+        }
+
+        // If resolved to ADT or Opaque, use the CANONICAL name
+        const canonicalName = resolved ? resolved.name : annotation.name;
+
+        // Concrete type constructor
+        return {
+          kind: "con",
+          name: canonicalName,
+          args: annotation.args.map((arg) =>
+            this.typeFromAnnotation(arg, context),
+          ),
+        };
+      }
+      case "FunctionType": {
+        const from = this.typeFromAnnotation(annotation.from, context);
+        const to = this.typeFromAnnotation(annotation.to, context);
+        return fn(from, to);
+      }
+      case "TupleType": {
+        return {
+          kind: "tuple",
+          elements: annotation.elements.map((el) =>
+            this.typeFromAnnotation(el, context),
+          ),
+        };
+      }
+      case "RecordType": {
+        // Reject floating record types in type annotations
+        // Record types must be defined using `type Name = { ... }` and then referenced by name
+        throw new SemanticError(
+          `Record types cannot be used directly in type annotations. ` +
+            `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
+          annotation.span,
+          this.getFilePath(),
+        );
+      }
+      case "QualifiedType": {
+        // For the simple typeFromAnnotation function, we extract only the underlying type.
+        // Use typeFromAnnotationWithConstraints() to also extract constraints.
+        // This maintains backwards compatibility with call sites that only need the type.
+        return this.typeFromAnnotation(annotation.type, context);
+      }
+    }
+  }
+
+  /**
+   * Validate that a constructor pattern has the correct number of arguments.
+   *
+   * Checks both user-defined constructors (from the registry) and built-in
+   * constructors (True, False, Just, Nothing, Ok, Err).
+   */
+  validateConstructorArity(
+    pattern: Extract<Pattern, { kind: "ConstructorPattern" }>,
+  ) {
+    // First check user-defined constructors
+    const ctorInfo = this.constructors[pattern.name];
+    if (ctorInfo) {
+      if (ctorInfo.arity !== pattern.args.length) {
+        throw new SemanticError(
+          `Constructor '${pattern.name}' expects ${ctorInfo.arity} argument(s), got ${pattern.args.length}`,
+          pattern.span,
+          this.getFilePath(),
+        );
+      }
+      return;
+    }
+
+    // Fall back to built-in constructors
+    const expected = BUILTIN_CONSTRUCTORS[pattern.name];
+    if (expected !== undefined && expected !== pattern.args.length) {
+      throw new SemanticError(
+        `Constructor '${pattern.name}' expects ${expected} argument(s)`,
+        pattern.span,
+        this.getFilePath(),
+      );
+    }
+  }
+
+  bindPatterns(
+    scope: Scope,
+    patterns: Pattern[],
+    paramTypes: Type[],
+    substitution: Substitution = this.substitution,
+  ) {
+    if (patterns.length !== paramTypes.length) {
+      throw new Error("Internal arity mismatch during pattern binding");
+    }
+    const seen = new Set<string>();
+    patterns.forEach((pattern, idx) => {
+      const paramType = paramTypes[idx]!;
+      this.bindPattern(pattern, scope, seen, paramType, substitution);
+      if (pattern.kind === "VarPattern") {
+        // Pattern variables are monomorphic
+        scope.symbols.set(pattern.name, {
+          vars: new Set(),
+          constraints: [],
+          type: paramType,
+        });
+      }
+    });
+  }
+
+  /**
+   * Bind pattern variables to types in a scope.
+   *
+   * This function recursively processes a pattern, binding variables to their types
+   * and validating that the pattern is well-formed for the expected type.
+   *
+   * For constructor patterns, it:
+   * 1. Validates constructor arity (number of arguments)
+   * 2. Determines the constructor's type from the registry
+   * 3. Unifies the pattern type with the expected type
+   * 4. Recursively binds nested pattern arguments
+   */
+  bindPattern(
     pattern: Pattern,
     scope: Scope,
+    seen = new Set(),
     expected: Type,
-    seen: Set<string> = new Set(),
+    substitution: Substitution = this.substitution,
   ): Type {
-    return bindPattern(
-      this,
-      pattern,
-      scope,
-      this._substitution,
-      seen,
-      expected,
-    );
+    const { constructors, adts, imports, dependencies } = this;
+
+    // Helper for recursive calls
+    const bind = (p: Pattern, exp: Type) =>
+      this.bindPattern(p, scope, seen, exp);
+
+    switch (pattern.kind) {
+      case "VarPattern": {
+        if (seen.has(pattern.name)) {
+          throw new SemanticError(
+            `Duplicate pattern variable '${pattern.name}'`,
+            pattern.span,
+            this.getFilePath(),
+          );
+        }
+        seen.add(pattern.name);
+        // Pattern variables are monomorphic (not generalized)
+        // This follows the let-polymorphism discipline where only let-bound names are polymorphic
+        this.declareSymbol(
+          scope,
+          pattern.name,
+          { vars: new Set(), constraints: [], type: expected },
+          pattern.span,
+        );
+        return expected;
+      }
+      case "WildcardPattern":
+        return expected;
+      case "TuplePattern": {
+        const subTypes = pattern.elements.map(() => freshType());
+        this.unify(
+          { kind: "tuple", elements: subTypes },
+          expected,
+          pattern.span,
+          substitution,
+        );
+        pattern.elements.forEach((el, idx) => bind(el, subTypes[idx]!));
+        return applySubstitution(
+          { kind: "tuple", elements: subTypes },
+          substitution,
+        );
+      }
+      case "ConstructorPattern": {
+        // Validate constructor arity
+        this.validateConstructorArity(pattern);
+
+        // Look up constructor info to get proper types (supports qualified names)
+        const resolved = resolveQualifiedConstructor(
+          pattern.name,
+          constructors,
+          adts,
+          imports,
+          dependencies,
+        );
+        const ctorInfo = resolved ? resolved.info : undefined;
+
+        if (ctorInfo) {
+          // User-defined ADT constructor
+          // Create fresh type variables for the ADT's type parameters
+          const paramTypeVars: Map<string, TypeVar> = new Map();
+          for (const param of ctorInfo.parentParams) {
+            paramTypeVars.set(param, freshType());
+          }
+
+          // Build the result type: ParentType param1 param2 ...
+          const resultType: TypeCon = {
+            kind: "con",
+            name: ctorInfo.parentType,
+            args: ctorInfo.parentParams.map((p) => paramTypeVars.get(p)!),
+          };
+
+          // Build types for constructor arguments
+          const argTypes: Type[] = ctorInfo.argTypes.map((argExpr) =>
+            this.constructorArgToType(argExpr, paramTypeVars),
+          );
+
+          // Unify the result type with the expected type to bind type parameters
+          this.unify(resultType, expected, pattern.span, substitution);
+
+          // Validate we have the right number of argument patterns
+          if (pattern.args.length !== argTypes.length) {
+            throw new SemanticError(
+              `Constructor '${pattern.name}' expects ${argTypes.length} argument(s), got ${pattern.args.length}`,
+              pattern.span,
+              this.getFilePath(),
+            );
+          }
+
+          // Recursively bind pattern arguments
+          pattern.args.forEach((arg, idx) => {
+            const argType = applySubstitution(argTypes[idx]!, substitution);
+            bind(arg, argType);
+          });
+
+          return applySubstitution(resultType, substitution);
+        } else {
+          // Fall back to legacy behavior for built-in constructors
+          const argTypes = pattern.args.map(() => freshType());
+          const constructed: Type = fnChain(argTypes, freshType());
+          this.unify(constructed, expected, pattern.span, substitution);
+          pattern.args.forEach((arg, idx) => bind(arg, argTypes[idx]!));
+          return applySubstitution(expected, substitution);
+        }
+      }
+      case "ListPattern": {
+        // List pattern: [] or [x, y, z]
+        // Expected type should be List a for some a
+        const elemType = freshType();
+        const lt = listType(elemType);
+        this.unify(lt, expected, pattern.span, substitution);
+
+        // Bind each element pattern to the element type
+        pattern.elements.forEach((el) =>
+          bind(el, applySubstitution(elemType, substitution)),
+        );
+        return applySubstitution(lt, substitution);
+      }
+      case "ConsPattern": {
+        // Cons pattern: head :: tail
+        // Expected type should be List a for some a
+        const elemType = freshType();
+        const lt = listType(elemType);
+        this.unify(lt, expected, pattern.span, substitution);
+
+        // Head pattern binds to element type
+        bind(pattern.head, applySubstitution(elemType, substitution));
+
+        // Tail pattern binds to list type
+        bind(pattern.tail, applySubstitution(lt, substitution));
+
+        return applySubstitution(lt, substitution);
+      }
+      case "RecordPattern": {
+        // Record pattern: { x, y } or { x = pat, y }
+        // Expected type should be a record with at least these fields
+
+        // Build record type from field names
+        const fieldTypes: Record<string, Type> = {};
+        for (const field of pattern.fields) {
+          fieldTypes[field.name] = freshType();
+        }
+
+        // Create record type and unify with expected
+        const recordType: Type = {
+          kind: "record",
+          fields: fieldTypes,
+        };
+        this.unify(recordType, expected, pattern.span, substitution);
+
+        // Bind each field's pattern (or the field name as variable)
+        for (const field of pattern.fields) {
+          const fieldType = fieldTypes[field.name]!;
+          const appliedFieldType = applySubstitution(fieldType, substitution);
+
+          if (field.pattern) {
+            // Field has an explicit pattern: { x = pat }
+            bind(field.pattern, appliedFieldType);
+          } else {
+            // Field without pattern becomes a variable: { x } === { x = x }
+            if (seen.has(field.name)) {
+              throw new SemanticError(
+                `Duplicate pattern variable '${field.name}'`,
+                pattern.span,
+                this.getFilePath(),
+              );
+            }
+            seen.add(field.name);
+            this.declareSymbol(
+              scope,
+              field.name,
+              { vars: new Set(), constraints: [], type: appliedFieldType },
+              pattern.span,
+            );
+          }
+        }
+
+        return applySubstitution(recordType, substitution);
+      }
+      default:
+        return expected;
+    }
+  }
+
+  /**
+   * Convert a constructor argument TypeExpr to an internal Type.
+   *
+   * This handles:
+   * - Type variables (lowercase, e.g., "a") -> look up in paramTypeVars
+   * - Type constructors (uppercase, e.g., "List a") -> build TypeCon
+   * - Recursive types (e.g., "Tree a" in Tree definition) -> build TypeCon
+   */
+  constructorArgToType(
+    expr: TypeExpr,
+    paramTypeVars: Map<string, TypeVar>,
+  ): Type {
+    switch (expr.kind) {
+      case "TypeRef": {
+        // Check if it's a type variable (lowercase, single letter typically)
+        const typeVar = paramTypeVars.get(expr.name);
+        if (typeVar && expr.args.length === 0) {
+          return typeVar;
+        }
+
+        // Otherwise it's a type constructor
+        // Recursively convert arguments
+        const args = expr.args.map((arg) =>
+          this.constructorArgToType(arg, paramTypeVars),
+        );
+        return {
+          kind: "con",
+          name: expr.name,
+          args,
+        };
+      }
+      case "FunctionType": {
+        return {
+          kind: "fun",
+          from: this.constructorArgToType(expr.from, paramTypeVars),
+          to: this.constructorArgToType(expr.to, paramTypeVars),
+        };
+      }
+      case "TupleType": {
+        return {
+          kind: "tuple",
+          elements: expr.elements.map((el) =>
+            this.constructorArgToType(el, paramTypeVars),
+          ),
+        };
+      }
+      case "RecordType": {
+        // Convert record type annotation to internal record type
+        const sortedFields = [...expr.fields].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+        const fields: Record<string, Type> = {};
+        for (const field of sortedFields) {
+          fields[field.name] = this.constructorArgToType(
+            field.type,
+            paramTypeVars,
+          );
+        }
+        return {
+          kind: "record",
+          fields,
+        };
+      }
+      case "QualifiedType": {
+        // For constructor arguments, we don't support qualified types
+        // (constraints only make sense at the top level of function signatures)
+        throw new SemanticError(
+          "Constructor arguments cannot have constraints",
+          expr.span,
+          this.getFilePath(),
+        );
+      }
+    }
+  }
+
+  /**
+   * Validate that patterns used in function parameters are allowed.
+   *
+   * Function parameters can use:
+   * - Variable patterns (x)
+   * - Wildcard patterns (_)
+   * - Tuple patterns ((a, b))
+   * - Record patterns ({ x, y })
+   * - Constructor patterns ONLY for single-constructor ADTs (e.g., Pair a b)
+   *
+   * Multi-constructor ADTs (like Maybe, Result) require case expressions.
+   */
+  validateFunctionParamPatterns(patterns: Pattern[]): void {
+    for (const pattern of patterns) {
+      this.validateFunctionParamPattern(pattern);
+    }
+  }
+
+  /**
+   * Recursively validate a single function parameter pattern.
+   */
+  validateFunctionParamPattern(pattern: Pattern): void {
+    const { constructors, adts } = this;
+
+    switch (pattern.kind) {
+      case "VarPattern":
+      case "WildcardPattern":
+        // Always allowed
+        return;
+
+      case "TuplePattern":
+        // Allowed, but validate nested patterns
+        for (const element of pattern.elements) {
+          this.validateFunctionParamPattern(element);
+        }
+        return;
+
+      case "RecordPattern":
+        // Allowed, but validate nested patterns
+        for (const field of pattern.fields) {
+          if (field.pattern) {
+            this.validateFunctionParamPattern(field.pattern);
+          }
+        }
+        return;
+
+      case "ConstructorPattern": {
+        // Only allowed for single-constructor ADTs
+        const ctorInfo = constructors[pattern.name];
+
+        if (!ctorInfo) {
+          // Unknown constructor - will be caught by other validation
+          return;
+        }
+
+        const adtInfo = adts[ctorInfo.parentType];
+
+        if (!adtInfo) {
+          // Unknown ADT - will be caught by other validation
+          return;
+        }
+
+        if (adtInfo.constructors.length > 1) {
+          const constructorNames = adtInfo.constructors.join(", ");
+          throw new SemanticError(
+            `Constructor pattern '${pattern.name}' is not allowed in function parameters. ` +
+              `The type '${ctorInfo.parentType}' has multiple constructors (${constructorNames}). ` +
+              `Use a case expression in the function body instead.`,
+            pattern.span,
+            this.getFilePath(),
+          );
+        }
+
+        // Validate nested patterns
+        for (const arg of pattern.args) {
+          this.validateFunctionParamPattern(arg);
+        }
+        return;
+      }
+
+      case "ListPattern":
+      case "ConsPattern":
+        // These should have been rejected by the parser, but check anyway
+        throw new SemanticError(
+          `List patterns are not allowed in function parameters. ` +
+            `Use a case expression in the function body instead.`,
+          pattern.span,
+          this.getFilePath(),
+        );
+    }
+  }
+
+  analyzeValueDeclaration(
+    decl: ValueDeclaration,
+    scope: Scope,
+    substitution: Substitution,
+    declaredType: Type,
+    annotationType?: Type,
+  ): Type {
+    // Validate function parameter patterns (single-constructor ADTs, tuples, records)
+    this.validateFunctionParamPatterns(decl.args);
+
+    const paramTypes = annotationType
+      ? extractAnnotationParams(annotationType, decl.args.length, decl.span)
+      : decl.args.map(() => freshType());
+    const returnType = annotationType
+      ? extractAnnotationReturn(annotationType, decl.args.length)
+      : freshType();
+    const expected = fnChain(paramTypes, returnType);
+
+    this.unify(expected, declaredType, decl.span, substitution);
+
+    const fnScope = scope.child();
+    this.bindPatterns(fnScope, decl.args, paramTypes, substitution);
+
+    const bodyType = this.analyzeExpr(decl.body, {
+      scope: fnScope,
+      substitution,
+      expectedType: returnType,
+    });
+    this.unify(bodyType, returnType, decl.body.span, substitution);
+
+    return applySubstitution(expected, substitution);
   }
 
   /**
@@ -480,47 +1659,425 @@ class SemanticAnalyzer {
    * @param b - Second type
    * @param span - Source location for error reporting
    */
-  unifyTypes(a: Type, b: Type, span: Span): void {
-    unify(this, a, b, span, this._substitution);
-  }
+  unify(
+    a: Type,
+    b: Type,
+    span: Span,
+    substitution: Substitution = this.substitution,
+  ): void {
+    const left = applySubstitution(a, substitution);
+    const right = applySubstitution(b, substitution);
 
-  /**
-   * Lookup a symbol in a scope and instantiate its type scheme.
-   *
-   * @param scope - Scope to search in
-   * @param name - Symbol name to look up
-   * @param span - Source location for error reporting
-   * @returns The instantiated type and any constraints
-   */
-  lookupSymbolInScope(scope: Scope, name: string, span: Span): LookupResult {
-    return lookupSymbolWithConstraints(
-      this,
-      scope,
-      name,
+    // Error types unify with anything - prevents cascading errors
+    if (left.kind === "error" || right.kind === "error") {
+      return;
+    }
+
+    if (left.kind === "var") {
+      if (!typesEqual(left, right)) {
+        if (occursIn(left.id, right, substitution)) {
+          throw new SemanticError(
+            "Recursive type detected",
+            span,
+            this.getFilePath(),
+          );
+        }
+        substitution.set(left.id, right);
+      }
+      return;
+    }
+
+    if (right.kind === "var") {
+      return this.unify(right, left, span, substitution);
+    }
+
+    if (left.kind === "con" && right.kind === "con") {
+      if (left.name !== right.name || left.args.length !== right.args.length) {
+        throw new SemanticError(
+          `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
+            right,
+          )}'`,
+          span,
+          this.getFilePath(),
+        );
+      }
+      left.args.forEach((arg, idx) =>
+        this.unify(arg, right.args[idx]!, span, substitution),
+      );
+      return;
+    }
+
+    if (left.kind === "fun" && right.kind === "fun") {
+      this.unify(left.from, right.from, span, substitution);
+      this.unify(left.to, right.to, span, substitution);
+      return;
+    }
+
+    if (left.kind === "tuple" && right.kind === "tuple") {
+      if (left.elements.length !== right.elements.length) {
+        throw new SemanticError(
+          "Tuple length mismatch",
+          span,
+          this.getFilePath(),
+        );
+      }
+      left.elements.forEach((el, idx) =>
+        this.unify(el, right.elements[idx]!, span, substitution),
+      );
+      return;
+    }
+
+    if (left.kind === "record" && right.kind === "record") {
+      const shared = Object.keys(left.fields).filter(
+        (k) => right.fields[k] !== undefined,
+      );
+      for (const key of shared) {
+        this.unify(left.fields[key]!, right.fields[key]!, span, substitution);
+      }
+      // Row-typed approximation: allow extra fields on either side.
+      return;
+    }
+
+    throw new SemanticError(
+      `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
+        right,
+      )}'`,
       span,
-      this._substitution,
+      this.getFilePath(),
     );
   }
 
   /**
-   * Apply the current substitution to a type.
-   *
-   * @param type - Type to apply substitution to
-   * @returns The substituted type
+   * Import a single export specification from a dependency module.
    */
-  resolveType(type: Type): Type {
-    return applySubstitution(type, this._substitution);
+  importExportSpec(
+    spec: ExportSpec,
+    depModule: SemanticModule,
+    imp: ImportDeclaration,
+  ): void {
+    switch (spec.kind) {
+      case "ExportValue": {
+        const name = spec.name;
+
+        // First check if it's actually exported
+        if (!isExportedFromModule(depModule, name, "value")) {
+          // Check if it's a type, type alias, opaque type, or protocol
+          if (
+            isExportedFromModule(depModule, name, "type") &&
+            depModule.adts[name]
+          ) {
+            // Import the ADT without constructors
+            const depADT = depModule.adts[name]!;
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.adts[name],
+              imp.span,
+              "type",
+            );
+            this.adts[name] = depADT;
+            return;
+          }
+          if (depModule.typeAliases[name]) {
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.typeAliases[name],
+              imp.span,
+              "type alias",
+            );
+            this.typeAliases[name] = depModule.typeAliases[name]!;
+            return;
+          }
+          if (depModule.opaqueTypes[name]) {
+            this.opaqueTypes[name] = depModule.opaqueTypes[name]!;
+            return;
+          }
+          if (
+            isExportedFromModule(depModule, name, "protocol") &&
+            depModule.protocols[name]
+          ) {
+            // Import the protocol without methods
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.protocols[name],
+              imp.span,
+              "protocol",
+            );
+            this.protocols[name] = depModule.protocols[name]!;
+            return;
+          }
+          // If nothing matched, the item is not exported
+          throw new SemanticError(
+            `Cannot import '${name}' from module '${imp.moduleName}' - it is not exported`,
+            spec.span,
+            this.getFilePath(),
+          );
+        }
+
+        // Import value
+        const depValue = depModule.values[name];
+        if (depValue && depValue.type) {
+          const importedType = depValue.type;
+          const scheme = this.generalize(
+            importedType,
+            this.globalScope,
+            this.substitution,
+          );
+          this.globalScope.define(name, scheme);
+          // Track for re-export support
+          this.importedValues.set(name, imp.moduleName);
+        }
+
+        // Also check for constructors (might be re-exported)
+        if (isExportedFromModule(depModule, name, "constructor")) {
+          const depConstructor = depModule.constructors[name];
+          if (depConstructor) {
+            this.constructors[name] = depConstructor;
+            const ctorScheme = depModule.constructorTypes[name];
+            if (ctorScheme) {
+              this.globalScope.define(name, ctorScheme);
+              this.constructorTypes[name] = ctorScheme;
+            }
+          }
+        }
+        break;
+      }
+
+      case "ExportOperator": {
+        const op = spec.operator;
+
+        // Check if operator is exported
+        if (!isExportedFromModule(depModule, op, "operator")) {
+          throw new SemanticError(
+            `Cannot import operator '${op}' from module '${imp.moduleName}' - it is not exported`,
+            spec.span,
+            this.getFilePath(),
+          );
+        }
+
+        // Import operator value if it exists
+        const depValue = depModule.values[op];
+        if (depValue && depValue.type) {
+          const importedType = depValue.type;
+          const scheme = this.generalize(
+            importedType,
+            this.globalScope,
+            this.substitution,
+          );
+          this.globalScope.define(op, scheme);
+        }
+
+        // Import operator info if it exists
+        const opInfo = depModule.operators.get(op);
+        if (opInfo) {
+          this.operators.set(op, opInfo);
+          // Track as imported so we can reject fixity redefinitions
+          this.importedValues.set(op, imp.moduleName);
+        }
+        break;
+      }
+
+      case "ExportTypeAll": {
+        const name = spec.name;
+
+        // Check if it's an ADT
+        const depADT = depModule.adts[name];
+        if (depADT) {
+          if (!isExportedFromModule(depModule, name, "type")) {
+            throw new SemanticError(
+              `Cannot import type '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+
+          this.checkTypeCollision(
+            name,
+            imp.moduleName,
+            this.adts[name],
+            imp.span,
+            "type",
+          );
+          this.adts[name] = depADT;
+
+          // Import all constructors
+          for (const ctorName of depADT.constructors) {
+            const ctor = depModule.constructors[ctorName];
+            if (ctor) {
+              this.constructors[ctorName] = ctor;
+              const ctorScheme = depModule.constructorTypes[ctorName];
+              if (ctorScheme) {
+                this.globalScope.define(ctorName, ctorScheme);
+                this.constructorTypes[ctorName] = ctorScheme;
+              }
+            }
+          }
+          return;
+        }
+
+        // Check if it's a protocol
+        const depProtocol = depModule.protocols[name];
+        if (depProtocol) {
+          if (!isExportedFromModule(depModule, name, "protocol")) {
+            throw new SemanticError(
+              `Cannot import protocol '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+
+          this.checkTypeCollision(
+            name,
+            imp.moduleName,
+            this.protocols[name],
+            imp.span,
+            "protocol",
+          );
+          this.protocols[name] = depProtocol;
+
+          // Add all protocol methods to scope
+          const methodSchemes = addProtocolMethodsToScope(
+            depProtocol,
+            this.globalScope,
+          );
+          // Store in typeSchemes for LSP hover/completion
+          for (const [methodName, scheme] of methodSchemes) {
+            this.typeSchemes[methodName] = scheme;
+          }
+          return;
+        }
+
+        throw new SemanticError(
+          `Cannot import '${name}(..)' from module '${imp.moduleName}' - it is not a type or protocol`,
+          spec.span,
+          this.getFilePath(),
+        );
+      }
+
+      case "ExportTypeSome": {
+        const name = spec.name;
+        const members = spec.members;
+
+        // Check if it's an ADT with specific constructors
+        const depADT = depModule.adts[name];
+        if (depADT) {
+          if (!isExportedFromModule(depModule, name, "type")) {
+            throw new SemanticError(
+              `Cannot import type '${name}' from module '${imp.moduleName}' - it is not exported`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+
+          this.checkTypeCollision(
+            name,
+            imp.moduleName,
+            this.adts[name],
+            imp.span,
+            "type",
+          );
+          this.adts[name] = depADT;
+
+          // Import specific constructors
+          for (const ctorName of members) {
+            if (!depADT.constructors.includes(ctorName)) {
+              throw new SemanticError(
+                `Constructor '${ctorName}' is not defined in type '${name}'`,
+                spec.span,
+                this.getFilePath(),
+              );
+            }
+            const ctor = depModule.constructors[ctorName];
+            if (ctor) {
+              this.constructors[ctorName] = ctor;
+              const ctorScheme = depModule.constructorTypes[ctorName];
+              if (ctorScheme) {
+                this.globalScope.define(ctorName, ctorScheme);
+                this.constructorTypes[ctorName] = ctorScheme;
+              }
+            }
+          }
+          return;
+        }
+
+        // Check if it's a protocol with specific methods
+        const depProtocol = depModule.protocols[name];
+        if (depProtocol) {
+          if (!isExportedFromModule(depModule, name, "protocol")) {
+            throw new SemanticError(
+              `Cannot import protocol '${name}' from module '${imp.moduleName}' - it is not exported`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+
+          this.checkTypeCollision(
+            name,
+            imp.moduleName,
+            this.protocols[name],
+            imp.span,
+            "protocol",
+          );
+          this.protocols[name] = depProtocol;
+
+          // Add specific protocol methods to scope
+          for (const methodName of members) {
+            const methodInfo = depProtocol.methods.get(methodName);
+            if (!methodInfo) {
+              throw new SemanticError(
+                `Method '${methodName}' is not defined in protocol '${name}'`,
+                spec.span,
+                this.getFilePath(),
+              );
+            }
+
+            // Create constrained type scheme for the method
+            const constraintTypeVar: Type = freshType();
+            const methodType = methodInfo.type;
+            const scheme: TypeScheme = {
+              vars: new Set([
+                constraintTypeVar.kind === "var" ? constraintTypeVar.id : -1,
+              ]),
+              constraints: [
+                { protocolName: name, typeArgs: [constraintTypeVar] },
+              ],
+              type: methodType,
+            };
+            this.globalScope.define(methodName, scheme);
+          }
+          return;
+        }
+
+        throw new SemanticError(
+          `Cannot import '${name}(...)' from module '${imp.moduleName}' - it is not a type or protocol`,
+          spec.span,
+          this.getFilePath(),
+        );
+      }
+    }
+  }
+
+  registerValue(decl: ValueDeclaration | ExternalDeclaration) {
+    // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+    if (Object.hasOwn(this.values, decl.name)) {
+      throw new SemanticError(
+        `Duplicate definition for '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+    this.values[decl.name] = {
+      declaration: decl,
+      annotation:
+        decl.kind === "ExternalDeclaration" ? decl.annotation : undefined,
+      externalTarget:
+        decl.kind === "ExternalDeclaration" ? decl.target : undefined,
+    };
   }
 
   // ===== Factory Methods =====
-
-  /**
-   * Create a fresh substitution for temporary type inference (e.g., protocol defaults).
-   * This avoids polluting the main substitution with temporary type variables.
-   */
-  createFreshSubstitution(): Substitution {
-    return new Map();
-  }
 
   /**
    * Create a child scope from a given parent scope.
@@ -530,131 +2087,3976 @@ class SemanticAnalyzer {
     return (parent ?? this._globalScope).child();
   }
 
+  // ===== Module Analysis Methods =====
+
   /**
-   * Create a type inference context with all necessary components.
-   * This is the primary way to create a context for type inference.
-   *
-   * @param scope - The scope to use (defaults to global scope)
-   * @param substitution - The substitution to use (defaults to the analyzer's substitution)
-   * @param expectedType - Optional expected type for bidirectional type checking
+   * Compute the expected module name from file path.
+   * The module name is derived from the relative path within the source directory.
    */
-  createInferenceContext(
-    scope?: Scope,
-    substitution?: Substitution,
-    expectedType?: Type | null,
-  ): TypeInferenceContext {
-    return {
-      scope: scope ?? this._globalScope,
-      substitution: substitution ?? this._substitution,
-      expectedType,
+  private computeExpectedModuleName(): string {
+    // Normalize paths to handle different separators
+    const normalizedFilePath = this.getFilePath().replace(/\\/g, "/");
+    const normalizedSrcDir = this.getSrcDir()
+      .replace(/\\/g, "/")
+      .replace(/\/$/, "");
+
+    // Get relative path from srcDir
+    if (!normalizedFilePath.startsWith(normalizedSrcDir + "/")) {
+      // Fallback: extract from file name only
+      const fileName = normalizedFilePath.split("/").pop() ?? "";
+      return fileName.replace(/\.vibe$/, "");
+    }
+
+    // Remove srcDir prefix and .vibe extension
+    const relativePath = normalizedFilePath
+      .slice(normalizedSrcDir.length + 1) // +1 for the trailing slash
+      .replace(/\.vibe$/, "");
+
+    // Convert path separators to dots for module name
+    return relativePath.replace(/\//g, ".");
+  }
+
+  private ensureModuleNameConsistency() {
+    const expectedModuleName = this.computeExpectedModuleName();
+
+    const declaredModuleName = this.program.module.name;
+    if (declaredModuleName !== expectedModuleName) {
+      throw new SemanticError(
+        `Module name '${declaredModuleName}' does not match file path.\n` +
+          `Expected: module ${expectedModuleName} [exposing (..)]\n` +
+          `File path: ${this.getFilePath()}`,
+        this.program.module.span,
+        this.getFilePath(),
+      );
+    }
+  }
+
+  private initializeBuiltinADTs(): void {
+    // Bool ADT: True | False (still an ADT for pattern matching)
+    this.adts["Bool"] = {
+      name: "Bool",
+      params: [],
+      constructors: ["True", "False"],
+      constraints: [],
+      span: BUILTIN_SPAN,
+    };
+    this.constructors["True"] = {
+      arity: 0,
+      argTypes: [],
+      parentType: "Bool",
+      parentParams: [],
+      moduleName: BUILTIN_MODULE_NAME,
+      span: BUILTIN_SPAN,
+    };
+    this.constructorTypes["True"] = {
+      vars: new Set(),
+      constraints: [],
+      type: { kind: "con", name: "Bool", args: [] },
+    };
+    this.constructors["False"] = {
+      arity: 0,
+      argTypes: [],
+      parentType: "Bool",
+      parentParams: [],
+      moduleName: BUILTIN_MODULE_NAME,
+      span: BUILTIN_SPAN,
+    };
+    this.constructorTypes["False"] = {
+      vars: new Set(),
+      constraints: [],
+      type: { kind: "con", name: "Bool", args: [] },
+    };
+
+    // List ADT: List a (builtin parameterized type for lists)
+    // Note: List uses the internal "list" type representation but is exposed as "List" ADT
+    this.adts["List"] = {
+      name: "List",
+      params: ["a"],
+      constructors: [], // List constructors are handled specially (via list literals)
+      constraints: [],
+      span: BUILTIN_SPAN,
+    };
+
+    this.globalScope.define("True", this.constructorTypes["True"]!);
+    this.globalScope.define("False", this.constructorTypes["False"]!);
+  }
+
+  private initializeBuiltinOpaqueTypes(): void {
+    // Primitive opaque types - no pattern matching allowed
+    this.opaqueTypes["Unit"] = {
+      name: "Unit",
+      moduleName: BUILTIN_MODULE_NAME,
+      params: [],
+      span: BUILTIN_SPAN,
+    };
+
+    this.opaqueTypes["Int"] = {
+      name: "Int",
+      moduleName: BUILTIN_MODULE_NAME,
+      params: [],
+      span: BUILTIN_SPAN,
+    };
+
+    this.opaqueTypes["Float"] = {
+      name: "Float",
+      moduleName: BUILTIN_MODULE_NAME,
+      params: [],
+      span: BUILTIN_SPAN,
+    };
+
+    this.opaqueTypes["String"] = {
+      name: "String",
+      moduleName: BUILTIN_MODULE_NAME,
+      params: [],
+      span: BUILTIN_SPAN,
+    };
+
+    this.opaqueTypes["Char"] = {
+      name: "Char",
+      moduleName: BUILTIN_MODULE_NAME,
+      params: [],
+      span: BUILTIN_SPAN,
     };
   }
 
-  /**
-   * Add a constraint to the current constraint context.
-   */
-  addConstraintToContext(constraint: Constraint): void {
-    addConstraint(this.currentConstraintContext, constraint);
-  }
-}
+  private validateImports(): void {
+    const byModule = new Map<string, ImportDeclaration>();
+    const byAlias = new Map<string, ImportDeclaration>();
 
-/**
- * Eagerly validate pending constraints after unification.
- *
- * This function is called after each application in the Apply case to detect
- * type mismatches early. When a protocol method's return type (a type variable)
- * gets unified with a function type due to over-application, this catches the
- * error immediately rather than waiting until generalization.
- *
- * The key insight: if a type variable from a protocol constraint gets unified
- * to a concrete type structure (function, tuple, etc.) that no instance could
- * ever match, we should report it as a type mismatch rather than a missing
- * instance error.
- *
- * @param substitution - Current type substitution
- * @param span - Source location for error reporting
- * @param expectedNonFunctionType - If provided, the type that was expected to not be a function
- */
-function validateConstraintsEagerly(
-  analyzer: SemanticAnalyzer,
-  substitution: Substitution,
-  span: Span,
-  expectedNonFunctionType?: Type,
-): void {
-  const constraints = analyzer.getCollectedConstraints();
-  if (constraints.length === 0) return;
-
-  for (const c of constraints) {
-    // Apply substitution to get the current resolved type args
-    const resolvedTypeArgs = c.typeArgs.map((t) =>
-      applySubstitution(t, substitution),
-    );
-
-    // Check if any type arg has become a concrete non-variable type
-    // (meaning it's no longer polymorphic and can be validated now)
-    const hasConcreteNonVarArg = resolvedTypeArgs.some((t) => {
-      // A type is "concrete" for validation if it has a known shape
-      // that isn't just a type variable
-      if (t.kind === "var") return false;
-      if (t.kind === "fun") return true; // Function types are concrete structures
-      if (t.kind === "tuple") return true;
-      if (t.kind === "record") return true;
-      // For type constructors, check if they have any unresolved type variables
-      if (t.kind === "con") {
-        // If all args are resolved (no free vars), it's fully concrete
-        // Otherwise, it's partially concrete but may still need validation
-        // For now, we focus on function types as those are the most common source
-        // of over-application errors
-        return false;
+    for (const imp of this.imports) {
+      const duplicateModule = byModule.get(imp.moduleName);
+      if (duplicateModule) {
+        throw new SemanticError(
+          `Duplicate import of module '${imp.moduleName}'`,
+          imp.span,
+          this.getFilePath(),
+        );
       }
-      return false;
+      byModule.set(imp.moduleName, imp);
+
+      if (imp.alias) {
+        const duplicateAlias = byAlias.get(imp.alias);
+        if (duplicateAlias) {
+          throw new SemanticError(
+            `Duplicate import alias '${imp.alias}'`,
+            imp.span,
+            this.getFilePath(),
+          );
+        }
+        byAlias.set(imp.alias, imp);
+      }
+    }
+  }
+
+  private seedBuiltinOperators(): void {
+    // Seed built-in operators as functions for prefix/infix symmetry.
+    // Built-in operators are monomorphic (not polymorphic).
+    // Short-circuit operators (&& and ||) are now included here.
+    for (const [op, ty] of Object.entries(INFIX_TYPES)) {
+      this.globalScope.define(op, {
+        vars: new Set(),
+        constraints: [],
+        type: ty,
+      });
+    }
+
+    // Seed built-in operator fixities (precedence and associativity).
+    // These are for short-circuit operators that are built into the compiler.
+    for (const [op, fixity] of Object.entries(BUILTIN_OPERATOR_FIXITY)) {
+      this.operators.set(op, fixity);
+    }
+  }
+
+  private mergeImportedModules(): void {
+    for (const imp of this.imports) {
+      const depModule = this.dependencies.get(imp.moduleName);
+      if (!depModule) {
+        // If dependency not provided, seed with placeholder (for backward compatibility)
+        throw new SemanticError(
+          "Unresolved module import",
+          imp.span,
+          this.getFilePath(),
+        );
+      }
+
+      // NOTE: Protocols are only imported when explicitly requested:
+      // - `exposing (..)` imports all exported protocols
+      // - `exposing (ProtocolName(..))` imports that specific protocol
+      // - `import Dep` (no exposing clause) does NOT import any protocols
+      // This ensures that `import Vibe.Basics exposing (Num)` does NOT bring
+      // `Show` into scope, so `implement Show Int` will fail if Show is not imported.
+      // Protocols will be imported below in the exposing clause handling.
+
+      // IMPORTANT: Instances are always visible (Haskell's orphan instance semantics).
+      // However, we should only import instances that are DEFINED by the dependency module,
+      // not instances that the dependency merely imported from elsewhere.
+      for (const instance of depModule.instances) {
+        const isDefinedByDep = instance.moduleName === depModule.module.name;
+        if (isDefinedByDep) {
+          this.instances.push(instance);
+        }
+      }
+
+      // Handle import alias (e.g., `import Html as H`)
+      if (imp.alias) {
+        // Register the alias in scope for qualified name access (e.g., H.div).
+        // The type is a placeholder since module namespaces aren't first-class values -
+        // actual qualified access is resolved specially in tryResolveModuleFieldAccess.
+        this.globalScope.define(imp.alias, {
+          vars: new Set(),
+          constraints: [],
+          type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
+        });
+      }
+
+      // Handle unaliased imports (e.g., `import Vibe.JS`)
+      // Register the module path so it can be accessed via qualified names like Vibe.JS.null
+      if (!imp.alias) {
+        // Extract the first component of the module name (e.g., "Vibe" from "Vibe.JS")
+        const moduleParts = imp.moduleName.split(".");
+        const rootModule = moduleParts[0]!;
+
+        // Check if we haven't already registered this module root
+        if (!this.globalScope.has(rootModule)) {
+          this.globalScope.define(rootModule, {
+            vars: new Set(),
+            constraints: [],
+            type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
+          });
+        }
+      }
+
+      // Handle explicit exposing with new ExportSpec format
+      if (imp.exposing?.kind === "Explicit") {
+        for (const spec of imp.exposing.exports) {
+          this.importExportSpec(spec, depModule, imp);
+        }
+      }
+
+      // Handle exposing all (e.g., `import Html exposing (..)`)
+      if (imp.exposing?.kind === "All") {
+        // Import all exported values
+        for (const [name, depValue] of Object.entries(depModule.values) as [
+          string,
+          ValueInfo,
+        ][]) {
+          if (depValue.type && isExportedFromModule(depModule, name, "value")) {
+            const importedType = depValue.type;
+            const scheme = this.generalize(
+              importedType,
+              this.globalScope,
+              this.substitution,
+            );
+            this.globalScope.define(name, scheme);
+            // Track for re-export support
+            this.importedValues.set(name, imp.moduleName);
+          }
+        }
+
+        // Import all exported constructors
+        for (const [name, ctor] of Object.entries(depModule.constructors) as [
+          string,
+          ConstructorInfo,
+        ][]) {
+          if (isExportedFromModule(depModule, name, "constructor")) {
+            this.constructors[name] = ctor;
+            // Also import the type scheme so the constructor can be used as a value
+            const ctorScheme = depModule.constructorTypes[name];
+            if (ctorScheme) {
+              this.globalScope.define(name, ctorScheme);
+              this.constructorTypes[name] = ctorScheme;
+            }
+          }
+        }
+
+        // Import all exported ADTs
+        for (const [name, adt] of Object.entries(depModule.adts) as [
+          string,
+          ADTInfo,
+        ][]) {
+          if (isExportedFromModule(depModule, name, "type")) {
+            // Check for collision with existing ADT from different module
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.adts[name],
+              imp.span,
+              "type",
+            );
+            this.adts[name] = adt;
+          }
+        }
+
+        // Import all exported type aliases
+        for (const [name, alias] of Object.entries(depModule.typeAliases) as [
+          string,
+          TypeAliasInfo,
+        ][]) {
+          if (isExportedFromModule(depModule, name, "type")) {
+            // Check for collision with existing type alias from different module
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.typeAliases[name],
+              imp.span,
+              "type alias",
+            );
+            this.typeAliases[name] = alias;
+          }
+        }
+
+        // Import all exported opaque types
+        for (const [name, opaque] of Object.entries(depModule.opaqueTypes) as [
+          string,
+          OpaqueTypeInfo,
+        ][]) {
+          if (isExportedFromModule(depModule, name, "type")) {
+            // Check for collision with existing opaque type from different module
+            // Allow builtin types to be shadowed by imports (e.g., prelude can re-export Int)
+            // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+            if (
+              Object.hasOwn(this.opaqueTypes, name) &&
+              this.opaqueTypes[name]!.moduleName !== BUILTIN_MODULE_NAME &&
+              this.opaqueTypes[name]!.moduleName !== imp.moduleName
+            ) {
+              throw new SemanticError(
+                `Opaque type '${name}' conflicts with opaque type from module '${
+                  this.opaqueTypes[name]!.moduleName
+                }'. ` + `Consider using a different name or qualified imports.`,
+                imp.span,
+                this.getFilePath(),
+              );
+            }
+            this.opaqueTypes[name] = opaque;
+          }
+        }
+
+        // Import all exported protocols
+        for (const [name, protocol] of Object.entries(depModule.protocols) as [
+          string,
+          ProtocolInfo,
+        ][]) {
+          if (isExportedFromModule(depModule, name, "protocol")) {
+            // Check for collision with existing protocol from different module
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.protocols[name],
+              imp.span,
+              "protocol",
+            );
+            this.protocols[name] = protocol;
+
+            // Add protocol methods to scope so they can be called directly
+            const methodSchemes = addProtocolMethodsToScope(
+              protocol,
+              this.globalScope,
+            );
+            // Store in typeSchemes for LSP hover/completion
+            for (const [methodName, scheme] of methodSchemes) {
+              this.typeSchemes[methodName] = scheme;
+            }
+          }
+        }
+
+        // Import all instances (always imported regardless of exports)
+        for (const instance of depModule.instances) {
+          this.instances.push(instance);
+        }
+
+        // Import exported operator declarations
+        for (const [op, info] of depModule.operators) {
+          if (isExportedFromModule(depModule, op, "operator")) {
+            this.operators.set(op, info);
+            // Track for re-export support (operators are also values)
+            this.importedValues.set(op, imp.moduleName);
+          }
+        }
+      }
+    }
+  }
+
+  private registerInfixDeclarations(): void {
+    for (const decl of this.program.declarations) {
+      if (decl.kind === "InfixDeclaration") {
+        this.registerInfixDeclaration(decl);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Register an infix declaration in the operator registry.
+   * Validates that:
+   * 1. There are no duplicate declarations for the same operator
+   * 2. The operator is not already imported (fixity is intrinsic and cannot be redefined)
+   */
+  registerInfixDeclaration(decl: InfixDeclaration) {
+    // Check if operator is imported - if so, reject the fixity declaration
+    // because fixity is intrinsic and travels with the operator
+    if (this.importedValues.has(decl.operator)) {
+      const sourceModule = this.importedValues.get(decl.operator)!;
+      throw new SemanticError(
+        `Cannot declare fixity for imported operator '${decl.operator}' from module '${sourceModule}'. ` +
+          `Fixity is an intrinsic property of the operator and cannot be redefined.`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Check for duplicate local operator declaration
+    if (this.operators.has(decl.operator)) {
+      throw new SemanticError(
+        `Duplicate infix declaration for operator '${decl.operator}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Convert fixity to associativity
+    const associativity: "left" | "right" | "none" =
+      decl.fixity === "infixl"
+        ? "left"
+        : decl.fixity === "infixr"
+          ? "right"
+          : "none";
+
+    // Validate precedence range (0-9)
+    if (decl.precedence < 0 || decl.precedence > 9) {
+      throw new SemanticError(
+        `Precedence must be between 0 and 9, got ${decl.precedence}`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Register the operator
+    this.operators.set(decl.operator, {
+      precedence: decl.precedence,
+      associativity,
     });
 
-    if (!hasConcreteNonVarArg) continue;
+    // Store the declaration for later reference
+    this.infixDeclarations.push(decl);
+  }
 
-    // Check if this constraint involves a function type that can't be satisfied
-    const resolvedConstraint: Constraint = {
-      protocolName: c.protocolName,
-      typeArgs: resolvedTypeArgs,
+  /**
+   * Register a record type declaration.
+   *
+   * Record types are named types with fields, defined using:
+   * `type Person = { name : String, age : Int }`
+   *
+   * Unlike ADTs:
+   * - Record types don't have constructors
+   * - Fields are accessed using dot notation
+   * - Records can be used in pattern matching
+   */
+  registerRecordTypeDeclaration(decl: TypeDeclaration): void {
+    // Check for duplicate type name across all type namespaces
+    if (this.records[decl.name]) {
+      throw new SemanticError(
+        `Duplicate record type declaration for '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+    if (this.adts[decl.name]) {
+      throw new SemanticError(
+        `Record type '${decl.name}' conflicts with ADT '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+    if (this.typeAliases[decl.name]) {
+      throw new SemanticError(
+        `Record type '${decl.name}' conflicts with type alias '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+    if (this.opaqueTypes[decl.name]) {
+      throw new SemanticError(
+        `Record type '${decl.name}' conflicts with opaque type '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate no mixing of constructors and record fields
+    if (decl.constructors && decl.constructors.length > 0) {
+      throw new SemanticError(
+        `Type '${decl.name}' cannot have both constructors and record fields. ` +
+          `Use 'type' for ADTs or record types separately.`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate record fields exist - but allow empty records (like unit types)
+    if (!decl.recordFields) {
+      throw new SemanticError(
+        `Record type '${decl.name}' is missing field definitions`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Check for duplicate field names
+    const fieldNames = new Set<string>();
+    for (const field of decl.recordFields) {
+      if (fieldNames.has(field.name)) {
+        throw new SemanticError(
+          `Duplicate field '${field.name}' in record type '${decl.name}'`,
+          field.span,
+          this.getFilePath(),
+        );
+      }
+      fieldNames.add(field.name);
+    }
+
+    // Create temporary type variables for type params (for field type resolution)
+    const paramTypeVars: Map<string, TypeVar> = new Map();
+    for (const param of decl.params) {
+      paramTypeVars.set(param, freshType());
+    }
+
+    // Resolve constraints (if any)
+    const semanticConstraints: Constraint[] = [];
+    if (decl.constraints) {
+      for (const c of decl.constraints) {
+        semanticConstraints.push({
+          protocolName: c.protocolName,
+          typeArgs: c.typeArgs.map((t) =>
+            this.constructorArgToType(t, paramTypeVars),
+          ),
+        });
+      }
+    }
+
+    // Validate field types - reject floating record types in field definitions
+    for (const field of decl.recordFields) {
+      if (containsRecordType(field.type)) {
+        throw new SemanticError(
+          `Record types cannot be used directly in type annotations. ` +
+            `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
+          field.span,
+          this.getFilePath(),
+        );
+      }
+    }
+
+    // Build field info - store the AST TypeExpr for proper type parameter resolution
+    const fields: RecordFieldInfo[] = decl.recordFields.map((field) => ({
+      name: field.name,
+      typeExpr: field.type, // Store the AST TypeExpr for later resolution
+      span: field.span,
+    }));
+
+    // Register the record type
+    this.records[decl.name] = {
+      name: decl.name,
+      moduleName: this.getModuleName(),
+      params: decl.params,
+      constraints: semanticConstraints,
+      fields,
+      span: decl.span,
+    };
+  }
+
+  /**
+   * Register an Algebraic Data Type declaration.
+   *
+   * This function:
+   * 1. Validates the type name is not already defined
+   * 2. Validates constructor names are unique within the module
+   * 3. Validates type parameters are unique
+   * 4. Registers the ADT in the adts registry
+   * 5. Registers each constructor in the constructors registry
+   * 6. Seeds constructors as polymorphic values in the global scope
+   *
+   * For example, `type Maybe a = Just a | Nothing` registers:
+   * - ADT: Maybe with param [a] and constructors [Just, Nothing]
+   * - Constructor Just: arity 1, parent Maybe
+   * - Constructor Nothing: arity 0, parent Maybe
+   * - Global scope: Just : forall a. a -> Maybe a
+   * - Global scope: Nothing : forall a. Maybe a
+   */
+  registerTypeDeclaration(decl: TypeDeclaration) {
+    // Check for duplicate type name
+    const existingADT = this.adts[decl.name];
+    if (existingADT) {
+      // If it's from a different module, provide a more helpful error message
+      if (
+        existingADT.moduleName &&
+        existingADT.moduleName !== this.getModuleName()
+      ) {
+        throw new SemanticError(
+          `Type '${decl.name}' conflicts with type from module '${existingADT.moduleName}'. ` +
+            `Consider using a different name or qualified imports.`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      throw new SemanticError(
+        `Duplicate type declaration for '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate type parameters are unique
+    const paramSet = new Set<string>();
+    for (const param of decl.params) {
+      if (paramSet.has(param)) {
+        throw new SemanticError(
+          `Duplicate type parameter '${param}' in type '${decl.name}'`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      paramSet.add(param);
+    }
+
+    // Validate at least one constructor (for ADTs only)
+    // Record types don't have constructors
+    if (!decl.constructors || decl.constructors.length === 0) {
+      // If we have record fields, this is a record type - register it separately
+      if (decl.recordFields) {
+        this.registerRecordTypeDeclaration(decl);
+        return;
+      }
+      throw new SemanticError(
+        `Type '${decl.name}' must have at least one constructor`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Create fresh type variables for each type parameter
+    // These will be used to construct the polymorphic type scheme for constructors
+    const paramTypeVars: Map<string, TypeVar> = new Map();
+    for (const param of decl.params) {
+      paramTypeVars.set(param, freshType());
+    }
+
+    // Resolve constraints (if any)
+    const semanticConstraints: Constraint[] = [];
+    if (decl.constraints) {
+      for (const c of decl.constraints) {
+        semanticConstraints.push({
+          protocolName: c.protocolName,
+          typeArgs: c.typeArgs.map((t) =>
+            this.constructorArgToType(t, paramTypeVars),
+          ),
+        });
+      }
+    }
+
+    // Register the ADT
+    const constructorNames = decl.constructors.map((c) => c.name);
+    this.adts[decl.name] = {
+      name: decl.name,
+      moduleName: this.getModuleName(),
+      params: decl.params,
+      constructors: constructorNames,
+      constraints: semanticConstraints,
+      span: decl.span,
     };
 
-    const satisfiability = checkConstraintSatisfiability(
-      resolvedConstraint,
-      analyzer.getInstanceRegistry(),
+    // Build the result type: TypeName param1 param2 ...
+    // For Maybe a, this is: { kind: "con", name: "Maybe", args: [TypeVar(a)] }
+    const resultType: TypeCon = {
+      kind: "con",
+      name: decl.name,
+      args: decl.params.map((p) => paramTypeVars.get(p)!),
+    };
+
+    // Register each constructor
+    for (const ctor of decl.constructors) {
+      // Check for duplicate constructor name defined within the SAME module
+      // Allow shadowing constructors imported from other modules
+      const existingCtor = this.constructors[ctor.name];
+      if (existingCtor && existingCtor.moduleName === this.getModuleName()) {
+        throw new SemanticError(
+          `Duplicate constructor '${ctor.name}' (constructor names must be unique within a module)`,
+          ctor.span,
+          this.getFilePath(),
+        );
+      }
+
+      // Note: We allow shadowing built-in constructors (like True/False)
+      // The type checker will disambiguate based on context
+
+      // Register constructor info
+      this.constructors[ctor.name] = {
+        arity: ctor.args.length,
+        argTypes: ctor.args,
+        parentType: decl.name,
+        parentParams: decl.params,
+        moduleName: this.getModuleName(),
+        span: ctor.span,
+      };
+
+      // Build the constructor's type and register it in global scope
+      // For Just: a -> Maybe a
+      // For Nothing: Maybe a
+      const ctorType = this.buildConstructorType(
+        ctor,
+        resultType,
+        paramTypeVars,
+      );
+
+      // Generalize over all type parameters to make it polymorphic
+      const quantifiedVars = new Set<number>();
+      for (const tv of paramTypeVars.values()) {
+        quantifiedVars.add(tv.id);
+      }
+
+      const ctorScheme: TypeScheme = {
+        vars: quantifiedVars,
+        constraints: semanticConstraints, // Apply type constraints to constructor
+        type: ctorType,
+      };
+
+      // Register constructor as a polymorphic value in global scope
+      this.globalScope.define(ctor.name, ctorScheme);
+
+      // Also store in constructorTypes for export
+      this.constructorTypes[ctor.name] = ctorScheme;
+    }
+  }
+
+  /**
+   * Build the type for a constructor.
+   *
+   * For a constructor like `Just a` in `type Maybe a`:
+   * - Arguments: [a]
+   * - Result: Maybe a
+   * - Type: a -> Maybe a
+   *
+   * For a constructor like `Nothing` in `type Maybe a`:
+   * - Arguments: []
+   * - Result: Maybe a
+   * - Type: Maybe a (no function arrow)
+   *
+   * For a constructor like `Node a (Tree a) (Tree a)` in `type Tree a`:
+   * - Arguments: [a, Tree a, Tree a]
+   * - Result: Tree a
+   * - Type: a -> Tree a -> Tree a -> Tree a
+   */
+  buildConstructorType(
+    ctor: ConstructorVariant,
+    resultType: TypeCon,
+    paramTypeVars: Map<string, TypeVar>,
+  ): Type {
+    if (ctor.args.length === 0) {
+      // Nullary constructor: just return the result type
+      return resultType;
+    }
+
+    // Convert each argument TypeExpr to internal Type
+    const argTypes: Type[] = ctor.args.map((argExpr) =>
+      this.constructorArgToType(argExpr, paramTypeVars),
     );
 
-    if (!satisfiability.possible) {
-      // Find which type arg is the problematic function type
-      for (const typeArg of resolvedTypeArgs) {
-        if (typeArg.kind === "fun") {
-          // This is the key: produce a type mismatch error, not an instance error
-          // The real problem is that the user is trying to apply a non-function value
-          // to more arguments than its type allows.
-          //
-          // When `convert3 10.0 []` is written with convert3 : a -> b,
-          // the `b` gets unified with `List t -> result` because we're trying
-          // to apply (convert3 10.0) to another argument [].
-          // But the actual instance returns List Int (not a function).
-          //
-          // We format the error to show what type was expected vs what we tried
-          // to use it as (a function type).
-          throw new SemanticError(
-            `Type mismatch: cannot unify '${formatType(
-              typeArg.from,
-            )}' with '${formatType(typeArg)}'`,
+    // Build function type: arg1 -> arg2 -> ... -> ResultType
+    return fnChain(argTypes, resultType);
+  }
+
+  private registerADTTypeDeclarations(): void {
+    for (const decl of this.program.declarations) {
+      if (decl.kind === "TypeDeclaration") {
+        this.registerTypeDeclaration(decl);
+        continue;
+      }
+    }
+  }
+
+  private registerOpaqueTypeDeclarations(): void {
+    for (const decl of this.program.declarations) {
+      if (decl.kind === "OpaqueTypeDeclaration") {
+        this.registerOpaqueType(decl);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Register an opaque type declaration.
+   *
+   * Opaque types are abstract types that hide their implementation.
+   * They are useful for JS interop where the actual type is unknown.
+   * Pattern matching and record updates are not allowed on opaque types.
+   *
+   * Example: `type Promise a` creates an opaque type that takes one parameter.
+   */
+  registerOpaqueType(decl: OpaqueTypeDeclaration) {
+    // Check for duplicate type name
+    // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+    if (Object.hasOwn(this.opaqueTypes, decl.name)) {
+      const existing = this.opaqueTypes[decl.name]!;
+      if (existing.moduleName && existing.moduleName !== this.getModuleName()) {
+        throw new SemanticError(
+          `Opaque type '${decl.name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
+            `Consider using a different name or qualified imports.`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      throw new SemanticError(
+        `Duplicate opaque type declaration for '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate type parameters are unique
+    const paramSet = new Set<string>();
+    for (const param of decl.params) {
+      if (paramSet.has(param)) {
+        throw new SemanticError(
+          `Duplicate type parameter '${param}' in opaque type '${decl.name}'`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      paramSet.add(param);
+    }
+
+    // Register the opaque type
+    this.opaqueTypes[decl.name] = {
+      name: decl.name,
+      moduleName: this.getModuleName(),
+      params: decl.params,
+      span: decl.span,
+    };
+  }
+
+  private registerTypeAliasDeclarations(): TypeAliasDeclaration[] {
+    const typeAliasDecls: TypeAliasDeclaration[] = [];
+    for (const decl of this.program.declarations) {
+      if (decl.kind === "TypeAliasDeclaration") {
+        this.registerTypeAliasWithoutValidation(decl);
+        typeAliasDecls.push(decl);
+        continue;
+      }
+    }
+    return typeAliasDecls;
+  }
+
+  /**
+   * Register a type alias declaration without validating type references.
+   * This allows aliases to be registered before validation, enabling
+   * mutual references between aliases.
+   */
+  registerTypeAliasWithoutValidation(decl: TypeAliasDeclaration) {
+    // Check for duplicate alias name
+    const existingAlias = this.typeAliases[decl.name];
+    if (existingAlias) {
+      // If it's from a different module, provide a more helpful error message
+      if (
+        existingAlias.moduleName &&
+        existingAlias.moduleName !== this.getModuleName()
+      ) {
+        throw new SemanticError(
+          `Type alias '${decl.name}' conflicts with type alias from module '${existingAlias.moduleName}'. ` +
+            `Consider using a different name or qualified imports.`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      throw new SemanticError(
+        `Duplicate type alias '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate type parameters are unique
+    const paramSet = new Set<string>();
+    for (const param of decl.params) {
+      if (paramSet.has(param)) {
+        throw new SemanticError(
+          `Duplicate type parameter '${param}' in type alias '${decl.name}'`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      paramSet.add(param);
+    }
+
+    // Register the alias (validation happens later)
+    this.typeAliases[decl.name] = {
+      name: decl.name,
+      moduleName: this.getModuleName(),
+      params: decl.params,
+      value: decl.value,
+      span: decl.span,
+    };
+  }
+
+  private validateTypeAliasDeclarations(
+    typeAliasDecls: TypeAliasDeclaration[],
+  ): void {
+    for (const decl of typeAliasDecls) {
+      this.validateTypeAliasReferences(decl);
+    }
+  }
+
+  /**
+   * Validate that all type references in a type alias are defined.
+   * Called after all ADTs and aliases are registered.
+   */
+  validateTypeAliasReferences(decl: TypeAliasDeclaration) {
+    // Reject bare record types in type alias declarations
+    // Record types must be defined using `type Name = { ... }` syntax
+    if (decl.value.kind === "RecordType") {
+      throw new SemanticError(
+        `Type alias '${decl.name}' cannot directly define a record type. ` +
+          `Use 'type ${decl.name} = { ... }' instead of 'type alias'.`,
+        decl.value.span,
+        this.getFilePath(),
+      );
+    }
+
+    const paramSet = new Set<string>(decl.params);
+
+    const validationErrors = validateTypeExpr(
+      this,
+      decl.value,
+      paramSet,
+      decl.span,
+    );
+
+    if (validationErrors.length > 0) {
+      // Report the first error (could be extended to report all)
+      const err = validationErrors[0]!;
+      const message = err.suggestion
+        ? `${err.message}. ${err.suggestion}`
+        : err.message;
+      throw new SemanticError(message, err.span, this.getFilePath());
+    }
+  }
+
+  private registerProtocolDeclarations(): void {
+    for (const decl of this.program.declarations) {
+      if (decl.kind === "ProtocolDeclaration") {
+        this.registerProtocol(decl);
+        // Track methods from locally-defined protocols for fixity validation
+        for (const method of decl.methods) {
+          this.localProtocolMethods.add(method.name);
+        }
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Register a protocol declaration in the protocol registry.
+   * Also adds protocol methods to the global scope as polymorphic functions with constraints.
+   */
+  registerProtocol(decl: ProtocolDeclaration) {
+    const { protocols, globalScope, substitution } = this;
+
+    // Check for duplicate protocol name
+    const existingProtocol = protocols[decl.name];
+    if (existingProtocol) {
+      // If it's from a different module, provide a more helpful error message
+      if (
+        existingProtocol.moduleName &&
+        existingProtocol.moduleName !== this.getModuleName()
+      ) {
+        throw new SemanticError(
+          `Protocol '${decl.name}' conflicts with protocol from module '${existingProtocol.moduleName}'. ` +
+            `Consider using a different name or qualified imports.`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      throw new SemanticError(
+        `Duplicate protocol '${decl.name}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate type parameters are unique
+    const paramSet = new Set<string>();
+    for (const param of decl.params) {
+      if (paramSet.has(param)) {
+        throw new SemanticError(
+          `Duplicate type parameter '${param}' in protocol '${decl.name}'`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      paramSet.add(param);
+    }
+
+    // Validate at least one method
+    if (decl.methods.length === 0) {
+      throw new SemanticError(
+        `Protocol '${decl.name}' must have at least one method`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Create SHARED type variable context for ALL protocol parameters
+    // This ensures all methods use the same type variable IDs for protocol params
+    const sharedTypeVarCtx = new Map<string, TypeVar>();
+    for (const param of decl.params) {
+      sharedTypeVarCtx.set(param, freshType());
+    }
+
+    // Create the constraint for this protocol
+    const protocolConstraint: Constraint = {
+      protocolName: decl.name,
+      typeArgs: decl.params.map((p) => sharedTypeVarCtx.get(p)!),
+    };
+
+    // Get the set of quantified variable IDs
+    const quantifiedVars = new Set<number>();
+    for (const tv of sharedTypeVarCtx.values()) {
+      quantifiedVars.add(tv.id);
+    }
+
+    // Convert method type expressions to internal types
+    const methods = new Map<string, ProtocolMethodInfo>();
+    const methodNames = new Set<string>();
+
+    for (const method of decl.methods) {
+      // Check for duplicate method names
+      if (methodNames.has(method.name)) {
+        throw new SemanticError(
+          `Duplicate method '${method.name}' in protocol '${decl.name}'`,
+          method.span,
+          this.getFilePath(),
+        );
+      }
+      methodNames.add(method.name);
+
+      let methodType: Type;
+
+      if (method.type) {
+        // Has explicit type annotation - convert from AST to internal representation
+        // Use the shared type variable context so all methods use same var IDs
+        methodType = this.typeFromAnnotation(method.type, sharedTypeVarCtx);
+      } else if (method.defaultImpl) {
+        // No explicit type annotation, but has default implementation
+        // Infer the type from the default implementation by analyzing it as a lambda
+        const lambdaExpr = makeLambda(
+          method.defaultImpl.args,
+          method.defaultImpl.body,
+          method.span,
+        );
+
+        // Create a temporary scope for type inference
+        const tempScope = this.createChildScope();
+
+        // Infer the type of the lambda
+        const inferredType = this.analyzeExpr(lambdaExpr, {
+          scope: tempScope,
+          substitution,
+        });
+
+        // Apply substitutions to get the final type
+        methodType = applySubstitution(inferredType, substitution);
+
+        // Replace any fresh type variables with the protocol's type parameters where appropriate
+        // This ensures the inferred type uses the protocol's type variables
+        methodType = substituteProtocolVars(methodType, sharedTypeVarCtx);
+      } else {
+        // Neither type annotation nor default implementation
+        throw new SemanticError(
+          `Protocol method '${method.name}' must have either a type annotation or a default implementation`,
+          method.span,
+          this.getFilePath(),
+        );
+      }
+
+      // Store method info with optional default implementation
+      const methodInfo: ProtocolMethodInfo = {
+        type: methodType,
+        span: method.span,
+      };
+
+      // If there's a default implementation, store it
+      if (method.defaultImpl) {
+        methodInfo.defaultImpl = {
+          args: method.defaultImpl.args,
+          body: method.defaultImpl.body,
+        };
+      }
+
+      methods.set(method.name, methodInfo);
+
+      // Add method to global scope as a polymorphic function with constraint
+      // Only add if not already defined (don't override explicit definitions)
+      if (!globalScope.symbols.has(method.name)) {
+        // Combine superclass constraints with the protocol's own constraint
+        const allConstraints: Constraint[] = [
+          protocolConstraint,
+          ...decl.constraints.map((c) => ({
+            protocolName: c.protocolName,
+            typeArgs: c.typeArgs.map((ta) =>
+              this.typeFromAnnotation(ta, sharedTypeVarCtx),
+            ),
+          })),
+        ];
+        const scheme: TypeScheme = {
+          vars: new Set(quantifiedVars), // Copy to avoid sharing
+          constraints: allConstraints,
+          type: methodType,
+        };
+        globalScope.symbols.set(method.name, scheme);
+      }
+    }
+
+    // Convert superclass constraints from AST to internal representation
+    const superclassConstraints: Constraint[] = decl.constraints.map((c) => ({
+      protocolName: c.protocolName,
+      typeArgs: c.typeArgs.map((ta) =>
+        this.typeFromAnnotation(ta, sharedTypeVarCtx),
+      ),
+    }));
+
+    // Register the protocol
+    protocols[decl.name] = {
+      name: decl.name,
+      moduleName: this.getModuleName(),
+      params: decl.params,
+      superclassConstraints,
+      methods,
+      span: decl.span,
+    };
+  }
+
+  private registerImplementationDeclarations(): void {
+    for (const decl of this.program.declarations) {
+      if (decl.kind === "ImplementationDeclaration") {
+        this.registerImplementation(decl);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Register an implementation declaration in the instance registry.
+   */
+  registerImplementation(decl: ImplementationDeclaration) {
+    // Check that the protocol exists
+    const protocol = this.protocols[decl.protocolName];
+    if (!protocol) {
+      throw new SemanticError(
+        `Unknown protocol '${decl.protocolName}'`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate number of type arguments matches protocol parameters
+    if (decl.typeArgs.length !== protocol.params.length) {
+      throw new SemanticError(
+        `Protocol '${decl.protocolName}' expects ${protocol.params.length} type argument(s), but got ${decl.typeArgs.length}`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Create a type variable context for converting type expressions
+    const typeVarCtx = new Map<string, TypeVar>();
+
+    // Convert type arguments from AST to internal representation
+    const typeArgs: Type[] = [];
+    for (const typeArg of decl.typeArgs) {
+      typeArgs.push(this.typeFromAnnotation(typeArg, typeVarCtx));
+    }
+
+    // Convert constraints
+    const constraints: Constraint[] = [];
+    for (const astConstraint of decl.constraints) {
+      // Validate that the constraint protocol exists
+      if (!this.protocols[astConstraint.protocolName]) {
+        throw new SemanticError(
+          `Unknown protocol '${astConstraint.protocolName}' in constraint`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+      const constraintTypeArgs: Type[] = [];
+      for (const typeArg of astConstraint.typeArgs) {
+        constraintTypeArgs.push(this.typeFromAnnotation(typeArg, typeVarCtx));
+      }
+      constraints.push({
+        protocolName: astConstraint.protocolName,
+        typeArgs: constraintTypeArgs,
+      });
+    }
+
+    // Validate that all required methods (those without defaults) are implemented
+    const implementedMethods = new Set(decl.methods.map((m) => m.name));
+    const allMethods = new Set(protocol.methods.keys());
+
+    // Check for auto-derivation request: implement Eq/Show with no methods
+    if (
+      decl.methods.length === 0 &&
+      (decl.protocolName === "Eq" || decl.protocolName === "Show")
+    ) {
+      // Ensure we have a valid type arg
+      if (typeArgs.length === 1 && typeArgs[0]!.kind === "con") {
+        const typeName = (typeArgs[0] as TypeCon).name;
+        // Find declaration
+        const typeDecl = this.getDeclarations().find(
+          (d) =>
+            (d.kind === "TypeDeclaration" ||
+              d.kind === "TypeAliasDeclaration") &&
+            d.name === typeName,
+        );
+
+        if (typeDecl && typeDecl.kind === "TypeDeclaration") {
+          // Generate synthetic instance
+          let synthetic: InstanceInfo | undefined;
+          if (decl.protocolName === "Eq") {
+            synthetic = this.generateEqImplementation(typeDecl, protocol);
+          } else {
+            synthetic = this.generateShowImplementation(typeDecl);
+          }
+
+          // Populate implemented methods from synthetic instance
+          if (synthetic) {
+            // Add synthetic methods to our declaration
+            synthetic.methods.forEach((impl, name) => {
+              const methodInfo = protocol.methods.get(name)!;
+              // We need to convert from Instance method format back to AST MethodImplementation format?
+              // No, registerImplementation uses AST decl.methods to build the instance methods.
+              // So we need to push to decl.methods?
+              // BUT, we are iterating over decl.methods later.
+
+              // Instead of modifying decl.methods (which is AST), maybe we should just populate the instance directly?
+              // But registerImplementation validates that all methods are present in decl.methods.
+
+              // Let's cheat: we already know it's empty. We just need to satisfy the checks.
+              // Or better: just use the synthetic instance directly?
+              // We can't return early because we need to register global instances etc.
+
+              // Let's push to decl.methods.
+              // But MethodImplementation needs AST nodes (Expression). Synthetic outputs runtime function lambdas?
+              // Wait, generateEqImplementation returns InstanceInfo which has `methods: Map<string, Expr>`.
+              // `Expr` IS the AST node for expression.
+
+              decl.methods.push({
+                name: name,
+                implementation: impl,
+                span: decl.span, // Synthetic span
+              });
+
+              // Also update implementedMethods set so validation passes
+              implementedMethods.add(name);
+            });
+          }
+        }
+      }
+    }
+
+    // Check that methods without defaults are implemented
+    for (const methodName of allMethods) {
+      const methodInfo = protocol.methods.get(methodName)!;
+      if (!implementedMethods.has(methodName) && !methodInfo.defaultImpl) {
+        throw new SemanticError(
+          `Instance is missing implementation for method '${methodName}'`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+    }
+
+    // Check for extra methods that aren't in the protocol
+    for (const implemented of implementedMethods) {
+      if (!allMethods.has(implemented)) {
+        throw new SemanticError(
+          `Method '${implemented}' is not part of protocol '${decl.protocolName}'`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+    }
+
+    // Convert method implementations to a map
+    // For methods not explicitly implemented, use the default implementation from the protocol
+    const methods = new Map<string, Expr>();
+    const explicitMethods = new Set<string>();
+    for (const method of decl.methods) {
+      // If the method has inline pattern arguments, wrap in a lambda
+      // e.g., `toString a = showA a` becomes `\a -> showA a`
+      if (method.args && method.args.length > 0) {
+        const lambda = makeLambda(
+          method.args,
+          method.implementation,
+          method.span,
+        );
+        methods.set(method.name, lambda);
+      } else {
+        methods.set(method.name, method.implementation);
+      }
+      explicitMethods.add(method.name);
+    }
+
+    // For methods with defaults that weren't explicitly implemented,
+    // create a lambda expression from the default implementation
+    for (const [methodName, methodInfo] of protocol.methods) {
+      if (!methods.has(methodName) && methodInfo.defaultImpl) {
+        // Create a lambda from the default implementation
+        // The lambda wraps the args and body from the default
+        const defaultLambda = makeLambda(
+          methodInfo.defaultImpl.args,
+          methodInfo.defaultImpl.body,
+          methodInfo.span,
+        );
+        methods.set(methodName, defaultLambda);
+      }
+    }
+
+    // Create the instance info
+    const instanceInfo: InstanceInfo = {
+      protocolName: decl.protocolName,
+      moduleName: this.getModuleName(),
+      typeArgs,
+      constraints,
+      methods,
+      explicitMethods,
+      span: decl.span,
+    };
+
+    // Check for overlapping instances
+    // An implementation overlaps if another implementation exists for the same protocol and type
+    // AND their constraints don't prevent overlap
+    for (const existing of this.instances) {
+      if (existing.protocolName !== decl.protocolName) continue;
+
+      // Check if instances overlap, considering constraints
+      if (instancesOverlap(existing, instanceInfo, this.instances)) {
+        throw new SemanticError(
+          `Overlapping implementation for protocol '${decl.protocolName}'`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+    }
+
+    // Register the instance in both the global list and local list
+    // The global list includes imported instances for overlap checking
+    // The local list is used for validation (only validate methods in this module)
+    this.instances.push(instanceInfo);
+    this.localInstances.push(instanceInfo);
+  }
+
+  generateShowImplementation(decl: TypeDeclaration): InstanceInfo {
+    // 1. Build type arguments for the instance
+    const typeArgs: Type[] = [
+      {
+        kind: "con",
+        name: decl.name,
+        args: decl.params.map(
+          (param): TypeVar => ({
+            kind: "var",
+            id: freshType().id,
+          }),
+        ),
+      },
+    ];
+
+    // Re-map params
+    const paramMap = new Map<string, TypeVar>();
+    const headType = typeArgs[0] as TypeCon;
+    decl.params.forEach((p, i) => {
+      paramMap.set(p, headType.args[i] as TypeVar);
+    });
+
+    // 2. Generate constraints
+    const constraints: Constraint[] = decl.params.map((p) => ({
+      protocolName: "Show",
+      typeArgs: [paramMap.get(p)!],
+    }));
+
+    // 3. Generate toString implementation
+    const methods = new Map<string, Expr>();
+    const span = decl.span;
+    let body: Expr;
+
+    const str = (s: string): Expr => ({
+      kind: "String",
+      value: `"${s}"`,
+      span,
+    });
+    const append = (a: Expr, b: Expr): Expr => ({
+      kind: "Infix",
+      left: a,
+      operator: "++",
+      right: b,
+      span,
+    });
+    const toString = (val: Expr): Expr => ({
+      kind: "Apply",
+      callee: { kind: "Var", name: "toString", namespace: "lower", span },
+      args: [val],
+      span,
+    });
+
+    if (decl.recordFields) {
+      // Type(field = val, ...)
+      let expr: Expr = str(`${decl.name}(`);
+
+      decl.recordFields.forEach((field, i) => {
+        if (i > 0) expr = append(expr, str(", "));
+
+        expr = append(expr, str(`${field.name} = `));
+
+        const fieldAccess: Expr = {
+          kind: "FieldAccess",
+          target: { kind: "Var", name: "x_impl", namespace: "lower", span },
+          field: field.name,
+          span,
+        };
+        expr = append(expr, toString(fieldAccess));
+      });
+
+      expr = append(expr, str(")"));
+      body = expr;
+    } else if (decl.constructors) {
+      // case x_impl of ...
+      const branches = decl.constructors.map((ctor) => {
+        const args = ctor.args.map((_, i) => `a${i}`);
+        const pattern: Pattern = {
+          kind: "ConstructorPattern",
+          name: ctor.name,
+          args: args.map((a) => ({ kind: "VarPattern", name: a, span })),
+          span,
+        };
+
+        let expr: Expr;
+        if (args.length === 0) {
+          expr = str(`${ctor.name}`);
+        } else {
+          expr = str(`${ctor.name}(`);
+          args.forEach((a, i) => {
+            if (i > 0) expr = append(expr, str(", "));
+            expr = append(
+              expr,
+              toString({ kind: "Var", name: a, namespace: "lower", span }),
+            );
+          });
+          expr = append(expr, str(")"));
+        }
+
+        return { pattern, body: expr, span };
+      });
+
+      body = {
+        kind: "Case",
+        discriminant: { kind: "Var", name: "x_impl", namespace: "lower", span },
+        branches,
+        span,
+      };
+    } else {
+      // Should not happen for valid types? Opaque?
+      body = str(`${decl.name}`);
+    }
+
+    methods.set("toString", {
+      kind: "Lambda",
+      args: [{ kind: "VarPattern", name: "x_impl", span }],
+      body,
+      span,
+    });
+
+    return {
+      protocolName: "Show",
+      moduleName: this.getModuleName(),
+      typeArgs,
+      constraints,
+      methods,
+      explicitMethods: new Set(["toString"]),
+      span,
+    };
+  }
+
+  generateEqImplementation(
+    decl: TypeDeclaration,
+    protocol: ProtocolInfo,
+  ): InstanceInfo {
+    // 0. Validate fields implement Eq
+    const typeParams = new Set(decl.params);
+
+    if (decl.recordFields) {
+      for (const field of decl.recordFields) {
+        this.validateTypeImplementsEq(
+          field.type,
+          decl.span,
+          typeParams,
+          new Set(),
+        );
+      }
+    }
+
+    if (decl.constructors) {
+      for (const ctor of decl.constructors) {
+        for (const arg of ctor.args) {
+          this.validateTypeImplementsEq(arg, decl.span, typeParams, new Set());
+        }
+      }
+    }
+
+    // 1. Build type arguments for the instance
+    const typeArgs: Type[] = [
+      {
+        kind: "con",
+        name: decl.name,
+        args: decl.params.map(
+          (param): TypeVar => ({
+            kind: "var",
+            id: freshType().id,
+          }),
+        ),
+      },
+    ];
+
+    // Re-map params
+    const paramMap = new Map<string, TypeVar>();
+    const headType = typeArgs[0];
+    if (headType && headType.kind === "con") {
+      const typeCon = headType as TypeCon;
+      decl.params.forEach((p, i) => {
+        paramMap.set(p, typeCon.args[i] as TypeVar);
+      });
+    }
+
+    // 2. Generate constraints
+    const constraints: Constraint[] = decl.params.map((p) => {
+      const tvar = paramMap.get(p);
+      if (!tvar) throw new Error("Type variable missing");
+      return {
+        protocolName: "Eq",
+        typeArgs: [tvar],
+      };
+    });
+
+    // 3. Generate (==) implementation
+    const methods = new Map<string, Expr>();
+    const xVar = "x_impl";
+    const yVar = "y_impl";
+    const span = decl.span;
+    let body: Expr;
+
+    if (decl.recordFields) {
+      const checks: Expr[] = decl.recordFields.map((field) => ({
+        kind: "Infix",
+        left: {
+          kind: "FieldAccess",
+          target: { kind: "Var", name: xVar, namespace: "lower", span },
+          field: field.name,
+          span,
+        },
+        operator: "==",
+        right: {
+          kind: "FieldAccess",
+          target: { kind: "Var", name: yVar, namespace: "lower", span },
+          field: field.name,
+          span,
+        },
+        span,
+      }));
+
+      if (checks.length === 0) {
+        body = { kind: "Var", name: "True", namespace: "upper", span };
+      } else {
+        body = checks.reduce((acc, check) => ({
+          kind: "Infix",
+          left: acc,
+          operator: "&&",
+          right: check,
+          span,
+        }));
+      }
+    } else if (decl.constructors) {
+      const branches: { pattern: Pattern; body: Expr; span: Span }[] = [];
+      const hasMultipleConstructors = decl.constructors.length > 1;
+
+      for (const ctor of decl.constructors) {
+        const argsX: Pattern[] = ctor.args.map((_, i) => ({
+          kind: "VarPattern",
+          name: `a_${i}`,
+          span,
+        }));
+        const argsY: Pattern[] = ctor.args.map((_, i) => ({
+          kind: "VarPattern",
+          name: `b_${i}`,
+          span,
+        }));
+
+        const patX: Pattern = {
+          kind: "ConstructorPattern",
+          name: ctor.name,
+          args: argsX,
+          span,
+        };
+        const patY: Pattern = {
+          kind: "ConstructorPattern",
+          name: ctor.name,
+          args: argsY,
+          span,
+        };
+
+        const pattern: Pattern = {
+          kind: "TuplePattern",
+          elements: [patX, patY],
+          span,
+        };
+
+        const checks: Expr[] = ctor.args.map((_, i) => ({
+          kind: "Infix",
+          left: { kind: "Var", name: `a_${i}`, namespace: "lower", span },
+          operator: "==",
+          right: { kind: "Var", name: `b_${i}`, namespace: "lower", span },
+          operatorInfo: {
+            precedence: 4, // Default for ==
+            associativity: "none",
+          },
+          span,
+        }));
+
+        let branchBody: Expr;
+        if (checks.length === 0) {
+          branchBody = { kind: "Var", name: "True", namespace: "upper", span };
+        } else {
+          branchBody = checks.reduce((acc, check) => ({
+            kind: "Infix",
+            left: acc,
+            operator: "&&",
+            right: check,
+            operatorInfo: {
+              precedence: 3, // Default for &&
+              associativity: "right",
+            },
             span,
-            analyzer.getFilePath(),
+          }));
+        }
+
+        branches.push({ pattern, body: branchBody, span });
+      }
+
+      if (hasMultipleConstructors || decl.constructors.length === 0) {
+        branches.push({
+          pattern: { kind: "WildcardPattern", span },
+          body: { kind: "Var", name: "False", namespace: "upper", span },
+          span,
+        });
+      }
+
+      body = {
+        kind: "Case",
+        discriminant: {
+          kind: "Tuple",
+          elements: [
+            { kind: "Var", name: xVar, namespace: "lower", span },
+            { kind: "Var", name: yVar, namespace: "lower", span },
+          ],
+          span,
+        },
+        branches,
+        span,
+      };
+    } else {
+      body = { kind: "Var", name: "True", namespace: "upper", span };
+    }
+
+    methods.set("==", {
+      kind: "Lambda",
+      args: [
+        { kind: "VarPattern", name: xVar, span },
+        { kind: "VarPattern", name: yVar, span },
+      ],
+      body,
+      span,
+    });
+
+    return {
+      protocolName: protocol.name,
+      moduleName: this.getModuleName(),
+      typeArgs,
+      constraints,
+      methods,
+      explicitMethods: new Set(["=="]),
+      span: decl.span,
+    };
+  }
+
+  /**
+   * Process an 'implementing' clause on a type declaration.
+   * Validates that all referenced protocols have all methods with defaults,
+   * and creates synthetic implement blocks.
+   */
+  validateTypeImplementsEq(
+    type: TypeExpr,
+    declSpan: Span,
+    typeParams: Set<string>,
+    checkedTypes: Set<string>,
+  ): void {
+    const typeKey = JSON.stringify(type);
+    if (checkedTypes.has(typeKey)) return;
+    checkedTypes.add(typeKey);
+
+    switch (type.kind) {
+      case "FunctionType":
+        throw new SemanticError(
+          `Type mismatch: cannot unify 'Int' with 'Int -> Int'. No instance of Eq for function type.`,
+          declSpan,
+          this.getFilePath(),
+        );
+      case "TypeRef":
+        const firstChar = type.name.charAt(0);
+        if (
+          firstChar === firstChar.toLowerCase() &&
+          firstChar !== firstChar.toUpperCase()
+        ) {
+          if (typeParams.has(type.name)) return;
+
+          // Convert TypeRef to Type for instance lookup
+          // Note: we assume no args for these simple refs in this context
+          // If we had args, we'd need to convert them too
+          const typeForLookup: Type = {
+            kind: "con",
+            name: type.name,
+            args: [],
+          };
+          if (
+            findInstanceForTypeInternal("Eq", typeForLookup, this.instances)
+          ) {
+            return;
+          }
+
+          if (type.name === "List" && type.args.length === 1) {
+            this.validateTypeImplementsEq(
+              type.args[0]!,
+              declSpan,
+              typeParams,
+              checkedTypes,
+            );
+            return;
+          }
+
+          // Strict check for local types
+          const localDecl = this.getDeclarations().find(
+            (d) =>
+              (d.kind === "TypeDeclaration" ||
+                d.kind === "TypeAliasDeclaration") &&
+              d.name === type.name,
+          );
+
+          if (localDecl) {
+            // If it's a TypeDeclaration (ADT/Record)
+            if (localDecl.kind === "TypeDeclaration") {
+              // Check explicit implementation
+              const hasExplicit = this.getDeclarations().some(
+                (d) =>
+                  d.kind === "ImplementationDeclaration" &&
+                  d.protocolName === "Eq" &&
+                  d.typeArgs.length > 0 &&
+                  d.typeArgs[0]!.kind === "TypeRef" &&
+                  (d.typeArgs[0]! as any).name === type.name,
+              );
+
+              if (hasExplicit) return;
+
+              throw new SemanticError(
+                `Type '${type.name}' does not implement 'Eq'. Implicit 'Eq' requires all fields to implement 'Eq'.`,
+                declSpan,
+                this.getFilePath(),
+              );
+            }
+          }
+
+          type.args.forEach((arg) =>
+            this.validateTypeImplementsEq(
+              arg,
+              declSpan,
+              typeParams,
+              checkedTypes,
+            ),
+          );
+          break;
+        }
+        return; // End of TypeRef case block scope (implicit in how code was structured, but cleaner with break or return)
+
+      case "TupleType":
+        type.elements.forEach((elem) =>
+          this.validateTypeImplementsEq(
+            elem,
+            declSpan,
+            typeParams,
+            checkedTypes,
+          ),
+        );
+        return;
+      case "RecordType":
+        type.fields.forEach((f) =>
+          this.validateTypeImplementsEq(
+            f.type,
+            declSpan,
+            typeParams,
+            checkedTypes,
+          ),
+        );
+        return;
+      case "QualifiedType":
+        this.validateTypeImplementsEq(
+          type.type,
+          declSpan,
+          typeParams,
+          checkedTypes,
+        );
+        return;
+      default:
+        return;
+    }
+  }
+
+  private autoImplementProtocols(): void {
+    for (const decl of this.getDeclarations()) {
+      if (decl.kind === "TypeDeclaration") {
+        const eqInstance = this.autoImplementProtocolForType("Eq", decl);
+        if (eqInstance) {
+          this.instances.push(eqInstance);
+          this.localInstances.push(eqInstance);
+        }
+
+        const showInstance = this.autoImplementProtocolForType("Show", decl);
+        if (showInstance) {
+          this.instances.push(showInstance);
+          this.localInstances.push(showInstance);
+        }
+      }
+    }
+  }
+
+  /**
+   * Automatically implement Eq for a type declaration if possible.
+   * Returns the generated instance, or undefined if Eq cannot be implemented.
+   * Only auto-implements for the Vibe/Vibe.Basics Eq protocol, not custom Eq protocols.
+   */
+
+  autoImplementProtocolForType(
+    protocolName: string,
+    decl: TypeDeclaration,
+  ): InstanceInfo | undefined {
+    // Find the protocol
+    const protocol = this.protocols[protocolName];
+    if (!protocol) return undefined;
+
+    // Only auto-implement for Vibe/Vibe.Basics protocols
+    const isVibe =
+      protocol.moduleName === "Vibe" || protocol.moduleName === "Vibe.Basics";
+    if (!isVibe) return undefined;
+
+    // Check if type can implement protocol
+    if (!this.canDeclImplementProtocol(decl, protocolName)) {
+      return undefined;
+    }
+
+    // Check for existing explicit implementation
+    for (const existing of this.instances) {
+      if (existing.protocolName !== protocolName) continue;
+      if (existing.typeArgs.length === 0) continue;
+      const typeArg = existing.typeArgs[0];
+      if (typeArg?.kind === "con" && (typeArg as TypeCon).name === decl.name) {
+        // Already has an implementation
+        return undefined;
+      }
+    }
+
+    if (protocolName === "Eq") {
+      return this.generateEqImplementation(decl, protocol);
+    } else if (protocolName === "Show") {
+      return this.generateShowImplementation(decl);
+    }
+
+    return undefined;
+  }
+
+  private registerValueDeclarations(): void {
+    for (const decl of this.getDeclarations()) {
+      if (
+        decl.kind === "ValueDeclaration" ||
+        decl.kind === "ExternalDeclaration"
+      ) {
+        this.registerValue(decl);
+        continue;
+      }
+
+      if (decl.kind === "TypeAnnotationDeclaration") {
+        // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+        if (Object.hasOwn(this.annotations, decl.name)) {
+          throw new SemanticError(
+            `Duplicate type annotation for '${decl.name}'`,
+            decl.span,
+            this.getFilePath(),
+          );
+        }
+        this.annotations[decl.name] = decl;
+      }
+    }
+  }
+
+  /**
+   * Check if a TypeDeclaration can automatically implement a protocol.
+   * Returns true if all fields/constructor args can implement the protocol.
+   */
+  canDeclImplementProtocol(
+    decl: TypeDeclaration,
+    protocolName: string,
+  ): boolean {
+    const typeParams = new Set(decl.params);
+
+    if (decl.recordFields) {
+      for (const field of decl.recordFields) {
+        if (
+          !this.canTypeImplementProtocol(field.type, protocolName, typeParams)
+        ) {
+          return false;
+        }
+      }
+    }
+
+    if (decl.constructors) {
+      for (const ctor of decl.constructors) {
+        for (const arg of ctor.args) {
+          if (!this.canTypeImplementProtocol(arg, protocolName, typeParams)) {
+            return false;
+          }
+        }
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Check if a type expression can implement a protocol.
+   *
+   * This function determines whether a type can satisfy a protocol constraint either through:
+   * 1. An explicit instance implementation
+   * 2. Auto-derivation (currently only supported for standard Eq from Vibe/Vibe.Basics)
+   * 3. Protocol with all default method implementations
+   */
+  canTypeImplementProtocol(
+    type: TypeExpr,
+    protocolName: string,
+    typeParams: Set<string>,
+    checkedTypes: Set<string> = new Set(),
+  ): boolean {
+    const typeKey = JSON.stringify(type);
+    if (checkedTypes.has(typeKey)) return true;
+    checkedTypes.add(typeKey);
+
+    // Helper to check if a type matches an instance's type argument
+    const typeMatchesInstanceArg = (
+      instanceArg: Type,
+      typeName: string,
+    ): boolean => {
+      return (
+        instanceArg.kind === "con" && (instanceArg as TypeCon).name === typeName
+      );
+    };
+
+    switch (type.kind) {
+      case "FunctionType":
+        // Functions can only implement protocols if there's an explicit instance
+        // Check if there's an instance for function types
+        const hasFunctionInstance = this.instances.some(
+          (inst) =>
+            inst.protocolName === protocolName &&
+            inst.typeArgs.length > 0 &&
+            inst.typeArgs[0]!.kind === "fun",
+        );
+        return hasFunctionInstance;
+
+      case "TypeRef": {
+        const firstChar = type.name.charAt(0);
+        // Type variables (lowercase) are allowed - they get protocol constraint
+        if (
+          firstChar === firstChar.toLowerCase() &&
+          firstChar !== firstChar.toUpperCase()
+        ) {
+          return true;
+        }
+
+        // Global Check: Check if there's already an instance for this type
+        const hasInstance = this.instances.some(
+          (inst) =>
+            inst.protocolName === protocolName &&
+            inst.typeArgs.length > 0 &&
+            typeMatchesInstanceArg(inst.typeArgs[0]!, type.name),
+        );
+        if (hasInstance) {
+          // Also check type arguments recursively
+          return type.args.every((arg) =>
+            this.canTypeImplementProtocol(
+              arg,
+              protocolName,
+              typeParams,
+              checkedTypes,
+            ),
+          );
+        }
+
+        // Auto-Derive Check: Determine if we can auto-derive this protocol
+        const protocol = this.protocols[protocolName];
+        if (!protocol) {
+          // Protocol not found - can't implement
+          return false;
+        }
+
+        // Check if all methods have default implementations
+        const allMethodsHaveDefaults = Array.from(
+          protocol.methods.values(),
+        ).every((method) => method.defaultImpl !== undefined);
+
+        // If all methods have defaults, any type can satisfy the protocol
+        if (allMethodsHaveDefaults) {
+          return true;
+        }
+
+        // Check if type is structural and all fields can implement Eq
+        // Check local type declarations
+        const localDecl = this.getDeclarations().find(
+          (d) =>
+            (d.kind === "TypeDeclaration" ||
+              d.kind === "TypeAliasDeclaration") &&
+            d.name === type.name,
+        );
+
+        if (localDecl && localDecl.kind === "TypeDeclaration") {
+          // Local type will get auto-Eq, check its type args
+          return type.args.every((arg) =>
+            this.canTypeImplementProtocol(
+              arg,
+              protocolName,
+              typeParams,
+              checkedTypes,
+            ),
+          );
+        }
+
+        // For type aliases, check type args
+        if (localDecl && localDecl.kind === "TypeAliasDeclaration") {
+          return type.args.every((arg) =>
+            this.canTypeImplementProtocol(
+              arg,
+              protocolName,
+              typeParams,
+              checkedTypes,
+            ),
+          );
+        }
+
+        // Unknown type - check type args only
+        return type.args.every((arg) =>
+          this.canTypeImplementProtocol(
+            arg,
+            protocolName,
+            typeParams,
+            checkedTypes,
+          ),
+        );
+      }
+
+      case "TupleType":
+        // Tuples can implement protocols if all elements can
+        return type.elements.every((elem) =>
+          this.canTypeImplementProtocol(
+            elem,
+            protocolName,
+            typeParams,
+            checkedTypes,
+          ),
+        );
+
+      case "RecordType":
+        // Records can implement protocols if all fields can
+        return type.fields.every((f) =>
+          this.canTypeImplementProtocol(
+            f.type,
+            protocolName,
+            typeParams,
+            checkedTypes,
+          ),
+        );
+
+      case "QualifiedType":
+        return this.canTypeImplementProtocol(
+          type.type,
+          protocolName,
+          typeParams,
+          checkedTypes,
+        );
+
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Validates that each infix declaration has a corresponding LOCAL function definition.
+   *
+   * Fixity is an intrinsic property of an operator - it travels with the operator wherever
+   * it goes. You cannot separate an operator from its fixity. This means:
+   *
+   * 1. An infix declaration must define a NEW operator in the current module
+   * 2. The operator must have a local definition (not imported)
+   * 3. You cannot redefine the fixity of an imported operator
+   *
+   * Valid local definitions include:
+   * - Local value declarations (e.g., `(+) x y = ...`)
+   * - External declarations (e.g., `@external ... (+) : ...`)
+   * - Protocol methods defined in THIS module
+   *
+   * Note: Imported operator check is done earlier in registerInfixDeclaration.
+   */
+  validateInfixDeclarationsHaveDefinitions(): void {
+    for (const decl of this.infixDeclarations) {
+      const op = decl.operator;
+
+      // Check if operator is defined locally:
+      // 1. As a local value/function
+      const hasLocalDefinition = Object.hasOwn(this.values, op);
+      // 2. As a local protocol method
+      const isLocalProtocolMethod = this.localProtocolMethods.has(op);
+
+      if (!hasLocalDefinition && !isLocalProtocolMethod) {
+        throw new SemanticError(
+          `Infix declaration for operator '${op}' has no corresponding function definition. ` +
+            `Define the operator in this module or remove the fixity declaration.`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+    }
+  }
+
+  private validateAnnotationsAndSeedGlobalNames(): void {
+    // ===== PASS 2a: Validate infix declarations have definitions =====
+    this.validateInfixDeclarationsHaveDefinitions();
+
+    for (const [name, ann] of Object.entries(this.annotations)) {
+      if (!Object.hasOwn(this.values, name)) {
+        throw new SemanticError(
+          `Type annotation for '${name}' has no matching definition`,
+          ann.span,
+          this.getFilePath(),
+        );
+      }
+      const value = this.values[name]!;
+      if (value.declaration.kind === "ExternalDeclaration") {
+        throw new SemanticError(
+          `External declaration '${name}' already includes a type annotation`,
+          ann.span,
+          this.getFilePath(),
+        );
+      }
+      value.annotation = ann.annotation;
+    }
+
+    // Seed global names to enable recursion.
+    for (const [name, info] of Object.entries(this.values)) {
+      const annotationExpr =
+        info.annotation ??
+        (info.declaration.kind === "ExternalDeclaration"
+          ? info.declaration.annotation
+          : undefined);
+
+      let annotationType: Type | undefined;
+      let annotatedConstraints: Constraint[] | undefined;
+
+      if (annotationExpr) {
+        const typeVars = collectTypeVariables(annotationExpr);
+        const validationErrors = validateTypeExpr(
+          this,
+          annotationExpr,
+          typeVars,
+          info.declaration.span,
+        );
+
+        if (validationErrors.length > 0) {
+          const err = validationErrors[0]!;
+          const message = err.suggestion
+            ? `${err.message}. ${err.suggestion}`
+            : err.message;
+          throw new SemanticError(message, err.span, this.getFilePath());
+        }
+
+        const result = this.typeFromAnnotationWithConstraints(
+          annotationExpr,
+          new Map(),
+        );
+        annotationType = result.type;
+        annotatedConstraints =
+          result.constraints.length > 0 ? result.constraints : undefined;
+
+        if (annotatedConstraints) {
+          info.annotatedConstraints = annotatedConstraints;
+        }
+      }
+
+      const seeded = annotationType ?? this.seedValueType(info.declaration);
+      this.declareSymbol(
+        this.globalScope,
+        name,
+        { vars: new Set(), constraints: [], type: seeded },
+        info.declaration.span,
+      );
+      this.types[name] = seeded;
+    }
+  }
+
+  /**
+   * Convert a type expression (from source annotation) to an internal type,
+   * including any protocol constraints from qualified types.
+   *
+   * This is the primary function for converting user type annotations.
+   * It extracts and validates constraints from `QualifiedType` annotations.
+   *
+   * Type variables (lowercase identifiers like 'a', 'b') get mapped to fresh TypeVars
+   * consistently within the same annotation. For example:
+   *   a -> a        maps both 'a' to the same TypeVar
+   *   (a -> b) -> a maps 'a' consistently, 'b' to a different TypeVar
+   *
+   * Also handles type aliases by expanding them to their underlying types.
+   */
+  typeFromAnnotationWithConstraints(
+    annotation: TypeExpr,
+    context: TypeVarContext = new Map(),
+  ): AnnotationResult {
+    // Access registries from analyzer
+    const { protocols } = this;
+
+    // Handle QualifiedType at the top level to extract constraints
+    if (annotation.kind === "QualifiedType") {
+      // Convert AST constraints to internal constraints
+      const constraints: Constraint[] = [];
+
+      for (const astConstraint of annotation.constraints) {
+        // Validate that the protocol exists
+        const protocol = protocols[astConstraint.protocolName];
+        if (!protocol) {
+          throw new SemanticError(
+            `Unknown protocol '${astConstraint.protocolName}' in type constraint`,
+            astConstraint.span,
+            this.getFilePath(),
+          );
+        }
+
+        // Validate the number of type arguments matches protocol parameters
+        if (astConstraint.typeArgs.length !== protocol.params.length) {
+          throw new SemanticError(
+            `Protocol '${astConstraint.protocolName}' expects ${protocol.params.length} type argument(s), but constraint has ${astConstraint.typeArgs.length}`,
+            astConstraint.span,
+            this.getFilePath(),
+          );
+        }
+
+        // Convert constraint type arguments
+        const constraintTypeArgs: Type[] = [];
+        for (const typeArg of astConstraint.typeArgs) {
+          constraintTypeArgs.push(this.typeFromAnnotation(typeArg, context));
+        }
+
+        // Validate that constraint type arguments are type variables
+        // (Constraints on concrete types like `Num Int` don't make sense in annotations)
+        for (let i = 0; i < constraintTypeArgs.length; i++) {
+          const typeArg = constraintTypeArgs[i]!;
+          if (typeArg.kind !== "var") {
+            throw new SemanticError(
+              `Constraint '${astConstraint.protocolName}' must be applied to type variables, not concrete types`,
+              astConstraint.span,
+              this.getFilePath(),
+            );
+          }
+        }
+
+        constraints.push({
+          protocolName: astConstraint.protocolName,
+          typeArgs: constraintTypeArgs,
+        });
+      }
+
+      // Convert the underlying type (recursively handling nested QualifiedTypes)
+      const innerResult = this.typeFromAnnotationWithConstraints(
+        annotation.type,
+        context,
+      );
+
+      // Merge constraints from nested qualified types
+      return {
+        type: innerResult.type,
+        constraints: [...constraints, ...innerResult.constraints],
+      };
+    }
+
+    // For non-qualified types, delegate to the simpler function
+    const type = this.typeFromAnnotation(annotation, context);
+    return { type, constraints: [] };
+  }
+
+  private inferValueDeclarations(): void {
+    // ===== PASS 2.0b: Concretize polymorphic instance type args =====
+    this.concretizeInstanceTypeArgs();
+
+    // Build dependency graph and compute SCCs for proper mutual recursion handling.
+    const depGraph = buildDependencyGraph(this.values);
+    const sccs = computeSCCs(depGraph);
+
+    // Process each SCC
+    for (const scc of sccs) {
+      const externals: string[] = [];
+      const valueDecls: string[] = [];
+
+      for (const name of scc) {
+        const info = this.values[name]!;
+        if (info.declaration.kind === "ExternalDeclaration") {
+          externals.push(name);
+        } else {
+          valueDecls.push(name);
+        }
+      }
+
+      // Process externals first
+      for (const name of externals) {
+        const info = this.values[name]!;
+        if (info.declaration.kind === "ExternalDeclaration") {
+          const result = this.typeFromAnnotationWithConstraints(
+            info.declaration.annotation,
+            new Map(),
+          );
+          info.type = result.type;
+
+          if (result.constraints.length > 0) {
+            info.annotatedConstraints = result.constraints;
+          }
+
+          const scheme: TypeScheme = {
+            vars: new Set<number>(),
+            constraints: result.constraints,
+            type: info.type,
+          };
+          this.globalScope.symbols.set(info.declaration.name, scheme);
+          this.typeSchemes[name] = scheme;
+        }
+      }
+
+      // Process value declarations in this SCC together
+      if (valueDecls.length > 0) {
+        this.resetConstraintContext();
+
+        const inferredTypes: Map<string, Type> = new Map();
+
+        for (const name of valueDecls) {
+          const info = this.values[name]!;
+          if (info.declaration.kind !== "ValueDeclaration") continue;
+
+          const declaredType = this.types[name]!;
+          const annotationType = info.annotation
+            ? this.typeFromAnnotation(info.annotation, new Map())
+            : undefined;
+
+          const inferred = this.analyzeValueDeclaration(
+            info.declaration,
+            this.globalScope,
+            this.substitution,
+            declaredType,
+            annotationType,
+          );
+
+          inferredTypes.set(name, inferred);
+          this.types[name] = inferred;
+          info.type = inferred;
+        }
+
+        // After inferring all in the SCC, generalize all together
+        for (const name of valueDecls) {
+          const info = this.values[name]!;
+          const inferred = inferredTypes.get(name)!;
+          const generalizedScheme = this.generalizeWithAnnotatedConstraints(
+            inferred,
+            new Scope(),
+            this.substitution,
+            info.annotatedConstraints,
+            info.declaration.span,
+          );
+          this.globalScope.define(name, generalizedScheme);
+          this.typeSchemes[name] = generalizedScheme;
+        }
+      }
+    }
+  }
+
+  /**
+   * Generalize a type into a type scheme, merging user-annotated constraints with inferred ones.
+   * This extends the basic generalize() function to support qualified type annotations.
+   *
+   * The merge strategy is "satisfiable": user-annotated constraints are included in the
+   * final type scheme, and we verify they are consistent with what was inferred.
+   *
+   * Validation rules:
+   * 1. All user-annotated constraints must reference only quantified type variables
+   * 2. User-annotated constraints are merged with inferred constraints
+   * 3. If a constraint is both annotated and inferred, that's fine (no conflict)
+   *
+   * @param type - The inferred type to generalize
+   * @param scope - The current scope (for determining quantifiable variables)
+   * @param substitution - Current type substitution
+   * @param annotatedConstraints - User-annotated constraints from type annotation
+   * @param span - Source location for error reporting
+   */
+  generalizeWithAnnotatedConstraints(
+    type: Type,
+    scope: Scope,
+    substitution: Substitution,
+    annotatedConstraints: Constraint[] | undefined,
+    span: Span,
+  ): TypeScheme {
+    const typeFreeVars = getFreeTypeVars(type, substitution);
+    const scopeFreeVars = getFreeTypeVarsInScope(scope, substitution);
+
+    // Quantify over type variables that appear in the type but not in the scope
+    const quantified = new Set<number>();
+    for (const v of typeFreeVars) {
+      if (!scopeFreeVars.has(v)) {
+        quantified.add(v);
+      }
+    }
+
+    // Get collected (inferred) constraints and apply substitution
+    const rawConstraints = this.getCollectedConstraints();
+    const resolvedConstraints = applySubstitutionToConstraints(
+      rawConstraints,
+      substitution,
+    );
+
+    // Validate constraints that are not purely polymorphic.
+    // Constraints that ONLY involve quantified type variables are deferred until call time.
+    // But constraints that have concrete type arguments (or type structures like function types)
+    // should be validated now to catch errors early.
+    for (const c of resolvedConstraints) {
+      // Apply substitution to all type args
+      const resolvedTypeArgs = c.typeArgs.map((t) =>
+        applySubstitution(t, substitution),
+      );
+
+      // Check if the constraint involves ONLY quantified type variables at the top level
+      // If so, skip validation - it will be validated at call sites when instantiated
+      const isFullyPolymorphic = resolvedTypeArgs.every((t) => {
+        if (t.kind === "var" && quantified.has(t.id)) {
+          return true; // This is a quantified type variable
+        }
+        return false;
+      });
+
+      if (isFullyPolymorphic) {
+        // All type args are quantified vars - skip validation, defer to call sites
+        continue;
+      }
+
+      const resolvedConstraint: Constraint = {
+        protocolName: c.protocolName,
+        typeArgs: resolvedTypeArgs,
+      };
+
+      // Validate that an instance exists (or could exist) for this constraint
+      const lookupResult = validateConstraintSatisfiable(
+        resolvedConstraint,
+        this.instances,
+      );
+
+      if (!lookupResult.found) {
+        // Build a helpful error message
+        const typeArgsStr = resolvedTypeArgs
+          .map((t) => formatType(t))
+          .join(", ");
+
+        if (lookupResult.reason === "unsatisfied-constraint") {
+          throw new SemanticError(
+            `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
+              `The instance requires '${lookupResult.constraint}' for '${lookupResult.forType}', ` +
+              `but no such instance exists.`,
+            span,
+            this.getFilePath(),
+          );
+        } else {
+          throw new SemanticError(
+            `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
+              `Add an implementation: implement ${c.protocolName} ${typeArgsStr} where ...`,
+            span,
+            this.getFilePath(),
           );
         }
       }
-      // Fallback: generic type mismatch for non-function cases
-      const typeArgsStr = resolvedTypeArgs.map((t) => formatType(t)).join(", ");
+    }
+
+    // Filter inferred constraints to only those involving quantified type variables.
+    // However, we need to catch ambiguous type variables: constraints with type variables
+    // that are NOT quantified (i.e., don't appear in the final type).
+    const inferredRelevantConstraints: Constraint[] = [];
+    for (const c of resolvedConstraints) {
+      const typeArgFreeVars: number[] = [];
+      for (const t of c.typeArgs) {
+        const freeVars = getFreeTypeVars(t, substitution);
+        for (const v of freeVars) {
+          typeArgFreeVars.push(v);
+        }
+      }
+
+      // Check if any free var is quantified
+      const hasQuantifiedVar = typeArgFreeVars.some((v) => quantified.has(v));
+
+      // Check if any free var is NOT quantified (ambiguous)
+      const hasUnquantifiedVar = typeArgFreeVars.some(
+        (v) => !quantified.has(v),
+      );
+
+      if (typeArgFreeVars.length === 0) {
+        // No type variables - constraint is fully concrete, skip it
+        // (it was already validated above)
+        continue;
+      }
+
+      if (hasUnquantifiedVar && !hasQuantifiedVar) {
+        // All type variables are unquantified - this is ambiguous!
+        // The constraint references type variables that don't appear in the final type.
+        const typeArgsStr = c.typeArgs.map((t) => formatType(t)).join(", ");
+        throw new SemanticError(
+          `Ambiguous type variable in '${c.protocolName}' constraint. ` +
+            `The type '${typeArgsStr}' contains type variable(s) that do not appear ` +
+            `in the expression's type, so they cannot be determined. ` +
+            `Consider adding a type annotation to make the type concrete.`,
+          span,
+          this.getFilePath(),
+        );
+      }
+
+      // Keep constraints that have at least one quantified variable
+      if (hasQuantifiedVar) {
+        inferredRelevantConstraints.push(c);
+      }
+    }
+
+    // Process user-annotated constraints
+    let allConstraints = [...inferredRelevantConstraints];
+
+    if (annotatedConstraints && annotatedConstraints.length > 0) {
+      // Apply substitution to annotated constraints
+      const resolvedAnnotated = applySubstitutionToConstraints(
+        annotatedConstraints,
+        substitution,
+      );
+
+      // Validate each annotated constraint
+      for (const c of resolvedAnnotated) {
+        // Check that all type args in the constraint reference quantified variables
+        for (const typeArg of c.typeArgs) {
+          const freeVars = getFreeTypeVars(typeArg, substitution);
+          let hasQuantifiedVar = false;
+          for (const v of freeVars) {
+            if (quantified.has(v)) {
+              hasQuantifiedVar = true;
+            }
+          }
+          // If the constraint is on a concrete type (no free vars), it's meaningless
+          if (freeVars.size === 0) {
+            throw new SemanticError(
+              `Constraint '${c.protocolName}' is on a concrete type, which is not allowed in type annotations`,
+              span,
+              this.getFilePath(),
+            );
+          }
+          // If the constraint references a type variable not in the function's type,
+          // that's likely an error
+          if (!hasQuantifiedVar) {
+            throw new SemanticError(
+              `Constraint '${c.protocolName}' references type variables not used in the function type`,
+              span,
+              this.getFilePath(),
+            );
+          }
+        }
+
+        // Add to the constraint list (will be deduplicated below)
+        allConstraints.push(c);
+      }
+    }
+
+    // Deduplicate constraints
+    const uniqueConstraints: Constraint[] = [];
+    for (const c of allConstraints) {
+      const isDuplicate = uniqueConstraints.some(
+        (uc) =>
+          uc.protocolName === c.protocolName &&
+          uc.typeArgs.length === c.typeArgs.length &&
+          uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!)),
+      );
+      if (!isDuplicate) {
+        uniqueConstraints.push(c);
+      }
+    }
+
+    // IMPORTANT: Try to resolve constraints against instances to concretize type variables.
+    // When a constraint has some concrete type args and some type variables (e.g., ExampleProtocol3 Float t123),
+    // and there's a unique matching instance (e.g., ExampleProtocol3 Float (List Int)), we can unify
+    // the type variable with the instance's concrete type. This fixes hover showing polymorphic types
+    // with constraints instead of concrete resolved types.
+    const constraintsToRemove: Constraint[] = [];
+    for (const c of uniqueConstraints) {
+      // Check if any type arg is a quantified type variable
+      const resolvedTypeArgs = c.typeArgs.map((t) =>
+        applySubstitution(t, substitution),
+      );
+
+      // Find all type variable positions and concrete positions
+      const varPositions: number[] = [];
+      const concretePositions: number[] = [];
+      for (let i = 0; i < resolvedTypeArgs.length; i++) {
+        const arg = resolvedTypeArgs[i]!;
+        if (arg.kind === "var" && quantified.has(arg.id)) {
+          varPositions.push(i);
+        } else if (arg.kind !== "var") {
+          concretePositions.push(i);
+        }
+      }
+
+      // If we have at least one concrete type arg and at least one type variable,
+      // try to find a unique matching instance
+      if (concretePositions.length > 0 && varPositions.length > 0) {
+        const matchingInstances = this.instances.filter((inst) => {
+          if (inst.protocolName !== c.protocolName) return false;
+          if (inst.typeArgs.length !== resolvedTypeArgs.length) return false;
+
+          // Check that all concrete positions match
+          for (const pos of concretePositions) {
+            const instArg = inst.typeArgs[pos]!;
+            const constraintArg = resolvedTypeArgs[pos]!;
+            if (!instanceTypeMatches(instArg, constraintArg)) return false;
+          }
+
+          // Check that the instance has concrete types for the variable positions
+          // (so we can actually resolve the type variable)
+          for (const pos of varPositions) {
+            const instArg = inst.typeArgs[pos]!;
+            // Instance type arg must be concrete (not a bare type variable)
+            if (instArg.kind === "var") return false;
+          }
+
+          return true;
+        });
+
+        // If exactly one matching instance, unify the type variables with instance types
+        if (matchingInstances.length === 1) {
+          const matchingInst = matchingInstances[0]!;
+          for (const pos of varPositions) {
+            const typeVar = resolvedTypeArgs[pos]!;
+            const instType = matchingInst.typeArgs[pos]!;
+            if (typeVar.kind === "var") {
+              // Add to substitution to concretize this type variable
+              substitution.set(typeVar.id, instType);
+              // Remove from quantified set since it's now concrete
+              quantified.delete(typeVar.id);
+            }
+          }
+          // Mark this constraint for removal since it's now fully resolved
+          constraintsToRemove.push(c);
+        }
+      }
+    }
+
+    // Remove fully resolved constraints
+    const finalConstraints = uniqueConstraints.filter(
+      (c) => !constraintsToRemove.includes(c),
+    );
+
+    // Apply the updated substitution to the type
+    const finalType = applySubstitution(type, substitution);
+
+    // Check for ambiguous type variables: constraints on type variables that don't appear
+    // in the final type. For example, in `[] == []`, the type is `Bool` but we have a
+    // constraint `Eq a` where `a` doesn't appear in `Bool`. This is an error because
+    // there's no way to determine what `a` should be.
+    const finalTypeFreeVars = getFreeTypeVars(finalType, substitution);
+    for (const c of finalConstraints) {
+      for (const typeArg of c.typeArgs) {
+        // Apply substitution to get the resolved type arg
+        const resolvedTypeArg = applySubstitution(typeArg, substitution);
+        const constraintFreeVars = getFreeTypeVars(
+          resolvedTypeArg,
+          substitution,
+        );
+        for (const v of constraintFreeVars) {
+          // If this type variable appears in the constraint but NOT in the final type,
+          // then it's ambiguous - there's no way to determine what type it should be.
+          // This catches cases like `[] == []` where the result is Bool but the
+          // constraint is `Eq a` and `a` doesn't appear anywhere in the result type.
+          if (!finalTypeFreeVars.has(v)) {
+            throw new SemanticError(
+              `Ambiguous type variable in '${c.protocolName}' constraint. ` +
+                `The type variable does not appear in the expression's type, ` +
+                `so it cannot be determined. Consider adding a type annotation ` +
+                `to make the type concrete.`,
+              span,
+              this.getFilePath(),
+            );
+          }
+        }
+      }
+    }
+
+    return { vars: quantified, constraints: finalConstraints, type: finalType };
+  }
+
+  private validateImplementationMethodExpressions(): void {
+    for (const instance of this.localInstances) {
+      // Only validate methods that were explicitly provided in the implement block
+      // Default implementations from protocols are validated during protocol registration
+      for (const methodName of instance.explicitMethods) {
+        const methodExpr = instance.methods.get(methodName);
+        if (methodExpr) {
+          this.validateExpressionIdentifiers(
+            methodExpr,
+            this.globalScope,
+            instance.protocolName,
+            methodName,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Recursively validate that all identifier references in an expression exist
+   * in the given scope. Throws SemanticError for undefined identifiers.
+   */
+  validateExpressionIdentifiers(
+    expr: Expr,
+    scope: Scope,
+    protocolName: string,
+    methodName: string,
+  ): void {
+    // Helper for recursive calls
+    const validate = (e: Expr, s: Scope = scope) =>
+      this.validateExpressionIdentifiers(e, s, protocolName, methodName);
+
+    switch (expr.kind) {
+      case "Var": {
+        const name = expr.name;
+        // Check if it's a constructor (constructors are always valid)
+        if (this.constructors[name]) {
+          return;
+        }
+        // Check if it's defined in scope
+        if (!symbolExists(scope, name)) {
+          this.addError(
+            `Undefined name '${name}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span,
+          );
+        }
+        return;
+      }
+      case "Lambda": {
+        // Create a child scope with the lambda arguments
+        const childScope = new Scope(scope);
+        for (const arg of expr.args) {
+          bindPatternNames(arg, childScope);
+        }
+        validate(expr.body, childScope);
+        return;
+      }
+      case "Apply": {
+        validate(expr.callee);
+        for (const arg of expr.args) {
+          validate(arg);
+        }
+        return;
+      }
+      case "If": {
+        validate(expr.condition);
+        validate(expr.thenBranch);
+        validate(expr.elseBranch);
+        return;
+      }
+      case "LetIn": {
+        // Create a child scope for let bindings
+        const childScope = new Scope(scope);
+        for (const binding of expr.bindings) {
+          // First validate the binding body in the parent scope
+          validate(binding.body);
+          // Then add the binding name to the child scope
+          childScope.symbols.set(binding.name, {
+            vars: new Set(),
+            constraints: [],
+            type: { kind: "var", id: -1 }, // Placeholder type
+          });
+        }
+        validate(expr.body, childScope);
+        return;
+      }
+      case "Case": {
+        validate(expr.discriminant);
+        for (const branch of expr.branches) {
+          // Create a child scope with pattern bindings
+          const branchScope = new Scope(scope);
+          bindPatternNames(branch.pattern, branchScope);
+          validate(branch.body, branchScope);
+        }
+        return;
+      }
+      case "Infix": {
+        // For infix expressions, we need to check if the operator is defined
+        // Operators like +, -, etc. are protocol methods and should be in scope
+        if (!symbolExists(scope, expr.operator)) {
+          throw new SemanticError(
+            `Undefined operator '${expr.operator}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+        validate(expr.left);
+        validate(expr.right);
+        return;
+      }
+      case "Unary": {
+        validate(expr.operand);
+        return;
+      }
+      case "Paren": {
+        validate(expr.expression);
+        return;
+      }
+      case "Tuple": {
+        for (const element of expr.elements) {
+          validate(element);
+        }
+        return;
+      }
+      case "List": {
+        for (const element of expr.elements) {
+          validate(element);
+        }
+        return;
+      }
+      case "ListRange": {
+        validate(expr.start);
+        validate(expr.end);
+        return;
+      }
+      case "Record": {
+        for (const field of expr.fields) {
+          validate(field.value);
+        }
+        return;
+      }
+      case "RecordUpdate": {
+        // Check that the base record exists
+        if (!symbolExists(scope, expr.base)) {
+          this.addError(
+            `Undefined name '${expr.base}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span,
+          );
+        }
+        for (const field of expr.fields) {
+          validate(field.value);
+        }
+        return;
+      }
+      case "FieldAccess": {
+        // For field access (e.g., Int.add), validate module-qualified access
+        // by checking that the module exists and exports the field
+        const resolved = this.validateModuleFieldAccess(
+          expr,
+          protocolName,
+          methodName,
+        );
+        if (!resolved) {
+          // Not a module access, validate the target expression normally
+          validate(expr.target);
+        }
+        return;
+      }
+      case "Number":
+      case "String":
+      case "Char":
+      case "Unit":
+        // Literals don't reference identifiers
+        return;
+    }
+  }
+
+  /**
+   * Validate a module-qualified field access (e.g., Int.add).
+   * Returns true if this was a valid module access, false if not a module access.
+   * Throws SemanticError if it looks like a module access but is invalid.
+   */
+  validateModuleFieldAccess(
+    expr: Extract<Expr, { kind: "FieldAccess" }>,
+    protocolName: string,
+    methodName: string,
+  ): boolean {
+    const { imports, dependencies } = this;
+
+    // Collect the chain of field accesses to reconstruct the module path
+    const parts: string[] = [];
+    let current: Expr = expr;
+
+    // Traverse backwards through FieldAccess expressions
+    while (current.kind === "FieldAccess") {
+      parts.unshift(current.field);
+      current = current.target;
+    }
+
+    // The base should be a Var to be a module reference
+    if (current.kind !== "Var") {
+      return false;
+    }
+
+    // The base name (e.g., "Int" from "Int.add")
+    const baseName = current.name;
+    parts.unshift(baseName);
+
+    // Try to find a matching import for the module path
+    for (const imp of imports) {
+      // Check for module alias match (e.g., "import Vibe.Int as Int" with "Int.add")
+      if (imp.alias && baseName === imp.alias && parts.length >= 2) {
+        const depModule = dependencies.get(imp.moduleName);
+        if (!depModule) {
+          throw new SemanticError(
+            `Module '${imp.moduleName}' (aliased as '${imp.alias}') not found in implementation of '${methodName}' for protocol '${protocolName}'`,
+            expr.span,
+            this.getFilePath(),
+          );
+        }
+
+        // Get the field name (e.g., "add" from ["Int", "add"])
+        const fieldName = parts[1]!;
+
+        // Check if it's an exported value
+        const valueInfo = depModule.values[fieldName];
+        if (valueInfo) {
+          // Check if it's exported
+          if (!isExportedFromModule(depModule, fieldName, "value")) {
+            throw new SemanticError(
+              `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          return true;
+        }
+
+        // Check if it's a constructor
+        const ctorInfo = depModule.constructors[fieldName];
+        if (ctorInfo) {
+          if (!isExportedFromModule(depModule, fieldName, "constructor")) {
+            throw new SemanticError(
+              `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          return true;
+        }
+
+        // Field not found in the module
+        throw new SemanticError(
+          `'${fieldName}' is not defined in module '${imp.moduleName}' (aliased as '${imp.alias}') in implementation of '${methodName}' for protocol '${protocolName}'`,
+          expr.span,
+          this.getFilePath(),
+        );
+      }
+
+      // Check for unaliased import match (e.g., "import Vibe.JS" with "Vibe.JS.null")
+      const importParts = imp.moduleName.split(".");
+      if (!imp.alias && importParts.length <= parts.length - 1) {
+        let matches = true;
+        for (let i = 0; i < importParts.length; i++) {
+          if (importParts[i] !== parts[i]) {
+            matches = false;
+            break;
+          }
+        }
+
+        if (matches) {
+          const depModule = dependencies.get(imp.moduleName);
+          if (!depModule) {
+            throw new SemanticError(
+              `Module '${imp.moduleName}' not found in implementation of '${methodName}' for protocol '${protocolName}'`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+
+          // Get the remaining parts after the module name
+          const fieldParts = parts.slice(importParts.length);
+
+          if (fieldParts.length === 1) {
+            const fieldName = fieldParts[0]!;
+
+            // Check if it's an exported value
+            const valueInfo = depModule.values[fieldName];
+            if (valueInfo) {
+              if (!isExportedFromModule(depModule, fieldName, "value")) {
+                throw new SemanticError(
+                  `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+                  expr.span,
+                  this.getFilePath(),
+                );
+              }
+              return true;
+            }
+
+            // Check if it's a constructor
+            const ctorInfo = depModule.constructors[fieldName];
+            if (ctorInfo) {
+              if (!isExportedFromModule(depModule, fieldName, "constructor")) {
+                throw new SemanticError(
+                  `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+                  expr.span,
+                  this.getFilePath(),
+                );
+              }
+              return true;
+            }
+
+            // Field not found in the module
+            throw new SemanticError(
+              `'${fieldName}' is not defined in module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+        }
+      }
+    }
+
+    // Not a recognized module access pattern
+    return false;
+  }
+
+  private validateInstanceConstraintSatisfiability(): void {
+    for (const instance of this.localInstances) {
+      // Skip instances without constraints
+      if (instance.constraints.length === 0) continue;
+
+      for (const constraint of instance.constraints) {
+        // Validate the constraint protocol exists
+        const constraintProtocol = this.protocols[constraint.protocolName];
+        if (!constraintProtocol) {
+          throw new SemanticError(
+            `Instance constraint references unknown protocol '${constraint.protocolName}'`,
+            instance.span,
+            this.getFilePath(),
+          );
+        }
+      }
+    }
+  }
+
+  private validateProtocolDefaultImplementations(): void {
+    for (const [protocolName, protocol] of Object.entries(this.protocols)) {
+      // Only validate protocols defined in this module
+      if (protocol.moduleName !== this.getModuleName()) continue;
+
+      for (const [methodName, methodInfo] of protocol.methods) {
+        if (methodInfo.defaultImpl) {
+          // Create a scope with the method parameters bound
+          const methodScope = new Scope(this.globalScope);
+          for (const arg of methodInfo.defaultImpl.args) {
+            bindPatternNames(arg, methodScope);
+          }
+
+          // Validate the body expression
+          this.validateExpressionIdentifiers(
+            methodInfo.defaultImpl.body,
+            methodScope,
+            protocolName,
+            methodName,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Compute export information for a module based on its exposing clause.
+   * This validates that all exported items exist and builds the ExportInfo structure.
+   *
+   * @param importedValues - Map from value name to source module name, for values imported
+   *                         from other modules that can be re-exported.
+   */
+  private computeModuleExports(): ExportInfo {
+    const moduleDecl = this.getModule();
+    const {
+      values,
+      operators,
+      adts,
+      typeAliases,
+      opaqueTypes,
+      protocols,
+      importedValues,
+    } = this;
+
+    // Default: empty exports
+    const exports: ExportInfo = {
+      values: new Set(),
+      operators: new Set(),
+      types: new Map(),
+      protocols: new Map(),
+      exportsAll: false,
+      reExportedValues: new Map(),
+    };
+
+    if (!moduleDecl.exposing) {
+      // No exposing clause means export nothing by default
+      return exports;
+    }
+
+    const exposing = moduleDecl.exposing;
+
+    // Handle "exposing (..)" - export everything
+    if (exposing.kind === "All") {
+      exports.exportsAll = true;
+
+      // Export all values
+      for (const name of Object.keys(values)) {
+        exports.values.add(name);
+      }
+
+      // Export all operators
+      for (const op of operators.keys()) {
+        exports.operators.add(op);
+      }
+
+      // Export all ADTs with all constructors
+      for (const [name, adt] of Object.entries(adts)) {
+        exports.types.set(name, {
+          allConstructors: true,
+          constructors: new Set(adt.constructors),
+        });
+      }
+
+      // Export all type aliases
+      for (const name of Object.keys(typeAliases)) {
+        exports.types.set(name, { allConstructors: false });
+      }
+
+      // Export all opaque types
+      for (const name of Object.keys(opaqueTypes)) {
+        exports.types.set(name, { allConstructors: false });
+      }
+
+      // Export all protocols with all methods
+      for (const [name, protocol] of Object.entries(protocols)) {
+        exports.protocols.set(name, {
+          allMethods: true,
+          methods: new Set(protocol.methods.keys()),
+        });
+      }
+
+      return exports;
+    }
+
+    // Handle explicit exports
+    for (const spec of exposing.exports) {
+      switch (spec.kind) {
+        case "ExportValue": {
+          const name = spec.name;
+
+          // Check if it's a value/function defined locally
+          // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+          if (Object.hasOwn(values, name)) {
+            exports.values.add(name);
+            continue;
+          }
+
+          // Check if it's an imported value that can be re-exported
+          if (importedValues.has(name)) {
+            exports.reExportedValues.set(name, importedValues.get(name)!);
+            continue;
+          }
+
+          // Check if it's a type (ADT, alias, or opaque) exported without constructors
+          // Use Object.hasOwn to avoid prototype pollution
+          if (Object.hasOwn(adts, name)) {
+            exports.types.set(name, {
+              allConstructors: false,
+              constructors: new Set(),
+            });
+            continue;
+          }
+          if (Object.hasOwn(typeAliases, name)) {
+            exports.types.set(name, { allConstructors: false });
+            continue;
+          }
+          if (Object.hasOwn(opaqueTypes, name)) {
+            exports.types.set(name, { allConstructors: false });
+            continue;
+          }
+
+          // Check if it's a protocol exported without methods
+          if (Object.hasOwn(protocols, name)) {
+            exports.protocols.set(name, {
+              allMethods: false,
+              methods: new Set(),
+            });
+            continue;
+          }
+
+          throw new SemanticError(
+            `Module exposes '${name}' which is not defined`,
+            spec.span,
+            this.getFilePath(),
+          );
+        }
+
+        case "ExportOperator": {
+          const op = spec.operator;
+
+          // Check if operator is defined (either as a value or in operator registry)
+          // Use Object.hasOwn to avoid prototype pollution
+          if (
+            !Object.hasOwn(values, op) &&
+            !operators.has(op) &&
+            !importedValues.has(op)
+          ) {
+            throw new SemanticError(
+              `Module exposes operator '${op}' which is not defined`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+
+          exports.operators.add(op);
+          // Also add to values since operators are functions
+          if (Object.hasOwn(values, op)) {
+            exports.values.add(op);
+          } else if (importedValues.has(op)) {
+            exports.reExportedValues.set(op, importedValues.get(op)!);
+          }
+          break;
+        }
+
+        case "ExportTypeAll": {
+          const name = spec.name;
+
+          // Check if it's an ADT
+          // Use Object.hasOwn to avoid prototype pollution
+          if (Object.hasOwn(adts, name)) {
+            const adt = adts[name]!;
+            exports.types.set(name, {
+              allConstructors: true,
+              constructors: new Set(adt.constructors),
+            });
+            continue;
+          }
+
+          // Check if it's a protocol
+          if (Object.hasOwn(protocols, name)) {
+            const protocol = protocols[name]!;
+            exports.protocols.set(name, {
+              allMethods: true,
+              methods: new Set(protocol.methods.keys()),
+            });
+            // Protocol methods are NOT exported as standalone values
+            // They are only accessible through instance dictionaries
+            continue;
+          }
+
+          // Type alias or opaque type with (..) is an error
+          if (Object.hasOwn(typeAliases, name)) {
+            throw new SemanticError(
+              `Type alias '${name}' cannot use (..) syntax - type aliases have no constructors`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+          if (Object.hasOwn(opaqueTypes, name)) {
+            throw new SemanticError(
+              `Opaque type '${name}' cannot use (..) syntax - opaque types have no constructors`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+
+          throw new SemanticError(
+            `Module exposes '${name}(..)' but '${name}' is not a type or protocol`,
+            spec.span,
+            this.getFilePath(),
+          );
+        }
+
+        case "ExportTypeSome": {
+          const name = spec.name;
+          const members = spec.members;
+
+          // Check if it's an ADT with specific constructors
+          // Use Object.hasOwn to avoid prototype pollution
+          if (Object.hasOwn(adts, name)) {
+            const adt = adts[name]!;
+            const exportedCtors = new Set<string>();
+
+            for (const memberName of members) {
+              if (!adt.constructors.includes(memberName)) {
+                throw new SemanticError(
+                  `Constructor '${memberName}' is not defined in type '${name}'`,
+                  spec.span,
+                  this.getFilePath(),
+                );
+              }
+              exportedCtors.add(memberName);
+            }
+
+            exports.types.set(name, {
+              allConstructors: false,
+              constructors: exportedCtors,
+            });
+            continue;
+          }
+
+          // Check if it's a protocol with specific methods
+          if (Object.hasOwn(protocols, name)) {
+            const protocol = protocols[name]!;
+            const exportedMethods = new Set<string>();
+
+            for (const memberName of members) {
+              if (!protocol.methods.has(memberName)) {
+                throw new SemanticError(
+                  `Method '${memberName}' is not defined in protocol '${name}'`,
+                  spec.span,
+                  this.getFilePath(),
+                );
+              }
+              exportedMethods.add(memberName);
+              // Also export the method name as a value
+              exports.values.add(memberName);
+            }
+
+            exports.protocols.set(name, {
+              allMethods: false,
+              methods: exportedMethods,
+            });
+            continue;
+          }
+
+          throw new SemanticError(
+            `Module exposes '${name}(...)' but '${name}' is not a type or protocol`,
+            spec.span,
+            this.getFilePath(),
+          );
+        }
+      }
+    }
+
+    return exports;
+  }
+
+  private buildSemanticModule(): SemanticModule {
+    const exports = this.computeModuleExports();
+
+    return {
+      values: this.values,
+      annotations: this.annotations,
+      module: this.program.module,
+      imports: this.imports,
+      types: this.types,
+      typeSchemes: this.typeSchemes,
+      adts: this.adts,
+      constructors: this.constructors,
+      constructorTypes: this.constructorTypes,
+      typeAliases: this.typeAliases,
+      records: this.records,
+      opaqueTypes: this.opaqueTypes,
+      protocols: this.protocols,
+      instances: this.instances,
+      operators: this.operators,
+      infixDeclarations: this.infixDeclarations,
+      exports,
+      errors: this.getErrors(),
+    };
+  }
+
+  // ===== Instance Validation Methods =====
+
+  /**
+   * Concretize polymorphic instance type arguments.
+   *
+   * Before value inference, analyze each instance's method bodies to determine
+   * if polymorphic type args can be concretized. This is important for multi-parameter
+   * protocols where the return type is constrained.
+   */
+  concretizeInstanceTypeArgs(): void {
+    for (const instance of this.localInstances) {
+      const protocol = this.protocols[instance.protocolName];
+      if (!protocol) continue;
+
+      // Only process instances that have type variables in their typeArgs
+      const hasTypeVars = instance.typeArgs.some((t) => t.kind === "var");
+      if (!hasTypeVars) continue;
+
+      // Analyze each explicitly implemented method to infer concrete types
+      for (const methodName of instance.explicitMethods) {
+        const methodExpr = instance.methods.get(methodName);
+        const protocolMethodInfo = protocol.methods.get(methodName);
+
+        if (!methodExpr || !protocolMethodInfo) continue;
+
+        // Get the expected type from the protocol, substituting type parameters
+        const expectedType = substituteTypeParams(
+          protocolMethodInfo.type,
+          protocol.params,
+          instance.typeArgs,
+        );
+
+        // Create a fresh substitution for inference
+        const inferSubstitution: Substitution = new Map(this._substitution);
+
+        // Infer the type of the implementation expression
+        const tempScope = this.createChildScope();
+        try {
+          const inferredType = this.analyzeExpr(methodExpr, {
+            scope: tempScope,
+            substitution: inferSubstitution,
+          });
+
+          // Unify to get concrete types
+          this.unify(
+            inferredType,
+            expectedType,
+            methodExpr.span,
+            inferSubstitution,
+          );
+
+          // Apply the inference results back to the instance's typeArgs
+          for (let i = 0; i < instance.typeArgs.length; i++) {
+            const typeArg = instance.typeArgs[i]!;
+            const resolved = applySubstitution(typeArg, inferSubstitution);
+            // Only update if we got a more concrete type (not still a bare type variable)
+            if (resolved.kind !== "var" && typeArg.kind === "var") {
+              instance.typeArgs[i] = resolved;
+            }
+          }
+
+          // Update constraints' type args and remove fully-satisfied constraints
+          const constraintsToRemove: Constraint[] = [];
+          for (const constraint of instance.constraints) {
+            let allConcrete = true;
+            for (let i = 0; i < constraint.typeArgs.length; i++) {
+              const typeArg = constraint.typeArgs[i]!;
+              const resolved = applySubstitution(typeArg, inferSubstitution);
+              if (resolved.kind !== "var" && typeArg.kind === "var") {
+                constraint.typeArgs[i] = resolved;
+              }
+              if (constraint.typeArgs[i]!.kind === "var") {
+                allConcrete = false;
+              }
+            }
+
+            // If all type args are now concrete, check if the constraint is satisfied
+            if (allConcrete) {
+              const isSatisfied = findInstanceForConstraint(
+                constraint.protocolName,
+                constraint.typeArgs,
+                this.instances,
+              );
+              if (isSatisfied) {
+                constraintsToRemove.push(constraint);
+              }
+            }
+          }
+
+          // Remove satisfied constraints from the instance
+          for (const toRemove of constraintsToRemove) {
+            const idx = instance.constraints.indexOf(toRemove);
+            if (idx !== -1) {
+              instance.constraints.splice(idx, 1);
+            }
+          }
+        } catch {
+          // If analysis fails, continue - validation will catch errors later
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate that all method implementations in protocol instances have types
+   * that match the protocol's declared method signatures.
+   */
+  validateImplementationMethodTypes(): void {
+    for (const instance of this.localInstances) {
+      const protocol = this.protocols[instance.protocolName];
+      if (!protocol) continue;
+
+      // Build a substitution from protocol type params to instance type args
+      const paramSubstitution = new Map<number, Type>();
+      const paramNameToId = new Map<string, number>();
+
+      // First, create type variables for each protocol parameter
+      for (let i = 0; i < protocol.params.length; i++) {
+        const paramName = protocol.params[i]!;
+        const typeArg = instance.typeArgs[i];
+        if (typeArg) {
+          const paramVar = freshType();
+          paramNameToId.set(paramName, paramVar.id);
+          paramSubstitution.set(paramVar.id, typeArg);
+        }
+      }
+
+      // Validate each explicitly implemented method
+      for (const methodName of instance.explicitMethods) {
+        const methodExpr = instance.methods.get(methodName);
+        const protocolMethodInfo = protocol.methods.get(methodName);
+
+        if (!methodExpr || !protocolMethodInfo) continue;
+
+        // Get the expected type from the protocol, substituting type parameters
+        const expectedType = substituteTypeParams(
+          protocolMethodInfo.type,
+          protocol.params,
+          instance.typeArgs,
+        );
+
+        // Create a fresh substitution for inference
+        const inferSubstitution: Substitution = new Map(this._substitution);
+
+        // Infer the type of the implementation expression
+        const tempScope = this.createChildScope();
+        let inferredType: Type;
+
+        if (methodExpr.kind === "Lambda" && expectedType.kind === "fun") {
+          // Extract parameter types from expected function type
+          const expectedParamTypes: Type[] = [];
+          let currentType: Type = expectedType;
+          while (
+            currentType.kind === "fun" &&
+            expectedParamTypes.length < methodExpr.args.length
+          ) {
+            expectedParamTypes.push(currentType.from);
+            currentType = currentType.to;
+          }
+
+          // Bind parameters with expected types
+          this.bindPatterns(
+            tempScope,
+            methodExpr.args,
+            expectedParamTypes,
+            inferSubstitution,
+          );
+
+          // Analyze the body
+          const bodyType = this.analyzeExpr(methodExpr.body, {
+            scope: tempScope,
+            substitution: inferSubstitution,
+          });
+
+          inferredType = fnChain(expectedParamTypes, bodyType);
+        } else {
+          inferredType = this.analyzeExpr(methodExpr, {
+            scope: tempScope,
+            substitution: inferSubstitution,
+            expectedType,
+          });
+        }
+
+        // Try to unify the inferred type with the expected type
+        try {
+          this.unify(
+            inferredType,
+            expectedType,
+            methodExpr.span,
+            inferSubstitution,
+          );
+        } catch (e) {
+          if (e instanceof SemanticError) {
+            throw new SemanticError(
+              `Implementation of '${methodName}' for '${
+                instance.protocolName
+              }' has type '${formatType(
+                applySubstitution(inferredType, inferSubstitution),
+              )}' but protocol expects '${formatType(expectedType)}'`,
+              methodExpr.span,
+              this.getFilePath(),
+            );
+          }
+          throw e;
+        }
+
+        // After successful unification, check that any constraints on the instance
+        // are satisfied when type variables are unified with concrete types.
+        for (const constraint of instance.constraints) {
+          for (const constraintTypeArg of constraint.typeArgs) {
+            const resolvedType = applySubstitution(
+              constraintTypeArg,
+              inferSubstitution,
+            );
+
+            if (resolvedType.kind === "con") {
+              const hasInstance = findInstanceForTypeInternal(
+                constraint.protocolName,
+                resolvedType,
+                this.instances,
+              );
+              if (!hasInstance) {
+                throw new SemanticError(
+                  `Implementation of '${methodName}' for '${instance.protocolName}' ` +
+                    `requires '${constraint.protocolName}' constraint on type parameter, ` +
+                    `but the implementation uses type '${formatType(
+                      resolvedType,
+                    )}' ` +
+                    `which does not implement '${constraint.protocolName}'`,
+                  methodExpr.span,
+                  this.getFilePath(),
+                );
+              }
+            }
+          }
+        }
+
+        // Concretize the instance's type args based on inference results.
+        for (let i = 0; i < instance.typeArgs.length; i++) {
+          const typeArg = instance.typeArgs[i]!;
+          const resolved = applySubstitution(typeArg, inferSubstitution);
+          if (resolved.kind !== "var" && typeArg.kind === "var") {
+            instance.typeArgs[i] = resolved;
+          }
+        }
+
+        // Also update constraints' type args to reflect any concretization
+        for (const constraint of instance.constraints) {
+          for (let i = 0; i < constraint.typeArgs.length; i++) {
+            const typeArg = constraint.typeArgs[i]!;
+            const resolved = applySubstitution(typeArg, inferSubstitution);
+            if (resolved.kind !== "var" && typeArg.kind === "var") {
+              constraint.typeArgs[i] = resolved;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate that concrete type constraints have corresponding instance declarations.
+   * After type inference, check that any protocol constraints on concrete types
+   * have corresponding instance declarations.
+   */
+  validateConcreteConstraintInstances(): void {
+    for (const [valueName, valueInfo] of Object.entries(this.values)) {
+      // Skip synthetic values and values without inferred constraints
+      if (valueName.startsWith("$")) continue;
+
+      if (valueInfo.collectedConstraints) {
+        for (const constraint of valueInfo.collectedConstraints) {
+          const resolvedTypeArgs = constraint.typeArgs.map((t) =>
+            applySubstitution(t, this._substitution),
+          );
+
+          for (const typeArg of resolvedTypeArgs) {
+            if (typeArg.kind === "con") {
+              const hasInstance = findInstanceForTypeInternal(
+                constraint.protocolName,
+                typeArg,
+                this.instances,
+              );
+
+              if (!hasInstance) {
+                const span = valueInfo.span ?? valueInfo.declaration.span;
+                throw new SemanticError(
+                  `No instance of '${
+                    constraint.protocolName
+                  }' for type '${formatType(typeArg)}'. ` +
+                    `Add an implementation: implement ${
+                      constraint.protocolName
+                    } ${formatType(typeArg)} where ...`,
+                  span,
+                  this.getFilePath(),
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Eagerly validate pending constraints after unification.
+   *
+   * This function is called after each application in the Apply case to detect
+   * type mismatches early. When a protocol method's return type (a type variable)
+   * gets unified with a function type due to over-application, this catches the
+   * error immediately rather than waiting until generalization.
+   *
+   * The key insight: if a type variable from a protocol constraint gets unified
+   * to a concrete type structure (function, tuple, etc.) that no instance could
+   * ever match, we should report it as a type mismatch rather than a missing
+   * instance error.
+   */
+  validateConstraintsEagerly(substitution: Substitution, span: Span): void {
+    const constraints = this.getCollectedConstraints();
+    if (constraints.length === 0) return;
+
+    for (const c of constraints) {
+      // Apply substitution to get the current resolved type args
+      const resolvedTypeArgs = c.typeArgs.map((t) =>
+        applySubstitution(t, substitution),
+      );
+
+      // Check if any type arg has become a concrete non-variable type
+      // (meaning it's no longer polymorphic and can be validated now)
+      const hasConcreteNonVarArg = resolvedTypeArgs.some((t) => {
+        // A type is "concrete" for validation if it has a known shape
+        // that isn't just a type variable
+        if (t.kind === "var") return false;
+        if (t.kind === "fun") return true; // Function types are concrete structures
+        if (t.kind === "tuple") return true;
+        if (t.kind === "record") return true;
+        // For type constructors, check if they have any unresolved type variables
+        if (t.kind === "con") {
+          // If all args are resolved (no free vars), it's fully concrete
+          // Otherwise, it's partially concrete but may still need validation
+          // For now, we focus on function types as those are the most common source
+          // of over-application errors
+          return false;
+        }
+        return false;
+      });
+
+      if (!hasConcreteNonVarArg) continue;
+
+      // Check if this constraint involves a function type that can't be satisfied
+      const resolvedConstraint: Constraint = {
+        protocolName: c.protocolName,
+        typeArgs: resolvedTypeArgs,
+      };
+
+      const satisfiability = checkConstraintSatisfiability(
+        resolvedConstraint,
+        this.instances,
+      );
+
+      if (!satisfiability.possible) {
+        // Find which type arg is the problematic function type
+        for (const typeArg of resolvedTypeArgs) {
+          if (typeArg.kind === "fun") {
+            // This is the key: produce a type mismatch error, not an instance error
+            // The real problem is that the user is trying to apply a non-function value
+            // to more arguments than its type allows.
+            //
+            // When `convert3 10.0 []` is written with convert3 : a -> b,
+            // the `b` gets unified with `List t -> result` because we're trying
+            // to apply (convert3 10.0) to another argument [].
+            // But the actual instance returns List Int (not a function).
+            //
+            // We format the error to show what type was expected vs what we tried
+            // to use it as (a function type).
+            throw new SemanticError(
+              `Type mismatch: cannot unify '${formatType(
+                typeArg.from,
+              )}' with '${formatType(typeArg)}'`,
+              span,
+              this.getFilePath(),
+            );
+          }
+        }
+        // Fallback: generic type mismatch for non-function cases
+        const typeArgsStr = resolvedTypeArgs
+          .map((t) => formatType(t))
+          .join(", ");
+        throw new SemanticError(
+          `Type mismatch: expression cannot be used as a function (constraint '${c.protocolName}' on '${typeArgsStr}' cannot be satisfied)`,
+          span,
+          this.getFilePath(),
+        );
+      }
+    }
+  }
+
+  /**
+   * Primitive type constants are no longer defined here.
+   * All types including Int, Float, String, Char, Bool, Unit come from the prelude as ADTs.
+   *
+   * The semantics phase resolves these types by looking them up in the ADT registry
+   * which is populated from the prelude.
+   */
+
+  // ===== Algebraic Data Type (ADT) Registry =====
+  // The ADT registry tracks user-defined types and their constructors.
+  // This enables proper type checking and exhaustiveness analysis.
+
+  /**
+   * Compute the expected module name from a file path and source directory.
+   *
+   * For example:
+   * - filePath: /project/src/Main.vibe, srcDir: /project/src -> "Main"
+   * - filePath: /project/src/Data/List.vibe, srcDir: /project/src -> "Data.List"
+   *
+   * @param filePath - Absolute path to the source file
+   * @param srcDir - Absolute path to the source directory
+   * @returns Expected module name
+   */
+  /**
+   * Check for type name collision when importing.
+   * Returns true if there's a conflict (same name, different module).
+   */
+  checkTypeCollision(
+    name: string,
+    importingFrom: string,
+    existing: { moduleName?: string } | undefined,
+    span: Span,
+    kind: "type" | "type alias" | "protocol",
+  ): void {
+    if (!existing) return;
+
+    // Protocols are globally available (like type class instances in Haskell)
+    // Allow re-importing the same protocol through different module paths
+    // e.g., Eq can be imported via Vibe.Basics or Vibe (which re-exports from Basics)
+    if (kind === "protocol") {
+      return;
+    }
+
+    // If the existing definition is from a different module, that's a conflict
+    // (unless it's a builtin which has no module)
+    if (
+      existing.moduleName !== undefined &&
+      existing.moduleName !== importingFrom
+    ) {
       throw new SemanticError(
-        `Type mismatch: expression cannot be used as a function (constraint '${c.protocolName}' on '${typeArgsStr}' cannot be satisfied)`,
+        `${
+          kind === "type"
+            ? "Type"
+            : kind === "type alias"
+              ? "Type alias"
+              : "Protocol"
+        } '${name}' conflicts with ${kind} from module '${
+          existing.moduleName
+        }'. ` + `Consider using qualified imports or aliasing one of them.`,
         span,
-        analyzer.getFilePath(),
+        this.getFilePath(),
       );
     }
+  }
+
+  // ===== Symbol Management Methods =====
+
+  /**
+   * Declare a symbol in a scope with duplicate checking.
+   * Throws if the symbol already exists in the given scope.
+   */
+  declareSymbol(
+    scope: Scope,
+    name: string,
+    scheme: TypeScheme,
+    span: Span,
+  ): void {
+    if (scope.has(name)) {
+      throw new SemanticError(
+        `Duplicate definition for '${name}'`,
+        span,
+        this.getFilePath(),
+      );
+    }
+    scope.define(name, scheme);
+  }
+
+  /**
+   * Look up a symbol in the scope and instantiate its type scheme.
+   * Returns both the instantiated type and any protocol constraints.
+   */
+  lookupSymbolWithConstraints(
+    scope: Scope,
+    name: string,
+    span: Span,
+    substitution?: Substitution,
+  ): LookupResult {
+    const sub = substitution ?? this._substitution;
+    const scheme = scope.lookup(name);
+    if (scheme) {
+      const { type, constraints } = instantiateWithConstraints(scheme, sub);
+      return { type, constraints };
+    }
+    this.addError(`Undefined name '${name}'`, span);
+    return { type: ERROR_TYPE, constraints: [] };
+  }
+
+  /**
+   * Look up a symbol and return just its instantiated type.
+   */
+  lookupSymbol(
+    scope: Scope,
+    name: string,
+    span: Span,
+    substitution?: Substitution,
+  ): Type {
+    return this.lookupSymbolWithConstraints(scope, name, span, substitution)
+      .type;
+  }
+
+  // ===== Type Generalization Methods =====
+
+  /**
+   * Generalize a type into a type scheme by quantifying over its free type variables.
+   * This is the key operation that enables let-polymorphism.
+   */
+  generalize(
+    type: Type,
+    scope: Scope,
+    substitution?: Substitution,
+  ): TypeScheme {
+    const sub = substitution ?? this._substitution;
+    const typeFreeVars = getFreeTypeVars(type, sub);
+    const scopeFreeVars = getFreeTypeVarsInScope(scope, sub);
+
+    const quantified = new Set<number>();
+    for (const v of typeFreeVars) {
+      if (!scopeFreeVars.has(v)) {
+        quantified.add(v);
+      }
+    }
+
+    const rawConstraints = this.getCollectedConstraints();
+    const resolvedConstraints = applySubstitutionToConstraints(
+      rawConstraints,
+      sub,
+    );
+
+    const relevantConstraints = resolvedConstraints.filter((c) => {
+      return c.typeArgs.some((t) => {
+        const freeVars = getFreeTypeVars(t, sub);
+        for (const v of freeVars) {
+          if (quantified.has(v)) return true;
+        }
+        return false;
+      });
+    });
+
+    const uniqueConstraints: Constraint[] = [];
+    for (const c of relevantConstraints) {
+      const isDuplicate = uniqueConstraints.some(
+        (uc) =>
+          uc.protocolName === c.protocolName &&
+          uc.typeArgs.length === c.typeArgs.length &&
+          uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!)),
+      );
+      if (!isDuplicate) {
+        uniqueConstraints.push(c);
+      }
+    }
+
+    return { vars: quantified, constraints: uniqueConstraints, type };
   }
 }
 
@@ -666,96 +6068,6 @@ function validateConstraintsEagerly(
  * NOTE: This local alias is used since Scope is also imported from types.ts
  * but we use it differently in places here. This will be cleaned up in a future refactor.
  */
-
-/**
- * Primitive type constants are no longer defined here.
- * All types including Int, Float, String, Char, Bool, Unit come from the prelude as ADTs.
- *
- * The semantics phase resolves these types by looking them up in the ADT registry
- * which is populated from the prelude.
- */
-
-// ===== Algebraic Data Type (ADT) Registry =====
-// The ADT registry tracks user-defined types and their constructors.
-// This enables proper type checking and exhaustiveness analysis.
-
-/**
- * Compute the expected module name from a file path and source directory.
- *
- * For example:
- * - filePath: /project/src/Main.vibe, srcDir: /project/src -> "Main"
- * - filePath: /project/src/Data/List.vibe, srcDir: /project/src -> "Data.List"
- *
- * @param filePath - Absolute path to the source file
- * @param srcDir - Absolute path to the source directory
- * @returns Expected module name
- */
-function computeExpectedModuleName(analyzer: SemanticAnalyzer): string {
-  // Normalize paths to handle different separators
-  const normalizedFilePath = analyzer.getFilePath().replace(/\\/g, "/");
-  const normalizedSrcDir = analyzer
-    .getSrcDir()
-    .replace(/\\/g, "/")
-    .replace(/\/$/, "");
-
-  // Get relative path from srcDir
-  if (!normalizedFilePath.startsWith(normalizedSrcDir + "/")) {
-    // Fallback: extract from file name only
-    const fileName = normalizedFilePath.split("/").pop() ?? "";
-    return fileName.replace(/\.vibe$/, "");
-  }
-
-  // Remove srcDir prefix and .vibe extension
-  const relativePath = normalizedFilePath
-    .slice(normalizedSrcDir.length + 1) // +1 for the trailing slash
-    .replace(/\.vibe$/, "");
-
-  // Convert path separators to dots for module name
-  return relativePath.replace(/\//g, ".");
-}
-
-/**
- * Check for type name collision when importing.
- * Returns true if there's a conflict (same name, different module).
- */
-function checkTypeCollision(
-  analyzer: SemanticAnalyzer,
-  name: string,
-  importingFrom: string,
-  existing: { moduleName?: string } | undefined,
-  span: Span,
-  kind: "type" | "type alias" | "protocol",
-): void {
-  if (!existing) return;
-
-  // Protocols are globally available (like type class instances in Haskell)
-  // Allow re-importing the same protocol through different module paths
-  // e.g., Eq can be imported via Vibe.Basics or Vibe (which re-exports from Basics)
-  if (kind === "protocol") {
-    return;
-  }
-
-  // If the existing definition is from a different module, that's a conflict
-  // (unless it's a builtin which has no module)
-  if (
-    existing.moduleName !== undefined &&
-    existing.moduleName !== importingFrom
-  ) {
-    throw new SemanticError(
-      `${
-        kind === "type"
-          ? "Type"
-          : kind === "type alias"
-            ? "Type alias"
-            : "Protocol"
-      } '${name}' conflicts with ${kind} from module '${
-        existing.moduleName
-      }'. ` + `Consider using qualified imports or aliasing one of them.`,
-      span,
-      analyzer.getFilePath(),
-    );
-  }
-}
 
 // ============================================================================
 // Strongly Connected Components (SCC) for Mutual Recursion
@@ -1042,1264 +6354,11 @@ function isExportedFromModule(
   }
 }
 
-/**
- * Import a single export specification from a dependency module.
- */
-function importExportSpec(
-  analyzer: SemanticAnalyzer,
-  spec: ExportSpec,
-  depModule: SemanticModule,
-  imp: ImportDeclaration,
-): void {
-  switch (spec.kind) {
-    case "ExportValue": {
-      const name = spec.name;
-
-      // First check if it's actually exported
-      if (!isExportedFromModule(depModule, name, "value")) {
-        // Check if it's a type, type alias, opaque type, or protocol
-        if (
-          isExportedFromModule(depModule, name, "type") &&
-          depModule.adts[name]
-        ) {
-          // Import the ADT without constructors
-          const depADT = depModule.adts[name]!;
-          checkTypeCollision(
-            analyzer,
-            name,
-            imp.moduleName,
-            analyzer.adts[name],
-            imp.span,
-            "type",
-          );
-          analyzer.adts[name] = depADT;
-          return;
-        }
-        if (depModule.typeAliases[name]) {
-          checkTypeCollision(
-            analyzer,
-            name,
-            imp.moduleName,
-            analyzer.typeAliases[name],
-            imp.span,
-            "type alias",
-          );
-          analyzer.typeAliases[name] = depModule.typeAliases[name]!;
-          return;
-        }
-        if (depModule.opaqueTypes[name]) {
-          analyzer.opaqueTypes[name] = depModule.opaqueTypes[name]!;
-          return;
-        }
-        if (
-          isExportedFromModule(depModule, name, "protocol") &&
-          depModule.protocols[name]
-        ) {
-          // Import the protocol without methods
-          checkTypeCollision(
-            analyzer,
-            name,
-            imp.moduleName,
-            analyzer.protocols[name],
-            imp.span,
-            "protocol",
-          );
-          analyzer.protocols[name] = depModule.protocols[name]!;
-          return;
-        }
-        // If nothing matched, the item is not exported
-        throw new SemanticError(
-          `Cannot import '${name}' from module '${imp.moduleName}' - it is not exported`,
-          spec.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      // Import value
-      const depValue = depModule.values[name];
-      if (depValue && depValue.type) {
-        const importedType = depValue.type;
-        const scheme = generalize(
-          analyzer,
-          importedType,
-          analyzer.globalScope,
-          analyzer.substitution,
-        );
-        analyzer.globalScope.define(name, scheme);
-        // Track for re-export support
-        analyzer.importedValues.set(name, imp.moduleName);
-      }
-
-      // Also check for constructors (might be re-exported)
-      if (isExportedFromModule(depModule, name, "constructor")) {
-        const depConstructor = depModule.constructors[name];
-        if (depConstructor) {
-          analyzer.constructors[name] = depConstructor;
-          const ctorScheme = depModule.constructorTypes[name];
-          if (ctorScheme) {
-            analyzer.globalScope.define(name, ctorScheme);
-            analyzer.constructorTypes[name] = ctorScheme;
-          }
-        }
-      }
-      break;
-    }
-
-    case "ExportOperator": {
-      const op = spec.operator;
-
-      // Check if operator is exported
-      if (!isExportedFromModule(depModule, op, "operator")) {
-        throw new SemanticError(
-          `Cannot import operator '${op}' from module '${imp.moduleName}' - it is not exported`,
-          spec.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      // Import operator value if it exists
-      const depValue = depModule.values[op];
-      if (depValue && depValue.type) {
-        const importedType = depValue.type;
-        const scheme = generalize(
-          analyzer,
-          importedType,
-          analyzer.globalScope,
-          analyzer.substitution,
-        );
-        analyzer.globalScope.define(op, scheme);
-      }
-
-      // Import operator info if it exists
-      const opInfo = depModule.operators.get(op);
-      if (opInfo) {
-        analyzer.operators.set(op, opInfo);
-        // Track as imported so we can reject fixity redefinitions
-        analyzer.importedValues.set(op, imp.moduleName);
-      }
-      break;
-    }
-
-    case "ExportTypeAll": {
-      const name = spec.name;
-
-      // Check if it's an ADT
-      const depADT = depModule.adts[name];
-      if (depADT) {
-        if (!isExportedFromModule(depModule, name, "type")) {
-          throw new SemanticError(
-            `Cannot import type '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
-            spec.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        checkTypeCollision(
-          analyzer,
-          name,
-          imp.moduleName,
-          analyzer.adts[name],
-          imp.span,
-          "type",
-        );
-        analyzer.adts[name] = depADT;
-
-        // Import all constructors
-        for (const ctorName of depADT.constructors) {
-          const ctor = depModule.constructors[ctorName];
-          if (ctor) {
-            analyzer.constructors[ctorName] = ctor;
-            const ctorScheme = depModule.constructorTypes[ctorName];
-            if (ctorScheme) {
-              analyzer.globalScope.define(ctorName, ctorScheme);
-              analyzer.constructorTypes[ctorName] = ctorScheme;
-            }
-          }
-        }
-        return;
-      }
-
-      // Check if it's a protocol
-      const depProtocol = depModule.protocols[name];
-      if (depProtocol) {
-        if (!isExportedFromModule(depModule, name, "protocol")) {
-          throw new SemanticError(
-            `Cannot import protocol '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
-            spec.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        checkTypeCollision(
-          analyzer,
-          name,
-          imp.moduleName,
-          analyzer.protocols[name],
-          imp.span,
-          "protocol",
-        );
-        analyzer.protocols[name] = depProtocol;
-
-        // Add all protocol methods to scope
-        const methodSchemes = addProtocolMethodsToScope(
-          depProtocol,
-          analyzer.globalScope,
-        );
-        // Store in typeSchemes for LSP hover/completion
-        for (const [methodName, scheme] of methodSchemes) {
-          analyzer.typeSchemes[methodName] = scheme;
-        }
-        return;
-      }
-
-      throw new SemanticError(
-        `Cannot import '${name}(..)' from module '${imp.moduleName}' - it is not a type or protocol`,
-        spec.span,
-        analyzer.getFilePath(),
-      );
-    }
-
-    case "ExportTypeSome": {
-      const name = spec.name;
-      const members = spec.members;
-
-      // Check if it's an ADT with specific constructors
-      const depADT = depModule.adts[name];
-      if (depADT) {
-        if (!isExportedFromModule(depModule, name, "type")) {
-          throw new SemanticError(
-            `Cannot import type '${name}' from module '${imp.moduleName}' - it is not exported`,
-            spec.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        checkTypeCollision(
-          analyzer,
-          name,
-          imp.moduleName,
-          analyzer.adts[name],
-          imp.span,
-          "type",
-        );
-        analyzer.adts[name] = depADT;
-
-        // Import specific constructors
-        for (const ctorName of members) {
-          if (!depADT.constructors.includes(ctorName)) {
-            throw new SemanticError(
-              `Constructor '${ctorName}' is not defined in type '${name}'`,
-              spec.span,
-              analyzer.getFilePath(),
-            );
-          }
-          const ctor = depModule.constructors[ctorName];
-          if (ctor) {
-            analyzer.constructors[ctorName] = ctor;
-            const ctorScheme = depModule.constructorTypes[ctorName];
-            if (ctorScheme) {
-              analyzer.globalScope.define(ctorName, ctorScheme);
-              analyzer.constructorTypes[ctorName] = ctorScheme;
-            }
-          }
-        }
-        return;
-      }
-
-      // Check if it's a protocol with specific methods
-      const depProtocol = depModule.protocols[name];
-      if (depProtocol) {
-        if (!isExportedFromModule(depModule, name, "protocol")) {
-          throw new SemanticError(
-            `Cannot import protocol '${name}' from module '${imp.moduleName}' - it is not exported`,
-            spec.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        checkTypeCollision(
-          analyzer,
-          name,
-          imp.moduleName,
-          analyzer.protocols[name],
-          imp.span,
-          "protocol",
-        );
-        analyzer.protocols[name] = depProtocol;
-
-        // Add specific protocol methods to scope
-        for (const methodName of members) {
-          const methodInfo = depProtocol.methods.get(methodName);
-          if (!methodInfo) {
-            throw new SemanticError(
-              `Method '${methodName}' is not defined in protocol '${name}'`,
-              spec.span,
-              analyzer.getFilePath(),
-            );
-          }
-
-          // Create constrained type scheme for the method
-          const constraintTypeVar: Type = freshType();
-          const methodType = methodInfo.type;
-          const scheme: TypeScheme = {
-            vars: new Set([
-              constraintTypeVar.kind === "var" ? constraintTypeVar.id : -1,
-            ]),
-            constraints: [
-              { protocolName: name, typeArgs: [constraintTypeVar] },
-            ],
-            type: methodType,
-          };
-          analyzer.globalScope.define(methodName, scheme);
-        }
-        return;
-      }
-
-      throw new SemanticError(
-        `Cannot import '${name}(...)' from module '${imp.moduleName}' - it is not a type or protocol`,
-        spec.span,
-        analyzer.getFilePath(),
-      );
-    }
-  }
-}
-
 export function analyze(
   program: Program,
   options: AnalyzeOptions,
 ): SemanticModule {
-  const analyzer = new SemanticAnalyzer(options);
-
-  try {
-    // ===== Module Declaration Validation =====
-    // Every Vibe file MUST have a module declaration as the first statement (enforced by parser).
-    // When fileContext is provided, validate that the declared module name matches the file's path.
-
-    // Compute expected module name from file path
-    const expectedModuleName = computeExpectedModuleName(analyzer);
-
-    const declaredModuleName = program.module.name;
-    if (declaredModuleName !== expectedModuleName) {
-      throw new SemanticError(
-        `Module name '${declaredModuleName}' does not match file path.\n` +
-          `Expected: module ${expectedModuleName} [exposing (..)]\n` +
-          `File path: ${analyzer.getFilePath()}`,
-        program.module.span,
-        analyzer.getFilePath(),
-      );
-    }
-
-    // Extract the current module name for qualified naming
-    const currentModuleName = program.module?.name;
-
-    // ===== Initialize Builtin Types =====
-    // These primitive types are built into the compiler and automatically available.
-    initializeBuiltinADTs(
-      analyzer.adts,
-      analyzer.constructors,
-      analyzer.constructorTypes,
-    );
-    initializeBuiltinOpaqueTypes(analyzer.opaqueTypes);
-
-    // Build the effective imports list
-    analyzer.imports = program.imports ?? [];
-
-    validateImports(analyzer, analyzer.imports);
-
-    // Add built-in Bool constructors (True/False) to global scope
-    analyzer.globalScope.define("True", analyzer.constructorTypes["True"]!);
-    analyzer.globalScope.define("False", analyzer.constructorTypes["False"]!);
-
-    // Seed built-in operators as functions for prefix/infix symmetry.
-    // Built-in operators are monomorphic (not polymorphic).
-    // Short-circuit operators (&& and ||) are now included here.
-    for (const [op, ty] of Object.entries(INFIX_TYPES)) {
-      analyzer.globalScope.define(op, {
-        vars: new Set(),
-        constraints: [],
-        type: ty,
-      });
-    }
-
-    // Seed built-in operator fixities (precedence and associativity).
-    // These are for short-circuit operators that are built into the compiler.
-    for (const [op, fixity] of Object.entries(BUILTIN_OPERATOR_FIXITY)) {
-      analyzer.operators.set(op, fixity);
-    }
-
-    // Merge types from imported dependency modules
-    // This replaces the previous approach of seeding placeholder types for imports.
-    // Now we use actual types from pre-analyzed dependency modules.
-    for (const imp of analyzer.imports) {
-      const depModule = analyzer.dependencies.get(imp.moduleName);
-      if (!depModule) {
-        // If dependency not provided, seed with placeholder (for backward compatibility)
-        if (imp.alias) {
-          analyzer.globalScope.define(imp.alias, {
-            vars: new Set(),
-            constraints: [],
-            type: freshType(),
-          });
-        }
-        continue;
-      }
-
-      // NOTE: Protocols are only imported when explicitly requested:
-      // - `exposing (..)` imports all exported protocols
-      // - `exposing (ProtocolName(..))` imports that specific protocol
-      // - `import Dep` (no exposing clause) does NOT import any protocols
-      // This ensures that `import Vibe.Basics exposing (Num)` does NOT bring
-      // `Show` into scope, so `implement Show Int` will fail if Show is not imported.
-      // Protocols will be imported below in the exposing clause handling.
-
-      // IMPORTANT: Instances are always visible (Haskell's orphan instance semantics).
-      // However, we should only import instances that are DEFINED by the dependency module,
-      // not instances that the dependency merely imported from elsewhere.
-      for (const instance of depModule.instances) {
-        const isDefinedByDep = instance.moduleName === depModule.module.name;
-        if (isDefinedByDep) {
-          analyzer.instances.push(instance);
-        }
-      }
-
-      // Handle import alias (e.g., `import Html as H`)
-      if (imp.alias) {
-        // Register the alias in scope for qualified name access (e.g., H.div).
-        // The type is a placeholder since module namespaces aren't first-class values -
-        // actual qualified access is resolved specially in tryResolveModuleFieldAccess.
-        analyzer.globalScope.define(imp.alias, {
-          vars: new Set(),
-          constraints: [],
-          type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
-        });
-      }
-
-      // Handle unaliased imports (e.g., `import Vibe.JS`)
-      // Register the module path so it can be accessed via qualified names like Vibe.JS.null
-      if (!imp.alias) {
-        // Extract the first component of the module name (e.g., "Vibe" from "Vibe.JS")
-        const moduleParts = imp.moduleName.split(".");
-        const rootModule = moduleParts[0]!;
-
-        // Check if we haven't already registered this module root
-        if (!analyzer.globalScope.has(rootModule)) {
-          analyzer.globalScope.define(rootModule, {
-            vars: new Set(),
-            constraints: [],
-            type: freshType(), // Placeholder: module namespaces resolved via tryResolveModuleFieldAccess
-          });
-        }
-      }
-
-      // Handle explicit exposing with new ExportSpec format
-      if (imp.exposing?.kind === "Explicit") {
-        for (const spec of imp.exposing.exports) {
-          importExportSpec(analyzer, spec, depModule, imp);
-        }
-      }
-
-      // Handle exposing all (e.g., `import Html exposing (..)`)
-      if (imp.exposing?.kind === "All") {
-        // Import all exported values
-        for (const [name, depValue] of Object.entries(depModule.values) as [
-          string,
-          ValueInfo,
-        ][]) {
-          if (depValue.type && isExportedFromModule(depModule, name, "value")) {
-            const importedType = depValue.type;
-            const scheme = generalize(
-              analyzer,
-              importedType,
-              analyzer.globalScope,
-              analyzer.substitution,
-            );
-            analyzer.globalScope.define(name, scheme);
-            // Track for re-export support
-            analyzer.importedValues.set(name, imp.moduleName);
-          }
-        }
-
-        // Import all exported constructors
-        for (const [name, ctor] of Object.entries(depModule.constructors) as [
-          string,
-          ConstructorInfo,
-        ][]) {
-          if (isExportedFromModule(depModule, name, "constructor")) {
-            analyzer.constructors[name] = ctor;
-            // Also import the type scheme so the constructor can be used as a value
-            const ctorScheme = depModule.constructorTypes[name];
-            if (ctorScheme) {
-              analyzer.globalScope.define(name, ctorScheme);
-              analyzer.constructorTypes[name] = ctorScheme;
-            }
-          }
-        }
-
-        // Import all exported ADTs
-        for (const [name, adt] of Object.entries(depModule.adts) as [
-          string,
-          ADTInfo,
-        ][]) {
-          if (isExportedFromModule(depModule, name, "type")) {
-            // Check for collision with existing ADT from different module
-            checkTypeCollision(
-              analyzer,
-              name,
-              imp.moduleName,
-              analyzer.adts[name],
-              imp.span,
-              "type",
-            );
-            analyzer.adts[name] = adt;
-          }
-        }
-
-        // Import all exported type aliases
-        for (const [name, alias] of Object.entries(depModule.typeAliases) as [
-          string,
-          TypeAliasInfo,
-        ][]) {
-          if (isExportedFromModule(depModule, name, "type")) {
-            // Check for collision with existing type alias from different module
-            checkTypeCollision(
-              analyzer,
-              name,
-              imp.moduleName,
-              analyzer.typeAliases[name],
-              imp.span,
-              "type alias",
-            );
-            analyzer.typeAliases[name] = alias;
-          }
-        }
-
-        // Import all exported opaque types
-        for (const [name, opaque] of Object.entries(depModule.opaqueTypes) as [
-          string,
-          OpaqueTypeInfo,
-        ][]) {
-          if (isExportedFromModule(depModule, name, "type")) {
-            // Check for collision with existing opaque type from different module
-            // Allow builtin types to be shadowed by imports (e.g., prelude can re-export Int)
-            // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-            if (
-              Object.hasOwn(analyzer.opaqueTypes, name) &&
-              analyzer.opaqueTypes[name]!.moduleName !== BUILTIN_MODULE_NAME &&
-              analyzer.opaqueTypes[name]!.moduleName !== imp.moduleName
-            ) {
-              throw new SemanticError(
-                `Opaque type '${name}' conflicts with opaque type from module '${
-                  analyzer.opaqueTypes[name]!.moduleName
-                }'. ` + `Consider using a different name or qualified imports.`,
-                imp.span,
-                analyzer.getFilePath(),
-              );
-            }
-            analyzer.opaqueTypes[name] = opaque;
-          }
-        }
-
-        // Import all exported protocols
-        for (const [name, protocol] of Object.entries(depModule.protocols) as [
-          string,
-          ProtocolInfo,
-        ][]) {
-          if (isExportedFromModule(depModule, name, "protocol")) {
-            // Check for collision with existing protocol from different module
-            checkTypeCollision(
-              analyzer,
-              name,
-              imp.moduleName,
-              analyzer.protocols[name],
-              imp.span,
-              "protocol",
-            );
-            analyzer.protocols[name] = protocol;
-
-            // Add protocol methods to scope so they can be called directly
-            const methodSchemes = addProtocolMethodsToScope(
-              protocol,
-              analyzer.globalScope,
-            );
-            // Store in typeSchemes for LSP hover/completion
-            for (const [methodName, scheme] of methodSchemes) {
-              analyzer.typeSchemes[methodName] = scheme;
-            }
-          }
-        }
-
-        // Import all instances (always imported regardless of exports)
-        for (const instance of depModule.instances) {
-          analyzer.instances.push(instance);
-        }
-
-        // Import exported operator declarations
-        for (const [op, info] of depModule.operators) {
-          if (isExportedFromModule(depModule, op, "operator")) {
-            analyzer.operators.set(op, info);
-            // Track for re-export support (operators are also values)
-            analyzer.importedValues.set(op, imp.moduleName);
-          }
-        }
-      }
-    }
-
-    // ===== PASS 0: Register infix declarations =====
-    // We process infix declarations first so operator precedence is known during parsing.
-    // Note: This pass validates declarations but the parser pre-processing handles actual precedence.
-    for (const decl of program.declarations) {
-      if (decl.kind === "InfixDeclaration") {
-        registerInfixDeclaration(analyzer, decl);
-        continue;
-      }
-    }
-
-    // ===== PASS 1a: Register type declarations (ADTs only) =====
-    // We register ADTs first so type aliases can reference them.
-    for (const decl of program.declarations) {
-      if (decl.kind === "TypeDeclaration") {
-        registerTypeDeclaration(
-          analyzer,
-          decl,
-          analyzer.adts,
-          analyzer.records,
-          analyzer.constructors,
-          analyzer.constructorTypes,
-          analyzer.typeAliases,
-          analyzer.opaqueTypes,
-          analyzer.globalScope,
-          currentModuleName,
-        );
-        continue;
-      }
-    }
-
-    // ===== PASS 1a2: Register opaque type declarations =====
-    // Opaque types are registered before type aliases since aliases may reference them.
-    for (const decl of program.declarations) {
-      if (decl.kind === "OpaqueTypeDeclaration") {
-        registerOpaqueType(
-          analyzer,
-          decl,
-          analyzer.opaqueTypes,
-          currentModuleName,
-        );
-        continue;
-      }
-    }
-
-    // ===== PASS 1b: Register type aliases =====
-    // Type aliases are registered after ADTs so they can reference them.
-    // Aliases are also registered without validation first so they can reference each other.
-    const typeAliasDecls: TypeAliasDeclaration[] = [];
-    for (const decl of program.declarations) {
-      if (decl.kind === "TypeAliasDeclaration") {
-        registerTypeAliasWithoutValidation(
-          analyzer,
-          decl,
-          analyzer.typeAliases,
-          currentModuleName,
-        );
-        typeAliasDecls.push(decl);
-        continue;
-      }
-    }
-
-    // ===== PASS 1c: Validate type alias references =====
-    // Now that all ADTs and aliases are registered, validate that type references exist.
-    for (const decl of typeAliasDecls) {
-      validateTypeAliasReferences(analyzer, decl);
-    }
-
-    // ===== PASS 1d: Register protocols =====
-    for (const decl of program.declarations) {
-      if (decl.kind === "ProtocolDeclaration") {
-        registerProtocol(analyzer, decl, currentModuleName);
-        // Track methods from locally-defined protocols for fixity validation
-        for (const method of decl.methods) {
-          analyzer.localProtocolMethods.add(method.name);
-        }
-        continue;
-      }
-    }
-
-    // ===== PASS 1.5: Register implementation declarations =====
-    // Implementations are registered after protocols but before value inference
-    // so that we can resolve constraints during type checking.
-    for (const decl of program.declarations) {
-      if (decl.kind === "ImplementationDeclaration") {
-        registerImplementation(
-          analyzer,
-          decl,
-          analyzer.instances,
-          analyzer.localInstances,
-          analyzer.protocols,
-          analyzer.adts,
-          analyzer.typeAliases,
-          currentModuleName,
-          program.declarations,
-        );
-        continue;
-      }
-    }
-
-    // ===== PASS 1.6: Auto-implement Eq for all type declarations =====
-    // After explicit implementations are registered, auto-generate Eq for types that:
-    // 1. Don't already have an Eq implementation
-    // 2. Can implement Eq (no function fields, all fields can implement Eq)
-    for (const decl of program.declarations) {
-      if (decl.kind === "TypeDeclaration") {
-        const eqInstance = autoImplementProtocolForType(
-          analyzer,
-          "Eq",
-          decl,
-          analyzer.protocols,
-          analyzer.instances,
-          program.declarations,
-          currentModuleName,
-        );
-        if (eqInstance) {
-          analyzer.instances.push(eqInstance);
-          analyzer.localInstances.push(eqInstance);
-        }
-
-        const showInstance = autoImplementProtocolForType(
-          analyzer,
-          "Show",
-          decl,
-          analyzer.protocols,
-          analyzer.instances,
-          program.declarations,
-          currentModuleName,
-        );
-        if (showInstance) {
-          analyzer.instances.push(showInstance);
-          analyzer.localInstances.push(showInstance);
-        }
-      }
-    }
-
-    // ===== PASS 2: Register value declarations =====
-    for (const decl of program.declarations) {
-      if (
-        decl.kind === "ValueDeclaration" ||
-        decl.kind === "ExternalDeclaration"
-      ) {
-        registerValue(analyzer, analyzer.values, decl);
-        continue;
-      }
-
-      if (decl.kind === "TypeAnnotationDeclaration") {
-        // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-        if (Object.hasOwn(analyzer.annotations, decl.name)) {
-          throw new SemanticError(
-            `Duplicate type annotation for '${decl.name}'`,
-            decl.span,
-            analyzer.getFilePath(),
-          );
-        }
-        analyzer.annotations[decl.name] = decl;
-      }
-    }
-
-    // ===== PASS 2a: Validate infix declarations have definitions =====
-    // Each infix declaration must have a corresponding LOCAL function definition.
-    // Fixity is intrinsic to operators and cannot be redefined for imported operators.
-    // Note: Imported operator validation is done earlier in registerInfixDeclaration.
-    validateInfixDeclarationsHaveDefinitions(
-      analyzer,
-      analyzer.infixDeclarations,
-      analyzer.values,
-      analyzer.localProtocolMethods,
-    );
-
-    for (const [name, ann] of Object.entries(analyzer.annotations)) {
-      // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-      if (!Object.hasOwn(analyzer.values, name)) {
-        throw new SemanticError(
-          `Type annotation for '${name}' has no matching definition`,
-          ann.span,
-          analyzer.getFilePath(),
-        );
-      }
-      const value = analyzer.values[name]!;
-      if (value.declaration.kind === "ExternalDeclaration") {
-        throw new SemanticError(
-          `External declaration '${name}' already includes a type annotation`,
-          ann.span,
-          analyzer.getFilePath(),
-        );
-      }
-      value.annotation = ann.annotation;
-    }
-
-    // Seed global names to enable recursion.
-    // We initially seed with monomorphic schemes (empty quantifier set)
-    // and will generalize them after full inference.
-    for (const [name, info] of Object.entries(analyzer.values)) {
-      const annotationExpr =
-        info.annotation ??
-        (info.declaration.kind === "ExternalDeclaration"
-          ? info.declaration.annotation
-          : undefined);
-
-      // Arity validation is not needed here - the type system will verify
-      // that the RHS expression's type matches the annotation during unification.
-
-      // Use typeFromAnnotationWithConstraints to extract both type and constraints
-      let annotationType: Type | undefined;
-      let annotatedConstraints: Constraint[] | undefined;
-
-      if (annotationExpr) {
-        // Validate that all type references in the annotation are defined.
-        // For value/external declarations, type variables are implicitly defined,
-        // so we collect them first to treat as "defined params".
-        const typeVars = collectTypeVariables(annotationExpr);
-        const validationErrors = validateTypeExpr(
-          analyzer,
-          annotationExpr,
-          typeVars,
-          info.declaration.span,
-        );
-
-        if (validationErrors.length > 0) {
-          const err = validationErrors[0]!;
-          const message = err.suggestion
-            ? `${err.message}. ${err.suggestion}`
-            : err.message;
-          throw new SemanticError(message, err.span, analyzer.getFilePath());
-        }
-
-        const result = typeFromAnnotationWithConstraints(
-          analyzer,
-          annotationExpr,
-          new Map(),
-        );
-        annotationType = result.type;
-        annotatedConstraints =
-          result.constraints.length > 0 ? result.constraints : undefined;
-
-        // Store annotated constraints in the value info for later merging
-        if (annotatedConstraints) {
-          info.annotatedConstraints = annotatedConstraints;
-        }
-      }
-
-      const seeded =
-        annotationType ?? seedValueType(analyzer, info.declaration);
-      // Seed with a monomorphic scheme (no quantified variables yet)
-      declareSymbol(
-        analyzer,
-        analyzer.globalScope,
-        name,
-        { vars: new Set(), constraints: [], type: seeded },
-        info.declaration.span,
-      );
-      analyzer.types[name] = seeded;
-    }
-
-    // Set the instance registry for constraint validation during generalization.
-    // This allows validateConcreteConstraints to check if concrete type constraints
-    // have matching instances.
-    analyzer.setInstanceRegistry(analyzer.instances);
-
-    // ===== PASS 2.0b: Concretize polymorphic instance type args =====
-    // Before value inference, analyze each instance's method bodies to determine
-    // if polymorphic type args can be concretized. This is important for multi-parameter
-    // protocols where the return type is constrained (e.g., `implement Appendable a => Proto Float a`
-    // where the method body forces `a` to be `List Int`).
-    concretizeInstanceTypeArgs(analyzer);
-
-    // Build dependency graph and compute SCCs for proper mutual recursion handling.
-    // SCCs are returned in reverse topological order, so we process dependencies first.
-    const depGraph = buildDependencyGraph(analyzer.values);
-    const sccs = computeSCCs(depGraph);
-
-    // Process each SCC:
-    // - For single-element SCCs (non-recursive or self-recursive): infer and generalize immediately
-    // - For multi-element SCCs (mutually recursive): infer all together, then generalize all together
-    for (const scc of sccs) {
-      // First, handle any external declarations in this SCC (they don't participate in mutual recursion)
-      const externals: string[] = [];
-      const valueDecls: string[] = [];
-
-      for (const name of scc) {
-        const info = analyzer.values[name]!;
-        if (info.declaration.kind === "ExternalDeclaration") {
-          externals.push(name);
-        } else {
-          valueDecls.push(name);
-        }
-      }
-
-      // Process externals first
-      for (const name of externals) {
-        const info = analyzer.values[name]!;
-        if (info.declaration.kind === "ExternalDeclaration") {
-          // Use typeFromAnnotationWithConstraints for external declarations too
-          const result = typeFromAnnotationWithConstraints(
-            analyzer,
-            info.declaration.annotation,
-            new Map(),
-          );
-          info.type = result.type;
-
-          // Store annotated constraints if any
-          if (result.constraints.length > 0) {
-            info.annotatedConstraints = result.constraints;
-          }
-
-          // External declarations use their annotated constraints directly
-          const scheme: TypeScheme = {
-            vars: new Set<number>(),
-            constraints: result.constraints,
-            type: info.type,
-          };
-          analyzer.globalScope.symbols.set(info.declaration.name, scheme);
-          // Store the type scheme for external declarations too (needed by IR lowering)
-          analyzer.typeSchemes[name] = scheme;
-        }
-      }
-
-      // Process value declarations in this SCC together
-      if (valueDecls.length > 0) {
-        // Reset constraint context for this SCC
-        // All values in an SCC share constraints (they're mutually recursive)
-        analyzer.resetConstraintContext();
-
-        // Infer all declarations in the SCC
-        const inferredTypes: Map<string, Type> = new Map();
-
-        for (const name of valueDecls) {
-          const info = analyzer.values[name]!;
-          if (info.declaration.kind !== "ValueDeclaration") continue;
-
-          const declaredType = analyzer.types[name]!;
-          // Use the pre-computed annotated type (already extracted with constraints during seeding)
-          const annotationType = info.annotation
-            ? typeFromAnnotation(analyzer, info.annotation, new Map())
-            : undefined;
-
-          const inferred = analyzeValueDeclaration(
-            analyzer,
-            info.declaration,
-            analyzer.globalScope,
-            analyzer.substitution,
-            declaredType,
-            annotationType,
-          );
-
-          inferredTypes.set(name, inferred);
-          analyzer.types[name] = inferred;
-          info.type = inferred;
-        }
-
-        // After inferring all in the SCC, generalize all together
-        // This ensures mutually recursive functions get proper polymorphic types
-        for (const name of valueDecls) {
-          const info = analyzer.values[name]!;
-          const inferred = inferredTypes.get(name)!;
-          const generalizedScheme = generalizeWithAnnotatedConstraints(
-            analyzer,
-            inferred,
-            new Scope(analyzer.globalScope.parent),
-            analyzer.substitution,
-            info.annotatedConstraints,
-            info.declaration.span,
-          );
-          analyzer.globalScope.define(name, generalizedScheme);
-          // Store the type scheme with constraints for dictionary-passing
-          analyzer.typeSchemes[name] = generalizedScheme;
-        }
-      }
-    }
-
-    // ===== PASS 2.5: Validate implementation method expressions =====
-    // Now that all values are registered, validate that method implementations
-    // reference defined identifiers. Only validate localInstances since imported
-    // instances were already validated in their defining module.
-    validateImplementationMethodExpressions(analyzer, analyzer.localInstances);
-
-    // ===== PASS 2.5b: Validate implementation method types =====
-    // Validate that each method implementation's type matches the protocol's
-    // declared method signature (with type parameters substituted).
-    validateImplementationMethodTypes(analyzer);
-
-    // ===== PASS 2.5c: Validate instance constraint satisfiability =====
-    // For polymorphic instances with constraints (e.g., `implement Eq a => ExampleProtocol a`),
-    // validate that the constraint protocols have instances that could satisfy the constraint.
-    // This catches cases where a constraint references a protocol with no instances.
-    validateInstanceConstraintSatisfiability(analyzer);
-
-    // ===== PASS 2.5d: Validate concrete constraint instances exist =====
-    // After type inference, check that any protocol constraints on concrete types
-    // (e.g., `Eq A` when calling a function that requires `Eq a`) have corresponding
-    // instance declarations. This provides early error detection for missing instances.
-    validateConcreteConstraintInstances(analyzer);
-
-    // ===== PASS 2.6: Validate protocol default implementations =====
-    // Validate that default implementations in protocols reference defined identifiers.
-    // This is done after all values are registered so forward references work.
-    validateProtocolDefaultImplementations(analyzer, currentModuleName);
-
-    // Compute export information for this module
-    const exports = computeModuleExports(
-      analyzer,
-      program.module,
-      analyzer.values,
-      analyzer.adts,
-      analyzer.constructors,
-      analyzer.typeAliases,
-      analyzer.opaqueTypes,
-      analyzer.protocols,
-      analyzer.operators,
-      analyzer.importedValues,
-    );
-
-    const result: SemanticModule = {
-      values: analyzer.values,
-      annotations: analyzer.annotations,
-      module: program.module,
-      imports: analyzer.imports,
-      types: analyzer.types,
-      typeSchemes: analyzer.typeSchemes,
-      adts: analyzer.adts,
-      constructors: analyzer.constructors,
-      constructorTypes: analyzer.constructorTypes,
-      typeAliases: analyzer.typeAliases,
-      records: analyzer.records,
-      opaqueTypes: analyzer.opaqueTypes,
-      protocols: analyzer.protocols,
-      instances: analyzer.instances,
-      operators: analyzer.operators,
-      infixDeclarations: analyzer.infixDeclarations,
-      exports,
-      errors: analyzer.getErrors(),
-    };
-
-    // If errors were collected, throw them as a group (Elm-style: report all, not just first)
-    if (analyzer.getErrors().length > 0) {
-      throw new MultipleSemanticErrors(analyzer.getErrors());
-    }
-
-    return result;
-  } catch (error) {
-    // If we already wrapped errors in MultipleSemanticErrors, re-throw as-is
-    if (error instanceof MultipleSemanticErrors) {
-      throw error;
-    }
-    // Enrich SemanticError with file path if available
-    if (error instanceof SemanticError && !error.filePath) {
-      throw new SemanticError(
-        error.message,
-        error.span,
-        analyzer.getFilePath(),
-      );
-    }
-    throw error;
-  }
-}
-
-function registerValue(
-  analyzer: SemanticAnalyzer,
-  values: Record<string, ValueInfo>,
-  decl: ValueDeclaration | ExternalDeclaration,
-) {
-  // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-  if (Object.hasOwn(values, decl.name)) {
-    throw new SemanticError(
-      `Duplicate definition for '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-  values[decl.name] = {
-    declaration: decl,
-    annotation:
-      decl.kind === "ExternalDeclaration" ? decl.annotation : undefined,
-    externalTarget:
-      decl.kind === "ExternalDeclaration" ? decl.target : undefined,
-  };
-}
-
-/**
- * Register an Algebraic Data Type declaration.
- *
- * This function:
- * 1. Validates the type name is not already defined
- * 2. Validates constructor names are unique within the module
- * 3. Validates type parameters are unique
- * 4. Registers the ADT in the adts registry
- * 5. Registers each constructor in the constructors registry
- * 6. Seeds constructors as polymorphic values in the global scope
- *
- * For example, `type Maybe a = Just a | Nothing` registers:
- * - ADT: Maybe with param [a] and constructors [Just, Nothing]
- * - Constructor Just: arity 1, parent Maybe
- * - Constructor Nothing: arity 0, parent Maybe
- * - Global scope: Just : forall a. a -> Maybe a
- * - Global scope: Nothing : forall a. Maybe a
- */
-function registerTypeDeclaration(
-  analyzer: SemanticAnalyzer,
-  decl: TypeDeclaration,
-  adts: Record<string, ADTInfo>,
-  records: Record<string, RecordInfo>,
-  constructors: Record<string, ConstructorInfo>,
-  constructorTypes: Record<string, TypeScheme>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  globalScope: Scope,
-  moduleName: string,
-) {
-  // Check for duplicate type name
-  const existingADT = adts[decl.name];
-  if (existingADT) {
-    // If it's from a different module, provide a more helpful error message
-    if (existingADT.moduleName && existingADT.moduleName !== moduleName) {
-      throw new SemanticError(
-        `Type '${decl.name}' conflicts with type from module '${existingADT.moduleName}'. ` +
-          `Consider using a different name or qualified imports.`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    throw new SemanticError(
-      `Duplicate type declaration for '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Validate type parameters are unique
-  const paramSet = new Set<string>();
-  for (const param of decl.params) {
-    if (paramSet.has(param)) {
-      throw new SemanticError(
-        `Duplicate type parameter '${param}' in type '${decl.name}'`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    paramSet.add(param);
-  }
-
-  // Validate at least one constructor (for ADTs only)
-  // Record types don't have constructors
-  if (!decl.constructors || decl.constructors.length === 0) {
-    // If we have record fields, this is a record type - register it separately
-    if (decl.recordFields) {
-      registerRecordTypeDeclaration(
-        analyzer,
-        decl,
-        records,
-        adts,
-        typeAliases,
-        opaqueTypes,
-        moduleName,
-      );
-      return;
-    }
-    throw new SemanticError(
-      `Type '${decl.name}' must have at least one constructor`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Create fresh type variables for each type parameter
-  // These will be used to construct the polymorphic type scheme for constructors
-  const paramTypeVars: Map<string, TypeVar> = new Map();
-  for (const param of decl.params) {
-    paramTypeVars.set(param, freshType());
-  }
-
-  // Resolve constraints (if any)
-  const semanticConstraints: Constraint[] = [];
-  if (decl.constraints) {
-    for (const c of decl.constraints) {
-      semanticConstraints.push({
-        protocolName: c.protocolName,
-        typeArgs: c.typeArgs.map((t) =>
-          constructorArgToType(analyzer, t, paramTypeVars),
-        ),
-      });
-    }
-  }
-
-  // Register the ADT
-  const constructorNames = decl.constructors.map((c) => c.name);
-  adts[decl.name] = {
-    name: decl.name,
-    moduleName,
-    params: decl.params,
-    constructors: constructorNames,
-    constraints: semanticConstraints,
-    span: decl.span,
-  };
-
-  // Build the result type: TypeName param1 param2 ...
-  // For Maybe a, this is: { kind: "con", name: "Maybe", args: [TypeVar(a)] }
-  const resultType: TypeCon = {
-    kind: "con",
-    name: decl.name,
-    args: decl.params.map((p) => paramTypeVars.get(p)!),
-  };
-
-  // Register each constructor
-  for (const ctor of decl.constructors) {
-    // Check for duplicate constructor name defined within the SAME module
-    // Allow shadowing constructors imported from other modules
-    const existingCtor = constructors[ctor.name];
-    if (existingCtor && existingCtor.moduleName === moduleName) {
-      throw new SemanticError(
-        `Duplicate constructor '${ctor.name}' (constructor names must be unique within a module)`,
-        ctor.span,
-        analyzer.getFilePath(),
-      );
-    }
-
-    // Note: We allow shadowing built-in constructors (like True/False)
-    // The type checker will disambiguate based on context
-
-    // Register constructor info
-    constructors[ctor.name] = {
-      arity: ctor.args.length,
-      argTypes: ctor.args,
-      parentType: decl.name,
-      parentParams: decl.params,
-      moduleName,
-      span: ctor.span,
-    };
-
-    // Build the constructor's type and register it in global scope
-    // For Just: a -> Maybe a
-    // For Nothing: Maybe a
-    const ctorType = buildConstructorType(
-      analyzer,
-      ctor,
-      resultType,
-      paramTypeVars,
-    );
-
-    // Generalize over all type parameters to make it polymorphic
-    const quantifiedVars = new Set<number>();
-    for (const tv of paramTypeVars.values()) {
-      quantifiedVars.add(tv.id);
-    }
-
-    const ctorScheme: TypeScheme = {
-      vars: quantifiedVars,
-      constraints: semanticConstraints, // Apply type constraints to constructor
-      type: ctorType,
-    };
-
-    // Register constructor as a polymorphic value in global scope
-    globalScope.symbols.set(ctor.name, ctorScheme);
-
-    // Also store in constructorTypes for export
-    constructorTypes[ctor.name] = ctorScheme;
-  }
+  return new SemanticAnalyzer(program, options).analyze();
 }
 
 /**
@@ -2318,252 +6377,6 @@ function containsRecordType(expr: TypeExpr): boolean {
       return expr.elements.some(containsRecordType);
     case "QualifiedType":
       return containsRecordType(expr.type);
-  }
-}
-
-/**
- * Register a record type declaration.
- *
- * Record types are named types with fields, defined using:
- * `type Person = { name : String, age : Int }`
- *
- * Unlike ADTs:
- * - Record types don't have constructors
- * - Fields are accessed using dot notation
- * - Records can be used in pattern matching
- */
-function registerRecordTypeDeclaration(
-  analyzer: SemanticAnalyzer,
-  decl: TypeDeclaration,
-  records: Record<string, RecordInfo>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  moduleName: string,
-): void {
-  // Check for duplicate type name across all type namespaces
-  if (records[decl.name]) {
-    throw new SemanticError(
-      `Duplicate record type declaration for '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-  if (adts[decl.name]) {
-    throw new SemanticError(
-      `Record type '${decl.name}' conflicts with ADT '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-  if (typeAliases[decl.name]) {
-    throw new SemanticError(
-      `Record type '${decl.name}' conflicts with type alias '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-  if (opaqueTypes[decl.name]) {
-    throw new SemanticError(
-      `Record type '${decl.name}' conflicts with opaque type '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Validate no mixing of constructors and record fields
-  if (decl.constructors && decl.constructors.length > 0) {
-    throw new SemanticError(
-      `Type '${decl.name}' cannot have both constructors and record fields. ` +
-        `Use 'type' for ADTs or record types separately.`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Validate record fields exist - but allow empty records (like unit types)
-  if (!decl.recordFields) {
-    throw new SemanticError(
-      `Record type '${decl.name}' is missing field definitions`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Check for duplicate field names
-  const fieldNames = new Set<string>();
-  for (const field of decl.recordFields) {
-    if (fieldNames.has(field.name)) {
-      throw new SemanticError(
-        `Duplicate field '${field.name}' in record type '${decl.name}'`,
-        field.span,
-        analyzer.getFilePath(),
-      );
-    }
-    fieldNames.add(field.name);
-  }
-
-  // Create temporary type variables for type params (for field type resolution)
-  const paramTypeVars: Map<string, TypeVar> = new Map();
-  for (const param of decl.params) {
-    paramTypeVars.set(param, freshType());
-  }
-
-  // Resolve constraints (if any)
-  const semanticConstraints: Constraint[] = [];
-  if (decl.constraints) {
-    for (const c of decl.constraints) {
-      semanticConstraints.push({
-        protocolName: c.protocolName,
-        typeArgs: c.typeArgs.map((t) =>
-          constructorArgToType(analyzer, t, paramTypeVars),
-        ),
-      });
-    }
-  }
-
-  // Validate field types - reject floating record types in field definitions
-  for (const field of decl.recordFields) {
-    if (containsRecordType(field.type)) {
-      throw new SemanticError(
-        `Record types cannot be used directly in type annotations. ` +
-          `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
-        field.span,
-        analyzer.getFilePath(),
-      );
-    }
-  }
-
-  // Build field info - store the AST TypeExpr for proper type parameter resolution
-  const fields: RecordFieldInfo[] = decl.recordFields.map((field) => ({
-    name: field.name,
-    typeExpr: field.type, // Store the AST TypeExpr for later resolution
-    span: field.span,
-  }));
-
-  // Register the record type
-  records[decl.name] = {
-    name: decl.name,
-    moduleName,
-    params: decl.params,
-    constraints: semanticConstraints,
-    fields,
-    span: decl.span,
-  };
-}
-
-/**
- * Build the type for a constructor.
- *
- * For a constructor like `Just a` in `type Maybe a`:
- * - Arguments: [a]
- * - Result: Maybe a
- * - Type: a -> Maybe a
- *
- * For a constructor like `Nothing` in `type Maybe a`:
- * - Arguments: []
- * - Result: Maybe a
- * - Type: Maybe a (no function arrow)
- *
- * For a constructor like `Node a (Tree a) (Tree a)` in `type Tree a`:
- * - Arguments: [a, Tree a, Tree a]
- * - Result: Tree a
- * - Type: a -> Tree a -> Tree a -> Tree a
- */
-function buildConstructorType(
-  analyzer: SemanticAnalyzer,
-  ctor: ConstructorVariant,
-  resultType: TypeCon,
-  paramTypeVars: Map<string, TypeVar>,
-): Type {
-  if (ctor.args.length === 0) {
-    // Nullary constructor: just return the result type
-    return resultType;
-  }
-
-  // Convert each argument TypeExpr to internal Type
-  const argTypes: Type[] = ctor.args.map((argExpr) =>
-    constructorArgToType(analyzer, argExpr, paramTypeVars),
-  );
-
-  // Build function type: arg1 -> arg2 -> ... -> ResultType
-  return fnChain(argTypes, resultType);
-}
-
-/**
- * Convert a constructor argument TypeExpr to an internal Type.
- *
- * This handles:
- * - Type variables (lowercase, e.g., "a") -> look up in paramTypeVars
- * - Type constructors (uppercase, e.g., "List a") -> build TypeCon
- * - Recursive types (e.g., "Tree a" in Tree definition) -> build TypeCon
- */
-function constructorArgToType(
-  analyzer: SemanticAnalyzer,
-  expr: TypeExpr,
-  paramTypeVars: Map<string, TypeVar>,
-): Type {
-  switch (expr.kind) {
-    case "TypeRef": {
-      // Check if it's a type variable (lowercase, single letter typically)
-      const typeVar = paramTypeVars.get(expr.name);
-      if (typeVar && expr.args.length === 0) {
-        return typeVar;
-      }
-
-      // Otherwise it's a type constructor
-      // Recursively convert arguments
-      const args = expr.args.map((arg) =>
-        constructorArgToType(analyzer, arg, paramTypeVars),
-      );
-      return {
-        kind: "con",
-        name: expr.name,
-        args,
-      };
-    }
-    case "FunctionType": {
-      return {
-        kind: "fun",
-        from: constructorArgToType(analyzer, expr.from, paramTypeVars),
-        to: constructorArgToType(analyzer, expr.to, paramTypeVars),
-      };
-    }
-    case "TupleType": {
-      return {
-        kind: "tuple",
-        elements: expr.elements.map((el) =>
-          constructorArgToType(analyzer, el, paramTypeVars),
-        ),
-      };
-    }
-    case "RecordType": {
-      // Convert record type annotation to internal record type
-      const sortedFields = [...expr.fields].sort((a, b) =>
-        a.name.localeCompare(b.name),
-      );
-      const fields: Record<string, Type> = {};
-      for (const field of sortedFields) {
-        fields[field.name] = constructorArgToType(
-          analyzer,
-          field.type,
-          paramTypeVars,
-        );
-      }
-      return {
-        kind: "record",
-        fields,
-      };
-    }
-    case "QualifiedType": {
-      // For constructor arguments, we don't support qualified types
-      // (constraints only make sense at the top level of function signatures)
-      throw new SemanticError(
-        "Constructor arguments cannot have constraints",
-        expr.span,
-        analyzer.getFilePath(),
-      );
-    }
   }
 }
 
@@ -2819,279 +6632,6 @@ function validateTypeExpr(
 }
 
 /**
- * Register a type alias declaration without validating type references.
- * This allows aliases to be registered before validation, enabling
- * mutual references between aliases.
- */
-function registerTypeAliasWithoutValidation(
-  analyzer: SemanticAnalyzer,
-  decl: TypeAliasDeclaration,
-  typeAliases: Record<string, TypeAliasInfo>,
-  moduleName: string | undefined,
-) {
-  // Check for duplicate alias name
-  const existingAlias = typeAliases[decl.name];
-  if (existingAlias) {
-    // If it's from a different module, provide a more helpful error message
-    if (existingAlias.moduleName && existingAlias.moduleName !== moduleName) {
-      throw new SemanticError(
-        `Type alias '${decl.name}' conflicts with type alias from module '${existingAlias.moduleName}'. ` +
-          `Consider using a different name or qualified imports.`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    throw new SemanticError(
-      `Duplicate type alias '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Validate type parameters are unique
-  const paramSet = new Set<string>();
-  for (const param of decl.params) {
-    if (paramSet.has(param)) {
-      throw new SemanticError(
-        `Duplicate type parameter '${param}' in type alias '${decl.name}'`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    paramSet.add(param);
-  }
-
-  // Register the alias (validation happens later)
-  typeAliases[decl.name] = {
-    name: decl.name,
-    moduleName,
-    params: decl.params,
-    value: decl.value,
-    span: decl.span,
-  };
-}
-
-/**
- * Validate that all type references in a type alias are defined.
- * Called after all ADTs and aliases are registered.
- */
-function validateTypeAliasReferences(
-  analyzer: SemanticAnalyzer,
-  decl: TypeAliasDeclaration,
-) {
-  // Reject bare record types in type alias declarations
-  // Record types must be defined using `type Name = { ... }` syntax
-  if (decl.value.kind === "RecordType") {
-    throw new SemanticError(
-      `Type alias '${decl.name}' cannot directly define a record type. ` +
-        `Use 'type ${decl.name} = { ... }' instead of 'type alias'.`,
-      decl.value.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  const paramSet = new Set<string>(decl.params);
-
-  const validationErrors = validateTypeExpr(
-    analyzer,
-    decl.value,
-    paramSet,
-    decl.span,
-  );
-
-  if (validationErrors.length > 0) {
-    // Report the first error (could be extended to report all)
-    const err = validationErrors[0]!;
-    const message = err.suggestion
-      ? `${err.message}. ${err.suggestion}`
-      : err.message;
-    throw new SemanticError(message, err.span, analyzer.getFilePath());
-  }
-}
-
-/**
- * Register an opaque type declaration.
- *
- * Opaque types are abstract types that hide their implementation.
- * They are useful for JS interop where the actual type is unknown.
- * Pattern matching and record updates are not allowed on opaque types.
- *
- * Example: `type Promise a` creates an opaque type that takes one parameter.
- */
-function registerOpaqueType(
-  analyzer: SemanticAnalyzer,
-  decl: OpaqueTypeDeclaration,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  moduleName: string | undefined,
-) {
-  // Check for duplicate type name
-  // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-  if (Object.hasOwn(opaqueTypes, decl.name)) {
-    const existing = opaqueTypes[decl.name]!;
-    if (existing.moduleName && existing.moduleName !== moduleName) {
-      throw new SemanticError(
-        `Opaque type '${decl.name}' conflicts with opaque type from module '${existing.moduleName}'. ` +
-          `Consider using a different name or qualified imports.`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    throw new SemanticError(
-      `Duplicate opaque type declaration for '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Validate type parameters are unique
-  const paramSet = new Set<string>();
-  for (const param of decl.params) {
-    if (paramSet.has(param)) {
-      throw new SemanticError(
-        `Duplicate type parameter '${param}' in opaque type '${decl.name}'`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    paramSet.add(param);
-  }
-
-  // Register the opaque type
-  opaqueTypes[decl.name] = {
-    name: decl.name,
-    moduleName,
-    params: decl.params,
-    span: decl.span,
-  };
-}
-
-/**
- * Register a type alias declaration.
- *
- * Type aliases don't introduce new constructors, they just create
- * a new name for an existing type expression.
- *
- * For example, `type alias UserId = number` allows using "UserId"
- * anywhere "number" is expected.
- *
- * @deprecated Use registerTypeAliasWithoutValidation and validateTypeAliasReferences instead
- */
-function registerTypeAlias(
-  analyzer: SemanticAnalyzer,
-  decl: TypeAliasDeclaration,
-  moduleName: string,
-) {
-  registerTypeAliasWithoutValidation(
-    analyzer,
-    decl,
-    analyzer.typeAliases,
-    moduleName,
-  );
-  validateTypeAliasReferences(analyzer, decl);
-}
-
-/**
- * Register an infix declaration in the operator registry.
- * Validates that:
- * 1. There are no duplicate declarations for the same operator
- * 2. The operator is not already imported (fixity is intrinsic and cannot be redefined)
- */
-function registerInfixDeclaration(
-  analyzer: SemanticAnalyzer,
-  decl: InfixDeclaration,
-) {
-  // Check if operator is imported - if so, reject the fixity declaration
-  // because fixity is intrinsic and travels with the operator
-  if (analyzer.importedValues.has(decl.operator)) {
-    const sourceModule = analyzer.importedValues.get(decl.operator)!;
-    throw new SemanticError(
-      `Cannot declare fixity for imported operator '${decl.operator}' from module '${sourceModule}'. ` +
-        `Fixity is an intrinsic property of the operator and cannot be redefined.`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Check for duplicate local operator declaration
-  if (analyzer.operators.has(decl.operator)) {
-    throw new SemanticError(
-      `Duplicate infix declaration for operator '${decl.operator}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Convert fixity to associativity
-  const associativity: "left" | "right" | "none" =
-    decl.fixity === "infixl"
-      ? "left"
-      : decl.fixity === "infixr"
-        ? "right"
-        : "none";
-
-  // Validate precedence range (0-9)
-  if (decl.precedence < 0 || decl.precedence > 9) {
-    throw new SemanticError(
-      `Precedence must be between 0 and 9, got ${decl.precedence}`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Register the operator
-  analyzer.operators.set(decl.operator, {
-    precedence: decl.precedence,
-    associativity,
-  });
-
-  // Store the declaration for later reference
-  analyzer.infixDeclarations.push(decl);
-}
-
-/**
- * Validates that each infix declaration has a corresponding LOCAL function definition.
- *
- * Fixity is an intrinsic property of an operator - it travels with the operator wherever
- * it goes. You cannot separate an operator from its fixity. This means:
- *
- * 1. An infix declaration must define a NEW operator in the current module
- * 2. The operator must have a local definition (not imported)
- * 3. You cannot redefine the fixity of an imported operator
- *
- * Valid local definitions include:
- * - Local value declarations (e.g., `(+) x y = ...`)
- * - External declarations (e.g., `@external ... (+) : ...`)
- * - Protocol methods defined in THIS module
- *
- * Note: Imported operator check is done earlier in registerInfixDeclaration.
- */
-function validateInfixDeclarationsHaveDefinitions(
-  analyzer: SemanticAnalyzer,
-  infixDeclarations: InfixDeclaration[],
-  values: Record<string, ValueInfo>,
-  localProtocolMethods: Set<string>,
-): void {
-  for (const decl of infixDeclarations) {
-    const op = decl.operator;
-
-    // Check if operator is defined locally:
-    // 1. As a local value/function
-    const hasLocalDefinition = Object.hasOwn(values, op);
-    // 2. As a local protocol method
-    const isLocalProtocolMethod = localProtocolMethods.has(op);
-
-    if (!hasLocalDefinition && !isLocalProtocolMethod) {
-      throw new SemanticError(
-        `Infix declaration for operator '${op}' has no corresponding function definition. ` +
-          `Define the operator in this module or remove the fixity declaration.`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-  }
-}
-
-/**
  * Add protocol methods to a scope as polymorphic functions with constraints.
  * This is called when:
  * 1. Registering a new protocol
@@ -3184,1248 +6724,6 @@ function substituteProtocolVars(
 }
 
 /**
- * Register a protocol declaration in the protocol registry.
- * Also adds protocol methods to the global scope as polymorphic functions with constraints.
- */
-function registerProtocol(
-  analyzer: SemanticAnalyzer,
-  decl: ProtocolDeclaration,
-  moduleName: string,
-) {
-  const { protocols, globalScope, substitution } = analyzer;
-
-  // Check for duplicate protocol name
-  const existingProtocol = protocols[decl.name];
-  if (existingProtocol) {
-    // If it's from a different module, provide a more helpful error message
-    if (
-      existingProtocol.moduleName &&
-      existingProtocol.moduleName !== moduleName
-    ) {
-      throw new SemanticError(
-        `Protocol '${decl.name}' conflicts with protocol from module '${existingProtocol.moduleName}'. ` +
-          `Consider using a different name or qualified imports.`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    throw new SemanticError(
-      `Duplicate protocol '${decl.name}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Validate type parameters are unique
-  const paramSet = new Set<string>();
-  for (const param of decl.params) {
-    if (paramSet.has(param)) {
-      throw new SemanticError(
-        `Duplicate type parameter '${param}' in protocol '${decl.name}'`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    paramSet.add(param);
-  }
-
-  // Validate at least one method
-  if (decl.methods.length === 0) {
-    throw new SemanticError(
-      `Protocol '${decl.name}' must have at least one method`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Create SHARED type variable context for ALL protocol parameters
-  // This ensures all methods use the same type variable IDs for protocol params
-  const sharedTypeVarCtx = new Map<string, TypeVar>();
-  for (const param of decl.params) {
-    sharedTypeVarCtx.set(param, freshType());
-  }
-
-  // Create the constraint for this protocol
-  const protocolConstraint: Constraint = {
-    protocolName: decl.name,
-    typeArgs: decl.params.map((p) => sharedTypeVarCtx.get(p)!),
-  };
-
-  // Get the set of quantified variable IDs
-  const quantifiedVars = new Set<number>();
-  for (const tv of sharedTypeVarCtx.values()) {
-    quantifiedVars.add(tv.id);
-  }
-
-  // Convert method type expressions to internal types
-  const methods = new Map<string, ProtocolMethodInfo>();
-  const methodNames = new Set<string>();
-
-  for (const method of decl.methods) {
-    // Check for duplicate method names
-    if (methodNames.has(method.name)) {
-      throw new SemanticError(
-        `Duplicate method '${method.name}' in protocol '${decl.name}'`,
-        method.span,
-        analyzer.getFilePath(),
-      );
-    }
-    methodNames.add(method.name);
-
-    let methodType: Type;
-
-    if (method.type) {
-      // Has explicit type annotation - convert from AST to internal representation
-      // Use the shared type variable context so all methods use same var IDs
-      methodType = typeFromAnnotation(analyzer, method.type, sharedTypeVarCtx);
-    } else if (method.defaultImpl) {
-      // No explicit type annotation, but has default implementation
-      // Infer the type from the default implementation by analyzing it as a lambda
-      const lambdaExpr = makeLambda(
-        method.defaultImpl.args,
-        method.defaultImpl.body,
-        method.span,
-      );
-
-      // Create a temporary scope for type inference
-      const tempScope = new Scope(globalScope);
-
-      // Infer the type of the lambda
-      const inferredType = analyzeExpr(
-        analyzer,
-        lambdaExpr,
-        tempScope,
-        substitution,
-      );
-
-      // Apply substitutions to get the final type
-      methodType = applySubstitution(inferredType, substitution);
-
-      // Replace any fresh type variables with the protocol's type parameters where appropriate
-      // This ensures the inferred type uses the protocol's type variables
-      methodType = substituteProtocolVars(methodType, sharedTypeVarCtx);
-    } else {
-      // Neither type annotation nor default implementation
-      throw new SemanticError(
-        `Protocol method '${method.name}' must have either a type annotation or a default implementation`,
-        method.span,
-        analyzer.getFilePath(),
-      );
-    }
-
-    // Store method info with optional default implementation
-    const methodInfo: ProtocolMethodInfo = {
-      type: methodType,
-      span: method.span,
-    };
-
-    // If there's a default implementation, store it
-    if (method.defaultImpl) {
-      methodInfo.defaultImpl = {
-        args: method.defaultImpl.args,
-        body: method.defaultImpl.body,
-      };
-    }
-
-    methods.set(method.name, methodInfo);
-
-    // Add method to global scope as a polymorphic function with constraint
-    // Only add if not already defined (don't override explicit definitions)
-    if (!globalScope.symbols.has(method.name)) {
-      // Combine superclass constraints with the protocol's own constraint
-      const allConstraints: Constraint[] = [
-        protocolConstraint,
-        ...decl.constraints.map((c) => ({
-          protocolName: c.protocolName,
-          typeArgs: c.typeArgs.map((ta) =>
-            typeFromAnnotation(analyzer, ta, sharedTypeVarCtx),
-          ),
-        })),
-      ];
-      const scheme: TypeScheme = {
-        vars: new Set(quantifiedVars), // Copy to avoid sharing
-        constraints: allConstraints,
-        type: methodType,
-      };
-      globalScope.symbols.set(method.name, scheme);
-    }
-  }
-
-  // Convert superclass constraints from AST to internal representation
-  const superclassConstraints: Constraint[] = decl.constraints.map((c) => ({
-    protocolName: c.protocolName,
-    typeArgs: c.typeArgs.map((ta) =>
-      typeFromAnnotation(analyzer, ta, sharedTypeVarCtx),
-    ),
-  }));
-
-  // Register the protocol
-  protocols[decl.name] = {
-    name: decl.name,
-    moduleName,
-    params: decl.params,
-    superclassConstraints,
-    methods,
-    span: decl.span,
-  };
-}
-
-/**
- * Check if a type expression can implement a protocol.
- *
- * This function determines whether a type can satisfy a protocol constraint either through:
- * 1. An explicit instance implementation
- * 2. Auto-derivation (currently only supported for standard Eq from Vibe/Vibe.Basics)
- * 3. Protocol with all default method implementations
- *
- * @param type - The type expression to check
- * @param protocolName - The name of the protocol to check
- * @param typeParams - Set of type parameters in scope (these are always valid)
- * @param declarations - All declarations in scope (for checking local types)
- * @param instances - All instances in scope (for checking explicit implementations)
- * @param protocols - All protocols in scope (for checking default methods)
- * @param checkedTypes - Set of already-checked types (for cycle detection)
- * @returns true if the type can implement the protocol
- */
-function canTypeImplementProtocol(
-  type: TypeExpr,
-  protocolName: string,
-  typeParams: Set<string>,
-  declarations: Declaration[],
-  instances: InstanceInfo[],
-  protocols: Record<string, ProtocolInfo>,
-  checkedTypes: Set<string> = new Set(),
-): boolean {
-  const typeKey = JSON.stringify(type);
-  if (checkedTypes.has(typeKey)) return true;
-  checkedTypes.add(typeKey);
-
-  // Helper to check if a type matches an instance's type argument
-  const typeMatchesInstanceArg = (
-    instanceArg: Type,
-    typeName: string,
-  ): boolean => {
-    return (
-      instanceArg.kind === "con" && (instanceArg as TypeCon).name === typeName
-    );
-  };
-
-  switch (type.kind) {
-    case "FunctionType":
-      // Functions can only implement protocols if there's an explicit instance
-      // Check if there's an instance for function types
-      const hasFunctionInstance = instances.some(
-        (inst) =>
-          inst.protocolName === protocolName &&
-          inst.typeArgs.length > 0 &&
-          inst.typeArgs[0]!.kind === "fun",
-      );
-      return hasFunctionInstance;
-
-    case "TypeRef": {
-      const firstChar = type.name.charAt(0);
-      // Type variables (lowercase) are allowed - they get protocol constraint
-      if (
-        firstChar === firstChar.toLowerCase() &&
-        firstChar !== firstChar.toUpperCase()
-      ) {
-        return true;
-      }
-
-      // Global Check: Check if there's already an instance for this type
-      const hasInstance = instances.some(
-        (inst) =>
-          inst.protocolName === protocolName &&
-          inst.typeArgs.length > 0 &&
-          typeMatchesInstanceArg(inst.typeArgs[0]!, type.name),
-      );
-      if (hasInstance) {
-        // Also check type arguments recursively
-        return type.args.every((arg) =>
-          canTypeImplementProtocol(
-            arg,
-            protocolName,
-            typeParams,
-            declarations,
-            instances,
-            protocols,
-            checkedTypes,
-          ),
-        );
-      }
-
-      // Auto-Derive Check: Determine if we can auto-derive this protocol
-      const protocol = protocols[protocolName];
-      if (!protocol) {
-        // Protocol not found - can't implement
-        return false;
-      }
-
-      // Check if all methods have default implementations
-      const allMethodsHaveDefaults = Array.from(
-        protocol.methods.values(),
-      ).every((method) => method.defaultImpl !== undefined);
-
-      // If all methods have defaults, any type can satisfy the protocol
-      if (allMethodsHaveDefaults) {
-        return true;
-      }
-
-      // Check if type is structural and all fields can implement Eq
-      // Check local type declarations
-      const localDecl = declarations.find(
-        (d) =>
-          (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
-          d.name === type.name,
-      );
-
-      if (localDecl && localDecl.kind === "TypeDeclaration") {
-        // Local type will get auto-Eq, check its type args
-        return type.args.every((arg) =>
-          canTypeImplementProtocol(
-            arg,
-            protocolName,
-            typeParams,
-            declarations,
-            instances,
-            protocols,
-            checkedTypes,
-          ),
-        );
-      }
-
-      // For type aliases, check type args
-      if (localDecl && localDecl.kind === "TypeAliasDeclaration") {
-        return type.args.every((arg) =>
-          canTypeImplementProtocol(
-            arg,
-            protocolName,
-            typeParams,
-            declarations,
-            instances,
-            protocols,
-            checkedTypes,
-          ),
-        );
-      }
-
-      // Unknown type - check type args only
-      return type.args.every((arg) =>
-        canTypeImplementProtocol(
-          arg,
-          protocolName,
-          typeParams,
-          declarations,
-          instances,
-          protocols,
-          checkedTypes,
-        ),
-      );
-    }
-
-    case "TupleType":
-      // Tuples can implement protocols if all elements can
-      return type.elements.every((elem) =>
-        canTypeImplementProtocol(
-          elem,
-          protocolName,
-          typeParams,
-          declarations,
-          instances,
-          protocols,
-          checkedTypes,
-        ),
-      );
-
-    case "RecordType":
-      // Records can implement protocols if all fields can
-      return type.fields.every((f) =>
-        canTypeImplementProtocol(
-          f.type,
-          protocolName,
-          typeParams,
-          declarations,
-          instances,
-          protocols,
-          checkedTypes,
-        ),
-      );
-
-    case "QualifiedType":
-      return canTypeImplementProtocol(
-        type.type,
-        protocolName,
-        typeParams,
-        declarations,
-        instances,
-        protocols,
-        checkedTypes,
-      );
-
-    default:
-      return false;
-  }
-}
-
-/**
- * Check if a TypeDeclaration can automatically implement a protocol.
- * Returns true if all fields/constructor args can implement the protocol.
- */
-function canDeclImplementProtocol(
-  decl: TypeDeclaration,
-  protocolName: string,
-  declarations: Declaration[],
-  instances: InstanceInfo[],
-  protocols: Record<string, ProtocolInfo>,
-): boolean {
-  const typeParams = new Set(decl.params);
-
-  if (decl.recordFields) {
-    for (const field of decl.recordFields) {
-      if (
-        !canTypeImplementProtocol(
-          field.type,
-          protocolName,
-          typeParams,
-          declarations,
-          instances,
-          protocols,
-        )
-      ) {
-        return false;
-      }
-    }
-  }
-
-  if (decl.constructors) {
-    for (const ctor of decl.constructors) {
-      for (const arg of ctor.args) {
-        if (
-          !canTypeImplementProtocol(
-            arg,
-            protocolName,
-            typeParams,
-            declarations,
-            instances,
-            protocols,
-          )
-        ) {
-          return false;
-        }
-      }
-    }
-  }
-
-  return true;
-}
-
-/**
- * Automatically implement Eq for a type declaration if possible.
- * Returns the generated instance, or undefined if Eq cannot be implemented.
- * Only auto-implements for the Vibe/Vibe.Basics Eq protocol, not custom Eq protocols.
- */
-
-function autoImplementProtocolForType(
-  analyzer: SemanticAnalyzer,
-  protocolName: string,
-  decl: TypeDeclaration,
-  protocols: Record<string, ProtocolInfo>,
-  instances: InstanceInfo[],
-  declarations: Declaration[],
-  moduleName: string,
-): InstanceInfo | undefined {
-  // Find the protocol
-  const protocol = protocols[protocolName];
-  if (!protocol) return undefined;
-
-  // Only auto-implement for Vibe/Vibe.Basics protocols
-  const isVibe =
-    protocol.moduleName === "Vibe" || protocol.moduleName === "Vibe.Basics";
-  if (!isVibe) return undefined;
-
-  // Check if type can implement protocol
-  if (
-    !canDeclImplementProtocol(
-      decl,
-      protocolName,
-      declarations,
-      instances,
-      protocols,
-    )
-  ) {
-    return undefined;
-  }
-
-  // Check for existing explicit implementation
-  for (const existing of instances) {
-    if (existing.protocolName !== protocolName) continue;
-    if (existing.typeArgs.length === 0) continue;
-    const typeArg = existing.typeArgs[0];
-    if (typeArg?.kind === "con" && (typeArg as TypeCon).name === decl.name) {
-      // Already has an implementation
-      return undefined;
-    }
-  }
-
-  if (protocolName === "Eq") {
-    return generateEqImplementation(
-      analyzer,
-      decl,
-      protocol,
-      moduleName,
-      instances,
-      {},
-      declarations,
-    );
-  } else if (protocolName === "Show") {
-    return generateShowImplementation(
-      analyzer,
-      decl,
-      protocol,
-      moduleName,
-      declarations,
-    );
-  }
-
-  return undefined;
-}
-
-function generateShowImplementation(
-  analyzer: SemanticAnalyzer,
-  decl: TypeDeclaration,
-  protocol: ProtocolInfo,
-  moduleName: string | undefined,
-  declarations: Declaration[],
-): InstanceInfo {
-  // 1. Build type arguments for the instance
-  const typeArgs: Type[] = [
-    {
-      kind: "con",
-      name: decl.name,
-      args: decl.params.map(
-        (param): TypeVar => ({
-          kind: "var",
-          id: freshType().id,
-        }),
-      ),
-    },
-  ];
-
-  // Re-map params
-  const paramMap = new Map<string, TypeVar>();
-  const headType = typeArgs[0] as TypeCon;
-  decl.params.forEach((p, i) => {
-    paramMap.set(p, headType.args[i] as TypeVar);
-  });
-
-  // 2. Generate constraints
-  const constraints: Constraint[] = decl.params.map((p) => ({
-    protocolName: "Show",
-    typeArgs: [paramMap.get(p)!],
-  }));
-
-  // 3. Generate toString implementation
-  const methods = new Map<string, Expr>();
-  const span = decl.span;
-  let body: Expr;
-
-  const str = (s: string): Expr => ({ kind: "String", value: `"${s}"`, span });
-  const append = (a: Expr, b: Expr): Expr => ({
-    kind: "Infix",
-    left: a,
-    operator: "++",
-    right: b,
-    span,
-  });
-  const toString = (val: Expr): Expr => ({
-    kind: "Apply",
-    callee: { kind: "Var", name: "toString", namespace: "lower", span },
-    args: [val],
-    span,
-  });
-
-  if (decl.recordFields) {
-    // Type(field = val, ...)
-    let expr: Expr = str(`${decl.name}(`);
-
-    decl.recordFields.forEach((field, i) => {
-      if (i > 0) expr = append(expr, str(", "));
-
-      expr = append(expr, str(`${field.name} = `));
-
-      const fieldAccess: Expr = {
-        kind: "FieldAccess",
-        target: { kind: "Var", name: "x_impl", namespace: "lower", span },
-        field: field.name,
-        span,
-      };
-      expr = append(expr, toString(fieldAccess));
-    });
-
-    expr = append(expr, str(")"));
-    body = expr;
-  } else if (decl.constructors) {
-    // case x_impl of ...
-    const branches = decl.constructors.map((ctor) => {
-      const args = ctor.args.map((_, i) => `a${i}`);
-      const pattern: Pattern = {
-        kind: "ConstructorPattern",
-        name: ctor.name,
-        args: args.map((a) => ({ kind: "VarPattern", name: a, span })),
-        span,
-      };
-
-      let expr: Expr;
-      if (args.length === 0) {
-        expr = str(`${ctor.name}`);
-      } else {
-        expr = str(`${ctor.name}(`);
-        args.forEach((a, i) => {
-          if (i > 0) expr = append(expr, str(", "));
-          expr = append(
-            expr,
-            toString({ kind: "Var", name: a, namespace: "lower", span }),
-          );
-        });
-        expr = append(expr, str(")"));
-      }
-
-      return { pattern, body: expr, span };
-    });
-
-    body = {
-      kind: "Case",
-      discriminant: { kind: "Var", name: "x_impl", namespace: "lower", span },
-      branches,
-      span,
-    };
-  } else {
-    // Should not happen for valid types? Opaque?
-    body = str(`${decl.name}`);
-  }
-
-  methods.set("toString", {
-    kind: "Lambda",
-    args: [{ kind: "VarPattern", name: "x_impl", span }],
-    body,
-    span,
-  });
-
-  return {
-    protocolName: "Show",
-    moduleName,
-    typeArgs,
-    constraints,
-    methods,
-    explicitMethods: new Set(["toString"]),
-    span,
-  };
-}
-
-/**
- * Process an 'implementing' clause on a type declaration.
- * Validates that all referenced protocols have all methods with defaults,
- * and creates synthetic implement blocks.
- */
-function validateTypeImplementsEq(
-  analyzer: SemanticAnalyzer,
-  type: TypeExpr,
-  declSpan: Span,
-  typeParams: Set<string>,
-  declarations: Declaration[],
-  instances: InstanceInfo[],
-  checkedTypes: Set<string>,
-): void {
-  const typeKey = JSON.stringify(type);
-  if (checkedTypes.has(typeKey)) return;
-  checkedTypes.add(typeKey);
-
-  switch (type.kind) {
-    case "FunctionType":
-      throw new SemanticError(
-        `Type mismatch: cannot unify 'Int' with 'Int -> Int'. No instance of Eq for function type.`,
-        declSpan,
-        analyzer.getFilePath(),
-      );
-    case "TypeRef":
-      const firstChar = type.name.charAt(0);
-      if (
-        firstChar === firstChar.toLowerCase() &&
-        firstChar !== firstChar.toUpperCase()
-      ) {
-        if (typeParams.has(type.name)) return;
-
-        // Convert TypeRef to Type for instance lookup
-        // Note: we assume no args for these simple refs in this context
-        // If we had args, we'd need to convert them too
-        const typeForLookup: Type = { kind: "con", name: type.name, args: [] };
-        if (findInstanceForTypeInternal("Eq", typeForLookup, instances)) {
-          return;
-        }
-
-        if (type.name === "List" && type.args.length === 1) {
-          validateTypeImplementsEq(
-            analyzer,
-            type.args[0]!,
-            declSpan,
-            typeParams,
-            declarations,
-            instances,
-            checkedTypes,
-          );
-          return;
-        }
-
-        // Strict check for local types
-        const localDecl = declarations.find(
-          (d) =>
-            (d.kind === "TypeDeclaration" ||
-              d.kind === "TypeAliasDeclaration") &&
-            d.name === type.name,
-        );
-
-        if (localDecl) {
-          // If it's a TypeDeclaration (ADT/Record)
-          if (localDecl.kind === "TypeDeclaration") {
-            // Check explicit implementation
-            const hasExplicit = declarations.some(
-              (d) =>
-                d.kind === "ImplementationDeclaration" &&
-                d.protocolName === "Eq" &&
-                d.typeArgs.length > 0 &&
-                d.typeArgs[0]!.kind === "TypeRef" &&
-                (d.typeArgs[0]! as any).name === type.name,
-            );
-
-            if (hasExplicit) return;
-
-            throw new SemanticError(
-              `Type '${type.name}' does not implement 'Eq'. Implicit 'Eq' requires all fields to implement 'Eq'.`,
-              declSpan,
-              analyzer.getFilePath(),
-            );
-          }
-        }
-
-        type.args.forEach((arg) =>
-          validateTypeImplementsEq(
-            analyzer,
-            arg,
-            declSpan,
-            typeParams,
-            declarations,
-            instances,
-            checkedTypes,
-          ),
-        );
-        break;
-      }
-      return; // End of TypeRef case block scope (implicit in how code was structured, but cleaner with break or return)
-
-    case "TupleType":
-      type.elements.forEach((elem) =>
-        validateTypeImplementsEq(
-          analyzer,
-          elem,
-          declSpan,
-          typeParams,
-          declarations,
-          instances,
-          checkedTypes,
-        ),
-      );
-      return;
-    case "RecordType":
-      type.fields.forEach((f) =>
-        validateTypeImplementsEq(
-          analyzer,
-          f.type,
-          declSpan,
-          typeParams,
-          declarations,
-          instances,
-          checkedTypes,
-        ),
-      );
-      return;
-    case "QualifiedType":
-      validateTypeImplementsEq(
-        analyzer,
-        type.type,
-        declSpan,
-        typeParams,
-        declarations,
-        instances,
-        checkedTypes,
-      );
-      return;
-    default:
-      return;
-  }
-}
-
-function generateEqImplementation(
-  analyzer: SemanticAnalyzer,
-  decl: TypeDeclaration,
-  protocol: ProtocolInfo,
-  moduleName: string | undefined,
-  instances: InstanceInfo[],
-  adts: Record<string, ADTInfo>,
-  declarations: Declaration[],
-): InstanceInfo {
-  // 0. Validate fields implement Eq
-  const typeParams = new Set(decl.params);
-
-  if (decl.recordFields) {
-    for (const field of decl.recordFields) {
-      validateTypeImplementsEq(
-        analyzer,
-        field.type,
-        decl.span,
-        typeParams,
-        declarations,
-        instances,
-        new Set(),
-      );
-    }
-  }
-
-  if (decl.constructors) {
-    for (const ctor of decl.constructors) {
-      for (const arg of ctor.args) {
-        validateTypeImplementsEq(
-          analyzer,
-          arg,
-          decl.span,
-          typeParams,
-          declarations,
-          instances,
-          new Set(),
-        );
-      }
-    }
-  }
-
-  // 1. Build type arguments for the instance
-  const typeArgs: Type[] = [
-    {
-      kind: "con",
-      name: decl.name,
-      args: decl.params.map(
-        (param): TypeVar => ({
-          kind: "var",
-          id: freshType().id,
-        }),
-      ),
-    },
-  ];
-
-  // Re-map params
-  const paramMap = new Map<string, TypeVar>();
-  const headType = typeArgs[0];
-  if (headType && headType.kind === "con") {
-    const typeCon = headType as TypeCon;
-    decl.params.forEach((p, i) => {
-      paramMap.set(p, typeCon.args[i] as TypeVar);
-    });
-  }
-
-  // 2. Generate constraints
-  const constraints: Constraint[] = decl.params.map((p) => {
-    const tvar = paramMap.get(p);
-    if (!tvar) throw new Error("Type variable missing");
-    return {
-      protocolName: "Eq",
-      typeArgs: [tvar],
-    };
-  });
-
-  // 3. Generate (==) implementation
-  const methods = new Map<string, Expr>();
-  const xVar = "x_impl";
-  const yVar = "y_impl";
-  const span = decl.span;
-  let body: Expr;
-
-  if (decl.recordFields) {
-    const checks: Expr[] = decl.recordFields.map((field) => ({
-      kind: "Infix",
-      left: {
-        kind: "FieldAccess",
-        target: { kind: "Var", name: xVar, namespace: "lower", span },
-        field: field.name,
-        span,
-      },
-      operator: "==",
-      right: {
-        kind: "FieldAccess",
-        target: { kind: "Var", name: yVar, namespace: "lower", span },
-        field: field.name,
-        span,
-      },
-      span,
-    }));
-
-    if (checks.length === 0) {
-      body = { kind: "Var", name: "True", namespace: "upper", span };
-    } else {
-      body = checks.reduce((acc, check) => ({
-        kind: "Infix",
-        left: acc,
-        operator: "&&",
-        right: check,
-        span,
-      }));
-    }
-  } else if (decl.constructors) {
-    const branches: { pattern: Pattern; body: Expr; span: Span }[] = [];
-    const hasMultipleConstructors = decl.constructors.length > 1;
-
-    for (const ctor of decl.constructors) {
-      const argsX: Pattern[] = ctor.args.map((_, i) => ({
-        kind: "VarPattern",
-        name: `a_${i}`,
-        span,
-      }));
-      const argsY: Pattern[] = ctor.args.map((_, i) => ({
-        kind: "VarPattern",
-        name: `b_${i}`,
-        span,
-      }));
-
-      const patX: Pattern = {
-        kind: "ConstructorPattern",
-        name: ctor.name,
-        args: argsX,
-        span,
-      };
-      const patY: Pattern = {
-        kind: "ConstructorPattern",
-        name: ctor.name,
-        args: argsY,
-        span,
-      };
-
-      const pattern: Pattern = {
-        kind: "TuplePattern",
-        elements: [patX, patY],
-        span,
-      };
-
-      const checks: Expr[] = ctor.args.map((_, i) => ({
-        kind: "Infix",
-        left: { kind: "Var", name: `a_${i}`, namespace: "lower", span },
-        operator: "==",
-        right: { kind: "Var", name: `b_${i}`, namespace: "lower", span },
-        operatorInfo: {
-          precedence: 4, // Default for ==
-          associativity: "none",
-        },
-        span,
-      }));
-
-      let branchBody: Expr;
-      if (checks.length === 0) {
-        branchBody = { kind: "Var", name: "True", namespace: "upper", span };
-      } else {
-        branchBody = checks.reduce((acc, check) => ({
-          kind: "Infix",
-          left: acc,
-          operator: "&&",
-          right: check,
-          operatorInfo: {
-            precedence: 3, // Default for &&
-            associativity: "right",
-          },
-          span,
-        }));
-      }
-
-      branches.push({ pattern, body: branchBody, span });
-    }
-
-    if (hasMultipleConstructors || decl.constructors.length === 0) {
-      branches.push({
-        pattern: { kind: "WildcardPattern", span },
-        body: { kind: "Var", name: "False", namespace: "upper", span },
-        span,
-      });
-    }
-
-    body = {
-      kind: "Case",
-      discriminant: {
-        kind: "Tuple",
-        elements: [
-          { kind: "Var", name: xVar, namespace: "lower", span },
-          { kind: "Var", name: yVar, namespace: "lower", span },
-        ],
-        span,
-      },
-      branches,
-      span,
-    };
-  } else {
-    body = { kind: "Var", name: "True", namespace: "upper", span };
-  }
-
-  methods.set("==", {
-    kind: "Lambda",
-    args: [
-      { kind: "VarPattern", name: xVar, span },
-      { kind: "VarPattern", name: yVar, span },
-    ],
-    body,
-    span,
-  });
-
-  return {
-    protocolName: protocol.name,
-    moduleName,
-    typeArgs,
-    constraints,
-    methods,
-    explicitMethods: new Set(["=="]),
-    span: decl.span,
-  };
-}
-
-/**
- * Register an implementation declaration in the instance registry.
- */
-function registerImplementation(
-  analyzer: SemanticAnalyzer,
-  decl: ImplementationDeclaration,
-  instances: InstanceInfo[],
-  localInstances: InstanceInfo[],
-  protocols: Record<string, ProtocolInfo>,
-  adts: Record<string, ADTInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  currentModuleName: string,
-  programDeclarations: Declaration[] = [],
-) {
-  // Check that the protocol exists
-  const protocol = protocols[decl.protocolName];
-  if (!protocol) {
-    throw new SemanticError(
-      `Unknown protocol '${decl.protocolName}'`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Validate number of type arguments matches protocol parameters
-  if (decl.typeArgs.length !== protocol.params.length) {
-    throw new SemanticError(
-      `Protocol '${decl.protocolName}' expects ${protocol.params.length} type argument(s), but got ${decl.typeArgs.length}`,
-      decl.span,
-      analyzer.getFilePath(),
-    );
-  }
-
-  // Create a type variable context for converting type expressions
-  const typeVarCtx = new Map<string, TypeVar>();
-
-  // Convert type arguments from AST to internal representation
-  const typeArgs: Type[] = [];
-  for (const typeArg of decl.typeArgs) {
-    typeArgs.push(typeFromAnnotation(analyzer, typeArg, typeVarCtx));
-  }
-
-  // Convert constraints
-  const constraints: Constraint[] = [];
-  for (const astConstraint of decl.constraints) {
-    // Validate that the constraint protocol exists
-    if (!protocols[astConstraint.protocolName]) {
-      throw new SemanticError(
-        `Unknown protocol '${astConstraint.protocolName}' in constraint`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-    const constraintTypeArgs: Type[] = [];
-    for (const typeArg of astConstraint.typeArgs) {
-      constraintTypeArgs.push(
-        typeFromAnnotation(analyzer, typeArg, typeVarCtx),
-      );
-    }
-    constraints.push({
-      protocolName: astConstraint.protocolName,
-      typeArgs: constraintTypeArgs,
-    });
-  }
-
-  // Validate that all required methods (those without defaults) are implemented
-  const implementedMethods = new Set(decl.methods.map((m) => m.name));
-  const allMethods = new Set(protocol.methods.keys());
-
-  // Check for auto-derivation request: implement Eq/Show with no methods
-  if (
-    decl.methods.length === 0 &&
-    (decl.protocolName === "Eq" || decl.protocolName === "Show")
-  ) {
-    // Ensure we have a valid type arg
-    if (typeArgs.length === 1 && typeArgs[0]!.kind === "con") {
-      const typeName = (typeArgs[0] as TypeCon).name;
-      // Find declaration
-      const typeDecl = programDeclarations.find(
-        (d) =>
-          (d.kind === "TypeDeclaration" || d.kind === "TypeAliasDeclaration") &&
-          d.name === typeName,
-      );
-
-      if (typeDecl && typeDecl.kind === "TypeDeclaration") {
-        // Generate synthetic instance
-        let synthetic: InstanceInfo | undefined;
-        if (decl.protocolName === "Eq") {
-          synthetic = generateEqImplementation(
-            analyzer,
-            typeDecl,
-            protocol,
-            currentModuleName,
-            instances,
-            {},
-            programDeclarations,
-          );
-        } else {
-          synthetic = generateShowImplementation(
-            analyzer,
-            typeDecl,
-            protocol,
-            currentModuleName,
-            programDeclarations,
-          );
-        }
-
-        // Populate implemented methods from synthetic instance
-        if (synthetic) {
-          // Add synthetic methods to our declaration
-          synthetic.methods.forEach((impl, name) => {
-            const methodInfo = protocol.methods.get(name)!;
-            // We need to convert from Instance method format back to AST MethodImplementation format?
-            // No, registerImplementation uses AST decl.methods to build the instance methods.
-            // So we need to push to decl.methods?
-            // BUT, we are iterating over decl.methods later.
-
-            // Instead of modifying decl.methods (which is AST), maybe we should just populate the instance directly?
-            // But registerImplementation validates that all methods are present in decl.methods.
-
-            // Let's cheat: we already know it's empty. We just need to satisfy the checks.
-            // Or better: just use the synthetic instance directly?
-            // We can't return early because we need to register global instances etc.
-
-            // Let's push to decl.methods.
-            // But MethodImplementation needs AST nodes (Expression). Synthetic outputs runtime function lambdas?
-            // Wait, generateEqImplementation returns InstanceInfo which has `methods: Map<string, Expr>`.
-            // `Expr` IS the AST node for expression.
-
-            decl.methods.push({
-              name: name,
-              implementation: impl,
-              span: decl.span, // Synthetic span
-            });
-
-            // Also update implementedMethods set so validation passes
-            implementedMethods.add(name);
-          });
-        }
-      }
-    }
-  }
-
-  // Check that methods without defaults are implemented
-  for (const methodName of allMethods) {
-    const methodInfo = protocol.methods.get(methodName)!;
-    if (!implementedMethods.has(methodName) && !methodInfo.defaultImpl) {
-      throw new SemanticError(
-        `Instance is missing implementation for method '${methodName}'`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-  }
-
-  // Check for extra methods that aren't in the protocol
-  for (const implemented of implementedMethods) {
-    if (!allMethods.has(implemented)) {
-      throw new SemanticError(
-        `Method '${implemented}' is not part of protocol '${decl.protocolName}'`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-  }
-
-  // Convert method implementations to a map
-  // For methods not explicitly implemented, use the default implementation from the protocol
-  const methods = new Map<string, Expr>();
-  const explicitMethods = new Set<string>();
-  for (const method of decl.methods) {
-    // If the method has inline pattern arguments, wrap in a lambda
-    // e.g., `toString a = showA a` becomes `\a -> showA a`
-    if (method.args && method.args.length > 0) {
-      const lambda = makeLambda(
-        method.args,
-        method.implementation,
-        method.span,
-      );
-      methods.set(method.name, lambda);
-    } else {
-      methods.set(method.name, method.implementation);
-    }
-    explicitMethods.add(method.name);
-  }
-
-  // For methods with defaults that weren't explicitly implemented,
-  // create a lambda expression from the default implementation
-  for (const [methodName, methodInfo] of protocol.methods) {
-    if (!methods.has(methodName) && methodInfo.defaultImpl) {
-      // Create a lambda from the default implementation
-      // The lambda wraps the args and body from the default
-      const defaultLambda = makeLambda(
-        methodInfo.defaultImpl.args,
-        methodInfo.defaultImpl.body,
-        methodInfo.span,
-      );
-      methods.set(methodName, defaultLambda);
-    }
-  }
-
-  // Create the instance info
-  const instanceInfo: InstanceInfo = {
-    protocolName: decl.protocolName,
-    moduleName: currentModuleName,
-    typeArgs,
-    constraints,
-    methods,
-    explicitMethods,
-    span: decl.span,
-  };
-
-  // Check for overlapping instances
-  // An implementation overlaps if another implementation exists for the same protocol and type
-  // AND their constraints don't prevent overlap
-  for (const existing of instances) {
-    if (existing.protocolName !== decl.protocolName) continue;
-
-    // Check if instances overlap, considering constraints
-    if (instancesOverlap(existing, instanceInfo, instances)) {
-      throw new SemanticError(
-        `Overlapping implementation for protocol '${decl.protocolName}'`,
-        decl.span,
-        analyzer.getFilePath(),
-      );
-    }
-  }
-
-  // Register the instance in both the global list and local list
-  // The global list includes imported instances for overlap checking
-  // The local list is used for validation (only validate methods in this module)
-  instances.push(instanceInfo);
-  localInstances.push(instanceInfo);
-}
-
-/**
  * Concretize polymorphic instance type args by analyzing method bodies.
  *
  * When an implementation body forces a polymorphic type arg to be concrete
@@ -4435,113 +6733,6 @@ function registerImplementation(
  *
  * This fixes hover showing `ExampleProtocol3 Float t402 => t402` instead of `List Int`.
  */
-function concretizeInstanceTypeArgs(analyzer: SemanticAnalyzer): void {
-  const {
-    localInstances,
-    instances: allInstances,
-    protocols,
-    globalScope,
-    substitution,
-  } = analyzer;
-
-  for (const instance of localInstances) {
-    const protocol = protocols[instance.protocolName];
-    if (!protocol) continue;
-
-    // Only process instances that have type variables in their typeArgs
-    const hasTypeVars = instance.typeArgs.some((t) => t.kind === "var");
-    if (!hasTypeVars) continue;
-
-    // Analyze each explicitly implemented method to infer concrete types
-    for (const methodName of instance.explicitMethods) {
-      const methodExpr = instance.methods.get(methodName);
-      const protocolMethodInfo = protocol.methods.get(methodName);
-
-      if (!methodExpr || !protocolMethodInfo) continue;
-
-      // Get the expected type from the protocol, substituting type parameters
-      const expectedType = substituteTypeParams(
-        protocolMethodInfo.type,
-        protocol.params,
-        instance.typeArgs,
-      );
-
-      // Create a fresh substitution for inference
-      const inferSubstitution: Substitution = new Map(substitution);
-
-      // Infer the type of the implementation expression
-      const tempScope = new Scope(globalScope);
-      try {
-        const inferredType = analyzeExpr(
-          analyzer,
-          methodExpr,
-          tempScope,
-          inferSubstitution,
-        );
-
-        // Unify to get concrete types
-        unify(
-          analyzer,
-          inferredType,
-          expectedType,
-          methodExpr.span,
-          inferSubstitution,
-        );
-
-        // Apply the inference results back to the instance's typeArgs
-        for (let i = 0; i < instance.typeArgs.length; i++) {
-          const typeArg = instance.typeArgs[i]!;
-          const resolved = applySubstitution(typeArg, inferSubstitution);
-          // Only update if we got a more concrete type (not still a bare type variable)
-          if (resolved.kind !== "var" && typeArg.kind === "var") {
-            instance.typeArgs[i] = resolved;
-          }
-        }
-
-        // Update constraints' type args and remove fully-satisfied constraints
-        // When a constraint's type arg becomes concrete (e.g., Appendable a -> Appendable (List Int)),
-        // and there's a matching instance, the constraint is satisfied and can be removed.
-        const constraintsToRemove: Constraint[] = [];
-        for (const constraint of instance.constraints) {
-          let allConcrete = true;
-          for (let i = 0; i < constraint.typeArgs.length; i++) {
-            const typeArg = constraint.typeArgs[i]!;
-            const resolved = applySubstitution(typeArg, inferSubstitution);
-            if (resolved.kind !== "var" && typeArg.kind === "var") {
-              constraint.typeArgs[i] = resolved;
-            }
-            if (constraint.typeArgs[i]!.kind === "var") {
-              allConcrete = false;
-            }
-          }
-
-          // If all type args are now concrete, check if the constraint is satisfied
-          if (allConcrete) {
-            const isSatisfied = findInstanceForConstraint(
-              constraint.protocolName,
-              constraint.typeArgs,
-              allInstances,
-            );
-            if (isSatisfied) {
-              constraintsToRemove.push(constraint);
-            }
-          }
-        }
-
-        // Remove satisfied constraints from the instance
-        for (const toRemove of constraintsToRemove) {
-          const idx = instance.constraints.indexOf(toRemove);
-          if (idx !== -1) {
-            instance.constraints.splice(idx, 1);
-          }
-        }
-      } catch {
-        // If analysis fails, continue - validation will catch errors later
-      }
-    }
-  }
-}
-
 /**
  * Check if there's an instance that satisfies a constraint with the given type args.
  */
@@ -4576,195 +6767,6 @@ function findInstanceForConstraint(
 }
 
 /**
- * Validate that all method implementations in protocol instances have types
- * that match the protocol's declared method signatures.
- *
- * For example, if Show declares `toString : a -> String`, and we're implementing
- * `Show A`, then the implementation must have type `A -> String`, not `String`.
- */
-function validateImplementationMethodTypes(analyzer: SemanticAnalyzer): void {
-  const {
-    localInstances,
-    instances: allInstances,
-    protocols,
-    globalScope,
-    substitution,
-  } = analyzer;
-
-  for (const instance of localInstances) {
-    const protocol = protocols[instance.protocolName];
-    if (!protocol) continue;
-
-    // Build a substitution from protocol type params to instance type args
-    // e.g., for `implement Show A`, map protocol param 'a' to concrete type 'A'
-    const paramSubstitution = new Map<number, Type>();
-    const paramNameToId = new Map<string, number>();
-
-    // First, create type variables for each protocol parameter
-    for (let i = 0; i < protocol.params.length; i++) {
-      const paramName = protocol.params[i]!;
-      const typeArg = instance.typeArgs[i];
-      if (typeArg) {
-        // Create a fresh type variable ID for the parameter
-        const paramVar = freshType();
-        paramNameToId.set(paramName, paramVar.id);
-        // Map this type variable to the concrete instance type
-        paramSubstitution.set(paramVar.id, typeArg);
-      }
-    }
-
-    // Validate each explicitly implemented method
-    for (const methodName of instance.explicitMethods) {
-      const methodExpr = instance.methods.get(methodName);
-      const protocolMethodInfo = protocol.methods.get(methodName);
-
-      if (!methodExpr || !protocolMethodInfo) continue;
-
-      // Get the expected type from the protocol, substituting type parameters
-      const expectedType = substituteTypeParams(
-        protocolMethodInfo.type,
-        protocol.params,
-        instance.typeArgs,
-      );
-
-      // Create a fresh substitution for inference
-      const inferSubstitution: Substitution = new Map(substitution);
-
-      // Infer the type of the implementation expression
-      // For Lambda expressions, use bidirectional type checking - bind parameter types
-      // from the expected function type before analyzing the body
-      const tempScope = new Scope(globalScope);
-      let inferredType: Type;
-
-      if (methodExpr.kind === "Lambda" && expectedType.kind === "fun") {
-        // Extract parameter types from expected function type
-        const expectedParamTypes: Type[] = [];
-        let currentType: Type = expectedType;
-        while (
-          currentType.kind === "fun" &&
-          expectedParamTypes.length < methodExpr.args.length
-        ) {
-          expectedParamTypes.push(currentType.from);
-          currentType = currentType.to;
-        }
-
-        // Bind parameters with expected types
-        bindPatterns(
-          analyzer,
-          tempScope,
-          methodExpr.args,
-          expectedParamTypes,
-          inferSubstitution,
-        );
-
-        // Analyze the body
-        const bodyType = analyzeExpr(
-          analyzer,
-          methodExpr.body,
-          tempScope,
-          inferSubstitution,
-        );
-
-        inferredType = fnChain(expectedParamTypes, bodyType);
-      } else {
-        inferredType = analyzeExpr(
-          analyzer,
-          methodExpr,
-          tempScope,
-          inferSubstitution,
-          expectedType,
-        );
-      }
-
-      // Try to unify the inferred type with the expected type
-      try {
-        unify(
-          analyzer,
-          inferredType,
-          expectedType,
-          methodExpr.span,
-          inferSubstitution,
-        );
-      } catch (e) {
-        if (e instanceof SemanticError) {
-          throw new SemanticError(
-            `Implementation of '${methodName}' for '${
-              instance.protocolName
-            }' has type '${formatType(
-              applySubstitution(inferredType, inferSubstitution),
-            )}' but protocol expects '${formatType(expectedType)}'`,
-            methodExpr.span,
-            analyzer.getFilePath(),
-          );
-        }
-        throw e;
-      }
-
-      // After successful unification, check that any constraints on the instance
-      // are satisfied when type variables are unified with concrete types.
-      // For example, if we have `implement Appendable a => Proto Float a`
-      // and the method implementation returns Int, then a=Int must satisfy Appendable.
-      for (const constraint of instance.constraints) {
-        for (const constraintTypeArg of constraint.typeArgs) {
-          // Apply the substitution to see what the constraint type arg resolves to
-          const resolvedType = applySubstitution(
-            constraintTypeArg,
-            inferSubstitution,
-          );
-
-          // If it resolved to a concrete type, check that an instance exists
-          if (resolvedType.kind === "con") {
-            const hasInstance = findInstanceForTypeInternal(
-              constraint.protocolName,
-              resolvedType,
-              allInstances,
-            );
-            if (!hasInstance) {
-              throw new SemanticError(
-                `Implementation of '${methodName}' for '${instance.protocolName}' ` +
-                  `requires '${constraint.protocolName}' constraint on type parameter, ` +
-                  `but the implementation uses type '${formatType(
-                    resolvedType,
-                  )}' ` +
-                  `which does not implement '${constraint.protocolName}'`,
-                methodExpr.span,
-                analyzer.getFilePath(),
-              );
-            }
-          }
-        }
-      }
-
-      // IMPORTANT: Concretize the instance's type args based on inference results.
-      // When the implementation body forces a polymorphic type arg to be concrete
-      // (e.g., `convert3 _ = [1]` forces `a` to be `List Int`), we update the
-      // instance's typeArgs so that later generalization produces concrete types
-      // instead of leaving quantified variables with constraints.
-      // This fixes hover showing `ExampleProtocol3 Float t402 => t402` instead of `List Int`.
-      for (let i = 0; i < instance.typeArgs.length; i++) {
-        const typeArg = instance.typeArgs[i]!;
-        const resolved = applySubstitution(typeArg, inferSubstitution);
-        // Only update if we got a more concrete type (not still a bare type variable)
-        if (resolved.kind !== "var" && typeArg.kind === "var") {
-          instance.typeArgs[i] = resolved;
-        }
-      }
-
-      // Also update constraints' type args to reflect any concretization
-      for (const constraint of instance.constraints) {
-        for (let i = 0; i < constraint.typeArgs.length; i++) {
-          const typeArg = constraint.typeArgs[i]!;
-          const resolved = applySubstitution(typeArg, inferSubstitution);
-          if (resolved.kind !== "var" && typeArg.kind === "var") {
-            constraint.typeArgs[i] = resolved;
-          }
-        }
-      }
-    }
-  }
-}
-
-/**
  * Substitute protocol type variables with concrete types.
  * Used to specialize a method type for a particular instance.
  *
@@ -4793,81 +6795,6 @@ function substituteTypeParams(
 }
 
 /**
- * Validate that all identifiers referenced in implementation method expressions
- * are defined in the current scope. This ensures we catch undefined function
- * references like `intAdd` at compile time rather than runtime.
- *
- * This is called after all value declarations have been processed, so the
- * globalScope contains all defined symbols.
- *
- * Note: Only validates explicitly provided method implementations, not default
- * implementations inherited from protocols (those are validated during protocol
- * registration in a scope that includes other protocol methods).
- */
-function validateImplementationMethodExpressions(
-  analyzer: SemanticAnalyzer,
-  instances: InstanceInfo[],
-): void {
-  const { globalScope, constructors } = analyzer;
-
-  for (const instance of instances) {
-    // Only validate methods that were explicitly provided in the implement block
-    // Default implementations from protocols are validated during protocol registration
-    for (const methodName of instance.explicitMethods) {
-      const methodExpr = instance.methods.get(methodName);
-      if (methodExpr) {
-        validateExpressionIdentifiers(
-          analyzer,
-          methodExpr,
-          globalScope,
-          constructors,
-          instance.protocolName,
-          methodName,
-        );
-      }
-    }
-  }
-}
-
-/**
- * Validate that constraints on polymorphic instances are satisfiable.
- *
- * For each instance with constraints (e.g., `implement Eq a => ExampleProtocol a`),
- * we check that:
- * 1. The constraint protocol exists
- *
- * Note: We don't require instances to exist at this point because they may be
- * defined in other modules that are imported at the call site. The actual
- * satisfiability check happens during code generation when we know the concrete types.
- */
-function validateInstanceConstraintSatisfiability(
-  analyzer: SemanticAnalyzer,
-): void {
-  const { localInstances, protocols } = analyzer;
-
-  for (const instance of localInstances) {
-    // Skip instances without constraints
-    if (instance.constraints.length === 0) continue;
-
-    for (const constraint of instance.constraints) {
-      // Validate the constraint protocol exists
-      const constraintProtocol = protocols[constraint.protocolName];
-      if (!constraintProtocol) {
-        throw new SemanticError(
-          `Instance constraint references unknown protocol '${constraint.protocolName}'`,
-          instance.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      // Note: We intentionally don't check if instances exist because they may be
-      // defined in other modules. The check happens at code generation time when
-      // the instance is used with concrete types.
-    }
-  }
-}
-
-/**
  * Validate that concrete-type constraints have corresponding instances.
  *
  * When a polymorphic function with constraints (e.g., `Eq a => a -> Bool`) is
@@ -4880,51 +6807,6 @@ function validateInstanceConstraintSatisfiability(
  *
  * This function detects that `Eq A` is required but no such instance exists.
  */
-function validateConcreteConstraintInstances(analyzer: SemanticAnalyzer): void {
-  const { values, instances, substitution } = analyzer;
-
-  for (const [valueName, valueInfo] of Object.entries(values)) {
-    // Skip synthetic values and values without inferred constraints
-    if (valueName.startsWith("$")) continue;
-
-    // For now, we validate by checking that for each constraint on a concrete type
-    // in the value info's collectedConstraints (if available), an instance exists
-    if (valueInfo.collectedConstraints) {
-      for (const constraint of valueInfo.collectedConstraints) {
-        // Apply substitution to get the resolved constraint types
-        const resolvedTypeArgs = constraint.typeArgs.map((t) =>
-          applySubstitution(t, substitution),
-        );
-
-        // Check if any type argument is a concrete type (not a type variable)
-        for (const typeArg of resolvedTypeArgs) {
-          if (typeArg.kind === "con") {
-            // This is a constraint on a concrete type - validate instance exists
-            const hasInstance = findInstanceForTypeInternal(
-              constraint.protocolName,
-              typeArg,
-              instances,
-            );
-
-            if (!hasInstance) {
-              const span = valueInfo.span ?? valueInfo.declaration.span;
-              throw new SemanticError(
-                `No instance of '${
-                  constraint.protocolName
-                }' for type '${formatType(typeArg)}'. ` +
-                  `Add an implementation: implement ${
-                    constraint.protocolName
-                  } ${formatType(typeArg)} where ...`,
-                span,
-                analyzer.getFilePath(),
-              );
-            }
-          }
-        }
-      }
-    }
-  }
-}
 
 /**
  * Check if an instance type pattern matches a concrete type.
@@ -5782,364 +7664,6 @@ function generateSyntheticShow(type: Type): Expr {
   throw new Error("Unsupported type for synthetic Show");
 }
 
-function validateProtocolDefaultImplementations(
-  analyzer: SemanticAnalyzer,
-  currentModuleName: string,
-): void {
-  const { protocols, globalScope, constructors } = analyzer;
-
-  for (const [protocolName, protocol] of Object.entries(protocols)) {
-    // Only validate protocols defined in this module
-    if (protocol.moduleName !== currentModuleName) continue;
-
-    for (const [methodName, methodInfo] of protocol.methods) {
-      if (methodInfo.defaultImpl) {
-        // Create a scope with the method parameters bound
-        const methodScope = new Scope(globalScope);
-        for (const arg of methodInfo.defaultImpl.args) {
-          bindPatternNames(arg, methodScope);
-        }
-
-        // Validate the body expression
-        validateExpressionIdentifiers(
-          analyzer,
-          methodInfo.defaultImpl.body,
-          methodScope,
-          constructors,
-          protocolName,
-          methodName,
-        );
-      }
-    }
-  }
-}
-
-/**
- * Recursively validate that all identifier references in an expression exist
- * in the given scope. Throws SemanticError for undefined identifiers.
- *
- * @param expr The expression to validate
- * @param scope The scope to look up identifiers in
- * @param constructors Known constructors (for distinguishing value vs constructor refs)
- * @param protocolName Protocol name for error context
- * @param methodName Method name for error context
- */
-function validateExpressionIdentifiers(
-  analyzer: SemanticAnalyzer,
-  expr: Expr,
-  scope: Scope,
-  constructors: Record<string, ConstructorInfo>,
-  protocolName: string,
-  methodName: string,
-): void {
-  // Helper for recursive calls
-  const validate = (e: Expr, s: Scope = scope) =>
-    validateExpressionIdentifiers(
-      analyzer,
-      e,
-      s,
-      constructors,
-      protocolName,
-      methodName,
-    );
-
-  switch (expr.kind) {
-    case "Var": {
-      const name = expr.name;
-      // Check if it's a constructor (constructors are always valid)
-      if (constructors[name]) {
-        return;
-      }
-      // Check if it's defined in scope
-      if (!symbolExists(scope, name)) {
-        analyzer.addError(
-          `Undefined name '${name}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span,
-        );
-      }
-      return;
-    }
-    case "Lambda": {
-      // Create a child scope with the lambda arguments
-      const childScope = new Scope(scope);
-      for (const arg of expr.args) {
-        bindPatternNames(arg, childScope);
-      }
-      validate(expr.body, childScope);
-      return;
-    }
-    case "Apply": {
-      validate(expr.callee);
-      for (const arg of expr.args) {
-        validate(arg);
-      }
-      return;
-    }
-    case "If": {
-      validate(expr.condition);
-      validate(expr.thenBranch);
-      validate(expr.elseBranch);
-      return;
-    }
-    case "LetIn": {
-      // Create a child scope for let bindings
-      const childScope = new Scope(scope);
-      for (const binding of expr.bindings) {
-        // First validate the binding body in the parent scope
-        validate(binding.body);
-        // Then add the binding name to the child scope
-        childScope.symbols.set(binding.name, {
-          vars: new Set(),
-          constraints: [],
-          type: { kind: "var", id: -1 }, // Placeholder type
-        });
-      }
-      validate(expr.body, childScope);
-      return;
-    }
-    case "Case": {
-      validate(expr.discriminant);
-      for (const branch of expr.branches) {
-        // Create a child scope with pattern bindings
-        const branchScope = new Scope(scope);
-        bindPatternNames(branch.pattern, branchScope);
-        validate(branch.body, branchScope);
-      }
-      return;
-    }
-    case "Infix": {
-      // For infix expressions, we need to check if the operator is defined
-      // Operators like +, -, etc. are protocol methods and should be in scope
-      if (!symbolExists(scope, expr.operator)) {
-        throw new SemanticError(
-          `Undefined operator '${expr.operator}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-      validate(expr.left);
-      validate(expr.right);
-      return;
-    }
-    case "Unary": {
-      validate(expr.operand);
-      return;
-    }
-    case "Paren": {
-      validate(expr.expression);
-      return;
-    }
-    case "Tuple": {
-      for (const element of expr.elements) {
-        validate(element);
-      }
-      return;
-    }
-    case "List": {
-      for (const element of expr.elements) {
-        validate(element);
-      }
-      return;
-    }
-    case "ListRange": {
-      validate(expr.start);
-      validate(expr.end);
-      return;
-    }
-    case "Record": {
-      for (const field of expr.fields) {
-        validate(field.value);
-      }
-      return;
-    }
-    case "RecordUpdate": {
-      // Check that the base record exists
-      if (!symbolExists(scope, expr.base)) {
-        analyzer.addError(
-          `Undefined name '${expr.base}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span,
-        );
-      }
-      for (const field of expr.fields) {
-        validate(field.value);
-      }
-      return;
-    }
-    case "FieldAccess": {
-      // For field access (e.g., Int.add), validate module-qualified access
-      // by checking that the module exists and exports the field
-      const resolved = validateModuleFieldAccess(
-        analyzer,
-        expr,
-        protocolName,
-        methodName,
-      );
-      if (!resolved) {
-        // Not a module access, validate the target expression normally
-        validate(expr.target);
-      }
-      return;
-    }
-    case "Number":
-    case "String":
-    case "Char":
-    case "Unit":
-      // Literals don't reference identifiers
-      return;
-  }
-}
-
-/**
- * Validate a module-qualified field access (e.g., Int.add).
- * Returns true if this was a valid module access, false if not a module access.
- * Throws SemanticError if it looks like a module access but is invalid.
- */
-function validateModuleFieldAccess(
-  analyzer: SemanticAnalyzer,
-  expr: Extract<Expr, { kind: "FieldAccess" }>,
-  protocolName: string,
-  methodName: string,
-): boolean {
-  const { imports, dependencies } = analyzer;
-
-  // Collect the chain of field accesses to reconstruct the module path
-  const parts: string[] = [];
-  let current: Expr = expr;
-
-  // Traverse backwards through FieldAccess expressions
-  while (current.kind === "FieldAccess") {
-    parts.unshift(current.field);
-    current = current.target;
-  }
-
-  // The base should be a Var to be a module reference
-  if (current.kind !== "Var") {
-    return false;
-  }
-
-  // The base name (e.g., "Int" from "Int.add")
-  const baseName = current.name;
-  parts.unshift(baseName);
-
-  // Try to find a matching import for the module path
-  for (const imp of imports) {
-    // Check for module alias match (e.g., "import Vibe.Int as Int" with "Int.add")
-    if (imp.alias && baseName === imp.alias && parts.length >= 2) {
-      const depModule = dependencies.get(imp.moduleName);
-      if (!depModule) {
-        throw new SemanticError(
-          `Module '${imp.moduleName}' (aliased as '${imp.alias}') not found in implementation of '${methodName}' for protocol '${protocolName}'`,
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      // Get the field name (e.g., "add" from ["Int", "add"])
-      const fieldName = parts[1]!;
-
-      // Check if it's an exported value
-      const valueInfo = depModule.values[fieldName];
-      if (valueInfo) {
-        // Check if it's exported
-        if (!isExportedFromModule(depModule, fieldName, "value")) {
-          throw new SemanticError(
-            `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span,
-            analyzer.getFilePath(),
-          );
-        }
-        return true;
-      }
-
-      // Check if it's a constructor
-      const ctorInfo = depModule.constructors[fieldName];
-      if (ctorInfo) {
-        if (!isExportedFromModule(depModule, fieldName, "constructor")) {
-          throw new SemanticError(
-            `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span,
-            analyzer.getFilePath(),
-          );
-        }
-        return true;
-      }
-
-      // Field not found in the module
-      throw new SemanticError(
-        `'${fieldName}' is not defined in module '${imp.moduleName}' (aliased as '${imp.alias}') in implementation of '${methodName}' for protocol '${protocolName}'`,
-        expr.span,
-        analyzer.getFilePath(),
-      );
-    }
-
-    // Check for unaliased import match (e.g., "import Vibe.JS" with "Vibe.JS.null")
-    const importParts = imp.moduleName.split(".");
-    if (!imp.alias && importParts.length <= parts.length - 1) {
-      let matches = true;
-      for (let i = 0; i < importParts.length; i++) {
-        if (importParts[i] !== parts[i]) {
-          matches = false;
-          break;
-        }
-      }
-
-      if (matches) {
-        const depModule = dependencies.get(imp.moduleName);
-        if (!depModule) {
-          throw new SemanticError(
-            `Module '${imp.moduleName}' not found in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        // Get the remaining parts after the module name
-        const fieldParts = parts.slice(importParts.length);
-
-        if (fieldParts.length === 1) {
-          const fieldName = fieldParts[0]!;
-
-          // Check if it's an exported value
-          const valueInfo = depModule.values[fieldName];
-          if (valueInfo) {
-            if (!isExportedFromModule(depModule, fieldName, "value")) {
-              throw new SemanticError(
-                `'${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-                expr.span,
-                analyzer.getFilePath(),
-              );
-            }
-            return true;
-          }
-
-          // Check if it's a constructor
-          const ctorInfo = depModule.constructors[fieldName];
-          if (ctorInfo) {
-            if (!isExportedFromModule(depModule, fieldName, "constructor")) {
-              throw new SemanticError(
-                `Constructor '${fieldName}' is not exported from module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-                expr.span,
-                analyzer.getFilePath(),
-              );
-            }
-            return true;
-          }
-
-          // Field not found in the module
-          throw new SemanticError(
-            `'${fieldName}' is not defined in module '${imp.moduleName}' in implementation of '${methodName}' for protocol '${protocolName}'`,
-            expr.span,
-            analyzer.getFilePath(),
-          );
-        }
-      }
-    }
-  }
-
-  // Not a recognized module access pattern
-  return false;
-}
-
 /**
  * Check if a symbol exists in the scope hierarchy (without throwing).
  */
@@ -6394,347 +7918,6 @@ function typeOverlaps(type1: Type, type2: Type): boolean {
 }
 
 /**
- * Compute export information for a module based on its exposing clause.
- * This validates that all exported items exist and builds the ExportInfo structure.
- *
- * @param importedValues - Map from value name to source module name, for values imported
- *                         from other modules that can be re-exported.
- */
-function computeModuleExports(
-  analyzer: SemanticAnalyzer,
-  moduleDecl: ModuleDeclaration | undefined,
-  values: Record<string, ValueInfo>,
-  adts: Record<string, ADTInfo>,
-  constructors: Record<string, ConstructorInfo>,
-  typeAliases: Record<string, TypeAliasInfo>,
-  opaqueTypes: Record<string, OpaqueTypeInfo>,
-  protocols: Record<string, ProtocolInfo>,
-  operators: OperatorRegistry,
-  importedValues: Map<string, string>,
-): ExportInfo {
-  // Default: empty exports
-  const exports: ExportInfo = {
-    values: new Set(),
-    operators: new Set(),
-    types: new Map(),
-    protocols: new Map(),
-    exportsAll: false,
-    reExportedValues: new Map(),
-  };
-
-  if (!moduleDecl || !moduleDecl.exposing) {
-    // No exposing clause means export nothing by default
-    return exports;
-  }
-
-  const exposing = moduleDecl.exposing;
-
-  // Handle "exposing (..)" - export everything
-  if (exposing.kind === "All") {
-    exports.exportsAll = true;
-
-    // Export all values
-    for (const name of Object.keys(values)) {
-      exports.values.add(name);
-    }
-
-    // Export all operators
-    for (const op of operators.keys()) {
-      exports.operators.add(op);
-    }
-
-    // Export all ADTs with all constructors
-    for (const [name, adt] of Object.entries(adts)) {
-      exports.types.set(name, {
-        allConstructors: true,
-        constructors: new Set(adt.constructors),
-      });
-    }
-
-    // Export all type aliases
-    for (const name of Object.keys(typeAliases)) {
-      exports.types.set(name, { allConstructors: false });
-    }
-
-    // Export all opaque types
-    for (const name of Object.keys(opaqueTypes)) {
-      exports.types.set(name, { allConstructors: false });
-    }
-
-    // Export all protocols with all methods
-    for (const [name, protocol] of Object.entries(protocols)) {
-      exports.protocols.set(name, {
-        allMethods: true,
-        methods: new Set(protocol.methods.keys()),
-      });
-    }
-
-    return exports;
-  }
-
-  // Handle explicit exports
-  for (const spec of exposing.exports) {
-    switch (spec.kind) {
-      case "ExportValue": {
-        const name = spec.name;
-
-        // Check if it's a value/function defined locally
-        // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-        if (Object.hasOwn(values, name)) {
-          exports.values.add(name);
-          continue;
-        }
-
-        // Check if it's an imported value that can be re-exported
-        if (importedValues.has(name)) {
-          exports.reExportedValues.set(name, importedValues.get(name)!);
-          continue;
-        }
-
-        // Check if it's a type (ADT, alias, or opaque) exported without constructors
-        // Use Object.hasOwn to avoid prototype pollution
-        if (Object.hasOwn(adts, name)) {
-          exports.types.set(name, {
-            allConstructors: false,
-            constructors: new Set(),
-          });
-          continue;
-        }
-        if (Object.hasOwn(typeAliases, name)) {
-          exports.types.set(name, { allConstructors: false });
-          continue;
-        }
-        if (Object.hasOwn(opaqueTypes, name)) {
-          exports.types.set(name, { allConstructors: false });
-          continue;
-        }
-
-        // Check if it's a protocol exported without methods
-        if (Object.hasOwn(protocols, name)) {
-          exports.protocols.set(name, {
-            allMethods: false,
-            methods: new Set(),
-          });
-          continue;
-        }
-
-        throw new SemanticError(
-          `Module exposes '${name}' which is not defined`,
-          spec.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      case "ExportOperator": {
-        const op = spec.operator;
-
-        // Check if operator is defined (either as a value or in operator registry)
-        // Use Object.hasOwn to avoid prototype pollution
-        if (
-          !Object.hasOwn(values, op) &&
-          !operators.has(op) &&
-          !importedValues.has(op)
-        ) {
-          throw new SemanticError(
-            `Module exposes operator '${op}' which is not defined`,
-            spec.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        exports.operators.add(op);
-        // Also add to values since operators are functions
-        if (Object.hasOwn(values, op)) {
-          exports.values.add(op);
-        } else if (importedValues.has(op)) {
-          exports.reExportedValues.set(op, importedValues.get(op)!);
-        }
-        break;
-      }
-
-      case "ExportTypeAll": {
-        const name = spec.name;
-
-        // Check if it's an ADT
-        // Use Object.hasOwn to avoid prototype pollution
-        if (Object.hasOwn(adts, name)) {
-          const adt = adts[name]!;
-          exports.types.set(name, {
-            allConstructors: true,
-            constructors: new Set(adt.constructors),
-          });
-          continue;
-        }
-
-        // Check if it's a protocol
-        if (Object.hasOwn(protocols, name)) {
-          const protocol = protocols[name]!;
-          exports.protocols.set(name, {
-            allMethods: true,
-            methods: new Set(protocol.methods.keys()),
-          });
-          // Protocol methods are NOT exported as standalone values
-          // They are only accessible through instance dictionaries
-          continue;
-        }
-
-        // Type alias or opaque type with (..) is an error
-        if (Object.hasOwn(typeAliases, name)) {
-          throw new SemanticError(
-            `Type alias '${name}' cannot use (..) syntax - type aliases have no constructors`,
-            spec.span,
-            analyzer.getFilePath(),
-          );
-        }
-        if (Object.hasOwn(opaqueTypes, name)) {
-          throw new SemanticError(
-            `Opaque type '${name}' cannot use (..) syntax - opaque types have no constructors`,
-            spec.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        throw new SemanticError(
-          `Module exposes '${name}(..)' but '${name}' is not a type or protocol`,
-          spec.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      case "ExportTypeSome": {
-        const name = spec.name;
-        const members = spec.members;
-
-        // Check if it's an ADT with specific constructors
-        // Use Object.hasOwn to avoid prototype pollution
-        if (Object.hasOwn(adts, name)) {
-          const adt = adts[name]!;
-          const exportedCtors = new Set<string>();
-
-          for (const memberName of members) {
-            if (!adt.constructors.includes(memberName)) {
-              throw new SemanticError(
-                `Constructor '${memberName}' is not defined in type '${name}'`,
-                spec.span,
-                analyzer.getFilePath(),
-              );
-            }
-            exportedCtors.add(memberName);
-          }
-
-          exports.types.set(name, {
-            allConstructors: false,
-            constructors: exportedCtors,
-          });
-          continue;
-        }
-
-        // Check if it's a protocol with specific methods
-        if (Object.hasOwn(protocols, name)) {
-          const protocol = protocols[name]!;
-          const exportedMethods = new Set<string>();
-
-          for (const memberName of members) {
-            if (!protocol.methods.has(memberName)) {
-              throw new SemanticError(
-                `Method '${memberName}' is not defined in protocol '${name}'`,
-                spec.span,
-                analyzer.getFilePath(),
-              );
-            }
-            exportedMethods.add(memberName);
-            // Also export the method name as a value
-            exports.values.add(memberName);
-          }
-
-          exports.protocols.set(name, {
-            allMethods: false,
-            methods: exportedMethods,
-          });
-          continue;
-        }
-
-        throw new SemanticError(
-          `Module exposes '${name}(...)' but '${name}' is not a type or protocol`,
-          spec.span,
-          analyzer.getFilePath(),
-        );
-      }
-    }
-  }
-
-  return exports;
-}
-
-function validateImports(
-  analyzer: SemanticAnalyzer,
-  imports: ImportDeclaration[],
-) {
-  const byModule = new Map<string, ImportDeclaration>();
-  const byAlias = new Map<string, ImportDeclaration>();
-
-  for (const imp of imports) {
-    const duplicateModule = byModule.get(imp.moduleName);
-    if (duplicateModule) {
-      throw new SemanticError(
-        `Duplicate import of module '${imp.moduleName}'`,
-        imp.span,
-        analyzer.getFilePath(),
-      );
-    }
-    byModule.set(imp.moduleName, imp);
-
-    if (imp.alias) {
-      const duplicateAlias = byAlias.get(imp.alias);
-      if (duplicateAlias) {
-        throw new SemanticError(
-          `Duplicate import alias '${imp.alias}'`,
-          imp.span,
-          analyzer.getFilePath(),
-        );
-      }
-      byAlias.set(imp.alias, imp);
-    }
-  }
-}
-
-function analyzeValueDeclaration(
-  analyzer: SemanticAnalyzer,
-  decl: ValueDeclaration,
-  scope: Scope,
-  substitution: Substitution,
-  declaredType: Type,
-  annotationType?: Type,
-): Type {
-  // Validate function parameter patterns (single-constructor ADTs, tuples, records)
-  validateFunctionParamPatterns(analyzer, decl.args);
-
-  const paramTypes = annotationType
-    ? extractAnnotationParams(annotationType, decl.args.length, decl.span)
-    : decl.args.map(() => freshType());
-  const returnType = annotationType
-    ? extractAnnotationReturn(annotationType, decl.args.length)
-    : freshType();
-  const expected = fnChain(paramTypes, returnType);
-
-  unify(analyzer, expected, declaredType, decl.span, substitution);
-
-  const fnScope = new Scope(scope);
-  bindPatterns(analyzer, fnScope, decl.args, paramTypes, substitution);
-
-  const bodyType = analyzeExpr(
-    analyzer,
-    decl.body,
-    fnScope,
-    substitution,
-    returnType,
-  );
-  unify(analyzer, bodyType, returnType, decl.body.span, substitution);
-
-  return applySubstitution(expected, substitution);
-}
-
-/**
  * Try to resolve a module-qualified field access (e.g., Vibe.JS.null)
  * Returns the type of the accessed symbol if it's a module access, or null if not.
  */
@@ -6850,559 +8033,6 @@ function tryResolveModuleFieldAccess(
   return null;
 }
 
-function analyzeExpr(
-  analyzer: SemanticAnalyzer,
-  expr: Expr,
-  scope: Scope,
-  substitution: Substitution,
-  expectedType: Type | null = null,
-): Type {
-  // Access registry properties from analyzer
-  const { constructors, adts, typeAliases, opaqueTypes, records } = analyzer;
-  const { imports, dependencies } = analyzer;
-
-  switch (expr.kind) {
-    case "Var": {
-      // Look up the symbol and collect any protocol constraints
-      const { type: resolved, constraints } = lookupSymbolWithConstraints(
-        analyzer,
-        scope,
-        expr.name,
-        expr.span,
-        substitution,
-      );
-      // Add any constraints from the symbol to the current context
-      for (const constraint of constraints) {
-        addConstraint(analyzer.getConstraintContext(), constraint);
-      }
-      return applySubstitution(resolved, substitution);
-    }
-    case "Number": {
-      // Number literals are treated as Int or Float based on decimal point
-      const hasDecimal = expr.value.includes(".");
-      const typeName = hasDecimal ? "Float" : "Int";
-      const opaque = opaqueTypes[typeName];
-      if (!opaque && !adts[typeName]) {
-        throw new SemanticError(
-          `Type '${typeName}' not found. Make sure the prelude is imported.`,
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-      return { kind: "con", name: typeName, args: [] };
-    }
-    case "String": {
-      const opaque = opaqueTypes["String"];
-      if (!opaque && !adts["String"]) {
-        throw new SemanticError(
-          "Type 'String' not found. Make sure the prelude is imported.",
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-      return { kind: "con", name: "String", args: [] };
-    }
-    case "Char": {
-      const opaque = opaqueTypes["Char"];
-      if (!opaque && !adts["Char"]) {
-        throw new SemanticError(
-          "Type 'Char' not found. Make sure the prelude is imported.",
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-      return { kind: "con", name: "Char", args: [] };
-    }
-    case "Unit": {
-      // () is syntax sugar for the Unit constructor from the prelude
-      const opaque = opaqueTypes["Unit"];
-      if (!opaque && !adts["Unit"]) {
-        throw new SemanticError(
-          "Type 'Unit' not found. Make sure the prelude is imported.",
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-      return { kind: "con", name: "Unit", args: [] };
-    }
-    case "Tuple": {
-      const elements = expr.elements.map((el) =>
-        analyzeExpr(analyzer, el, scope, substitution),
-      );
-      return { kind: "tuple", elements };
-    }
-    case "List": {
-      if (expr.elements.length === 0) {
-        return listType(freshType());
-      }
-      const first = analyzeExpr(
-        analyzer,
-        expr.elements[0]!,
-        scope,
-        substitution,
-      );
-      for (const el of expr.elements.slice(1)) {
-        const elType = analyzeExpr(analyzer, el, scope, substitution);
-        unify(analyzer, first, elType, el.span, substitution);
-      }
-      return listType(applySubstitution(first, substitution));
-    }
-    case "ListRange": {
-      const startType = analyzeExpr(analyzer, expr.start, scope, substitution);
-      const endType = analyzeExpr(analyzer, expr.end, scope, substitution);
-      unify(analyzer, startType, endType, expr.span, substitution);
-      return listType(applySubstitution(startType, substitution));
-    }
-    case "Record": {
-      const fields: Record<string, Type> = {};
-      for (const field of expr.fields) {
-        // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
-        if (Object.hasOwn(fields, field.name)) {
-          throw new SemanticError(
-            `Duplicate record field '${field.name}'`,
-            field.span,
-            analyzer.getFilePath(),
-          );
-        }
-        fields[field.name] = analyzeExpr(
-          analyzer,
-          field.value,
-          scope,
-          substitution,
-        );
-      }
-      return { kind: "record", fields };
-    }
-    case "RecordUpdate": {
-      const baseType = lookupSymbol(
-        analyzer,
-        scope,
-        expr.base,
-        expr.span,
-        substitution,
-      );
-      const concreteBase = applySubstitution(baseType, substitution);
-      if (concreteBase.kind !== "record") {
-        throw new SemanticError(
-          `Cannot update non-record '${expr.base}'`,
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-      const updatedFields: Record<string, Type> = { ...concreteBase.fields };
-      for (const field of expr.fields) {
-        if (!updatedFields[field.name]) {
-          throw new SemanticError(
-            `Record '${expr.base}' has no field '${field.name}'`,
-            field.span,
-            analyzer.getFilePath(),
-          );
-        }
-        const fieldType = analyzeExpr(
-          analyzer,
-          field.value,
-          scope,
-          substitution,
-        );
-        unify(
-          analyzer,
-          updatedFields[field.name]!,
-          fieldType,
-          field.span,
-          substitution,
-        );
-        updatedFields[field.name] = applySubstitution(
-          updatedFields[field.name]!,
-          substitution,
-        );
-      }
-      return { kind: "record", fields: updatedFields };
-    }
-    case "FieldAccess": {
-      // First, try to resolve module-qualified access (e.g., Vibe.JS.null)
-      const moduleAccess = tryResolveModuleFieldAccess(
-        expr,
-        imports,
-        dependencies,
-      );
-      if (moduleAccess) {
-        return moduleAccess;
-      }
-
-      // Otherwise, handle as record field access
-      const targetType = analyzeExpr(
-        analyzer,
-        expr.target,
-        scope,
-        substitution,
-      );
-      const concrete = applySubstitution(targetType, substitution);
-
-      // If target is error type, propagate without additional errors (prevent cascading)
-      if (concrete.kind === "error") {
-        return ERROR_TYPE;
-      }
-
-      let fieldType: Type | undefined;
-
-      if (concrete.kind === "record") {
-        fieldType = concrete.fields[expr.field];
-      } else if (concrete.kind === "con") {
-        const recordInfo = records[concrete.name];
-        if (recordInfo) {
-          const fieldInfo = recordInfo.fields.find(
-            (f) => f.name === expr.field,
-          );
-          if (fieldInfo) {
-            const resolveCtx = new Map<string, TypeVar>();
-            const freshVars: TypeVar[] = [];
-            recordInfo.params.forEach((p) => {
-              const v: TypeVar = { kind: "var", id: freshType().id };
-              resolveCtx.set(p, v);
-              freshVars.push(v);
-            });
-
-            const genericFieldType = typeFromAnnotation(
-              analyzer,
-              fieldInfo.typeExpr,
-              resolveCtx,
-            );
-
-            const instSub = new Map<number, Type>();
-            freshVars.forEach((v, i) => {
-              instSub.set(v.id, concrete.args[i]!);
-            });
-
-            fieldType = applySubstitution(genericFieldType, instSub);
-          }
-        }
-      }
-
-      if (!fieldType) {
-        if (
-          concrete.kind !== "record" &&
-          (concrete.kind !== "con" || !records[concrete.name])
-        ) {
-          throw new SemanticError(
-            `Cannot access field '${expr.field}' on non-record value '${formatType(concrete)}'`,
-            expr.span,
-            analyzer.getFilePath(),
-          );
-        }
-        throw new SemanticError(
-          `Record has no field '${expr.field}'`,
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-      return applySubstitution(fieldType, substitution);
-    }
-    case "Lambda": {
-      const paramTypes = expr.args.map(() => freshType());
-      const fnScope = new Scope(scope);
-      bindPatterns(analyzer, fnScope, expr.args, paramTypes, substitution);
-      const bodyType = analyzeExpr(analyzer, expr.body, fnScope, substitution);
-      return fnChain(paramTypes, bodyType);
-    }
-    case "Apply": {
-      let calleeType = analyzeExpr(analyzer, expr.callee, scope, substitution);
-      for (const arg of expr.args) {
-        const argType = analyzeExpr(analyzer, arg, scope, substitution);
-        const resultType = freshType();
-        unify(
-          analyzer,
-          calleeType,
-          fn(argType, resultType),
-          expr.span,
-          substitution,
-        );
-        // Eagerly validate constraints after unification to catch type mismatches
-        // where a protocol method's return type gets unified with a function type
-        // due to over-application
-        validateConstraintsEagerly(analyzer, substitution, arg.span);
-        calleeType = applySubstitution(resultType, substitution);
-      }
-      return applySubstitution(calleeType, substitution);
-    }
-    case "If": {
-      const condType = analyzeExpr(
-        analyzer,
-        expr.condition,
-        scope,
-        substitution,
-      );
-      // Bool type must be defined in the prelude
-      const boolAdt = adts["Bool"];
-      if (!boolAdt) {
-        throw new SemanticError(
-          "Type 'Bool' not found. Make sure the prelude is imported.",
-          expr.condition.span,
-          analyzer.getFilePath(),
-        );
-      }
-      const tBool: Type = { kind: "con", name: "Bool", args: [] };
-      unify(analyzer, condType, tBool, expr.condition.span, substitution);
-      const thenType = analyzeExpr(
-        analyzer,
-        expr.thenBranch,
-        scope,
-        substitution,
-      );
-      const elseType = analyzeExpr(
-        analyzer,
-        expr.elseBranch,
-        scope,
-        substitution,
-      );
-      unify(analyzer, thenType, elseType, expr.span, substitution);
-      return applySubstitution(thenType, substitution);
-    }
-    case "LetIn": {
-      const letScope = new Scope(scope);
-
-      // First pass: seed the scope with monomorphic schemes to enable recursion
-      for (const binding of expr.bindings) {
-        if (letScope.symbols.has(binding.name)) {
-          throw new SemanticError(
-            `Duplicate let-binding '${binding.name}'`,
-            binding.span,
-            analyzer.getFilePath(),
-          );
-        }
-        const seeded = seedValueType(analyzer, binding);
-        // Seed with monomorphic scheme (empty quantifier set)
-        declareSymbol(
-          analyzer,
-          letScope,
-          binding.name,
-          { vars: new Set(), constraints: [], type: seeded },
-          binding.span,
-        );
-      }
-
-      // Second pass: analyze each binding and generalize its type
-      // This is where let-polymorphism happens for local bindings
-      for (const binding of expr.bindings) {
-        const declared = lookupSymbol(
-          analyzer,
-          letScope,
-          binding.name,
-          binding.span,
-          substitution,
-        );
-        const inferred = analyzeValueDeclaration(
-          analyzer,
-          binding,
-          letScope,
-          substitution,
-          declared,
-        );
-        // Generalize the inferred type for polymorphic let-bindings
-        // Note: We generalize with respect to the parent scope, not letScope,
-        // to allow quantifying over variables not bound in the parent
-        const generalizedScheme = generalize(
-          analyzer,
-          inferred,
-          scope,
-          substitution,
-        );
-        letScope.symbols.set(binding.name, generalizedScheme);
-      }
-
-      return analyzeExpr(
-        analyzer,
-        expr.body,
-        letScope,
-        substitution,
-        expectedType,
-      );
-    }
-    case "Case": {
-      const discriminantType = analyzeExpr(
-        analyzer,
-        expr.discriminant,
-        scope,
-        substitution,
-      );
-      const branchTypes: Type[] = [];
-
-      expr.branches.forEach((branch, index) => {
-        const branchScope = new Scope(scope);
-        const patternType = bindPattern(
-          analyzer,
-          branch.pattern,
-          branchScope,
-          substitution,
-          new Set(),
-          freshType(),
-        );
-        unify(
-          analyzer,
-          discriminantType,
-          patternType,
-          branch.pattern.span,
-          substitution,
-        );
-        const bodyType = analyzeExpr(
-          analyzer,
-          branch.body,
-          branchScope,
-          substitution,
-          expectedType,
-        );
-        branchTypes.push(bodyType);
-
-        if (branch.pattern.kind === "WildcardPattern") {
-          if (index !== expr.branches.length - 1) {
-            throw new SemanticError(
-              "Wildcard pattern makes following branches unreachable",
-              branch.pattern.span,
-              analyzer.getFilePath(),
-            );
-          }
-        }
-        if (branch.pattern.kind === "ConstructorPattern") {
-          validateConstructorArity(analyzer, branch.pattern);
-        }
-      });
-
-      if (branchTypes.length === 0) {
-        throw new SemanticError(
-          "Case expression has no branches",
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      const firstType = branchTypes[0]!;
-      for (const bt of branchTypes.slice(1)) {
-        unify(analyzer, firstType, bt, expr.span, substitution);
-      }
-
-      // Exhaustiveness checking
-      const patterns = expr.branches.map((b) => b.pattern);
-      const result = checkExhaustiveness(
-        patterns,
-        discriminantType,
-        adts,
-        constructors,
-        (name) =>
-          resolveQualifiedConstructor(
-            name,
-            constructors,
-            adts,
-            imports,
-            dependencies,
-          ) || undefined,
-      );
-
-      if (!result.exhaustive) {
-        throw new SemanticError(
-          `Non-exhaustive case expression (missing: ${result.missing})`,
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      return applySubstitution(firstType, substitution);
-    }
-    case "Infix": {
-      const leftType = analyzeExpr(analyzer, expr.left, scope, substitution);
-      const rightType = analyzeExpr(analyzer, expr.right, scope, substitution);
-      const opType = INFIX_TYPES[expr.operator];
-
-      if (opType) {
-        const expected = applySubstitution(opType, substitution);
-        const params = flattenFunctionParams(expected);
-        if (params.length < 2) {
-          throw new SemanticError(
-            "Invalid operator type",
-            expr.span,
-            analyzer.getFilePath(),
-          );
-        }
-        unify(analyzer, params[0]!, leftType, expr.left.span, substitution);
-        unify(analyzer, params[1]!, rightType, expr.right.span, substitution);
-        return applySubstitution(
-          extractAnnotationReturn(expected, 2),
-          substitution,
-        );
-      }
-
-      const callee: Expr = {
-        kind: "Var",
-        name: expr.operator,
-        namespace: "lower",
-        span: expr.span,
-      };
-      const applyExpr: Expr = {
-        kind: "Apply",
-        callee,
-        args: [expr.left, expr.right],
-        span: expr.span,
-      };
-      return analyzeExpr(
-        analyzer,
-        applyExpr,
-        scope,
-        substitution,
-        expectedType,
-      );
-    }
-    case "Paren":
-      return analyzeExpr(
-        analyzer,
-        expr.expression,
-        scope,
-        substitution,
-        expectedType,
-      );
-    case "Unary": {
-      // Unary negation: only allowed for Int and Float
-      const operandType = analyzeExpr(
-        analyzer,
-        expr.operand,
-        scope,
-        substitution,
-      );
-      const concreteType = applySubstitution(operandType, substitution);
-
-      // Check if the operand is Int or Float
-      if (concreteType.kind === "con") {
-        if (concreteType.name === "Int" || concreteType.name === "Float") {
-          return concreteType;
-        }
-      }
-
-      // For type variables, we need to defer the check or constrain the type
-      // For now, we require the type to be known as Int or Float
-      if (concreteType.kind === "var") {
-        throw new SemanticError(
-          `Unary negation requires a concrete numeric type (Int or Float), but got an unknown type. Add a type annotation to disambiguate.`,
-          expr.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      throw new SemanticError(
-        `Unary negation is only allowed for Int and Float, but got '${formatType(
-          concreteType,
-        )}'`,
-        expr.span,
-        analyzer.getFilePath(),
-      );
-    }
-    default: {
-      const _exhaustive: never = expr;
-      throw new SemanticError(
-        "Unsupported expression",
-        (expr as { span: Span }).span,
-        analyzer.getFilePath(),
-      );
-    }
-  }
-}
-
 /**
  * Check if a set of constructor patterns exhaustively covers an ADT.
  *
@@ -7482,847 +8112,6 @@ function constructorCoverage(
   }
 
   return { exhaustive: false };
-}
-
-/**
- * Validate that patterns used in function parameters are allowed.
- *
- * Function parameters can use:
- * - Variable patterns (x)
- * - Wildcard patterns (_)
- * - Tuple patterns ((a, b))
- * - Record patterns ({ x, y })
- * - Constructor patterns ONLY for single-constructor ADTs (e.g., Pair a b)
- *
- * Multi-constructor ADTs (like Maybe, Result) require case expressions.
- */
-function validateFunctionParamPatterns(
-  analyzer: SemanticAnalyzer,
-  patterns: Pattern[],
-): void {
-  for (const pattern of patterns) {
-    validateFunctionParamPattern(analyzer, pattern);
-  }
-}
-
-/**
- * Recursively validate a single function parameter pattern.
- */
-function validateFunctionParamPattern(
-  analyzer: SemanticAnalyzer,
-  pattern: Pattern,
-): void {
-  const { constructors, adts } = analyzer;
-
-  switch (pattern.kind) {
-    case "VarPattern":
-    case "WildcardPattern":
-      // Always allowed
-      return;
-
-    case "TuplePattern":
-      // Allowed, but validate nested patterns
-      for (const element of pattern.elements) {
-        validateFunctionParamPattern(analyzer, element);
-      }
-      return;
-
-    case "RecordPattern":
-      // Allowed, but validate nested patterns
-      for (const field of pattern.fields) {
-        if (field.pattern) {
-          validateFunctionParamPattern(analyzer, field.pattern);
-        }
-      }
-      return;
-
-    case "ConstructorPattern": {
-      // Only allowed for single-constructor ADTs
-      const ctorInfo = constructors[pattern.name];
-
-      if (!ctorInfo) {
-        // Unknown constructor - will be caught by other validation
-        return;
-      }
-
-      const adtInfo = adts[ctorInfo.parentType];
-
-      if (!adtInfo) {
-        // Unknown ADT - will be caught by other validation
-        return;
-      }
-
-      if (adtInfo.constructors.length > 1) {
-        const constructorNames = adtInfo.constructors.join(", ");
-        throw new SemanticError(
-          `Constructor pattern '${pattern.name}' is not allowed in function parameters. ` +
-            `The type '${ctorInfo.parentType}' has multiple constructors (${constructorNames}). ` +
-            `Use a case expression in the function body instead.`,
-          pattern.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      // Validate nested patterns
-      for (const arg of pattern.args) {
-        validateFunctionParamPattern(analyzer, arg);
-      }
-      return;
-    }
-
-    case "ListPattern":
-    case "ConsPattern":
-      // These should have been rejected by the parser, but check anyway
-      throw new SemanticError(
-        `List patterns are not allowed in function parameters. ` +
-          `Use a case expression in the function body instead.`,
-        pattern.span,
-        analyzer.getFilePath(),
-      );
-  }
-}
-
-function bindPatterns(
-  analyzer: SemanticAnalyzer,
-  scope: Scope,
-  patterns: Pattern[],
-  paramTypes: Type[],
-  substitution: Substitution,
-) {
-  if (patterns.length !== paramTypes.length) {
-    throw new Error("Internal arity mismatch during pattern binding");
-  }
-  const seen = new Set<string>();
-  patterns.forEach((pattern, idx) => {
-    const paramType = paramTypes[idx]!;
-    bindPattern(analyzer, pattern, scope, substitution, seen, paramType);
-    if (pattern.kind === "VarPattern") {
-      // Pattern variables are monomorphic
-      scope.symbols.set(pattern.name, {
-        vars: new Set(),
-        constraints: [],
-        type: paramType,
-      });
-    }
-  });
-}
-
-/**
- * Bind pattern variables to types in a scope.
- *
- * This function recursively processes a pattern, binding variables to their types
- * and validating that the pattern is well-formed for the expected type.
- *
- * For constructor patterns, it:
- * 1. Validates constructor arity (number of arguments)
- * 2. Determines the constructor's type from the registry
- * 3. Unifies the pattern type with the expected type
- * 4. Recursively binds nested pattern arguments
- */
-function bindPattern(
-  analyzer: SemanticAnalyzer,
-  pattern: Pattern,
-  scope: Scope,
-  substitution: Substitution,
-  seen: Set<string>,
-  expected: Type,
-): Type {
-  const { constructors, adts, imports, dependencies } = analyzer;
-
-  // Helper for recursive calls
-  const bind = (p: Pattern, exp: Type) =>
-    bindPattern(analyzer, p, scope, substitution, seen, exp);
-
-  switch (pattern.kind) {
-    case "VarPattern": {
-      if (seen.has(pattern.name)) {
-        throw new SemanticError(
-          `Duplicate pattern variable '${pattern.name}'`,
-          pattern.span,
-          analyzer.getFilePath(),
-        );
-      }
-      seen.add(pattern.name);
-      // Pattern variables are monomorphic (not generalized)
-      // This follows the let-polymorphism discipline where only let-bound names are polymorphic
-      declareSymbol(
-        analyzer,
-        scope,
-        pattern.name,
-        { vars: new Set(), constraints: [], type: expected },
-        pattern.span,
-      );
-      return expected;
-    }
-    case "WildcardPattern":
-      return expected;
-    case "TuplePattern": {
-      const subTypes = pattern.elements.map(() => freshType());
-      unify(
-        analyzer,
-        { kind: "tuple", elements: subTypes },
-        expected,
-        pattern.span,
-        substitution,
-      );
-      pattern.elements.forEach((el, idx) => bind(el, subTypes[idx]!));
-      return applySubstitution(
-        { kind: "tuple", elements: subTypes },
-        substitution,
-      );
-    }
-    case "ConstructorPattern": {
-      // Validate constructor arity
-      validateConstructorArity(analyzer, pattern);
-
-      // Look up constructor info to get proper types (supports qualified names)
-      const resolved = resolveQualifiedConstructor(
-        pattern.name,
-        constructors,
-        adts,
-        imports,
-        dependencies,
-      );
-      const ctorInfo = resolved ? resolved.info : undefined;
-
-      if (ctorInfo) {
-        // User-defined ADT constructor
-        // Create fresh type variables for the ADT's type parameters
-        const paramTypeVars: Map<string, TypeVar> = new Map();
-        for (const param of ctorInfo.parentParams) {
-          paramTypeVars.set(param, freshType());
-        }
-
-        // Build the result type: ParentType param1 param2 ...
-        const resultType: TypeCon = {
-          kind: "con",
-          name: ctorInfo.parentType,
-          args: ctorInfo.parentParams.map((p) => paramTypeVars.get(p)!),
-        };
-
-        // Build types for constructor arguments
-        const argTypes: Type[] = ctorInfo.argTypes.map((argExpr) =>
-          constructorArgToType(analyzer, argExpr, paramTypeVars),
-        );
-
-        // Unify the result type with the expected type to bind type parameters
-        unify(analyzer, resultType, expected, pattern.span, substitution);
-
-        // Validate we have the right number of argument patterns
-        if (pattern.args.length !== argTypes.length) {
-          throw new SemanticError(
-            `Constructor '${pattern.name}' expects ${argTypes.length} argument(s), got ${pattern.args.length}`,
-            pattern.span,
-            analyzer.getFilePath(),
-          );
-        }
-
-        // Recursively bind pattern arguments
-        pattern.args.forEach((arg, idx) => {
-          const argType = applySubstitution(argTypes[idx]!, substitution);
-          bind(arg, argType);
-        });
-
-        return applySubstitution(resultType, substitution);
-      } else {
-        // Fall back to legacy behavior for built-in constructors
-        const argTypes = pattern.args.map(() => freshType());
-        const constructed: Type = fnChain(argTypes, freshType());
-        unify(analyzer, constructed, expected, pattern.span, substitution);
-        pattern.args.forEach((arg, idx) => bind(arg, argTypes[idx]!));
-        return applySubstitution(expected, substitution);
-      }
-    }
-    case "ListPattern": {
-      // List pattern: [] or [x, y, z]
-      // Expected type should be List a for some a
-      const elemType = freshType();
-      const lt = listType(elemType);
-      unify(analyzer, lt, expected, pattern.span, substitution);
-
-      // Bind each element pattern to the element type
-      pattern.elements.forEach((el) =>
-        bind(el, applySubstitution(elemType, substitution)),
-      );
-      return applySubstitution(lt, substitution);
-    }
-    case "ConsPattern": {
-      // Cons pattern: head :: tail
-      // Expected type should be List a for some a
-      const elemType = freshType();
-      const lt = listType(elemType);
-      unify(analyzer, lt, expected, pattern.span, substitution);
-
-      // Head pattern binds to element type
-      bind(pattern.head, applySubstitution(elemType, substitution));
-
-      // Tail pattern binds to list type
-      bind(pattern.tail, applySubstitution(lt, substitution));
-
-      return applySubstitution(lt, substitution);
-    }
-    case "RecordPattern": {
-      // Record pattern: { x, y } or { x = pat, y }
-      // Expected type should be a record with at least these fields
-
-      // Build record type from field names
-      const fieldTypes: Record<string, Type> = {};
-      for (const field of pattern.fields) {
-        fieldTypes[field.name] = freshType();
-      }
-
-      // Create record type and unify with expected
-      const recordType: Type = {
-        kind: "record",
-        fields: fieldTypes,
-      };
-      unify(analyzer, recordType, expected, pattern.span, substitution);
-
-      // Bind each field's pattern (or the field name as variable)
-      for (const field of pattern.fields) {
-        const fieldType = fieldTypes[field.name]!;
-        const appliedFieldType = applySubstitution(fieldType, substitution);
-
-        if (field.pattern) {
-          // Field has an explicit pattern: { x = pat }
-          bind(field.pattern, appliedFieldType);
-        } else {
-          // Field without pattern becomes a variable: { x } === { x = x }
-          if (seen.has(field.name)) {
-            throw new SemanticError(
-              `Duplicate pattern variable '${field.name}'`,
-              pattern.span,
-              analyzer.getFilePath(),
-            );
-          }
-          seen.add(field.name);
-          declareSymbol(
-            analyzer,
-            scope,
-            field.name,
-            { vars: new Set(), constraints: [], type: appliedFieldType },
-            pattern.span,
-          );
-        }
-      }
-
-      return applySubstitution(recordType, substitution);
-    }
-    default:
-      return expected;
-  }
-}
-
-/**
- * Validate that a constructor pattern has the correct number of arguments.
- *
- * Checks both user-defined constructors (from the registry) and built-in
- * constructors (True, False, Just, Nothing, Ok, Err).
- */
-function validateConstructorArity(
-  analyzer: SemanticAnalyzer,
-  pattern: Extract<Pattern, { kind: "ConstructorPattern" }>,
-) {
-  // First check user-defined constructors
-  const ctorInfo = analyzer.constructors[pattern.name];
-  if (ctorInfo) {
-    if (ctorInfo.arity !== pattern.args.length) {
-      throw new SemanticError(
-        `Constructor '${pattern.name}' expects ${ctorInfo.arity} argument(s), got ${pattern.args.length}`,
-        pattern.span,
-        analyzer.getFilePath(),
-      );
-    }
-    return;
-  }
-
-  // Fall back to built-in constructors
-  const expected = BUILTIN_CONSTRUCTORS[pattern.name];
-  if (expected !== undefined && expected !== pattern.args.length) {
-    throw new SemanticError(
-      `Constructor '${pattern.name}' expects ${expected} argument(s)`,
-      pattern.span,
-      analyzer.getFilePath(),
-    );
-  }
-}
-
-/**
- * Declare a symbol in the scope with its type scheme.
- * Type schemes enable polymorphism - the symbol can be instantiated
- * at different types at different use sites.
- */
-function declareSymbol(
-  analyzer: SemanticAnalyzer,
-  scope: Scope,
-  name: string,
-  scheme: TypeScheme,
-  span: Span,
-) {
-  if (scope.has(name)) {
-    throw new SemanticError(
-      `Duplicate definition for '${name}'`,
-      span,
-      analyzer.getFilePath(),
-    );
-  }
-  scope.define(name, scheme);
-}
-
-/**
- * Look up a symbol in the scope and instantiate its type scheme.
- * Each lookup gets a fresh instantiation, enabling polymorphic usage.
- * Also returns any protocol constraints associated with the symbol.
- *
- * Example:
- *   id : forall a. a -> a
- *   First use: id 42        -> instantiated as number -> number
- *   Second use: id "hello"  -> instantiated as string -> string
- *
- *   (+) : forall a. Num a => a -> a -> a
- *   Use: x + y              -> returns type: a -> a -> a, constraints: [Num a]
- */
-function lookupSymbolWithConstraints(
-  analyzer: SemanticAnalyzer,
-  scope: Scope,
-  name: string,
-  span: Span,
-  substitution: Substitution,
-): LookupResult {
-  const scheme = scope.lookup(name);
-  if (scheme) {
-    // Instantiate the scheme to get a fresh type for this use site
-    const { type, constraints } = instantiateWithConstraints(
-      scheme,
-      substitution,
-    );
-    return { type, constraints };
-  }
-  // Undefined name - add error and return ERROR_TYPE for recovery
-  // This allows analysis to continue for other definitions (Elm-style per-definition isolation)
-  analyzer.addError(`Undefined name '${name}'`, span);
-  return { type: ERROR_TYPE, constraints: [] };
-}
-
-/**
- * Look up a symbol in the scope and instantiate its type scheme.
- * Each lookup gets a fresh instantiation, enabling polymorphic usage.
- *
- * Example:
- *   id : forall a. a -> a
- *   First use: id 42        -> instantiated as number -> number
- *   Second use: id "hello"  -> instantiated as string -> string
- */
-function lookupSymbol(
-  analyzer: SemanticAnalyzer,
-  scope: Scope,
-  name: string,
-  span: Span,
-  substitution: Substitution,
-): Type {
-  return lookupSymbolWithConstraints(analyzer, scope, name, span, substitution)
-    .type;
-}
-
-function seedValueType(
-  analyzer: SemanticAnalyzer,
-  decl: ValueDeclaration | ExternalDeclaration,
-): Type {
-  if (decl.kind === "ExternalDeclaration") {
-    return typeFromAnnotation(analyzer, decl.annotation, new Map());
-  }
-  const argTypes = decl.args.map(() => freshType());
-  const resultType = freshType();
-  return fnChain(argTypes, resultType);
-}
-
-/**
- * Generalize a type into a type scheme by quantifying over its free type variables.
- * This is the key operation that enables let-polymorphism.
- *
- * The generalization rule:
- * - Take a type τ and a typing environment Γ
- * - Find all type variables in τ that are NOT free in Γ
- * - Quantify over those variables to create a polymorphic type scheme
- *
- * Example:
- *   let id = \x -> x
- *   After inference: id : a -> a where a is a type variable
- *   Generalize: id : forall a. a -> a
- *   Now 'id' can be used at multiple different types
- *
- * Note: We only generalize at let-bindings and top-level declarations.
- * Lambda-bound variables remain monomorphic (this is the "let" in let-polymorphism).
- */
-function generalize(
-  analyzer: SemanticAnalyzer,
-  type: Type,
-  scope: Scope,
-  substitution: Substitution,
-): TypeScheme {
-  const typeFreeVars = getFreeTypeVars(type, substitution);
-  const scopeFreeVars = getFreeTypeVarsInScope(scope, substitution);
-
-  // Quantify over type variables that appear in the type but not in the scope
-  const quantified = new Set<number>();
-  for (const v of typeFreeVars) {
-    if (!scopeFreeVars.has(v)) {
-      quantified.add(v);
-    }
-  }
-
-  // Get collected constraints and apply substitution
-  const rawConstraints = analyzer.getCollectedConstraints();
-  const resolvedConstraints = applySubstitutionToConstraints(
-    rawConstraints,
-    substitution,
-  );
-
-  // Filter constraints to only those involving quantified type variables
-  // A constraint like "Num Int" is already satisfied and shouldn't be quantified
-  // A constraint like "Num a" where a is quantified should be kept
-  const relevantConstraints = resolvedConstraints.filter((c) => {
-    // Check if any type arg contains a quantified variable
-    return c.typeArgs.some((t) => {
-      const freeVars = getFreeTypeVars(t, substitution);
-      for (const v of freeVars) {
-        if (quantified.has(v)) return true;
-      }
-      return false;
-    });
-  });
-
-  // Deduplicate constraints
-  const uniqueConstraints: Constraint[] = [];
-  for (const c of relevantConstraints) {
-    const isDuplicate = uniqueConstraints.some(
-      (uc) =>
-        uc.protocolName === c.protocolName &&
-        uc.typeArgs.length === c.typeArgs.length &&
-        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!)),
-    );
-    if (!isDuplicate) {
-      uniqueConstraints.push(c);
-    }
-  }
-
-  return { vars: quantified, constraints: uniqueConstraints, type };
-}
-
-/**
- * Generalize a type into a type scheme, merging user-annotated constraints with inferred ones.
- * This extends the basic generalize() function to support qualified type annotations.
- *
- * The merge strategy is "satisfiable": user-annotated constraints are included in the
- * final type scheme, and we verify they are consistent with what was inferred.
- *
- * Validation rules:
- * 1. All user-annotated constraints must reference only quantified type variables
- * 2. User-annotated constraints are merged with inferred constraints
- * 3. If a constraint is both annotated and inferred, that's fine (no conflict)
- *
- * @param type - The inferred type to generalize
- * @param scope - The current scope (for determining quantifiable variables)
- * @param substitution - Current type substitution
- * @param annotatedConstraints - User-annotated constraints from type annotation
- * @param span - Source location for error reporting
- */
-function generalizeWithAnnotatedConstraints(
-  analyzer: SemanticAnalyzer,
-  type: Type,
-  scope: Scope,
-  substitution: Substitution,
-  annotatedConstraints: Constraint[] | undefined,
-  span: Span,
-): TypeScheme {
-  const typeFreeVars = getFreeTypeVars(type, substitution);
-  const scopeFreeVars = getFreeTypeVarsInScope(scope, substitution);
-
-  // Quantify over type variables that appear in the type but not in the scope
-  const quantified = new Set<number>();
-  for (const v of typeFreeVars) {
-    if (!scopeFreeVars.has(v)) {
-      quantified.add(v);
-    }
-  }
-
-  // Get collected (inferred) constraints and apply substitution
-  const rawConstraints = analyzer.getCollectedConstraints();
-  const resolvedConstraints = applySubstitutionToConstraints(
-    rawConstraints,
-    substitution,
-  );
-
-  // Validate constraints that are not purely polymorphic.
-  // Constraints that ONLY involve quantified type variables are deferred until call time.
-  // But constraints that have concrete type arguments (or type structures like function types)
-  // should be validated now to catch errors early.
-  for (const c of resolvedConstraints) {
-    // Apply substitution to all type args
-    const resolvedTypeArgs = c.typeArgs.map((t) =>
-      applySubstitution(t, substitution),
-    );
-
-    // Check if the constraint involves ONLY quantified type variables at the top level
-    // If so, skip validation - it will be validated at call sites when instantiated
-    const isFullyPolymorphic = resolvedTypeArgs.every((t) => {
-      if (t.kind === "var" && quantified.has(t.id)) {
-        return true; // This is a quantified type variable
-      }
-      return false;
-    });
-
-    if (isFullyPolymorphic) {
-      // All type args are quantified vars - skip validation, defer to call sites
-      continue;
-    }
-
-    const resolvedConstraint: Constraint = {
-      protocolName: c.protocolName,
-      typeArgs: resolvedTypeArgs,
-    };
-
-    // Validate that an instance exists (or could exist) for this constraint
-    const lookupResult = validateConstraintSatisfiable(
-      resolvedConstraint,
-      analyzer.getInstanceRegistry(),
-    );
-
-    if (!lookupResult.found) {
-      // Build a helpful error message
-      const typeArgsStr = resolvedTypeArgs.map((t) => formatType(t)).join(", ");
-
-      if (lookupResult.reason === "unsatisfied-constraint") {
-        throw new SemanticError(
-          `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
-            `The instance requires '${lookupResult.constraint}' for '${lookupResult.forType}', ` +
-            `but no such instance exists.`,
-          span,
-          analyzer.getFilePath(),
-        );
-      } else {
-        throw new SemanticError(
-          `No instance of '${c.protocolName}' for type(s) '${typeArgsStr}'. ` +
-            `Add an implementation: implement ${c.protocolName} ${typeArgsStr} where ...`,
-          span,
-          analyzer.getFilePath(),
-        );
-      }
-    }
-  }
-
-  // Filter inferred constraints to only those involving quantified type variables.
-  // However, we need to catch ambiguous type variables: constraints with type variables
-  // that are NOT quantified (i.e., don't appear in the final type).
-  const inferredRelevantConstraints: Constraint[] = [];
-  for (const c of resolvedConstraints) {
-    const typeArgFreeVars: number[] = [];
-    for (const t of c.typeArgs) {
-      const freeVars = getFreeTypeVars(t, substitution);
-      for (const v of freeVars) {
-        typeArgFreeVars.push(v);
-      }
-    }
-
-    // Check if any free var is quantified
-    const hasQuantifiedVar = typeArgFreeVars.some((v) => quantified.has(v));
-
-    // Check if any free var is NOT quantified (ambiguous)
-    const hasUnquantifiedVar = typeArgFreeVars.some((v) => !quantified.has(v));
-
-    if (typeArgFreeVars.length === 0) {
-      // No type variables - constraint is fully concrete, skip it
-      // (it was already validated above)
-      continue;
-    }
-
-    if (hasUnquantifiedVar && !hasQuantifiedVar) {
-      // All type variables are unquantified - this is ambiguous!
-      // The constraint references type variables that don't appear in the final type.
-      const typeArgsStr = c.typeArgs.map((t) => formatType(t)).join(", ");
-      throw new SemanticError(
-        `Ambiguous type variable in '${c.protocolName}' constraint. ` +
-          `The type '${typeArgsStr}' contains type variable(s) that do not appear ` +
-          `in the expression's type, so they cannot be determined. ` +
-          `Consider adding a type annotation to make the type concrete.`,
-        span,
-        analyzer.getFilePath(),
-      );
-    }
-
-    // Keep constraints that have at least one quantified variable
-    if (hasQuantifiedVar) {
-      inferredRelevantConstraints.push(c);
-    }
-  }
-
-  // Process user-annotated constraints
-  let allConstraints = [...inferredRelevantConstraints];
-
-  if (annotatedConstraints && annotatedConstraints.length > 0) {
-    // Apply substitution to annotated constraints
-    const resolvedAnnotated = applySubstitutionToConstraints(
-      annotatedConstraints,
-      substitution,
-    );
-
-    // Validate each annotated constraint
-    for (const c of resolvedAnnotated) {
-      // Check that all type args in the constraint reference quantified variables
-      for (const typeArg of c.typeArgs) {
-        const freeVars = getFreeTypeVars(typeArg, substitution);
-        let hasQuantifiedVar = false;
-        for (const v of freeVars) {
-          if (quantified.has(v)) {
-            hasQuantifiedVar = true;
-          }
-        }
-        // If the constraint is on a concrete type (no free vars), it's meaningless
-        if (freeVars.size === 0) {
-          throw new SemanticError(
-            `Constraint '${c.protocolName}' is on a concrete type, which is not allowed in type annotations`,
-            span,
-            analyzer.getFilePath(),
-          );
-        }
-        // If the constraint references a type variable not in the function's type,
-        // that's likely an error
-        if (!hasQuantifiedVar) {
-          throw new SemanticError(
-            `Constraint '${c.protocolName}' references type variables not used in the function type`,
-            span,
-            analyzer.getFilePath(),
-          );
-        }
-      }
-
-      // Add to the constraint list (will be deduplicated below)
-      allConstraints.push(c);
-    }
-  }
-
-  // Deduplicate constraints
-  const uniqueConstraints: Constraint[] = [];
-  for (const c of allConstraints) {
-    const isDuplicate = uniqueConstraints.some(
-      (uc) =>
-        uc.protocolName === c.protocolName &&
-        uc.typeArgs.length === c.typeArgs.length &&
-        uc.typeArgs.every((t, i) => typesEqual(t, c.typeArgs[i]!)),
-    );
-    if (!isDuplicate) {
-      uniqueConstraints.push(c);
-    }
-  }
-
-  // IMPORTANT: Try to resolve constraints against instances to concretize type variables.
-  // When a constraint has some concrete type args and some type variables (e.g., ExampleProtocol3 Float t123),
-  // and there's a unique matching instance (e.g., ExampleProtocol3 Float (List Int)), we can unify
-  // the type variable with the instance's concrete type. This fixes hover showing polymorphic types
-  // with constraints instead of concrete resolved types.
-  const constraintsToRemove: Constraint[] = [];
-  for (const c of uniqueConstraints) {
-    // Check if any type arg is a quantified type variable
-    const resolvedTypeArgs = c.typeArgs.map((t) =>
-      applySubstitution(t, substitution),
-    );
-
-    // Find all type variable positions and concrete positions
-    const varPositions: number[] = [];
-    const concretePositions: number[] = [];
-    for (let i = 0; i < resolvedTypeArgs.length; i++) {
-      const arg = resolvedTypeArgs[i]!;
-      if (arg.kind === "var" && quantified.has(arg.id)) {
-        varPositions.push(i);
-      } else if (arg.kind !== "var") {
-        concretePositions.push(i);
-      }
-    }
-
-    // If we have at least one concrete type arg and at least one type variable,
-    // try to find a unique matching instance
-    if (concretePositions.length > 0 && varPositions.length > 0) {
-      const matchingInstances = analyzer
-        .getInstanceRegistry()
-        .filter((inst) => {
-          if (inst.protocolName !== c.protocolName) return false;
-          if (inst.typeArgs.length !== resolvedTypeArgs.length) return false;
-
-          // Check that all concrete positions match
-          for (const pos of concretePositions) {
-            const instArg = inst.typeArgs[pos]!;
-            const constraintArg = resolvedTypeArgs[pos]!;
-            if (!instanceTypeMatches(instArg, constraintArg)) return false;
-          }
-
-          // Check that the instance has concrete types for the variable positions
-          // (so we can actually resolve the type variable)
-          for (const pos of varPositions) {
-            const instArg = inst.typeArgs[pos]!;
-            // Instance type arg must be concrete (not a bare type variable)
-            if (instArg.kind === "var") return false;
-          }
-
-          return true;
-        });
-
-      // If exactly one matching instance, unify the type variables with instance types
-      if (matchingInstances.length === 1) {
-        const matchingInst = matchingInstances[0]!;
-        for (const pos of varPositions) {
-          const typeVar = resolvedTypeArgs[pos]!;
-          const instType = matchingInst.typeArgs[pos]!;
-          if (typeVar.kind === "var") {
-            // Add to substitution to concretize this type variable
-            substitution.set(typeVar.id, instType);
-            // Remove from quantified set since it's now concrete
-            quantified.delete(typeVar.id);
-          }
-        }
-        // Mark this constraint for removal since it's now fully resolved
-        constraintsToRemove.push(c);
-      }
-    }
-  }
-
-  // Remove fully resolved constraints
-  const finalConstraints = uniqueConstraints.filter(
-    (c) => !constraintsToRemove.includes(c),
-  );
-
-  // Apply the updated substitution to the type
-  const finalType = applySubstitution(type, substitution);
-
-  // Check for ambiguous type variables: constraints on type variables that don't appear
-  // in the final type. For example, in `[] == []`, the type is `Bool` but we have a
-  // constraint `Eq a` where `a` doesn't appear in `Bool`. This is an error because
-  // there's no way to determine what `a` should be.
-  const finalTypeFreeVars = getFreeTypeVars(finalType, substitution);
-  for (const c of finalConstraints) {
-    for (const typeArg of c.typeArgs) {
-      // Apply substitution to get the resolved type arg
-      const resolvedTypeArg = applySubstitution(typeArg, substitution);
-      const constraintFreeVars = getFreeTypeVars(resolvedTypeArg, substitution);
-      for (const v of constraintFreeVars) {
-        // If this type variable appears in the constraint but NOT in the final type,
-        // then it's ambiguous - there's no way to determine what type it should be.
-        // This catches cases like `[] == []` where the result is Bool but the
-        // constraint is `Eq a` and `a` doesn't appear anywhere in the result type.
-        if (!finalTypeFreeVars.has(v)) {
-          throw new SemanticError(
-            `Ambiguous type variable in '${c.protocolName}' constraint. ` +
-              `The type variable does not appear in the expression's type, ` +
-              `so it cannot be determined. Consider adding a type annotation ` +
-              `to make the type concrete.`,
-            span,
-            analyzer.getFilePath(),
-          );
-        }
-      }
-    }
-  }
-
-  return { vars: quantified, constraints: finalConstraints, type: finalType };
 }
 
 /**
@@ -8543,293 +8332,6 @@ function isTypeVariable(name: string): boolean {
   return firstChar === firstChar.toLowerCase();
 }
 
-/**
- * Convert a type expression (from source annotation) to an internal type,
- * including any protocol constraints from qualified types.
- *
- * This is the primary function for converting user type annotations.
- * It extracts and validates constraints from `QualifiedType` annotations.
- *
- * Type variables (lowercase identifiers like 'a', 'b') get mapped to fresh TypeVars
- * consistently within the same annotation. For example:
- *   a -> a        maps both 'a' to the same TypeVar
- *   (a -> b) -> a maps 'a' consistently, 'b' to a different TypeVar
- *
- * Also handles type aliases by expanding them to their underlying types.
- *
- * @param annotation - The source type expression to convert
- * @param context - Map tracking type variable names to their TypeVar IDs
- * @param adts - Registry of ADT definitions (for recognizing ADT type names)
- * @param typeAliases - Registry of type aliases (for expansion)
- * @param protocols - Registry of protocol definitions (for constraint validation)
- * @returns Object containing the converted type and extracted constraints
- */
-function typeFromAnnotationWithConstraints(
-  analyzer: SemanticAnalyzer,
-  annotation: TypeExpr,
-  context: TypeVarContext = new Map(),
-): AnnotationResult {
-  // Access registries from analyzer
-  const { protocols } = analyzer;
-
-  // Handle QualifiedType at the top level to extract constraints
-  if (annotation.kind === "QualifiedType") {
-    // Convert AST constraints to internal constraints
-    const constraints: Constraint[] = [];
-
-    for (const astConstraint of annotation.constraints) {
-      // Validate that the protocol exists
-      const protocol = protocols[astConstraint.protocolName];
-      if (!protocol) {
-        throw new SemanticError(
-          `Unknown protocol '${astConstraint.protocolName}' in type constraint`,
-          astConstraint.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      // Validate the number of type arguments matches protocol parameters
-      if (astConstraint.typeArgs.length !== protocol.params.length) {
-        throw new SemanticError(
-          `Protocol '${astConstraint.protocolName}' expects ${protocol.params.length} type argument(s), but constraint has ${astConstraint.typeArgs.length}`,
-          astConstraint.span,
-          analyzer.getFilePath(),
-        );
-      }
-
-      // Convert constraint type arguments
-      const constraintTypeArgs: Type[] = [];
-      for (const typeArg of astConstraint.typeArgs) {
-        constraintTypeArgs.push(typeFromAnnotation(analyzer, typeArg, context));
-      }
-
-      // Validate that constraint type arguments are type variables
-      // (Constraints on concrete types like `Num Int` don't make sense in annotations)
-      for (let i = 0; i < constraintTypeArgs.length; i++) {
-        const typeArg = constraintTypeArgs[i]!;
-        if (typeArg.kind !== "var") {
-          throw new SemanticError(
-            `Constraint '${astConstraint.protocolName}' must be applied to type variables, not concrete types`,
-            astConstraint.span,
-            analyzer.getFilePath(),
-          );
-        }
-      }
-
-      constraints.push({
-        protocolName: astConstraint.protocolName,
-        typeArgs: constraintTypeArgs,
-      });
-    }
-
-    // Convert the underlying type (recursively handling nested QualifiedTypes)
-    const innerResult = typeFromAnnotationWithConstraints(
-      analyzer,
-      annotation.type,
-      context,
-    );
-
-    // Merge constraints from nested qualified types
-    return {
-      type: innerResult.type,
-      constraints: [...constraints, ...innerResult.constraints],
-    };
-  }
-
-  // For non-qualified types, delegate to the simpler function
-  const type = typeFromAnnotation(analyzer, annotation, context);
-  return { type, constraints: [] };
-}
-
-/**
- * Convert a type expression (from source annotation) to an internal type.
- * Handles type variables by maintaining a context of variable names to TypeVar IDs.
- *
- * NOTE: This function does NOT extract constraints from QualifiedType annotations.
- * Use typeFromAnnotationWithConstraints() when you need constraint extraction.
- *
- * Type variables (lowercase identifiers like 'a', 'b') get mapped to fresh TypeVars
- * consistently within the same annotation. For example:
- *   a -> a        maps both 'a' to the same TypeVar
- *   (a -> b) -> a maps 'a' consistently, 'b' to a different TypeVar
- *
- * Also handles type aliases by expanding them to their underlying types.
- *
- * @param annotation - The source type expression to convert
- * @param context - Map tracking type variable names to their TypeVar IDs
- * @param adts - Registry of ADT definitions (for recognizing ADT type names)
- * @param typeAliases - Registry of type aliases (for expansion)
- */
-function typeFromAnnotation(
-  analyzer: SemanticAnalyzer,
-  annotation: TypeExpr,
-  context: TypeVarContext = new Map(),
-): Type {
-  // Access registries from analyzer
-  const { adts, typeAliases, records, imports, dependencies } = analyzer;
-
-  // Helper to resolve type names (qualified or unqualified)
-  function resolve(name: string) {
-    return resolveQualifiedType(
-      name,
-      adts,
-      typeAliases,
-      {}, // Opaque types not passed but usually in adts/aliases? wait, typeFromAnnotation signature doesn't take opaque types
-      records,
-      imports,
-      dependencies,
-    );
-  }
-
-  // Need to add opaque types to typeFromAnnotation signature if we want to resolve them properly
-  // For now, assuming adts covers most? No, opaque types are separate.
-  // I will check resolveQualifiedType definition below.
-
-  switch (annotation.kind) {
-    case "TypeRef": {
-      // Check if this is a type variable (lowercase identifier)
-      if (isTypeVariable(annotation.name)) {
-        // ... (existing logic)
-        // Check local context
-        let typeVar = context.get(annotation.name);
-        if (!typeVar) {
-          typeVar = freshType();
-          context.set(annotation.name, typeVar);
-        }
-        if (annotation.args.length > 0) {
-          // Treating as type constructor if it has args - fall through?
-          // Existing logic returns var immediately.
-          // If 'a' has args, it's invalid syntax usually, but parser allows?
-          // Actually, if it has args it shouldn't be a var.
-          // But isTypeVariable check is just lowercase.
-          // 'list' is lowercase but is type alias/con?
-          // Vibe types must be Uppercase.
-          // So lowercase implies var.
-          // If dot present? 'a.b' is not lowercase?
-          // 'R.Result' starts with Upper.
-        } else {
-          return typeVar;
-        }
-      }
-
-      // Try to resolve reference (handles qualified names and aliases including imported ones)
-      const resolved = resolve(annotation.name);
-
-      if (resolved && resolved.kind === "alias") {
-        const aliasInfo = resolved.info as TypeAliasInfo;
-        // Expand the type alias
-        if (annotation.args.length !== aliasInfo.params.length) {
-          // Mismatch - fall back to constructor
-        } else {
-          // Convert all argument types first
-          const argTypes: Type[] = [];
-          for (let i = 0; i < aliasInfo.params.length; i++) {
-            const argType = typeFromAnnotation(
-              analyzer,
-              annotation.args[i]!,
-              context,
-            );
-            argTypes.push(argType);
-          }
-
-          // Create fresh type variables and substitution
-          const aliasContext: TypeVarContext = new Map(context);
-          const substitutionMap = new Map<number, Type>();
-
-          for (let i = 0; i < aliasInfo.params.length; i++) {
-            const paramName = aliasInfo.params[i]!;
-            const fresh = freshType();
-            aliasContext.set(paramName, fresh);
-            substitutionMap.set(fresh.id, argTypes[i]!);
-          }
-
-          const expandedType = typeFromAnnotation(
-            analyzer,
-            aliasInfo.value,
-            aliasContext,
-          );
-
-          return applySubstitution(expandedType, substitutionMap);
-        }
-      }
-
-      if (resolved && resolved.kind === "record") {
-        const recordInfo = resolved.info as RecordInfo;
-        if (annotation.args.length === recordInfo.params.length) {
-          // Convert args
-          const argTypes: Type[] = [];
-          for (let i = 0; i < recordInfo.params.length; i++) {
-            argTypes.push(
-              typeFromAnnotation(analyzer, annotation.args[i]!, context),
-            );
-          }
-          // Subst map
-          const recordContext: TypeVarContext = new Map(context);
-          const substitutionMap = new Map<number, Type>();
-          for (let i = 0; i < recordInfo.params.length; i++) {
-            const pname = recordInfo.params[i]!;
-            const fresh = freshType();
-            recordContext.set(pname, fresh);
-            substitutionMap.set(fresh.id, argTypes[i]!);
-          }
-          // Build fields
-          const fields: Record<string, Type> = {};
-          for (const field of recordInfo.fields) {
-            const fieldType = typeFromAnnotation(
-              analyzer,
-              field.typeExpr,
-              recordContext,
-            );
-            fields[field.name] = applySubstitution(fieldType, substitutionMap);
-          }
-          return { kind: "record", fields };
-        }
-      }
-
-      // If resolved to ADT or Opaque, use the CANONICAL name
-      const canonicalName = resolved ? resolved.name : annotation.name;
-
-      // Concrete type constructor
-      return {
-        kind: "con",
-        name: canonicalName,
-        args: annotation.args.map((arg) =>
-          typeFromAnnotation(analyzer, arg, context),
-        ),
-      };
-    }
-    case "FunctionType": {
-      const from = typeFromAnnotation(analyzer, annotation.from, context);
-      const to = typeFromAnnotation(analyzer, annotation.to, context);
-      return fn(from, to);
-    }
-    case "TupleType": {
-      return {
-        kind: "tuple",
-        elements: annotation.elements.map((el) =>
-          typeFromAnnotation(analyzer, el, context),
-        ),
-      };
-    }
-    case "RecordType": {
-      // Reject floating record types in type annotations
-      // Record types must be defined using `type Name = { ... }` and then referenced by name
-      throw new SemanticError(
-        `Record types cannot be used directly in type annotations. ` +
-          `Define a named record type using 'type RecordName = { ... }' and reference it by name.`,
-        annotation.span,
-        analyzer.getFilePath(),
-      );
-    }
-    case "QualifiedType": {
-      // For the simple typeFromAnnotation function, we extract only the underlying type.
-      // Use typeFromAnnotationWithConstraints() to also extract constraints.
-      // This maintains backwards compatibility with call sites that only need the type.
-      return typeFromAnnotation(analyzer, annotation.type, context);
-    }
-  }
-}
-
 function occursIn(id: number, type: Type, substitution: Substitution): boolean {
   const concrete = applySubstitution(type, substitution);
   if (concrete.kind === "var") {
@@ -8854,100 +8356,6 @@ function occursIn(id: number, type: Type, substitution: Substitution): boolean {
   }
 }
 
-function unify(
-  analyzer: SemanticAnalyzer,
-  a: Type,
-  b: Type,
-  span: Span,
-  substitution: Substitution,
-) {
-  const left = applySubstitution(a, substitution);
-  const right = applySubstitution(b, substitution);
-
-  // Error types unify with anything - prevents cascading errors
-  if (left.kind === "error" || right.kind === "error") {
-    return;
-  }
-
-  if (left.kind === "var") {
-    if (!typesEqual(left, right)) {
-      if (occursIn(left.id, right, substitution)) {
-        throw new SemanticError(
-          "Recursive type detected",
-          span,
-          analyzer.getFilePath(),
-        );
-      }
-      substitution.set(left.id, right);
-    }
-    return;
-  }
-
-  if (right.kind === "var") {
-    return unify(analyzer, right, left, span, substitution);
-  }
-
-  if (left.kind === "con" && right.kind === "con") {
-    if (left.name !== right.name || left.args.length !== right.args.length) {
-      throw new SemanticError(
-        `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
-          right,
-        )}'`,
-        span,
-        analyzer.getFilePath(),
-      );
-    }
-    left.args.forEach((arg, idx) =>
-      unify(analyzer, arg, right.args[idx]!, span, substitution),
-    );
-    return;
-  }
-
-  if (left.kind === "fun" && right.kind === "fun") {
-    unify(analyzer, left.from, right.from, span, substitution);
-    unify(analyzer, left.to, right.to, span, substitution);
-    return;
-  }
-
-  if (left.kind === "tuple" && right.kind === "tuple") {
-    if (left.elements.length !== right.elements.length) {
-      throw new SemanticError(
-        "Tuple length mismatch",
-        span,
-        analyzer.getFilePath(),
-      );
-    }
-    left.elements.forEach((el, idx) =>
-      unify(analyzer, el, right.elements[idx]!, span, substitution),
-    );
-    return;
-  }
-
-  if (left.kind === "record" && right.kind === "record") {
-    const shared = Object.keys(left.fields).filter(
-      (k) => right.fields[k] !== undefined,
-    );
-    for (const key of shared) {
-      unify(
-        analyzer,
-        left.fields[key]!,
-        right.fields[key]!,
-        span,
-        substitution,
-      );
-    }
-    // Row-typed approximation: allow extra fields on either side.
-    return;
-  }
-
-  throw new SemanticError(
-    `Type mismatch: cannot unify '${formatType(left)}' with '${formatType(
-      right,
-    )}'`,
-    span,
-    analyzer.getFilePath(),
-  );
-}
 /**
  * Helper to resolve a potentially qualified type name (e.g., "R.Result" or "Result").
  * Looks up in local definitions, aliases, opaque types, records, and imports.
