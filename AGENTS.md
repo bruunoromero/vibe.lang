@@ -6,6 +6,9 @@
 - No breadcrumbs. If you delete or move code, do not leave a comment in the old place. No "// moved to X", no "relocated". Just remove it.
 - Use comments sparingly. If obvious from the code, do not add a comment.
 - Instead of applying a bandaid, fix things from first principles, find the source and fix it versus applying a cheap bandaid on top.
+  - **Never use hacky workarounds** like serializing AST spans as map keys, string encoding node identities, or other context-workarounds
+  - If you find yourself doing that, STOP. You're at a symptom, not the problem. Redesign to propagate information through proper channels
+  - The architectural solution is always simpler in the long run than maintaining brittle hacks
 - When taking on new work, follow this order:
   - Think about the architecture.
   - Research official docs, blogs, or papers on the best architecture.
@@ -173,6 +176,62 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
    - Missing interface definitions
 
 5. **Zero tolerance policy**: A task with TypeScript errors is fundamentally incomplete and may cause issues for subsequent work.
+
+## Code Generation Correctness (Zero Tolerance)
+
+**CRITICAL:** The compiler must **NEVER** emit broken JavaScript. Emitting incorrect code (wrong dictionaries, missing imports, broken references) is a severity-1 bug that must be caught before merging.
+
+### Fundamental Architecture Principle: Propagate Information Through Proper Channels
+
+When a codegen bug appears, the root cause is almost always **missing information**. The wrong response is to work around it with hacks (e.g., serializing AST node positions as strings, using context lookups, relying on side-channel data). The right response is **to propagate the information through the compiler pipeline**.
+
+**Anti-Pattern (DO NOT DO THIS):**
+
+```
+// DON'T: Serializing AST spans as map keys
+const usageKey = `${expr.span.start}:${expr.span.end}`;
+const usage = map.get(usageKey);  // Fragile, easy to break, spans can collide
+```
+
+**Correct Pattern:**
+
+```
+// DO: Use AST node identity (the same Expr objects flow through parser → semantics → IR lowering)
+const usage = map.get(expr);  // Direct, robust, no serialization needed
+```
+
+**Rule of Thumb**: If you're tempted to serialize, stringify, or "encode" something to use as a map key, you're working around missing architecture. Fix the architecture instead:
+
+- Does the type definition lack a field? Add it.
+- Does information get lost between compilation phases? Thread it through properly.
+- Are you working with stale objects? Update the flow to carry fresh ones.
+
+This applies to **all** compiler code: lexer, parser, semantics, IR, codegen. Never hack around missing information—propagate it cleanly.
+
+### Verification Checklist
+
+1. **After any codegen, IR, or semantics change**, rebuild the example app and run it:
+
+   ```bash
+   bunx turbo run build && cd packages/example-app && bun start
+   ```
+
+   The output must be valid JavaScript that runs without errors and produces the expected result. If it doesn't, the task is NOT finished.
+
+2. **Dictionary resolution must be type-directed**: Protocol methods used as first-class values (e.g., passed to `<|`, `|>`, `map`, or any higher-order function) must resolve their dictionary from the **semantic type at the usage site**, not from fallbacks like `expectedReturnType` or operand heuristics. The `protocolMethodUsages` map on `SemanticModule` carries this information through the pipeline using proper AST node identity keys.
+
+3. **Common codegen pitfalls**:
+   - Protocol methods passed as arguments (not directly applied) lose their operand context — the dictionary must come from the IR's `constraint` field, populated during lowering from semantic type information carried through proper architectural channels
+   - `expectedReturnType` is the return type of the enclosing value, NOT the argument type for a protocol method — never use it as a dictionary key for protocol method dispatch
+   - Constrained instances (e.g., `Show a => Show (Ref a)`) require resolving both the outer dictionary AND the inner constraint dictionary
+
+4. **Final verification checklist for codegen changes**:
+   - [ ] `bun test` passes (all packages)
+   - [ ] `bun run typecheck` passes
+   - [ ] `bunx turbo run build` succeeds
+   - [ ] `cd packages/example-app && bun start` runs and produces correct output
+   - [ ] Generated JS files contain correct dictionary references (spot-check `dist/` files)
+   - [ ] No hacky workarounds (span serialization, string encoding, context lookups) — information flows architecturally through the pipeline
 
 ## Regression Testing
 

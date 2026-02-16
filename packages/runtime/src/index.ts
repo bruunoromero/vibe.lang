@@ -183,6 +183,31 @@ export const intPow =
     floatPow(base)(exp) | 0;
 
 // =============================================================================
+// Ref Operations
+// =============================================================================
+
+export type Ref<A> = { current: A };
+
+export const createRef = <A>(value: A): Ref<A> => {
+  return { current: value };
+};
+
+export const getRef = <A>(ref: Ref<A>): A => {
+  return ref.current;
+};
+
+export const setRef =
+  <A>(ref: Ref<A>) =>
+  (value: A): undefined => {
+    ref.current = value;
+  };
+
+export const refEq =
+  <A>(a: Ref<A>) =>
+  (b: Ref<A>): boolean =>
+    a === b;
+
+// =============================================================================
 // Debug / Development
 // =============================================================================
 

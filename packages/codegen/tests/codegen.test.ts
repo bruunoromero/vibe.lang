@@ -1376,3 +1376,194 @@ useTuple =
     expect(code).toContain(")([1, 2])");
   });
 });
+
+// ============================================================================
+// Imported Value Qualification Tests
+// ============================================================================
+
+describe("Imported value qualification", () => {
+  test("operators from namespace imports are qualified", () => {
+    // When using `import Vibe exposing (..)`, operators like `<|`
+    // are only available as namespace members (e.g., Vibe._LT_PIPE).
+    // The codegen must qualify them with the import alias.
+    const preludeSource = `
+module Vibe exposing (..)
+
+(<|) : (a -> b) -> a -> b
+(<|) f x = f x
+
+identity : a -> a
+identity x = x
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (..)
+
+main = identity <| 42
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    // The operator should be qualified with the import alias
+    expect(code).toContain("Vibe._LT_PIPE");
+    // It should NOT appear as a bare, unqualified reference
+    expect(code).not.toMatch(/(?<!\.)_LT_PIPE/);
+  });
+
+  test("infix operators from namespace imports are qualified", () => {
+    // Infix usage of imported operators should also be qualified
+    const preludeSource = `
+module Vibe exposing (..)
+
+(|>) : a -> (a -> b) -> b
+(|>) x f = f x
+
+identity : a -> a
+identity x = x
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (..)
+
+main = 42 |> identity
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    expect(code).toContain("Vibe._PIPE_GT");
+    expect(code).not.toMatch(/(?<!\.)_PIPE_GT/);
+  });
+
+  test("imported non-operator values are qualified", () => {
+    // Non-operator values imported via `exposing (..)` should also be qualified
+    const preludeSource = `
+module Vibe exposing (..)
+
+identity : a -> a
+identity x = x
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (..)
+
+main = identity 42
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    expect(code).toContain("Vibe.identity");
+  });
+
+  test("locally defined values are not qualified", () => {
+    // Values defined in the current module should remain unqualified
+    const source = `
+module Test exposing (..)
+
+myFn x = x
+main = myFn 42
+`;
+
+    const { code } = compileToJS(source);
+
+    expect(code).toContain("myFn(42)");
+    expect(code).not.toMatch(/\w+\.myFn/);
+  });
+});
+
+// ============================================================================
+// Protocol Method First-Class Usage Dictionary Resolution Tests
+// ============================================================================
+
+describe("Protocol method used as first-class value", () => {
+  const prelude = `
+module Vibe exposing (..)
+
+type Ref a
+
+protocol Show a where
+  toString : a -> String
+
+implement Show Int where
+  toString x = "int"
+
+implement Show String where
+  toString x = x
+
+implement Show a => Show (Ref a) where
+  toString ref = "Ref(...)"
+
+infixr 0 <|
+(<|) : (a -> b) -> a -> b
+(<|) f x = f x
+
+infixl 0 |>
+(|>) : a -> (a -> b) -> b
+(|>) x f = f x
+`;
+
+  test("resolves dictionary when protocol method is passed via <|", () => {
+    // Bug regression: toString <| Ref.create 10 was emitting $dict_Show_String
+    // instead of $dict_Show_Ref(...). When a protocol method is used as a
+    // first-class value (argument to <|), the constraint must be resolved
+    // from the protocol usage site's type, not from the value's return type.
+    const source = `
+module Test exposing (..)
+import Vibe exposing (..)
+
+main = toString <| 42
+`;
+
+    const { code } = compileToJS(source, prelude);
+
+    // Should resolve Show Int, not Show String
+    expect(code).toContain("$dict_Show_Int");
+    expect(code).toContain("toString");
+    expect(code).not.toContain("$dict_Show_String.toString");
+  });
+
+  test("resolves dictionary when protocol method is passed via |>", () => {
+    const source = `
+module Test exposing (..)
+import Vibe exposing (..)
+
+main = 42 |> toString
+`;
+
+    const { code } = compileToJS(source, prelude);
+
+    expect(code).toContain("$dict_Show_Int");
+    expect(code).not.toContain("$dict_Show_String.toString");
+  });
+
+  test("resolves dictionary for parameterized type via <|", () => {
+    // The key bug: toString <| (value of type Ref Int) must use
+    // the Show (Ref a) instance with Show Int constraint, not Show String.
+    const source = `
+module Test exposing (..)
+import Vibe exposing (..)
+
+protocol Num a where
+  plus : a -> a -> a
+
+implement Num Int where
+  plus x y = x
+
+value : Ref Int
+value = value
+
+main = toString <| value
+`;
+
+    const { code } = compileToJS(source, prelude);
+
+    // Should reference the Show Ref instance, not Show String
+    expect(code).toContain("$dict_Show_Ref");
+    expect(code).not.toContain("$dict_Show_String.toString");
+  });
+});

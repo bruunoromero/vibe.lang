@@ -598,10 +598,10 @@ class Parser {
     // Opaque types end when we see something that's not part of the type params
     if (!this.peek(TokenKind.Equals)) {
       if (constraints.length > 0) {
-        throw new ParseError(
-          "Opaque types cannot have constraints",
-          { start: typeToken.span.start, end: this.previousSpan().end }
-        );
+        throw new ParseError("Opaque types cannot have constraints", {
+          start: typeToken.span.start,
+          end: this.previousSpan().end,
+        });
       }
       // This is an opaque type: type Name params
       const lastToken =
@@ -659,6 +659,9 @@ class Parser {
     let i = 0;
     let parenDepth = 0;
 
+    // Get the starting line to detect when we move to a new declaration
+    const startLine = this.current().span.start.line;
+
     while (this.peekAhead(i)) {
       const tok = this.peekAhead(i);
       if (!tok) break;
@@ -681,11 +684,24 @@ class Parser {
         return false;
       }
 
-      // Stop looking if we hit newline at top level (end of opaque type)
-      // Actually parser doesn't see newlines easily in token stream usually, 
-      // but we can check if we hit another keyword that starts a decl?
-      // For now, looking for => within reasonable distance is enough.
-      
+      // Stop at keywords that start new declarations (prevents lookahead into next declaration)
+      // This is critical for opaque types like "type Ref a" which have no "=" boundary
+      if (tok.kind === TokenKind.Keyword && parenDepth === 0) {
+        const keyword = tok.lexeme;
+        if (
+          keyword === "implement" ||
+          keyword === "protocol" ||
+          keyword === "type" ||
+          keyword === "module" ||
+          keyword === "import" ||
+          keyword === "infix" ||
+          keyword === "infixl" ||
+          keyword === "infixr"
+        ) {
+          return false;
+        }
+      }
+
       i++;
 
       // Don't look too far ahead
@@ -1074,36 +1090,40 @@ class Parser {
 
     if (this.matchKeyword("where")) {
       // Methods can be either LowerIdentifier or (Operator)
-      if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
+      if (
+        !this.peek(TokenKind.LowerIdentifier) &&
+        !this.peek(TokenKind.LParen)
+      ) {
         throw new ParseError(
           "Expected at least one method implementation in implementation",
           this.currentSpan(),
         );
       }
-  
+
       const firstMethodStart = this.current().span.start;
       const baseIndent = firstMethodStart.column;
-  
+
       // Parse all method implementations
       while (
         this.peek(TokenKind.LowerIdentifier) ||
         this.peek(TokenKind.LParen)
       ) {
         const methodToken = this.current();
-  
+
         // Check indentation
         if (methodToken.span.start.column < baseIndent) {
           break;
         }
-  
+
         // Parse method name using shared parseDeclarationName
         // This handles both regular identifiers and operators in parens
-        const { name: methodName, span: nameSpan } = this.parseDeclarationName();
-  
+        const { name: methodName, span: nameSpan } =
+          this.parseDeclarationName();
+
         // Parse method body using shared parseMethodBody
         // This ensures consistent pattern parsing with standard functions
         const { args, body: implementation } = this.parseMethodBody();
-  
+
         methods.push({
           name: methodName,
           args: args.length > 0 ? args : undefined,
@@ -1113,10 +1133,15 @@ class Parser {
       }
     }
 
-    const lastMethod = methods.length > 0 ? methods[methods.length - 1]! : undefined;
+    const lastMethod =
+      methods.length > 0 ? methods[methods.length - 1]! : undefined;
     const span: Span = {
       start: implementToken.span.start,
-      end: lastMethod ? lastMethod.span.end : (typeArgs.length > 0 ? typeArgs[typeArgs.length - 1]!.span.end : protocolNameToken.span.end),
+      end: lastMethod
+        ? lastMethod.span.end
+        : typeArgs.length > 0
+          ? typeArgs[typeArgs.length - 1]!.span.end
+          : protocolNameToken.span.end,
     };
 
     return {
@@ -1431,7 +1456,7 @@ class Parser {
     // Parse record type { field1 : Type1, field2 : Type2, ... }
     if (this.match(TokenKind.LBrace)) {
       const start = this.previousSpan().start;
-            const fields: Array<{ name: string; type: TypeExpr; span: Span }> = [];
+      const fields: Array<{ name: string; type: TypeExpr; span: Span }> = [];
 
       // Check for empty record {}
       if (this.match(TokenKind.RBrace)) {
@@ -1546,7 +1571,8 @@ class Parser {
     // Lowercase identifiers are type variables and don't take arguments
     // This ensures "a (List a)" parses as two separate types, not "a" applied to "(List a)"
     // Note: Qualified names (e.g. M.T) are always considered constructors/aliases
-    const isTypeConstructor = ident.kind === TokenKind.UpperIdentifier || name.includes(".");
+    const isTypeConstructor =
+      ident.kind === TokenKind.UpperIdentifier || name.includes(".");
 
     const args: TypeExpr[] = [];
     let lastSpan = { start: ident.span.start, end };
@@ -1844,7 +1870,10 @@ class Parser {
 
       // Handle qualified constructors (e.g. Module.Just)
       while (this.match(TokenKind.Dot)) {
-        const next = this.expect(TokenKind.UpperIdentifier, "constructor name part");
+        const next = this.expect(
+          TokenKind.UpperIdentifier,
+          "constructor name part",
+        );
         name += "." + next.lexeme;
         end = next.span.end;
       }

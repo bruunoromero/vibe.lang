@@ -1,0 +1,30 @@
+module Vibe.Ref exposing (Ref, create, get, set)
+
+import Vibe.String
+import Vibe.Basics exposing (Appendable(..), Eq(..), Show(..))
+
+type Ref a
+
+implement Show a => Show (Ref a) where
+  toString ref = "Ref(" ++ (toString (get ref)) ++ ")"
+
+implement Eq (Ref a) where
+  (==) x y = _eq x y
+
+@external "@vibe/runtime" "createRef"
+create : a -> Ref a
+
+@external "@vibe/runtime" "getRef"
+get : Ref a -> a
+
+@external "@vibe/runtime" "setRef"
+set : Ref a -> a -> ()
+
+@external "@vibe/runtime" "refEq"
+_eq : Ref a -> Ref a -> Bool
+
+update : (a -> a) -> Ref a -> ()
+update f ref =
+  let current = get ref
+      updated = f current
+  in set ref updated

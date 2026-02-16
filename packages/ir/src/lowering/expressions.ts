@@ -22,10 +22,12 @@ import type {
   IRPattern,
   IRRecordField,
   IRModuleAccess,
+  IRConstraint,
 } from "../types";
 import { IRError } from "../types";
 import type { LoweringContext } from "./context";
 import { lowerPattern } from "./patterns";
+import { convertType } from "./types";
 
 /**
  * Lower an AST expression to IR form.
@@ -173,7 +175,7 @@ export function lowerExpr(expr: Expr, ctx: LoweringContext): IRExpr {
       const _exhaustive: never = expr;
       throw new IRError(
         `Unknown expression kind: ${(expr as any).kind}`,
-        (expr as any).span
+        (expr as any).span,
       );
   }
 }
@@ -189,7 +191,7 @@ export function lowerExpr(expr: Expr, ctx: LoweringContext): IRExpr {
  */
 function tryResolveModuleAccess(
   expr: Extract<Expr, { kind: "FieldAccess" }>,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): IRModuleAccess | null {
   // Collect the chain of field accesses to reconstruct the module path
   const parts: string[] = [];
@@ -309,7 +311,7 @@ function tryResolveModuleAccess(
  */
 function lowerVar(
   expr: Extract<Expr, { kind: "Var" }>,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): IRExpr {
   // Check if this is a constructor
   if (expr.namespace === "upper") {
@@ -336,10 +338,26 @@ function lowerVar(
     }
   }
 
+  const moduleName = ctx.semantics.importedValues?.get(expr.name);
+
+  // Look up resolved protocol method constraint by AST node identity.
+  // The same Expr object that went through semantic analysis is used here,
+  // so we can look it up directly in the map.
+  let constraint: IRConstraint | undefined;
+  const usage = ctx.semantics.protocolMethodUsages?.get(expr);
+  if (usage) {
+    constraint = {
+      protocolName: usage.protocolName,
+      typeArgs: usage.typeArgs.map((t) => convertType(t)),
+    };
+  }
+
   return {
     kind: "IRVar",
     name: expr.name,
     namespace: "value",
+    ...(moduleName ? { moduleName } : {}),
+    ...(constraint ? { constraint } : {}),
     span: expr.span,
   };
 }
@@ -388,7 +406,7 @@ function lowerNumber(expr: Extract<Expr, { kind: "Number" }>): IRExpr {
  */
 function lowerLetIn(
   expr: Extract<Expr, { kind: "LetIn" }>,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): IRExpr {
   // For multiple bindings, we chain them
   // let x = e1; y = e2 in body => (\x -> (\y -> body) e2) e1
@@ -467,7 +485,7 @@ function lowerValueBody(decl: ValueDeclaration, ctx: LoweringContext): IRExpr {
  */
 function lowerCase(
   expr: Extract<Expr, { kind: "Case" }>,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): IRExpr {
   const discriminant = lowerExpr(expr.discriminant, ctx);
   const branches = expr.branches;
@@ -501,7 +519,7 @@ function lowerCase(
  */
 function isBoolCase(
   branches: Array<{ pattern: Pattern; body: Expr; span: Span }>,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): boolean {
   if (branches.length !== 2) return false;
 
@@ -511,13 +529,13 @@ function isBoolCase(
     (p) =>
       p.kind === "ConstructorPattern" &&
       p.name === "True" &&
-      p.args.length === 0
+      p.args.length === 0,
   );
   const falsePattern = patterns.find(
     (p) =>
       p.kind === "ConstructorPattern" &&
       p.name === "False" &&
-      p.args.length === 0
+      p.args.length === 0,
   );
 
   if (!truePattern || !falsePattern) return false;
@@ -541,7 +559,7 @@ function lowerBoolCase(
   discriminant: IRExpr,
   branches: Array<{ pattern: Pattern; body: Expr; span: Span }>,
   ctx: LoweringContext,
-  span: Span
+  span: Span,
 ): IRExpr {
   let trueBranch: IRExpr | null = null;
   let falseBranch: IRExpr | null = null;
@@ -577,7 +595,7 @@ function lowerBoolCase(
  * Check if all branches have literal patterns.
  */
 function allLiteralPatterns(
-  branches: Array<{ pattern: Pattern; body: Expr; span: Span }>
+  branches: Array<{ pattern: Pattern; body: Expr; span: Span }>,
 ): boolean {
   // We can't directly detect literal patterns from current AST
   // as literals in patterns would be ConstructorPattern (for True/False)
@@ -593,7 +611,7 @@ function lowerLiteralCase(
   discriminant: IRExpr,
   branches: Array<{ pattern: Pattern; body: Expr; span: Span }>,
   ctx: LoweringContext,
-  span: Span
+  span: Span,
 ): IRExpr {
   // This would be implemented when we support literal patterns
   // For now, fall through to general case handling
@@ -625,7 +643,7 @@ function lowerLiteralCase(
  */
 function lowerRecordUpdate(
   expr: Extract<Expr, { kind: "RecordUpdate" }>,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): IRExpr {
   // For now, emit a simplified form that codegen can handle
   // The base is a variable name, and we need to copy unchanged fields
@@ -721,16 +739,32 @@ function lowerRecordUpdate(
  */
 function lowerInfix(
   expr: Extract<Expr, { kind: "Infix" }>,
-  ctx: LoweringContext
+  ctx: LoweringContext,
 ): IRExpr {
   const left = lowerExpr(expr.left, ctx);
   const right = lowerExpr(expr.right, ctx);
 
   // The operator becomes a variable reference
+  const opModuleName = ctx.semantics.importedValues?.get(expr.operator);
+
+  // Look up resolved protocol method constraint by the Infix AST node identity.
+  // During semantic analysis, constraints from synthetic Var nodes are re-keyed
+  // to the original Infix node so we can find them here.
+  let constraint: IRConstraint | undefined;
+  const usage = ctx.semantics.protocolMethodUsages?.get(expr);
+  if (usage) {
+    constraint = {
+      protocolName: usage.protocolName,
+      typeArgs: usage.typeArgs.map((t) => convertType(t)),
+    };
+  }
+
   const opVar: IRExpr = {
     kind: "IRVar",
     name: expr.operator,
     namespace: "value",
+    ...(opModuleName ? { moduleName: opModuleName } : {}),
+    ...(constraint ? { constraint } : {}),
     span: expr.span,
   };
 

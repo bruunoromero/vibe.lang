@@ -9,6 +9,7 @@ module Vibe exposing
     , Maybe(..)
     , Result(..)
     , Num(..)
+    , Ref
     , (|>)
     , (<|)
     , (>>)
@@ -33,6 +34,7 @@ import Vibe.Char
 import Vibe.List exposing ((::))
 import Vibe.Maybe exposing (Maybe(..))
 import Vibe.Result exposing (Result(..))
+import Vibe.Ref exposing (Ref)
 import Vibe.Never exposing (Never, never)
 
 

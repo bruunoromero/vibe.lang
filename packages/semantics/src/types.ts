@@ -411,6 +411,20 @@ export type ExportInfo = {
  * - imports: Import declarations
  * - exports: Computed export information
  */
+/**
+ * Records a protocol method's resolved constraint at a usage site.
+ * Used during IR lowering to attach constraint info to IRVar nodes,
+ * enabling correct dictionary resolution in codegen.
+ *
+ * For example, `toString <| Ref.create 10` records Show (Ref Int)
+ * against the `toString` Var node, so codegen emits
+ * `$dict_Show_Ref($dict_Show_Int).toString` instead of guessing.
+ */
+export type ProtocolMethodUsage = {
+  protocolName: string;
+  typeArgs: Type[];
+};
+
 export type SemanticModule = {
   values: Record<string, ValueInfo>;
   annotations: Record<string, import("@vibe/syntax").TypeAnnotationDeclaration>;
@@ -443,6 +457,15 @@ export type SemanticModule = {
   exports: ExportInfo;
   /** Accumulated semantic errors during analysis (Elm-style per-definition isolation) */
   errors: import("./errors").SemanticError[];
+  /** Map from imported value names to their source module name */
+  importedValues: Map<string, string>;
+  /**
+   * Resolved protocol method usages with their concrete constraint types.
+   * Keyed by AST Expr node identity — the same objects flow through
+   * parsing → semantic analysis → IR lowering, so identity matching works.
+   * For Infix operators the key is the Infix node (not the synthetic Var).
+   */
+  protocolMethodUsages: Map<Expr, ProtocolMethodUsage>;
 };
 
 export interface AnalyzeOptions {

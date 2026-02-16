@@ -70,6 +70,7 @@ export type {
   AnnotationResult,
   TypeValidationError,
   TypeInferenceContext,
+  ProtocolMethodUsage,
 } from "./types";
 
 // Re-export classes for external consumers
@@ -186,6 +187,20 @@ class SemanticAnalyzer {
    */
   private currentConstraintContext: ConstraintContext =
     createConstraintContext();
+
+  /**
+   * Tracks protocol method usages (span + constraint) during type inference.
+   * Raw usages have unresolved type vars; they are resolved after each value's
+   * body is fully analyzed, then stored in the final SemanticModule.
+   */
+  private _pendingProtocolUsages: Array<{
+    node: Expr;
+    constraint: Constraint;
+  }> = [];
+  private _resolvedProtocolUsages: Map<
+    Expr,
+    { protocolName: string; typeArgs: Type[] }
+  > = new Map();
 
   /**
    * Registry manager containing all type and value registries.
@@ -466,6 +481,7 @@ class SemanticAnalyzer {
    */
   resetConstraintContext(): void {
     this.currentConstraintContext = createConstraintContext();
+    this._pendingProtocolUsages = [];
   }
 
   getConstraintContext(): ConstraintContext {
@@ -503,6 +519,7 @@ class SemanticAnalyzer {
         // Add any constraints from the symbol to the current context
         for (const constraint of constraints) {
           addConstraint(this.getConstraintContext(), constraint);
+          this._pendingProtocolUsages.push({ node: expr, constraint });
         }
         return applySubstitution(resolved, substitution);
       }
@@ -910,11 +927,16 @@ class SemanticAnalyzer {
         return applySubstitution(firstType, substitution);
       }
       case "Infix": {
-        const leftType = this.analyzeExpr(expr.left, { scope, substitution });
-        const rightType = this.analyzeExpr(expr.right, { scope, substitution });
+        // Check if this is a builtin operator with known type
         const opType = INFIX_TYPES[expr.operator];
 
         if (opType) {
+          // Builtin operator: analyze operands and unify with known operator type
+          const leftType = this.analyzeExpr(expr.left, { scope, substitution });
+          const rightType = this.analyzeExpr(expr.right, {
+            scope,
+            substitution,
+          });
           const expected = applySubstitution(opType, substitution);
           const params = flattenFunctionParams(expected);
           if (params.length < 2) {
@@ -932,6 +954,9 @@ class SemanticAnalyzer {
           );
         }
 
+        // User-defined operator: convert to function application
+        // IMPORTANT: Don't analyze operands here - let the Apply handling do it
+        // to ensure proper constraint collection and unification
         const callee: Expr = {
           kind: "Var",
           name: expr.operator,
@@ -944,11 +969,22 @@ class SemanticAnalyzer {
           args: [expr.left, expr.right],
           span: expr.span,
         };
-        return this.analyzeExpr(applyExpr, {
+
+        // Track pending usages before recursive call so we can re-key
+        // any constraint recorded against the synthetic Var callee to the
+        // original Infix node (which is what IR lowering will see).
+        const beforeLen = this._pendingProtocolUsages.length;
+        const result = this.analyzeExpr(applyExpr, {
           scope,
           substitution,
           expectedType,
         });
+        for (let i = beforeLen; i < this._pendingProtocolUsages.length; i++) {
+          if (this._pendingProtocolUsages[i]!.node === callee) {
+            this._pendingProtocolUsages[i]!.node = expr;
+          }
+        }
+        return result;
       }
       case "Paren":
         return this.analyzeExpr(expr.expression, {
@@ -2096,12 +2132,14 @@ class SemanticAnalyzer {
   private computeExpectedModuleName(): string {
     // Normalize paths to handle different separators
     const normalizedFilePath = this.getFilePath().replace(/\\/g, "/");
-    const normalizedSrcDir = this.getSrcDir()
-      .replace(/\\/g, "/")
-      .replace(/\/$/, "");
+    const rawSrcDir = this.getSrcDir();
+    const normalizedSrcDir = rawSrcDir.replace(/\\/g, "/").replace(/\/$/, "");
 
-    // Get relative path from srcDir
-    if (!normalizedFilePath.startsWith(normalizedSrcDir + "/")) {
+    // If srcDir is empty or the file isn't under srcDir, use filename as module name
+    if (
+      !normalizedSrcDir ||
+      !normalizedFilePath.startsWith(normalizedSrcDir + "/")
+    ) {
       // Fallback: extract from file name only
       const fileName = normalizedFilePath.split("/").pop() ?? "";
       return fileName.replace(/\.vibe$/, "");
@@ -2288,11 +2326,18 @@ class SemanticAnalyzer {
       // Protocols will be imported below in the exposing clause handling.
 
       // IMPORTANT: Instances are always visible (Haskell's orphan instance semantics).
-      // However, we should only import instances that are DEFINED by the dependency module,
-      // not instances that the dependency merely imported from elsewhere.
+      // Import ALL instances from the dependency, including transitively imported ones.
+      // This matches Haskell's behavior where instances are globally visible once imported.
+      // Deduplication happens via the instance's unique (protocolName, moduleName, typeArgs) identity.
       for (const instance of depModule.instances) {
-        const isDefinedByDep = instance.moduleName === depModule.module.name;
-        if (isDefinedByDep) {
+        // Check for duplicates by comparing protocol name and module name (origin)
+        const isDuplicate = this.instances.some(
+          (existing) =>
+            existing.protocolName === instance.protocolName &&
+            existing.moduleName === instance.moduleName &&
+            typeArgsEqual(existing.typeArgs, instance.typeArgs),
+        );
+        if (!isDuplicate) {
           this.instances.push(instance);
         }
       }
@@ -2349,6 +2394,21 @@ class SemanticAnalyzer {
             );
             this.globalScope.define(name, scheme);
             // Track for re-export support
+            this.importedValues.set(name, imp.moduleName);
+          }
+        }
+
+        // Import all re-exported values (values that were imported from other modules and re-exported)
+        // These are values that the dependency imported from other modules and then re-exports
+        // Their type schemes are stored in depModule.typeSchemes
+        for (const [name] of depModule.exports.reExportedValues) {
+          // Skip if already imported (defined value takes precedence)
+          if (this.globalScope.has(name)) continue;
+
+          // Look up the type scheme from depModule's typeSchemes (where re-exported values are stored)
+          const scheme = depModule.typeSchemes[name];
+          if (scheme) {
+            this.globalScope.define(name, scheme);
             this.importedValues.set(name, imp.moduleName);
           }
         }
@@ -4495,6 +4555,19 @@ class SemanticAnalyzer {
           this.globalScope.define(name, generalizedScheme);
           this.typeSchemes[name] = generalizedScheme;
         }
+
+        // Resolve pending protocol method usages with the final substitution.
+        // This captures concrete constraint types (e.g., Show (Ref Int)) that
+        // are dropped during generalization but needed for dictionary resolution.
+        for (const usage of this._pendingProtocolUsages) {
+          const resolvedArgs = usage.constraint.typeArgs.map((t) =>
+            applySubstitution(t, this.substitution),
+          );
+          this._resolvedProtocolUsages.set(usage.node, {
+            protocolName: usage.constraint.protocolName,
+            typeArgs: resolvedArgs,
+          });
+        }
       }
     }
   }
@@ -5466,6 +5539,14 @@ class SemanticAnalyzer {
   private buildSemanticModule(): SemanticModule {
     const exports = this.computeModuleExports();
 
+    // For re-exported values, store their type schemes so downstream importers can access them
+    for (const [name] of exports.reExportedValues) {
+      const scheme = this.globalScope.lookup(name);
+      if (scheme && !this.typeSchemes[name]) {
+        this.typeSchemes[name] = scheme;
+      }
+    }
+
     return {
       values: this.values,
       annotations: this.annotations,
@@ -5485,6 +5566,8 @@ class SemanticAnalyzer {
       infixDeclarations: this.infixDeclarations,
       exports,
       errors: this.getErrors(),
+      importedValues: this.importedValues,
+      protocolMethodUsages: this._resolvedProtocolUsages,
     };
   }
 
@@ -7282,25 +7365,55 @@ function findInstanceForTypeWithReason(
     }
 
     if (matchesStructure) {
-      // Check if type arguments match
-      let argsMatch = true;
-
-      // Helper to get sub-args based on kind
-      const getArgs = (t: Type): Type[] => {
-        if (t.kind === "con") return t.args;
-        if (t.kind === "tuple") return t.elements;
-        // records handled by recursive matcher logic usually, but here we walk explicitly?
-        // Actually, let's delegate to instanceTypeMatches if mostly structural!
-        return [];
-      };
-
-      // Simplification: use instanceTypeMatches which I made robust
+      // Check if type arguments match structurally
       if (instanceTypeMatches(instTypeArg, concreteType)) {
-        return { found: true };
+        // If the instance has no constraints, it's a direct match
+        if (inst.constraints.length === 0) {
+          return { found: true };
+        }
+
+        // Instance has constraints - we need to check them
+        // Build a substitution from instance type variables to concrete types
+        const typeVarSubst = new Map<number, Type>();
+        buildTypeVarSubstitution(instTypeArg, concreteType, typeVarSubst);
+
+        // Check each constraint with the substituted types
+        let allConstraintsSatisfied = true;
+        for (const constraint of inst.constraints) {
+          // Apply substitution to the constraint's type args
+          const substitutedTypeArgs = constraint.typeArgs.map((t) =>
+            applySubstitutionToType(t, typeVarSubst),
+          );
+
+          // For each type arg in the constraint, check if an instance exists
+          for (const typeArg of substitutedTypeArgs) {
+            const constraintResult = findInstanceForTypeWithReason(
+              constraint.protocolName,
+              typeArg,
+              instances,
+            );
+            if (!constraintResult.found) {
+              allConstraintsSatisfied = false;
+              hasPolymorphicInstance = true;
+              if (!firstUnsatisfiedConstraint) {
+                firstUnsatisfiedConstraint = {
+                  constraint: constraint.protocolName,
+                  forType: formatType(typeArg),
+                };
+              }
+              break;
+            }
+          }
+          if (!allConstraintsSatisfied) break;
+        }
+
+        if (allConstraintsSatisfied) {
+          return { found: true };
+        }
       }
     }
 
-    // Polymorphic match ... (unchanged logic)
+    // Polymorphic match: instance head is just a type variable (e.g., `Show a`)
     if (instTypeArg.kind === "var") {
       hasPolymorphicInstance = true;
       if (inst.constraints.length === 0) {
@@ -7347,6 +7460,84 @@ function findInstanceForTypeWithReason(
   }
 
   return { found: false, reason: "no-instance" };
+}
+
+/**
+ * Build a substitution mapping type variables in `instType` to concrete types in `concreteType`.
+ * Assumes the types structurally match (i.e., instanceTypeMatches returned true).
+ */
+function buildTypeVarSubstitution(
+  instType: Type,
+  concreteType: Type,
+  subst: Map<number, Type>,
+): void {
+  if (instType.kind === "var") {
+    subst.set(instType.id, concreteType);
+    return;
+  }
+
+  if (instType.kind === "con" && concreteType.kind === "con") {
+    for (let i = 0; i < instType.args.length; i++) {
+      buildTypeVarSubstitution(instType.args[i]!, concreteType.args[i]!, subst);
+    }
+  } else if (instType.kind === "tuple" && concreteType.kind === "tuple") {
+    for (let i = 0; i < instType.elements.length; i++) {
+      buildTypeVarSubstitution(
+        instType.elements[i]!,
+        concreteType.elements[i]!,
+        subst,
+      );
+    }
+  } else if (instType.kind === "fun" && concreteType.kind === "fun") {
+    buildTypeVarSubstitution(instType.from, concreteType.from, subst);
+    buildTypeVarSubstitution(instType.to, concreteType.to, subst);
+  } else if (instType.kind === "record" && concreteType.kind === "record") {
+    for (const key of Object.keys(instType.fields)) {
+      if (key in concreteType.fields) {
+        buildTypeVarSubstitution(
+          instType.fields[key]!,
+          concreteType.fields[key]!,
+          subst,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Apply a type variable substitution to a type.
+ */
+function applySubstitutionToType(type: Type, subst: Map<number, Type>): Type {
+  if (type.kind === "var") {
+    return subst.get(type.id) ?? type;
+  }
+  if (type.kind === "con") {
+    return {
+      ...type,
+      args: type.args.map((a) => applySubstitutionToType(a, subst)),
+    };
+  }
+  if (type.kind === "tuple") {
+    return {
+      ...type,
+      elements: type.elements.map((e) => applySubstitutionToType(e, subst)),
+    };
+  }
+  if (type.kind === "fun") {
+    return {
+      ...type,
+      from: applySubstitutionToType(type.from, subst),
+      to: applySubstitutionToType(type.to, subst),
+    };
+  }
+  if (type.kind === "record") {
+    const newFields: Record<string, Type> = {};
+    for (const [k, v] of Object.entries(type.fields)) {
+      newFields[k] = applySubstitutionToType(v, subst);
+    }
+    return { ...type, fields: newFields };
+  }
+  return type;
 }
 
 /**
@@ -7728,6 +7919,16 @@ function bindPatternNames(pattern: Pattern, scope: Scope): void {
  * @param instances - All known instances (for constraint satisfaction checking)
  * @returns true if the implementations could apply to the same concrete type
  */
+
+/**
+ * Check if two arrays of types are structurally equal.
+ * Used for deduplicating instances during import.
+ */
+function typeArgsEqual(args1: Type[], args2: Type[]): boolean {
+  if (args1.length !== args2.length) return false;
+  return args1.every((t, i) => typesEqual(t, args2[i]!));
+}
+
 function instancesOverlap(
   inst1: InstanceInfo,
   inst2: InstanceInfo,

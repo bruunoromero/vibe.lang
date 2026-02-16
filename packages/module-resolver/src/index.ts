@@ -5,7 +5,57 @@ import {
   loadConfig,
   type ResolvedVibeConfig,
 } from "@vibe/config";
-import type { Program, OperatorRegistry } from "@vibe/syntax";
+import type { Program, OperatorRegistry, Span } from "@vibe/syntax";
+
+/**
+ * Error thrown during parsing when unexpected syntax is encountered.
+ * This is a re-declaration that mirrors the parser's ParseError so we can
+ * attach filePath information during module discovery without creating
+ * a circular dependency on @vibe/parser.
+ */
+class ParseErrorWithFilePath extends Error {
+  constructor(
+    message: string,
+    public readonly span: Span,
+    public readonly filePath: string,
+  ) {
+    super(message);
+    this.name = "ParseError";
+  }
+}
+
+/**
+ * Wrap a parse function call to attach filePath to any ParseError thrown.
+ * This ensures error messages point to the correct source file.
+ */
+function parseWithFilePath(
+  parseFunction: (
+    source: string,
+    operatorRegistry?: OperatorRegistry,
+  ) => Program,
+  source: string,
+  filePath: string,
+  operatorRegistry?: OperatorRegistry,
+): Program {
+  try {
+    return parseFunction(source, operatorRegistry);
+  } catch (error) {
+    // If this looks like a ParseError (has span property), wrap it with filePath
+    if (
+      error instanceof Error &&
+      "span" in error &&
+      !("filePath" in error && (error as any).filePath)
+    ) {
+      const parseError = error as Error & { span: Span };
+      throw new ParseErrorWithFilePath(
+        parseError.message,
+        parseError.span,
+        filePath,
+      );
+    }
+    throw error;
+  }
+}
 
 export interface ResolveModuleInput {
   config: ResolvedVibeConfig;
@@ -322,7 +372,12 @@ export function discoverModuleGraph(
 
     // Parse minimally to get imports - use the module's own operators only
     // (imports don't need complex expression parsing with operator precedence)
-    const ast = parseFunction(source, operatorRegistry);
+    const ast = parseWithFilePath(
+      parseFunction,
+      source,
+      resolved.filePath,
+      operatorRegistry,
+    );
 
     // Extract dependency names
     const dependencies = new Set<string>();
@@ -380,7 +435,12 @@ export function discoverModuleGraph(
     );
 
     // Re-parse with combined operator registry for correct precedence
-    const ast = parseFunction(preliminary.source, combinedRegistry);
+    const ast = parseWithFilePath(
+      parseFunction,
+      preliminary.source,
+      preliminary.filePath,
+      combinedRegistry,
+    );
 
     modules.set(moduleName, {
       moduleName: preliminary.moduleName,
@@ -558,7 +618,12 @@ export function discoverAllModules(
     const { registry: operatorRegistry } = collectInfixDeclarations(source);
 
     // Parse minimally to get imports
-    const ast = parseFunction(source, operatorRegistry);
+    const ast = parseWithFilePath(
+      parseFunction,
+      source,
+      resolved.filePath,
+      operatorRegistry,
+    );
 
     // Extract dependencies
     const dependencies = new Set<string>();
@@ -617,7 +682,12 @@ export function discoverAllModules(
     );
 
     // Re-parse with combined operator registry for correct precedence
-    const ast = parseFunction(preliminary.source, combinedRegistry);
+    const ast = parseWithFilePath(
+      parseFunction,
+      preliminary.source,
+      preliminary.filePath,
+      combinedRegistry,
+    );
 
     modules.set(moduleName, {
       moduleName: preliminary.moduleName,

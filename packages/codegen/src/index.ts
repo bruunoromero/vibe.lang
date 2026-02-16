@@ -1124,6 +1124,19 @@ function generateVar(
     return `${ctorInfo.moduleName}.${sanitizeIdentifier(expr.name)}`;
   }
 
+  // Check if this variable is imported from another module
+  if (
+    expr.moduleName &&
+    expr.moduleName !== currentModule &&
+    expr.moduleName !== BUILTIN_MODULE_NAME
+  ) {
+    const importAlias = getImportAliasForModule(
+      expr.moduleName,
+      ctx.program.importAliases,
+    );
+    return `${importAlias}.${sanitizeIdentifier(expr.name)}`;
+  }
+
   const safeName = sanitizeIdentifier(expr.name);
   return safeName;
 }
@@ -1515,7 +1528,11 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
               // For `toString : a -> String`, result is String
               // For `== : a -> a -> Bool`, result is Bool after 2 args
               let resultType: IRType = method.type;
-              for (let i = 0; i < operands.length && resultType.kind === "fun"; i++) {
+              for (
+                let i = 0;
+                i < operands.length && resultType.kind === "fun";
+                i++
+              ) {
                 resultType = resultType.to;
               }
               // If result is a type variable, try to substitute with concrete type

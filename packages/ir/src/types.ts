@@ -104,6 +104,8 @@ export type IRVar = {
    * E.g., for `+` from `Num a`, this would be { protocolName: "Num", typeArgs: [a] }
    */
   constraint?: IRConstraint;
+  /** The module this variable was imported from (if not locally defined) */
+  moduleName?: string;
   span: Span;
 };
 
