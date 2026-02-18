@@ -38,7 +38,7 @@ describe("DocumentManager", () => {
         "file:///test.vibe",
         "vibe",
         1,
-        "module Test exposing (..)\n\nx = 42"
+        "module Test exposing (..)\n\nx = 42",
       );
 
       const cache = manager.updateDocument(doc);
@@ -53,7 +53,7 @@ describe("DocumentManager", () => {
         "file:///test.vibe",
         "vibe",
         1,
-        "x = = 42" // Invalid syntax
+        "x = = 42", // Invalid syntax
       );
 
       const cache = manager.updateDocument(doc);
@@ -76,14 +76,14 @@ describe("DocumentManager", () => {
         "file:///test.vibe",
         "vibe",
         1,
-        "x = 42"
+        "x = 42",
       );
 
       const doc2 = TextDocument.create(
         "file:///test.vibe",
         "vibe",
         2,
-        "x = 43"
+        "x = 43",
       );
 
       const cache1 = manager.updateDocument(doc1);
@@ -132,7 +132,7 @@ describe("DocumentManager", () => {
         `module Test exposing (..)
 
 add x y = x
-`
+`,
       );
 
       manager.updateDocument(doc);
@@ -151,7 +151,7 @@ add x y = x
         `module Test exposing (..)
 
 type Maybe a = Just a | Nothing
-`
+`,
       );
 
       manager.updateDocument(doc);
@@ -181,7 +181,7 @@ type Maybe a = Just a | Nothing
         `module Test exposing (..)
 
 x = 42
-`
+`,
       );
 
       manager.updateDocument(doc);
@@ -200,7 +200,7 @@ x = 42
         `module Test exposing (..)
 
 x = 42
-`
+`,
       );
 
       manager.updateDocument(doc);
@@ -271,6 +271,37 @@ x = 42
 
       const formatted = manager.formatTypeScheme(scheme);
       expect(formatted).toBe("Num a => a -> a");
+    });
+
+    test("should use annotation paramNames when available", () => {
+      const scheme = {
+        vars: new Set([150]),
+        constraints: [],
+        type: {
+          kind: "fun" as const,
+          from: { kind: "var" as const, id: 150 },
+          to: { kind: "var" as const, id: 150 },
+        },
+        paramNames: new Map([[150, "x"]]),
+      };
+
+      const formatted = manager.formatTypeScheme(scheme);
+      expect(formatted).toBe("x -> x");
+    });
+
+    test("should normalize high IDs to letters without paramNames", () => {
+      const scheme = {
+        vars: new Set([999, 1000]),
+        constraints: [],
+        type: {
+          kind: "fun" as const,
+          from: { kind: "var" as const, id: 999 },
+          to: { kind: "var" as const, id: 1000 },
+        },
+      };
+
+      const formatted = manager.formatTypeScheme(scheme);
+      expect(formatted).toBe("a -> b");
     });
   });
 });

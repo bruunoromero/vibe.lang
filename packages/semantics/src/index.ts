@@ -76,6 +76,14 @@ export type {
 // Re-export classes for external consumers
 export { Scope, RegistryManager } from "./types";
 
+// Re-export display formatting functions
+export {
+  formatTypeForDisplay,
+  formatTypeSchemeForDisplay,
+  formatConstraintsForDisplay,
+  buildNormalizedNames,
+} from "./utils";
+
 import type {
   Type,
   TypeVar,
@@ -102,6 +110,8 @@ import type {
   InstanceLookupResult,
   TypeValidationError,
   TypeInferenceContext,
+  TypeVarContext,
+  AnnotationResult,
 } from "./types";
 
 import { Scope, RegistryManager } from "./types";
@@ -164,6 +174,37 @@ function makeLambda(args: Pattern[], body: Expr, span: Span): Expr {
  * Inspired by Rust's ty::Error and TypeScript's ErrorType.
  */
 const ERROR_TYPE: Type = { kind: "error" };
+
+/**
+ * Invert a TypeVarContext (name → TypeVar) to a paramNames map (TypeVar.id → name).
+ * Used to preserve user-given type parameter names from annotations.
+ */
+function invertContext(context: TypeVarContext): Map<number, string> {
+  const result = new Map<number, string>();
+  for (const [name, typeVar] of context) {
+    result.set(typeVar.id, name);
+  }
+  return result;
+}
+
+/**
+ * Resolve paramNames through a substitution so that names track through unification.
+ * If TypeVar(150) was named "a" but got unified to TypeVar(200), the result maps 200 → "a".
+ * If it unified to a concrete type, the name is dropped (no longer polymorphic).
+ */
+function resolveParamNames(
+  paramNames: Map<number, string>,
+  substitution: Substitution,
+): Map<number, string> {
+  const result = new Map<number, string>();
+  for (const [id, name] of paramNames) {
+    const resolved = applySubstitution({ kind: "var", id }, substitution);
+    if (resolved.kind === "var") {
+      result.set(resolved.id, name);
+    }
+  }
+  return result;
+}
 
 class SemanticAnalyzer {
   /**
@@ -663,6 +704,7 @@ class SemanticAnalyzer {
           expr,
           imports,
           dependencies,
+          substitution,
         );
         if (moduleAccess) {
           return moduleAccess;
@@ -2534,6 +2576,29 @@ class SemanticAnalyzer {
         }
       }
     }
+
+    // Global instance visibility: import instances from ALL available dependency
+    // modules, not just explicitly imported ones. In Haskell, instances are
+    // globally visible once defined anywhere in the program. This ensures that
+    // auto-derived instances (e.g., Show using ++ / Appendable) can find the
+    // required instances even if the defining module isn't directly imported.
+    const importedModuleNames = new Set(
+      this.imports.map((imp) => imp.moduleName),
+    );
+    for (const [depName, depModule] of this.dependencies) {
+      if (importedModuleNames.has(depName)) continue;
+      for (const instance of depModule.instances) {
+        const isDuplicate = this.instances.some(
+          (existing) =>
+            existing.protocolName === instance.protocolName &&
+            existing.moduleName === instance.moduleName &&
+            typeArgsEqual(existing.typeArgs, instance.typeArgs),
+        );
+        if (!isDuplicate) {
+          this.instances.push(instance);
+        }
+      }
+    }
   }
 
   private registerInfixDeclarations(): void {
@@ -2874,8 +2939,9 @@ class SemanticAnalyzer {
 
       const ctorScheme: TypeScheme = {
         vars: quantifiedVars,
-        constraints: semanticConstraints, // Apply type constraints to constructor
+        constraints: semanticConstraints,
         type: ctorType,
+        paramNames: invertContext(paramTypeVars),
       };
 
       // Register constructor as a polymorphic value in global scope
@@ -4365,6 +4431,9 @@ class SemanticAnalyzer {
         if (annotatedConstraints) {
           info.annotatedConstraints = annotatedConstraints;
         }
+        if (result.paramNames.size > 0) {
+          info.annotatedParamNames = result.paramNames;
+        }
       }
 
       const seeded = annotationType ?? this.seedValueType(info.declaration);
@@ -4456,15 +4525,18 @@ class SemanticAnalyzer {
       );
 
       // Merge constraints from nested qualified types
+      const paramNames = invertContext(context);
       return {
         type: innerResult.type,
         constraints: [...constraints, ...innerResult.constraints],
+        paramNames,
       };
     }
 
     // For non-qualified types, delegate to the simpler function
     const type = this.typeFromAnnotation(annotation, context);
-    return { type, constraints: [] };
+    const paramNames = invertContext(context);
+    return { type, constraints: [], paramNames };
   }
 
   private inferValueDeclarations(): void {
@@ -4503,10 +4575,15 @@ class SemanticAnalyzer {
             info.annotatedConstraints = result.constraints;
           }
 
+          // Quantify all free type variables so the scheme can be properly
+          // instantiated with fresh variables at each use site
+          const freeVars = getFreeTypeVars(info.type, this.substitution);
           const scheme: TypeScheme = {
-            vars: new Set<number>(),
+            vars: freeVars,
             constraints: result.constraints,
             type: info.type,
+            paramNames:
+              result.paramNames.size > 0 ? result.paramNames : undefined,
           };
           this.globalScope.symbols.set(info.declaration.name, scheme);
           this.typeSchemes[name] = scheme;
@@ -4552,6 +4629,12 @@ class SemanticAnalyzer {
             info.annotatedConstraints,
             info.declaration.span,
           );
+          if (info.annotatedParamNames) {
+            generalizedScheme.paramNames = resolveParamNames(
+              info.annotatedParamNames,
+              this.substitution,
+            );
+          }
           this.globalScope.define(name, generalizedScheme);
           this.typeSchemes[name] = generalizedScheme;
         }
@@ -6739,6 +6822,9 @@ function addProtocolMethodsToScope(protocol: ProtocolInfo, scope: Scope) {
     quantifiedVars.add(tv.id);
   }
 
+  // Build paramNames from the protocol's type variable context
+  const paramNames = invertContext(sharedTypeVarCtx);
+
   // Return the method schemes for optional storage in module.typeSchemes
   const methodSchemes = new Map<string, TypeScheme>();
 
@@ -6753,6 +6839,7 @@ function addProtocolMethodsToScope(protocol: ProtocolInfo, scope: Scope) {
         vars: new Set(quantifiedVars),
         constraints: [protocolConstraint],
         type: refreshedType,
+        paramNames,
       };
       scope.symbols.set(methodName, scheme);
       methodSchemes.set(methodName, scheme);
@@ -8119,6 +8206,36 @@ function typeOverlaps(type1: Type, type2: Type): boolean {
 }
 
 /**
+ * Resolve a field from a dependency module, properly instantiating its type scheme
+ * so that each use site gets fresh type variables.
+ */
+function resolveModuleField(
+  depModule: SemanticModule,
+  field: string,
+  substitution: Substitution,
+): Type | null {
+  // Prefer type schemes (with quantified vars) for proper instantiation
+  const scheme = depModule.typeSchemes[field];
+  if (scheme) {
+    return instantiate(scheme, substitution);
+  }
+  // Fall back to raw type on ValueInfo (already monomorphic or no scheme available)
+  const valueInfo = depModule.values[field];
+  if (valueInfo) {
+    const valueType = valueInfo.type || depModule.types[field];
+    if (valueType) {
+      return valueType;
+    }
+  }
+  // Check if it's a constructor
+  const ctorScheme = depModule.constructorTypes[field];
+  if (ctorScheme) {
+    return instantiate(ctorScheme, substitution);
+  }
+  return null;
+}
+
+/**
  * Try to resolve a module-qualified field access (e.g., Vibe.JS.null)
  * Returns the type of the accessed symbol if it's a module access, or null if not.
  */
@@ -8126,6 +8243,7 @@ function tryResolveModuleFieldAccess(
   expr: Extract<Expr, { kind: "FieldAccess" }>,
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
+  substitution: Substitution,
 ): Type | null {
   // Collect the chain of field accesses to reconstruct the module path
   const parts: string[] = [];
@@ -8170,19 +8288,8 @@ function tryResolveModuleFieldAccess(
       // Look up the value in the module
       if (fieldParts.length === 1) {
         const field = fieldParts[0]!;
-        // Check if it's a value - type may be on valueInfo.type or in depModule.types
-        const valueInfo = depModule.values[field];
-        if (valueInfo) {
-          const valueType = valueInfo.type || depModule.types[field];
-          if (valueType) {
-            return valueType;
-          }
-        }
-        // Check if it's a constructor
-        const ctorScheme = depModule.constructorTypes[field];
-        if (ctorScheme) {
-          return ctorScheme.type;
-        }
+        const resolved = resolveModuleField(depModule, field, substitution);
+        if (resolved) return resolved;
       }
       // For nested field accesses like Alias.value.field, we return null here
       // and let the recursive FieldAccess analysis in analyzeExpr handle it.
@@ -8211,19 +8318,8 @@ function tryResolveModuleFieldAccess(
         // Look up the value in the module
         if (fieldParts.length === 1) {
           const field = fieldParts[0]!;
-          // Check if it's a value - type may be on valueInfo.type or in depModule.types
-          const valueInfo = depModule.values[field];
-          if (valueInfo) {
-            const valueType = valueInfo.type || depModule.types[field];
-            if (valueType) {
-              return valueType;
-            }
-          }
-          // Check if it's a constructor
-          const ctorScheme = depModule.constructorTypes[field];
-          if (ctorScheme) {
-            return ctorScheme.type;
-          }
+          const resolved = resolveModuleField(depModule, field, substitution);
+          if (resolved) return resolved;
         }
         // For nested field accesses like Vibe.JS.value.field, we return null here
         // and let the recursive FieldAccess analysis in analyzeExpr handle it.
@@ -8486,28 +8582,6 @@ function countAnnotationParams(annotation: TypeExpr): number {
   }
   return 0;
 }
-
-/**
- * TypeVarContext tracks type variable names to their corresponding TypeVar IDs
- * during annotation parsing. This enables polymorphic type annotations like:
- * - id : a -> a
- * - map : (a -> b) -> List a -> List b
- *
- * Type variables are lowercase identifiers (typically single letters: a, b, c)
- * that should be treated as universally quantified variables.
- */
-type TypeVarContext = Map<string, TypeVar>;
-
-/**
- * Result of converting a type annotation to an internal type.
- * Includes both the type and any protocol constraints from qualified types.
- */
-type AnnotationResult = {
-  /** The converted internal type */
-  type: Type;
-  /** Protocol constraints extracted from qualified types (e.g., Num a => ...) */
-  constraints: Constraint[];
-};
 
 /**
  * Check if a type name should be treated as a type variable.

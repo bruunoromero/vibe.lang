@@ -3,6 +3,7 @@ import type {
   TypeVar,
   TypeCon,
   TypeFun,
+  TypeScheme,
   Substitution,
   Constraint,
   Scope,
@@ -102,7 +103,7 @@ export function typesEqual(t1: Type, t2: Type): boolean {
       return (
         t1.elements.length === (t2 as typeof t1).elements.length &&
         t1.elements.every((e, i) =>
-          typesEqual(e, (t2 as typeof t1).elements[i]!)
+          typesEqual(e, (t2 as typeof t1).elements[i]!),
         )
       );
     case "record": {
@@ -112,7 +113,7 @@ export function typesEqual(t1: Type, t2: Type): boolean {
       return (
         keys1.length === keys2.length &&
         keys1.every(
-          (k, i) => k === keys2[i] && typesEqual(t1.fields[k]!, r2.fields[k]!)
+          (k, i) => k === keys2[i] && typesEqual(t1.fields[k]!, r2.fields[k]!),
         )
       );
     }
@@ -128,7 +129,7 @@ export function typesEqual(t1: Type, t2: Type): boolean {
  */
 export function applySubstitution(
   type: Type,
-  substitution: Substitution
+  substitution: Substitution,
 ): Type {
   if (type.kind === "var") {
     const replacement = substitution.get(type.id);
@@ -137,7 +138,7 @@ export function applySubstitution(
   if (type.kind === "fun") {
     return fn(
       applySubstitution(type.from, substitution),
-      applySubstitution(type.to, substitution)
+      applySubstitution(type.to, substitution),
     );
   }
   if (type.kind === "tuple") {
@@ -168,7 +169,7 @@ export function applySubstitution(
  */
 export function applySubstitutionToConstraints(
   constraints: Constraint[],
-  substitution: Substitution
+  substitution: Substitution,
 ): Constraint[] {
   return constraints.map((c) => ({
     protocolName: c.protocolName,
@@ -190,7 +191,7 @@ export function applySubstitutionToConstraints(
  */
 export function getFreeTypeVars(
   type: Type,
-  substitution: Substitution
+  substitution: Substitution,
 ): Set<number> {
   const concrete = applySubstitution(type, substitution);
 
@@ -252,7 +253,7 @@ export function getFreeTypeVars(
  */
 export function getFreeTypeVarsInScope(
   scope: Scope,
-  substitution: Substitution
+  substitution: Substitution,
 ): Set<number> {
   const result = new Set<number>();
 
@@ -319,7 +320,7 @@ function collectTypeVarIdsHelper(type: Type, ids: Set<number>): void {
 export function collectTypeVarIdsOrdered(
   type: Type,
   result: number[],
-  seen: Set<number>
+  seen: Set<number>,
 ): void {
   switch (type.kind) {
     case "var":
@@ -352,8 +353,11 @@ export function collectTypeVarIdsOrdered(
 
 // ===== Type Formatting =====
 
+const LETTERS = "abcdefghijklmnopqrstuvwxyz";
+
 /**
  * Format a type for display in error messages.
+ * Uses raw type var IDs (t0, t1, ...) — for internal/debug use.
  */
 export function formatType(type: Type): string {
   switch (type.kind) {
@@ -382,6 +386,101 @@ export function formatType(type: Type): string {
   }
 }
 
+/**
+ * Build a normalized name map for a TypeScheme.
+ * Assigns letters (a, b, c, ...) to type variables in order of first appearance.
+ * Constraints are scanned first so that constrained vars get earlier letters.
+ */
+export function buildNormalizedNames(scheme: TypeScheme): Map<number, string> {
+  const ids: number[] = [];
+  const seen = new Set<number>();
+  for (const c of scheme.constraints) {
+    for (const t of c.typeArgs) {
+      collectTypeVarIdsOrdered(t, ids, seen);
+    }
+  }
+  collectTypeVarIdsOrdered(scheme.type, ids, seen);
+  const map = new Map<number, string>();
+  for (let i = 0; i < ids.length; i++) {
+    map.set(ids[i]!, i < LETTERS.length ? LETTERS[i]! : `t${ids[i]}`);
+  }
+  return map;
+}
+
+/**
+ * Format a type for user-facing display with friendly type variable names.
+ * Uses the provided paramNames map, or falls back to "tN".
+ */
+export function formatTypeForDisplay(
+  type: Type,
+  paramNames: Map<number, string>,
+): string {
+  switch (type.kind) {
+    case "var":
+      return paramNames.get(type.id) ?? `t${type.id}`;
+    case "con":
+      if (type.args.length === 0) return type.name;
+      return `${type.name} ${type.args.map((a) => formatTypeArgForDisplay(a, paramNames)).join(" ")}`;
+    case "fun": {
+      const from = formatTypeArgForDisplay(type.from, paramNames);
+      return `${from} -> ${formatTypeForDisplay(type.to, paramNames)}`;
+    }
+    case "tuple":
+      return `(${type.elements.map((e) => formatTypeForDisplay(e, paramNames)).join(", ")})`;
+    case "record": {
+      const fields = Object.entries(type.fields)
+        .map(([k, v]) => `${k} : ${formatTypeForDisplay(v, paramNames)}`)
+        .join(", ");
+      return `{ ${fields} }`;
+    }
+    case "error":
+      return "<error>";
+  }
+}
+
+/**
+ * Format a type argument, wrapping in parens if it's a function or applied constructor.
+ */
+function formatTypeArgForDisplay(
+  type: Type,
+  paramNames: Map<number, string>,
+): string {
+  if (type.kind === "fun" || (type.kind === "con" && type.args.length > 0)) {
+    return `(${formatTypeForDisplay(type, paramNames)})`;
+  }
+  return formatTypeForDisplay(type, paramNames);
+}
+
+/**
+ * Format constraints for display with friendly type variable names.
+ */
+export function formatConstraintsForDisplay(
+  constraints: Constraint[],
+  paramNames: Map<number, string>,
+): string {
+  if (!constraints || constraints.length === 0) return "";
+  const parts = constraints.map((c) => {
+    const args = c.typeArgs
+      .map((t) => formatTypeForDisplay(t, paramNames))
+      .join(" ");
+    return `${c.protocolName} ${args}`;
+  });
+  if (parts.length === 1) return parts[0] ?? "";
+  return `(${parts.join(", ")})`;
+}
+
+/**
+ * Format a complete TypeScheme for user-facing display.
+ * Uses paramNames from annotations when available, otherwise normalizes to a, b, c...
+ */
+export function formatTypeSchemeForDisplay(scheme: TypeScheme): string {
+  if (!scheme || !scheme.type) return "<unknown type>";
+  const names = scheme.paramNames ?? buildNormalizedNames(scheme);
+  const constraintStr = formatConstraintsForDisplay(scheme.constraints, names);
+  const typeStr = formatTypeForDisplay(scheme.type, names);
+  return constraintStr ? `${constraintStr} => ${typeStr}` : typeStr;
+}
+
 // ===== Constraint Context =====
 
 /**
@@ -396,14 +495,14 @@ export function createConstraintContext(): ConstraintContext {
  */
 export function addConstraint(
   ctx: ConstraintContext,
-  constraint: Constraint
+  constraint: Constraint,
 ): void {
   // Check if we already have this constraint
   const isDuplicate = ctx.constraints.some(
     (c) =>
       c.protocolName === constraint.protocolName &&
       c.typeArgs.length === constraint.typeArgs.length &&
-      c.typeArgs.every((t, i) => typesEqual(t, constraint.typeArgs[i]!))
+      c.typeArgs.every((t, i) => typesEqual(t, constraint.typeArgs[i]!)),
   );
   if (!isDuplicate) {
     ctx.constraints.push(constraint);
@@ -432,7 +531,7 @@ export function flattenFunctionParams(type: Type): Type[] {
  */
 export function applyVarSubstitution(
   type: Type,
-  subst: Map<number, Type>
+  subst: Map<number, Type>,
 ): Type {
   switch (type.kind) {
     case "var": {
@@ -472,7 +571,7 @@ export function applyVarSubstitution(
  */
 export function applyTypeSubstitution(
   type: Type,
-  substitution: Map<number, Type>
+  substitution: Map<number, Type>,
 ): Type {
   switch (type.kind) {
     case "var": {
@@ -495,7 +594,7 @@ export function applyTypeSubstitution(
       return {
         kind: "tuple",
         elements: type.elements.map((el) =>
-          applyTypeSubstitution(el, substitution)
+          applyTypeSubstitution(el, substitution),
         ),
       };
     case "record": {

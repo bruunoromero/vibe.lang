@@ -208,6 +208,55 @@ export const refEq =
     a === b;
 
 // =============================================================================
+// Promise Operations
+// =============================================================================
+
+// A wrapper around a promise to prevent `Promise<Promise<T>>` collapsing into
+// `Promise<T>`.
+class PromiseWrapper<T> {
+  constructor(private promise: Promise<T>) {}
+
+  static wrap<T>(value: T | Promise<T>): T | PromiseWrapper<T> {
+    return value instanceof Promise ? new PromiseWrapper(value) : value;
+  }
+
+  static unwrap(value: any): any {
+    return value instanceof PromiseWrapper ? value.promise : value;
+  }
+}
+
+export const createPromise = <T>(
+  executor: (resolve: (value: T) => void) => void,
+) => {
+  return new Promise((resolve) =>
+    executor((value) => {
+      resolve(PromiseWrapper.wrap(value));
+    }),
+  );
+};
+
+export const resolve = <T>(value: T | Promise<T>) => {
+  return Promise.resolve(PromiseWrapper.wrap(value));
+};
+
+export const flatMapPromise = <T, U>(
+  promise: Promise<T>,
+  fn: (value: T) => PromiseWrapper<U>,
+) => {
+  return promise.then((value) => fn(PromiseWrapper.unwrap(value)));
+};
+
+export const mapPromise = <T, U>(promise: Promise<T>, fn: (value: T) => U) => {
+  return promise.then((value) =>
+    PromiseWrapper.wrap(fn(PromiseWrapper.unwrap(value))),
+  );
+};
+
+export const catchPromise = <T>(promise: Promise<T>, fn: (error: any) => T) => {
+  return promise.catch((error) => PromiseWrapper.wrap(fn(error)));
+};
+
+// =============================================================================
 // Debug / Development
 // =============================================================================
 

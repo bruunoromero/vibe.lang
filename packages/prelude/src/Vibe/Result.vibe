@@ -1,5 +1,6 @@
 module Vibe.Result exposing
     ( Result(..)
+    , map
     , isOk
     , isErr
     )
@@ -33,3 +34,8 @@ isOk result =
 isErr : Result error value -> Bool
 isErr result = not (isOk result)
 
+map : (a -> b) -> Result x a -> Result x b
+map f result =
+    case result of
+        Ok value -> Ok (f value)
+        Err error -> Err error

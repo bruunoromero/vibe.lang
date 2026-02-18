@@ -193,6 +193,23 @@ export function generateDependencyImports(
     }
   }
 
+  // Generate imports for modules that provide instances but aren't explicitly
+  // imported by the user. These are added to importAliases during IR lowering
+  // with a $inst_ prefix to avoid collisions with user aliases.
+  for (const aliasEntry of program.importAliases ?? []) {
+    if (importedModules.has(aliasEntry.moduleName)) continue;
+    const importedPackage =
+      modulePackages.get(aliasEntry.moduleName) ||
+      aliasEntry.moduleName.split(".")[0]!;
+    const importPath = calculateImportPath(
+      currentPackage,
+      currentDepth,
+      importedPackage,
+      aliasEntry.moduleName,
+    );
+    lines.push(`import * as ${aliasEntry.alias} from "${importPath}";`);
+  }
+
   return lines;
 }
 

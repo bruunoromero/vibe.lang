@@ -1,0 +1,19 @@
+module Vibe.Promise exposing (Promise, create)
+
+import Vibe.Result exposing (Result)
+import Vibe.Dynamic exposing (Dynamic)
+
+
+type Promise a
+
+@external "@vibe/runtime" "createPromise"
+create : ((a -> Unit) -> Unit) -> Promise a  
+
+@external "@vibe/runtime" "flatMapPromise"
+flatMap : (a -> Promise b) -> Promise a -> Promise b
+
+@external "@vibe/runtime" "mapPromise"
+map : (a -> b) -> Promise a -> Promise b
+
+@external "@vibe/runtime" "catchPromise"
+catch : (Dynamic -> a) -> Promise a -> Promise a

@@ -1,0 +1,3 @@
+module Vibe.Dynamic exposing (Dynamic)
+
+type Dynamic

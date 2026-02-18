@@ -16,6 +16,9 @@ import {
   analyze,
   SemanticError,
   MultipleSemanticErrors,
+  formatTypeSchemeForDisplay,
+  formatTypeForDisplay,
+  buildNormalizedNames,
   type SemanticModule,
   type TypeScheme,
   type Type,
@@ -152,7 +155,7 @@ export class DocumentManager {
         if (fs.existsSync(packageJsonPath)) {
           try {
             const pkgJson = JSON.parse(
-              fs.readFileSync(packageJsonPath, "utf8")
+              fs.readFileSync(packageJsonPath, "utf8"),
             );
             if (pkgJson.vibe) {
               this.projectConfig = loadConfig({ path: packageJsonPath });
@@ -282,16 +285,16 @@ export class DocumentManager {
           this.createDiagnostic(
             error.message,
             error.span,
-            DiagnosticSeverity.Error
-          )
+            DiagnosticSeverity.Error,
+          ),
         );
       } else {
         diagnostics.push(
           this.createDiagnostic(
             `Lexer error: ${String(error)}`,
             this.defaultSpan(),
-            DiagnosticSeverity.Error
-          )
+            DiagnosticSeverity.Error,
+          ),
         );
       }
       cache.diagnostics = diagnostics;
@@ -309,8 +312,8 @@ export class DocumentManager {
         this.createDiagnostic(
           parseError.message,
           parseError.span,
-          DiagnosticSeverity.Error
-        )
+          DiagnosticSeverity.Error,
+        ),
       );
       cache.diagnostics = diagnostics;
       return;
@@ -351,8 +354,8 @@ export class DocumentManager {
               this.createDiagnostic(
                 e.message,
                 e.span,
-                DiagnosticSeverity.Error
-              )
+                DiagnosticSeverity.Error,
+              ),
             );
           }
         } else if (error instanceof SemanticError) {
@@ -363,8 +366,8 @@ export class DocumentManager {
             this.createDiagnostic(
               error.message,
               error.span,
-              DiagnosticSeverity.Error
-            )
+              DiagnosticSeverity.Error,
+            ),
           );
         } else {
           const msg = error instanceof Error ? error.message : String(error);
@@ -375,8 +378,8 @@ export class DocumentManager {
             this.createDiagnostic(
               `Semantic error: ${msg}`,
               this.defaultSpan(),
-              DiagnosticSeverity.Error
-            )
+              DiagnosticSeverity.Error,
+            ),
           );
         }
       }
@@ -392,7 +395,7 @@ export class DocumentManager {
   private createDiagnostic(
     message: string,
     span: Span,
-    severity: DiagnosticSeverity
+    severity: DiagnosticSeverity,
   ): Diagnostic {
     return {
       severity,
@@ -480,8 +483,9 @@ export class DocumentManager {
       symbols.push({
         name,
         kind: SymbolKind.Type,
-        documentation: `type ${name}${adtInfo.params.length > 0 ? " " + adtInfo.params.join(" ") : ""
-          }`,
+        documentation: `type ${name}${
+          adtInfo.params.length > 0 ? " " + adtInfo.params.join(" ") : ""
+        }`,
         definitionSpan: adtInfo.span,
         moduleName: adtInfo.moduleName,
       });
@@ -540,7 +544,7 @@ export class DocumentManager {
   findDefinition(
     uri: string,
     line: number,
-    character: number
+    character: number,
   ): { uri: string; span: Span } | undefined {
     const cache = this.documents.get(uri);
     if (!cache?.parseResult?.ast) {
@@ -555,7 +559,7 @@ export class DocumentManager {
     const name = this.findIdentifierAtPosition(
       cache.content,
       targetLine,
-      targetColumn
+      targetColumn,
     );
     if (!name) {
       return undefined;
@@ -578,7 +582,7 @@ export class DocumentManager {
   private findIdentifierAtPosition(
     content: string,
     line: number,
-    column: number
+    column: number,
   ): string | undefined {
     const lines = content.split("\n");
     if (line < 1 || line > lines.length) {
@@ -622,7 +626,7 @@ export class DocumentManager {
   getHoverInfo(
     uri: string,
     line: number,
-    character: number
+    character: number,
   ): { type: string; name: string; span: Span } | undefined {
     const cache = this.documents.get(uri);
     if (!cache?.semanticResult?.module) {
@@ -635,7 +639,7 @@ export class DocumentManager {
     const name = this.findIdentifierAtPosition(
       cache.content,
       targetLine,
-      targetColumn
+      targetColumn,
     );
     if (!name) {
       return undefined;
@@ -682,8 +686,9 @@ export class DocumentManager {
       const adt = module.adts[name];
       return {
         name,
-        type: `type ${name}${adt.params.length > 0 ? " " + adt.params.join(" ") : ""
-          }`,
+        type: `type ${name}${
+          adt.params.length > 0 ? " " + adt.params.join(" ") : ""
+        }`,
         span: adt.span,
       };
     }
@@ -693,8 +698,9 @@ export class DocumentManager {
       const alias = module.typeAliases[name];
       return {
         name,
-        type: `type alias ${name}${alias.params.length > 0 ? " " + alias.params.join(" ") : ""
-          }`,
+        type: `type alias ${name}${
+          alias.params.length > 0 ? " " + alias.params.join(" ") : ""
+        }`,
         span: alias.span,
       };
     }
@@ -714,18 +720,10 @@ export class DocumentManager {
 
   /**
    * Format a type scheme as a readable string.
+   * Uses annotation param names when available, otherwise normalizes to a, b, c...
    */
   formatTypeScheme(scheme: TypeScheme): string {
-    if (!scheme || !scheme.type) {
-      return "<unknown type>";
-    }
-    const constraints = this.formatConstraints(scheme.constraints);
-    const typeStr = this.formatType(scheme.type);
-
-    if (constraints) {
-      return `${constraints} => ${typeStr}`;
-    }
-    return typeStr;
+    return formatTypeSchemeForDisplay(scheme);
   }
 
   /**
@@ -735,7 +733,7 @@ export class DocumentManager {
    */
   private inferProtocolMethodType(
     methodName: string,
-    module: SemanticModule
+    module: SemanticModule,
   ): string | undefined {
     // Look through all instances to find one that defines this method
     for (const instance of module.instances) {
@@ -745,10 +743,14 @@ export class DocumentManager {
       // Check if this protocol has this method
       const methodInfo = protocol.methods.get(methodName);
       if (methodInfo) {
-        // Get the method's type and format it
-        // This is the generic type from the protocol definition
-        const typeStr = this.formatType(methodInfo.type);
-        return typeStr;
+        // Build a temporary scheme to get normalized names
+        const tempScheme: TypeScheme = {
+          vars: new Set<number>(),
+          constraints: [],
+          type: methodInfo.type,
+        };
+        const names = buildNormalizedNames(tempScheme);
+        return formatTypeForDisplay(methodInfo.type, names);
       }
     }
 
@@ -756,76 +758,18 @@ export class DocumentManager {
   }
 
   /**
-   * Format constraints.
-   */
-  private formatConstraints(
-    constraints: Array<{ protocolName: string; typeArgs: Type[] }>
-  ): string {
-    if (!constraints || constraints.length === 0) return "";
-    const parts = constraints.map((c) => {
-      const args = c.typeArgs.map((t) => this.formatType(t)).join(" ");
-      return `${c.protocolName} ${args}`;
-    });
-    if (parts.length === 1) return parts[0] ?? "";
-    return `(${parts.join(", ")})`;
-  }
-
-  /**
-   * Format a type as a readable string.
+   * Format a bare type with normalized variable names.
    */
   formatType(type: Type): string {
     if (!type) {
       return "<unknown>";
     }
-    switch (type.kind) {
-      case "var":
-        return this.typeVarName(type.id);
-      case "con":
-        if (type.args.length === 0) {
-          return type.name;
-        }
-        return `${type.name} ${type.args
-          .map((a) => this.formatTypeArg(a))
-          .join(" ")}`;
-      case "fun": {
-        const from = this.formatTypeArg(type.from);
-        const to = this.formatType(type.to);
-        return `${from} -> ${to}`;
-      }
-      case "tuple":
-        return `(${type.elements.map((e) => this.formatType(e)).join(", ")})`;
-      case "record": {
-        const fields = Object.entries(type.fields)
-          .map(([k, v]) => `${k} : ${this.formatType(v)}`)
-          .join(", ");
-        return `{ ${fields} }`;
-      }
-      case "error":
-        return "<error>";
-    }
-  }
-
-  /**
-   * Format a type argument (with parens if needed).
-   */
-  private formatTypeArg(type: Type): string {
-    if (!type) {
-      return "<unknown>";
-    }
-    if (type.kind === "fun" || (type.kind === "con" && type.args.length > 0)) {
-      return `(${this.formatType(type)})`;
-    }
-    return this.formatType(type);
-  }
-
-  /**
-   * Generate type variable name from ID.
-   */
-  private typeVarName(id: number): string {
-    const letters = "abcdefghijklmnopqrstuvwxyz";
-    if (id < letters.length) {
-      return letters[id] ?? `t${id}`;
-    }
-    return `t${id}`;
+    const tempScheme: TypeScheme = {
+      vars: new Set<number>(),
+      constraints: [],
+      type,
+    };
+    const names = buildNormalizedNames(tempScheme);
+    return formatTypeForDisplay(type, names);
   }
 }

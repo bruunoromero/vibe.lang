@@ -355,7 +355,10 @@ export function lower(
               }
             }
           }
-          const specializedType = substituteTypeArg(methodInfo.type, paramSubst);
+          const specializedType = substituteTypeArg(
+            methodInfo.type,
+            paramSubst,
+          );
           methodType = convertType(specializedType);
         }
 
@@ -470,7 +473,10 @@ export function lower(
               }
             }
           }
-          const specializedType = substituteTypeArg(methodInfo.type, paramSubst2);
+          const specializedType = substituteTypeArg(
+            methodInfo.type,
+            paramSubst2,
+          );
           methodType = convertType(specializedType);
         }
 
@@ -614,6 +620,24 @@ export function lower(
       alias,
       moduleName: imp.moduleName,
     });
+  }
+
+  // Add import aliases for modules that provide instances but aren't explicitly
+  // imported. This enables the codegen to generate correct dictionary references
+  // for globally-visible instances (e.g., Appendable String from Vibe.String
+  // used by auto-derived Show in a module that doesn't import Vibe.String).
+  const importedModuleNames = new Set(imports.map((imp) => imp.moduleName));
+  for (const semInst of semantics.instances) {
+    const srcModule = semInst.moduleName;
+    if (
+      srcModule &&
+      srcModule !== currentModuleName &&
+      !importedModuleNames.has(srcModule) &&
+      !importAliases.some((a) => a.moduleName === srcModule)
+    ) {
+      const alias = "$inst_" + srcModule.split(".").pop()!;
+      importAliases.push({ alias, moduleName: srcModule });
+    }
   }
 
   // Package name comes from options, or defaults to first segment of module name

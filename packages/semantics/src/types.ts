@@ -67,6 +67,8 @@ export type TypeScheme = {
   vars: Set<number>; // Set of type variable IDs that are quantified (polymorphic)
   constraints: Constraint[]; // Protocol constraints on type variables
   type: Type; // The underlying type structure
+  /** Maps type var IDs to user-given names from type annotations (e.g., 150 → "a") */
+  paramNames?: Map<number, string>;
 };
 
 export type Substitution = Map<number, Type>;
@@ -348,6 +350,8 @@ export type ValueInfo = {
   type?: Type;
   /** User-annotated protocol constraints from qualified type annotations */
   annotatedConstraints?: Constraint[];
+  /** Maps type var IDs back to user-given names from annotations (e.g., 150 → "a") */
+  annotatedParamNames?: Map<number, string>;
   /** All constraints collected during type inference (before filtering to polymorphic) */
   collectedConstraints?: Constraint[];
   /** Source location for error reporting */
@@ -549,6 +553,8 @@ export type AnnotationResult = {
   type: Type;
   /** Protocol constraints extracted from qualified types (e.g., Num a => ...) */
   constraints: Constraint[];
+  /** Maps type var IDs to user-given names from the annotation */
+  paramNames: Map<number, string>;
 };
 
 /**
