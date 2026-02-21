@@ -6,9 +6,6 @@
     "build": "bun ../cli/src/index.ts build",
     "test": "bun test"
   },
-  "dependencies": {
-    "@vibe/runtime": "workspace:*"
-  },
   "devDependencies": {
     "@vibe/cli": "workspace:*"
   }

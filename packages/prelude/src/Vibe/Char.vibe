@@ -9,5 +9,5 @@ implement Show Char where
 implement Eq Char where
   (==) x y = (toString x) == (toString y)
 
-@external "@vibe/runtime" "charToString"
+@external "./Char.ffi.js" "charToString"
 _toString : Char -> String

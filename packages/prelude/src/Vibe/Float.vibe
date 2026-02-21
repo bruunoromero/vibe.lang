@@ -21,28 +21,28 @@ implement Fractional Float where
 implement Show Float where
     toString = _toString
 
-@external "@vibe/runtime" "floatAdd"
+@external "./Float.ffi.js" "floatAdd"
 _add: Float -> Float -> Float
 
-@external "@vibe/runtime" "floatSub"
+@external "./Float.ffi.js" "floatSub"
 _sub: Float -> Float -> Float
 
-@external "@vibe/runtime" "floatMul"
+@external "./Float.ffi.js" "floatMul"
 _mul: Float -> Float -> Float
 
-@external "@vibe/runtime" "floatDiv"
+@external "./Float.ffi.js" "floatDiv"
 _div: Float -> Float -> Float
 
-@external "@vibe/runtime" "numToString"
+@external "./Float.ffi.js" "numToString"
 _toString: Float -> String
 
-@external "@vibe/runtime" "numEq"
+@external "./Float.ffi.js" "numEq"
 _eq: Float -> Float -> Bool
 
-@external "@vibe/runtime" "numLt"
+@external "./Float.ffi.js" "numLt"
 _lt: Float -> Float -> Bool
 
-@external "@vibe/runtime" "numGt"
+@external "./Float.ffi.js" "numGt"
 _gt: Float -> Float -> Bool
 
 _negate: Float -> Float

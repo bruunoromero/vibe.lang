@@ -3,5 +3,5 @@ module Vibe.Console exposing
   )
 
 
-@external "@vibe/runtime" "consoleLog"
+@external "./Console.ffi.js" "consoleLog"
 log: String -> ()

@@ -6,14 +6,14 @@ import Vibe.Dynamic exposing (Dynamic)
 
 type Promise a
 
-@external "@vibe/runtime" "createPromise"
+@external "./Promise.ffi.js" "createPromise"
 create : ((a -> Unit) -> Unit) -> Promise a  
 
-@external "@vibe/runtime" "flatMapPromise"
+@external "./Promise.ffi.js" "flatMapPromise"
 flatMap : (a -> Promise b) -> Promise a -> Promise b
 
-@external "@vibe/runtime" "mapPromise"
+@external "./Promise.ffi.js" "mapPromise"
 map : (a -> b) -> Promise a -> Promise b
 
-@external "@vibe/runtime" "catchPromise"
+@external "./Promise.ffi.js" "catchPromise"
 catch : (Dynamic -> a) -> Promise a -> Promise a

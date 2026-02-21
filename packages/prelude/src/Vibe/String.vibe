@@ -16,16 +16,16 @@ implement Show String where
 implement Appendable String where
     (++) = _append
 
-@external "@vibe/runtime" "stringAppend"
+@external "./String.ffi.js" "stringAppend"
 _append : String -> String -> String
 
-@external "@vibe/runtime" "stringEq"
+@external "./String.ffi.js" "stringEq"
 _eq: String -> String -> Bool
 
-@external "@vibe/runtime" "parseInt"
+@external "./String.ffi.js" "parseInt"
 _parseInt : (Int -> Maybe Int) -> Maybe Int -> String -> Maybe Int
 
-@external "@vibe/runtime" "parseFloat"
+@external "./String.ffi.js" "parseFloat"
 _parseFloat: (Float -> Maybe Float) -> Maybe Float -> String -> Maybe Float
 
 join : String -> List String -> String

@@ -11,16 +11,16 @@ implement Show a => Show (Ref a) where
 implement Eq (Ref a) where
   (==) x y = _eq x y
 
-@external "@vibe/runtime" "createRef"
+@external "./Ref.ffi.js" "createRef"
 create : a -> Ref a
 
-@external "@vibe/runtime" "getRef"
+@external "./Ref.ffi.js" "getRef"
 get : Ref a -> a
 
-@external "@vibe/runtime" "setRef"
+@external "./Ref.ffi.js" "setRef"
 set : Ref a -> a -> ()
 
-@external "@vibe/runtime" "refEq"
+@external "./Ref.ffi.js" "refEq"
 _eq : Ref a -> Ref a -> Bool
 
 update : (a -> a) -> Ref a -> ()

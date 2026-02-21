@@ -22,31 +22,31 @@ implement Integral Int where
 implement Show Int where
     toString = _toString
 
-@external "@vibe/runtime" "intAdd"
+@external "./Int.ffi.js" "intAdd"
 _add: Int -> Int -> Int
 
-@external "@vibe/runtime" "intSub"
+@external "./Int.ffi.js" "intSub"
 _sub: Int -> Int -> Int
 
-@external "@vibe/runtime" "intMul"
+@external "./Int.ffi.js" "intMul"
 _mul: Int -> Int -> Int
 
-@external "@vibe/runtime" "intDiv"
+@external "./Int.ffi.js" "intDiv"
 _div: Int -> Int -> Int
 
-@external "@vibe/runtime" "intMod"
+@external "./Int.ffi.js" "intMod"
 _mod: Int -> Int -> Int
 
-@external "@vibe/runtime" "numEq"
+@external "./Int.ffi.js" "numEq"
 _eq: Int -> Int -> Bool
 
-@external "@vibe/runtime" "numLt"
+@external "./Int.ffi.js" "numLt"
 _lt: Int -> Int -> Bool
 
-@external "@vibe/runtime" "numGt"
+@external "./Int.ffi.js" "numGt"
 _gt: Int -> Int -> Bool
 
-@external "@vibe/runtime" "numToString"
+@external "./Int.ffi.js" "numToString"
 _toString: Int -> String
 
 _negate: Int -> Int

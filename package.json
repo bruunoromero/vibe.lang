@@ -8,8 +8,7 @@
     "packages/*"
   ],
   "dependencies": {
-    "@vibe/config": "workspace:*",
-    "@vibe/runtime": "workspace:*"
+    "@vibe/config": "workspace:*"
   },
   "devDependencies": {
     "@tsconfig/bun": "^1.0.10",

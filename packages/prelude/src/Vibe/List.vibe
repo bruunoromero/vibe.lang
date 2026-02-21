@@ -35,14 +35,14 @@ implement Appendable (List a) where
 
     1 :: [2, 3]  ==  [1, 2, 3]
 -}
-@external "@vibe/runtime" "listCons"
+@external "./List.ffi.js" "listCons"
 (::) : a -> List a -> List a
 
 {-| Appends two lists together.
 
     [1, 2] ++ [3, 4]  ==  [1, 2, 3, 4]
 -}
-@external "@vibe/runtime" "listAppend"
+@external "./List.ffi.js" "listAppend"
 _append : List a -> List a -> List a
 
 
@@ -50,21 +50,21 @@ _append : List a -> List a -> List a
 
     foldl (+) 0 [1, 2, 3, 4]  ==  10
 -}
-@external "@vibe/runtime" "listFoldl"
+@external "./List.ffi.js" "listFoldl"
 foldl : (b -> a -> b) -> b -> List a -> b
 
 {-| Maps a function over a list.
 
     map (\x -> x * 2) [1, 2, 3]  ==  [2, 4, 6]
 -}
-@external "@vibe/runtime" "listMap"
+@external "./List.ffi.js" "listMap"
 map : (a -> b) -> List a -> List b
 
 {-| Filters a list based on a predicate function.
 
     filter (\x -> x > 2) [1, 2, 3, 4]  ==  [3, 4]
 -}
-@external "@vibe/runtime" "listFilter"
+@external "./List.ffi.js" "listFilter"
 filter : (a -> Bool) -> List a -> List a
 
 {-| Returns the first element of a list, or `Nothing` if the list is empty.
