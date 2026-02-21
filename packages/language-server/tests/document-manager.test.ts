@@ -211,6 +211,62 @@ x = 42
     });
   });
 
+  describe("overlapping implementation false positive", () => {
+    test("should not report overlapping implementation when module is in loadedModules cache", () => {
+      // Reproduces: open ExampleApp.vibe (loads Vibe.String into cache),
+      // then open Vibe/String.vibe → false "Overlapping implementation for
+      // protocol 'Eq'" because loadDependencies fed the cached Vibe.String
+      // back as a dependency of itself.
+
+      const moduleSource = `module Test.Proto exposing (..)
+
+protocol MyProto a where
+    myMethod : a -> a
+
+implement MyProto Int where
+    myMethod x = x
+`;
+
+      // First analysis — succeeds, produces a SemanticModule with instances
+      const doc1 = TextDocument.create(
+        "file:///Test/Proto.vibe",
+        "vibe",
+        1,
+        moduleSource,
+      );
+      const cache1 = manager.updateDocument(doc1);
+      expect(
+        cache1.diagnostics.filter((d) =>
+          d.message.includes("Overlapping implementation"),
+        ),
+      ).toHaveLength(0);
+
+      // Simulate another module having loaded this module (populates the cache)
+      if (cache1.semanticResult?.module) {
+        (manager as any).loadedModules.set(
+          "Test.Proto",
+          cache1.semanticResult.module,
+        );
+      }
+
+      // Re-analyze the same module (simulates editing or reopening the file)
+      const doc2 = TextDocument.create(
+        "file:///Test/Proto.vibe",
+        "vibe",
+        2,
+        moduleSource,
+      );
+      const cache2 = manager.updateDocument(doc2);
+
+      // Must NOT report "Overlapping implementation" — the module's own cached
+      // copy should be excluded from its dependency set
+      const overlapping = cache2.diagnostics.filter((d) =>
+        d.message.includes("Overlapping implementation"),
+      );
+      expect(overlapping).toHaveLength(0);
+    });
+  });
+
   describe("formatTypeScheme", () => {
     test("should format simple types", () => {
       const scheme = {

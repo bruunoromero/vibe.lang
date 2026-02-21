@@ -1,8 +1,11 @@
 module Vibe.String exposing 
   ( join
+  , toInt
+  , toFloat
   )
 
 import Vibe.Basics exposing (Eq, Show, Appendable(..), identity)
+import Vibe.Maybe exposing (Maybe(..))
 
 implement Eq String where
     (==) = _eq
@@ -19,9 +22,21 @@ _append : String -> String -> String
 @external "@vibe/runtime" "stringEq"
 _eq: String -> String -> Bool
 
+@external "@vibe/runtime" "parseInt"
+_parseInt : (Int -> Maybe Int) -> Maybe Int -> String -> Maybe Int
+
+@external "@vibe/runtime" "parseFloat"
+_parseFloat: (Float -> Maybe Float) -> Maybe Float -> String -> Maybe Float
+
 join : String -> List String -> String
 join separator strings =
   case strings of
     [] -> ""
     [x] -> x
     x :: xs -> x ++ separator ++ (join separator xs)
+
+toInt : String -> Maybe Int
+toInt = _parseInt Just Nothing
+
+toFloat : String -> Maybe Float
+toFloat = _parseFloat Just Nothing

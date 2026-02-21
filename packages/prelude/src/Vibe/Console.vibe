@@ -1,0 +1,7 @@
+module Vibe.Console exposing
+  ( log
+  )
+
+
+@external "@vibe/runtime" "consoleLog"
+log: String -> ()

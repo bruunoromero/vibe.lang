@@ -66,6 +66,28 @@ export const stringEq =
   (b: string): boolean =>
     a === b;
 
+export const parseInt =
+  <T, E>(just: (x: number) => T) =>
+  (nothing: E) =>
+  (s: string): T | E => {
+    const n = Number.parseInt(s, 10);
+    if (Number.isNaN(n)) {
+      return nothing;
+    }
+    return just(n);
+  };
+
+export const parseFloat =
+  <T, E>(just: (x: number) => T) =>
+  (nothing: E) =>
+  (s: string): T | E => {
+    const n = Number.parseFloat(s);
+    if (Number.isNaN(n)) {
+      return nothing;
+    }
+    return just(n);
+  };
+
 // =============================================================================
 // Char Operations
 // =============================================================================
@@ -261,7 +283,6 @@ export const catchPromise = <T>(promise: Promise<T>, fn: (error: any) => T) => {
 // =============================================================================
 
 /** Print a value to console (for debugging) */
-export const println = <A>(value: A): A => {
+export const consoleLog = (value: string) => {
   console.log(value);
-  return value;
 };

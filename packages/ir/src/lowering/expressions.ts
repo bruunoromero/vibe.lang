@@ -318,8 +318,26 @@ function lowerVar(
     const ctorInfo = ctx.semantics.constructors[expr.name];
     if (ctorInfo) {
       const tag = ctx.constructorTags.get(expr.name) ?? 0;
-      // Zero-arity constructor: emit as IRConstructor directly
+      const ctorModuleName = ctx.namespaceImportedNames.get(expr.name);
+      const isImported =
+        ctorInfo.moduleName !== undefined &&
+        ctorInfo.moduleName !== ctx.semantics.module.name &&
+        ctorInfo.moduleName !== BUILTIN_MODULE_NAME;
+
       if (ctorInfo.arity === 0) {
+        // Imported zero-arity constructors: emit as IRVar so codegen
+        // references the named import (e.g., `Nothing`) instead of
+        // inlining `{ $tag: N }`.
+        if (isImported) {
+          return {
+            kind: "IRVar",
+            name: expr.name,
+            namespace: "constructor",
+            ...(ctorModuleName ? { moduleName: ctorModuleName } : {}),
+            span: expr.span,
+          };
+        }
+        // Local zero-arity constructor: inline as IRConstructor
         return {
           kind: "IRConstructor",
           name: expr.name,
@@ -333,12 +351,13 @@ function lowerVar(
         kind: "IRVar",
         name: expr.name,
         namespace: "constructor",
+        ...(ctorModuleName ? { moduleName: ctorModuleName } : {}),
         span: expr.span,
       };
     }
   }
 
-  const moduleName = ctx.semantics.importedValues?.get(expr.name);
+  const moduleName = ctx.namespaceImportedNames.get(expr.name);
 
   // Look up resolved protocol method constraint by AST node identity.
   // The same Expr object that went through semantic analysis is used here,
@@ -745,7 +764,7 @@ function lowerInfix(
   const right = lowerExpr(expr.right, ctx);
 
   // The operator becomes a variable reference
-  const opModuleName = ctx.semantics.importedValues?.get(expr.operator);
+  const opModuleName = ctx.namespaceImportedNames.get(expr.operator);
 
   // Look up resolved protocol method constraint by the Infix AST node identity.
   // During semantic analysis, constraints from synthetic Var nodes are re-keyed

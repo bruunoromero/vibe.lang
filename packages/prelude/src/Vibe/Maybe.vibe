@@ -1,8 +1,9 @@
 module Vibe.Maybe exposing
-    (  Maybe(..)
+    ( Maybe(..)
     , withDefault
     , isJust
     , isNothing 
+    , fromResult
     )
 
 import Vibe.Basics exposing (not)

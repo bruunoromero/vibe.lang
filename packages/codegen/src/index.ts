@@ -1112,19 +1112,7 @@ function generateVar(
     );
   }
 
-  // Check if this is a constructor from another module
-  const ctorInfo = ctx.constructors[expr.name];
-  if (
-    ctorInfo &&
-    ctorInfo.moduleName &&
-    ctorInfo.moduleName !== currentModule &&
-    ctorInfo.moduleName !== BUILTIN_MODULE_NAME
-  ) {
-    // Reference constructor from its defining module
-    return `${ctorInfo.moduleName}.${sanitizeIdentifier(expr.name)}`;
-  }
-
-  // Check if this variable is imported from another module
+  // Check if this variable/constructor is from another module (namespace-imported)
   if (
     expr.moduleName &&
     expr.moduleName !== currentModule &&
@@ -1925,19 +1913,21 @@ function generateConstructorExpr(
     return expr.name === "True" ? "true" : "false";
   }
 
-  // If constructor is from another module, reference it from that module
+  // If constructor is namespace-imported from another module, reference via alias
   if (
-    ctor?.moduleName &&
-    ctor.moduleName !== currentModule &&
-    ctor.moduleName !== BUILTIN_MODULE_NAME
+    expr.moduleName &&
+    expr.moduleName !== currentModule &&
+    expr.moduleName !== BUILTIN_MODULE_NAME
   ) {
+    const importAlias = getImportAliasForModule(
+      expr.moduleName,
+      ctx.program.importAliases,
+    );
     const ctorName = sanitizeIdentifier(expr.name);
     if (expr.args.length === 0) {
-      // Zero-arity constructor: just reference it
-      return `${ctor.moduleName}.${ctorName}`;
+      return `${importAlias}.${ctorName}`;
     }
-    // With args: call the constructor function
-    let result = `${ctor.moduleName}.${ctorName}`;
+    let result = `${importAlias}.${ctorName}`;
     for (const arg of expr.args) {
       const argCode = generateExpr(arg, ctx);
       result = `${result}(${argCode})`;

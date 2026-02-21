@@ -244,6 +244,8 @@ export type IRConstructor = {
   args: IRExpr[];
   /** Runtime tag for pattern matching dispatch */
   tag: number;
+  /** The module this constructor was imported from (if namespace-imported) */
+  moduleName?: string;
   span: Span;
 };
 

@@ -2,5 +2,10 @@ module ExampleApp exposing (..)
 
 import Vibe exposing (..)
 import Vibe.Ref as Ref
+import Vibe.Promise as Promise exposing (Promise)
+import Vibe.Console as Console
 
-main = toString <| Ref.create 10
+@external "node:fs/promises" "readFile"
+readFile : String -> Promise String
+
+main = readFile "~/example.txt" |> Promise.map Console.log

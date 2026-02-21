@@ -240,9 +240,12 @@ export class DocumentManager {
    */
   private loadDependencies(ast: Program): Map<string, SemanticModule> {
     const dependencies = new Map<string, SemanticModule>();
+    const currentModuleName = ast.module.name;
 
-    // Add already-loaded modules
+    // Add already-loaded modules, excluding the module being analyzed
+    // to prevent its stale cached instances from poisoning re-analysis
     for (const [name, module] of this.loadedModules) {
+      if (name === currentModuleName) continue;
       dependencies.set(name, module);
     }
 

@@ -51,6 +51,125 @@ function compileToJS(
 }
 
 // ============================================================================
+// Exposed Import Qualification Tests
+// ============================================================================
+
+describe("Exposed Import Qualification", () => {
+  test("constructors imported via exposing are not module-qualified", () => {
+    // Regression test: `import M exposing (Maybe(..))` should generate
+    // unqualified `Just` and `Nothing` references, not `Vibe.Just` or alias-qualified.
+    const preludeSource = `
+module Vibe exposing (..)
+
+type Maybe a = Just a | Nothing
+
+wrap : a -> Maybe a
+wrap x = Just x
+
+unwrap : Maybe a -> a -> a
+unwrap m d =
+  case m of
+    Just v -> v
+    Nothing -> d
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (Maybe(..))
+
+useJust : Int -> Maybe Int
+useJust x = Just x
+
+useNothing : Maybe Int
+useNothing = Nothing
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    // Just and Nothing should appear unqualified
+    expect(code).toContain("Just(");
+    expect(code).toContain("Nothing");
+    // Must NOT contain module-qualified references like Vibe.Just
+    expect(code).not.toMatch(/Vibe\.Just/);
+    expect(code).not.toMatch(/Vibe\.Nothing/);
+  });
+
+  test("values imported via exposing are not module-qualified", () => {
+    const preludeSource = `
+module Vibe exposing (..)
+
+identity : a -> a
+identity x = x
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (identity)
+
+main : Int
+main = identity 42
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    // identity should appear unqualified
+    expect(code).toContain("identity");
+    expect(code).not.toMatch(/Vibe\.identity/);
+  });
+
+  test("zero-arity constructors from explicit exposing reference the import", () => {
+    // Regression: `Nothing` imported via `exposing (Maybe(..))` was being
+    // inlined as `{ $tag: 1 }` instead of referencing the named import.
+    const preludeSource = `
+module Vibe exposing (..)
+
+type Maybe a = Just a | Nothing
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (Maybe(..))
+
+val : Maybe Int
+val = Nothing
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    // Nothing should reference the import, not be inlined as { $tag: N }
+    expect(code).toContain("Nothing");
+    expect(code).not.toMatch(/Vibe\.Nothing/);
+  });
+
+  test("exposing (..) values are namespace-qualified", () => {
+    // Contrast: `exposing (..)` uses namespace imports, so values should
+    // be qualified with the import alias.
+    const preludeSource = `
+module Vibe exposing (..)
+
+identity : a -> a
+identity x = x
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (..)
+
+main = identity 42
+`;
+
+    const { code } = compileToJS(source, preludeSource);
+
+    // identity from exposing(..) should be namespace-qualified
+    expect(code).toContain("Vibe.identity");
+  });
+});
+
+// ============================================================================
 // Multi-Parameter Protocol Dictionary Resolution Tests
 // ============================================================================
 
