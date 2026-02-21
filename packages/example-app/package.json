@@ -5,9 +5,9 @@
   "type": "module",
   "module": "src/ExampleApp.vibe",
   "scripts": {
-    "tokenize": "bun ../cli/src/index.ts tokenize",
-    "parse": "bun ../cli/src/index.ts parse",
-    "analyze": "bun ../cli/src/index.ts analyze",
+    "tokenize": "bun ../cli/src/index.ts tokenize ExampleApp",
+    "parse": "bun ../cli/src/index.ts parse ExampleApp",
+    "analyze": "bun ../cli/src/index.ts analyze ExampleApp",
     "build": "bun ../cli/src/index.ts build",
     "start": "bun run ./main.ts"
   },

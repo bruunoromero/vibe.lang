@@ -20,13 +20,13 @@ function createWorkspace(): string {
         packages: [],
       },
       null,
-      2
-    )
+      2,
+    ),
   );
 
   fs.writeFileSync(
     path.join(srcDir, "Main.vibe"),
-    ["module Main exposing (..)", "", "value = 1", ""].join("\n")
+    ["module Main exposing (..)", "", "value = 1", ""].join("\n"),
   );
 
   return root;
@@ -46,12 +46,16 @@ function createCollector(): NodeJS.WritableStream {
 }
 
 describe("cli", () => {
-  test("tokenizes the default module from config", async () => {
+  test("tokenizes a module", async () => {
     const root = createWorkspace();
     const stdout = createCollector();
     const stderr = createCollector();
 
-    const exitCode = await run(["tokenize"], { cwd: root, stdout, stderr });
+    const exitCode = await run(["tokenize", "Main"], {
+      cwd: root,
+      stdout,
+      stderr,
+    });
 
     expect(exitCode).toBe(0);
     const tokens = JSON.parse(stdout.toString());
@@ -64,7 +68,11 @@ describe("cli", () => {
     const stdout = createCollector();
     const stderr = createCollector();
 
-    const exitCode = await run(["parse"], { cwd: root, stdout, stderr });
+    const exitCode = await run(["parse", "Main"], {
+      cwd: root,
+      stdout,
+      stderr,
+    });
 
     expect(exitCode).toBe(0);
     const ast = JSON.parse(stdout.toString());
@@ -77,7 +85,11 @@ describe("cli", () => {
     const stdout = createCollector();
     const stderr = createCollector();
 
-    const exitCode = await run(["analyze"], { cwd: root, stdout, stderr });
+    const exitCode = await run(["analyze", "Main"], {
+      cwd: root,
+      stdout,
+      stderr,
+    });
 
     expect(exitCode).toBe(0);
     const semantic = JSON.parse(stdout.toString());
@@ -93,7 +105,9 @@ describe("cli", () => {
     // Create a file with an undefined function
     fs.writeFileSync(
       path.join(srcDir, "Error.vibe"),
-      ["module Error exposing (..)", "", "value = unknownFunc 1", ""].join("\n")
+      ["module Error exposing (..)", "", "value = unknownFunc 1", ""].join(
+        "\n",
+      ),
     );
 
     const stdout = createCollector();
@@ -111,5 +125,50 @@ describe("cli", () => {
     expect(errorOutput).toContain("error:");
     expect(errorOutput).toContain("unknownFunc");
     expect(errorOutput).toContain("^");
+  });
+
+  test("builds all modules in src without a module argument", async () => {
+    const root = createWorkspace();
+    const stdout = createCollector();
+    const stderr = createCollector();
+
+    const exitCode = await run(["build"], { cwd: root, stdout, stderr });
+
+    expect(exitCode).toBe(0);
+    const output = stdout.toString();
+    expect(output).toContain("Build complete");
+    expect(output).toContain("1 module(s)");
+  });
+
+  test("builds multiple modules in topological order", async () => {
+    const root = createWorkspace();
+    const srcDir = path.join(root, "src");
+
+    fs.writeFileSync(
+      path.join(srcDir, "Helper.vibe"),
+      ["module Helper exposing (..)", "", "helperValue = 42", ""].join("\n"),
+    );
+
+    fs.writeFileSync(
+      path.join(srcDir, "Main.vibe"),
+      [
+        "module Main exposing (..)",
+        "",
+        "import Helper exposing (..)",
+        "",
+        "value = helperValue",
+        "",
+      ].join("\n"),
+    );
+
+    const stdout = createCollector();
+    const stderr = createCollector();
+
+    const exitCode = await run(["build"], { cwd: root, stdout, stderr });
+
+    expect(exitCode).toBe(0);
+    const output = stdout.toString();
+    expect(output).toContain("Build complete");
+    expect(output).toContain("2 module(s)");
   });
 });

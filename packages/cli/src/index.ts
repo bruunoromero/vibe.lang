@@ -50,7 +50,7 @@ interface CommandOptions {
 
 interface ExecuteCommandOptions {
   command: string;
-  moduleName: string;
+  moduleName?: string;
   configPath?: string;
   pretty: number;
   json?: boolean;
@@ -86,54 +86,49 @@ export async function run(
     );
 
   program
-    .command("tokenize [module]")
+    .command("tokenize <module>")
     .description("Tokenize source code")
     .option("-w, --watch", "Watch file for changes and re-run command")
-    .action((module: string | undefined, opts: CommandOptions) => {
+    .action((module: string, opts: CommandOptions) => {
       isHandled = true;
       handleCommand("tokenize", module, { ...opts, cwd, stdout, stderr });
     });
 
   program
-    .command("parse [module]")
+    .command("parse <module>")
     .description("Parse source code into AST")
     .option("-w, --watch", "Watch file for changes and re-run command")
-    .action((module: string | undefined, opts: CommandOptions) => {
+    .action((module: string, opts: CommandOptions) => {
       isHandled = true;
       handleCommand("parse", module, { ...opts, cwd, stdout, stderr });
     });
 
   program
-    .command("analyze [module]")
+    .command("analyze <module>")
     .description("Type-check code (requires parsing)")
     .option("-w, --watch", "Watch file for changes and re-run command")
-    .action((module: string | undefined, opts: CommandOptions) => {
+    .action((module: string, opts: CommandOptions) => {
       isHandled = true;
       handleCommand("analyze", module, { ...opts, cwd, stdout, stderr });
     });
 
   program
-    .command("ir [module]")
+    .command("ir <module>")
     .description("Lower to intermediate representation (requires analysis)")
     .option("-w, --watch", "Watch file for changes and re-run command")
     .option("--json", "Output IR as JSON instead of pretty-printed format")
-    .action(
-      (
-        module: string | undefined,
-        opts: CommandOptions & { json?: boolean },
-      ) => {
-        isHandled = true;
-        handleCommand("ir", module, { ...opts, cwd, stdout, stderr });
-      },
-    );
+    .action((module: string, opts: CommandOptions & { json?: boolean }) => {
+      isHandled = true;
+      handleCommand("ir", module, { ...opts, cwd, stdout, stderr });
+    });
 
   program
-    .command("build [module]")
-    .description("Build module and dependencies to JavaScript")
+    .command("build")
+    .description("Build all modules in the source directory to JavaScript")
     .option("-w, --watch", "Watch files for changes and rebuild")
-    .action((module: string | undefined, opts: CommandOptions) => {
+    .action((opts: CommandOptions) => {
       isHandled = true;
-      handleCommand("build", module, { ...opts, cwd, stdout, stderr });
+      handleCommand("build", undefined, { ...opts, cwd, stdout, stderr });
     });
 
   try {
@@ -174,7 +169,7 @@ function handleCommand(
     return;
   }
 
-  const targetModule = module ?? config.name;
+  const targetModule = module;
   const prettySpaces = Math.max(0, Number.parseInt(prettyStr ?? "2", 10) || 2);
 
   if (watch) {
@@ -196,7 +191,7 @@ function handleCommand(
         configPath,
         pretty: prettySpaces,
         json,
-      } as ExecuteCommandOptions,
+      },
       { cwd, stdout, stderr },
     );
   }
@@ -217,28 +212,22 @@ function executeCommand(
     return 1;
   }
 
-  let filePath = "";
-  let source = "";
-
   try {
-    const resolved = resolveModule({ config, moduleName });
-    filePath = resolved.filePath;
-    source = fs.readFileSync(filePath, "utf8");
-
     if (command === "tokenize") {
+      const resolved = resolveModule({ config, moduleName: moduleName! });
+      const source = fs.readFileSync(resolved.filePath, "utf8");
       const tokens = lex(source);
       stdout.write(`${JSON.stringify(tokens, null, pretty)}\n`);
       return 0;
     }
 
     if (command === "parse") {
-      // Use module discovery to get operator precedence from dependencies (like Vibe)
       const moduleGraph = discoverModuleGraph(
         config,
-        moduleName,
+        moduleName!,
         createDiscoverOptions(),
       );
-      const moduleNode = moduleGraph.modules.get(moduleName);
+      const moduleNode = moduleGraph.modules.get(moduleName!);
       if (!moduleNode) {
         throw new Error(`Module "${moduleName}" not found in graph`);
       }
@@ -247,14 +236,12 @@ function executeCommand(
     }
 
     if (command === "analyze" || command === "ir") {
-      // Discover all modules and their dependencies, sorted topologically
       const moduleGraph = discoverModuleGraph(
         config,
-        moduleName,
+        moduleName!,
         createDiscoverOptions(),
       );
 
-      // Analyze modules in topological order
       const analyzedModules = new Map<string, SemanticModule>();
 
       for (const currentModuleName of moduleGraph.sortedModuleNames) {
@@ -263,7 +250,6 @@ function executeCommand(
           throw new Error(`Module "${currentModuleName}" not found in graph`);
         }
 
-        // Analyze with pre-analyzed dependencies and file context for module validation
         const semantic = analyze(moduleNode.ast, {
           dependencies: analyzedModules,
           fileContext: {
@@ -275,8 +261,7 @@ function executeCommand(
         analyzedModules.set(currentModuleName, semantic);
       }
 
-      // Return the result for the requested module
-      const result = analyzedModules.get(moduleName);
+      const result = analyzedModules.get(moduleName!);
       if (!result) {
         throw new Error(`Module "${moduleName}" not found in analyzed modules`);
       }
@@ -286,41 +271,34 @@ function executeCommand(
         return 0;
       }
 
-      // IR command: lower the analyzed module
-      if (command === "ir") {
-        const moduleNode = moduleGraph.modules.get(moduleName);
-        if (!moduleNode) {
-          throw new Error(`Module "${moduleName}" not found in graph`);
-        }
-
-        const ir = lower(moduleNode.ast, result, {
-          validateDependencies: true,
-          dependencies: analyzedModules,
-        });
-
-        if (json) {
-          // Output as JSON (need to convert Sets and Maps for JSON serialization)
-          const jsonIr = {
-            ...ir,
-            externalImports: Array.from(ir.externalImports),
-            constraintMetadata: Object.fromEntries(ir.constraintMetadata),
-          };
-          stdout.write(`${JSON.stringify(jsonIr, null, pretty)}\n`);
-        } else {
-          // Output as pretty-printed IR
-          const printed = printProgram(ir);
-          stdout.write(`${printed}\n`);
-        }
-        return 0;
+      // IR command
+      const moduleNode = moduleGraph.modules.get(moduleName!);
+      if (!moduleNode) {
+        throw new Error(`Module "${moduleName}" not found in graph`);
       }
+
+      const ir = lower(moduleNode.ast, result, {
+        validateDependencies: true,
+        dependencies: analyzedModules,
+      });
+
+      if (json) {
+        const jsonIr = {
+          ...ir,
+          externalImports: Array.from(ir.externalImports),
+          constraintMetadata: Object.fromEntries(ir.constraintMetadata),
+        };
+        stdout.write(`${JSON.stringify(jsonIr, null, pretty)}\n`);
+      } else {
+        const printed = printProgram(ir);
+        stdout.write(`${printed}\n`);
+      }
+      return 0;
     }
 
-    // Build command: compile all modules to JavaScript
     if (command === "build") {
-      // Discover ALL modules in the source directory and their dependencies
       const moduleGraph = discoverAllModules(config, createDiscoverOptions());
 
-      // Analyze all modules in topological order
       const analyzedModules = new Map<string, SemanticModule>();
 
       for (const currentModuleName of moduleGraph.sortedModuleNames) {
@@ -340,13 +318,11 @@ function executeCommand(
         analyzedModules.set(currentModuleName, semantic);
       }
 
-      // Build module to package mapping
       const modulePackages = new Map<string, string>();
       for (const [modName, modNode] of moduleGraph.modules) {
         modulePackages.set(modName, modNode.packageName);
       }
 
-      // Lower all modules to IR and generate JavaScript
       const irPrograms: IRProgram[] = [];
 
       for (const currentModuleName of moduleGraph.sortedModuleNames) {
@@ -366,7 +342,6 @@ function executeCommand(
         irPrograms.push(ir);
       }
 
-      // Generate JavaScript for all modules
       const distDir = config.distDir;
       const generatedFiles: string[] = [];
 
@@ -390,7 +365,7 @@ function executeCommand(
 
     return 0;
   } catch (error) {
-    formatAndWriteError(error, filePath, source, stderr);
+    formatAndWriteError(error, "", "", stderr);
     return 1;
   }
 }
@@ -460,132 +435,51 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
     process.exit(1);
   }
 
+  function runBuild(): void {
+    executeCommand({ ...opts, command: "build" }, { cwd, stdout, stderr });
+  }
+
+  function runSingleModule(): void {
+    executeCommand(opts, { cwd, stdout, stderr });
+  }
+
+  const isBuild = opts.command === "build";
+
   try {
-    const resolved = resolveModule({ config, moduleName: opts.moduleName });
-    const filePath = resolved.filePath;
-    const fileDir = path.dirname(filePath);
+    if (isBuild) {
+      stderr.write(`👀 Watching ${config.srcDir} for changes...\n`);
 
-    stderr.write(`👀 Watching ${filePath} for changes...\n`);
+      runBuild();
 
-    const watcher = fs.watch(fileDir, (eventType, filename) => {
-      // Only watch the specific file we're interested in
-      if (filename !== path.basename(filePath)) {
-        return;
-      }
-
-      if (eventType === "change") {
-        stderr.write(
-          `\n📝 ${new Date().toLocaleTimeString()} - File changed\n`,
-        );
-
-        try {
-          const watchSource = fs.readFileSync(filePath, "utf8");
-
-          if (opts.command === "analyze") {
-            // Use topological analysis in watch mode too
-            const moduleGraph = discoverModuleGraph(
-              config,
-              opts.moduleName,
-              createDiscoverOptions(),
-            );
-            const analyzedModules = new Map<string, SemanticModule>();
-
-            for (const currentModuleName of moduleGraph.sortedModuleNames) {
-              const moduleNode = moduleGraph.modules.get(currentModuleName);
-              if (!moduleNode) {
-                throw new Error(
-                  `Module "${currentModuleName}" not found in graph`,
-                );
-              }
-
-              const semantic = analyze(moduleNode.ast, {
-                dependencies: analyzedModules,
-                fileContext: {
-                  filePath: moduleNode.filePath,
-                  srcDir: moduleNode.srcDir,
-                },
-              });
-
-              analyzedModules.set(currentModuleName, semantic);
-            }
-
-            stderr.write(`✅ Type checking passed\n`);
-          } else if (opts.command === "parse") {
-            // Use module discovery for operator precedence
-            const moduleGraph = discoverModuleGraph(
-              config,
-              opts.moduleName,
-              createDiscoverOptions(),
-            );
-            const moduleNode = moduleGraph.modules.get(opts.moduleName);
-            if (moduleNode) {
-              stderr.write(`✅ Parsing successful\n`);
-            }
-          } else if (opts.command === "tokenize") {
-            lex(watchSource);
-            stderr.write(`✅ Tokenization successful\n`);
-          }
-        } catch (error) {
-          stderr.write(`❌ Error detected:\n`);
-          const watchErrorSource = fs.readFileSync(filePath, "utf8");
-          formatAndWriteError(error, filePath, watchErrorSource ?? "", stderr);
+      fs.watch(config.srcDir, { recursive: true }, (eventType, filename) => {
+        if (!filename?.endsWith(".vibe")) return;
+        if (eventType === "change" || eventType === "rename") {
+          stderr.write(
+            `\n📝 ${new Date().toLocaleTimeString()} - ${filename} changed\n`,
+          );
+          runBuild();
         }
-      }
-    });
+      });
+    } else {
+      const resolved = resolveModule({ config, moduleName: opts.moduleName! });
+      const filePath = resolved.filePath;
+      const fileDir = path.dirname(filePath);
 
-    // Run once initially
-    try {
-      const initialSource = fs.readFileSync(filePath, "utf8");
+      stderr.write(`👀 Watching ${filePath} for changes...\n`);
 
-      if (opts.command === "analyze") {
-        // Use topological analysis for initial run too
-        const moduleGraph = discoverModuleGraph(
-          config,
-          opts.moduleName,
-          createDiscoverOptions(),
-        );
-        const analyzedModules = new Map<string, SemanticModule>();
+      runSingleModule();
 
-        for (const currentModuleName of moduleGraph.sortedModuleNames) {
-          const moduleNode = moduleGraph.modules.get(currentModuleName);
-          if (!moduleNode) {
-            throw new Error(`Module "${currentModuleName}" not found in graph`);
-          }
-
-          const semantic = analyze(moduleNode.ast, {
-            dependencies: analyzedModules,
-            fileContext: {
-              filePath: moduleNode.filePath,
-              srcDir: moduleNode.srcDir,
-            },
-          });
-
-          analyzedModules.set(currentModuleName, semantic);
+      fs.watch(fileDir, (eventType, filename) => {
+        if (filename !== path.basename(filePath)) return;
+        if (eventType === "change") {
+          stderr.write(
+            `\n📝 ${new Date().toLocaleTimeString()} - File changed\n`,
+          );
+          runSingleModule();
         }
-
-        stderr.write(`✅ Initial type checking passed\n`);
-      } else if (opts.command === "parse") {
-        // Use module discovery for operator precedence
-        const moduleGraph = discoverModuleGraph(
-          config,
-          opts.moduleName,
-          createDiscoverOptions(),
-        );
-        const moduleNode = moduleGraph.modules.get(opts.moduleName);
-        if (moduleNode) {
-          stderr.write(`✅ Initial parsing successful\n`);
-        }
-      } else if (opts.command === "tokenize") {
-        lex(initialSource);
-        stderr.write(`✅ Initial tokenization successful\n`);
-      }
-    } catch (error) {
-      stderr.write(`❌ Initial error detected:\n`);
-      const initialErrorSource = fs.readFileSync(filePath, "utf8");
-      formatAndWriteError(error, filePath, initialErrorSource ?? "", stderr);
+      });
     }
 
-    // Keep the process alive
     return new Promise(() => {}) as never;
   } catch (error) {
     stderr.write(`${(error as Error).message}\n`);

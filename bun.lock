@@ -113,6 +113,16 @@
         "@types/bun": "latest",
       },
     },
+    "packages/node": {
+      "name": "@vibe/node",
+      "version": "0.0.0",
+      "dependencies": {
+        "@vibe/prelude": "workspace:*",
+      },
+      "devDependencies": {
+        "@vibe/cli": "workspace:*",
+      },
+    },
     "packages/parser": {
       "name": "@vibe/parser",
       "version": "0.0.0",
@@ -212,6 +222,8 @@
     "@vibe/lexer": ["@vibe/lexer@workspace:packages/lexer"],
 
     "@vibe/module-resolver": ["@vibe/module-resolver@workspace:packages/module-resolver"],
+
+    "@vibe/node": ["@vibe/node@workspace:packages/node"],
 
     "@vibe/parser": ["@vibe/parser@workspace:packages/parser"],
 
