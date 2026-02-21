@@ -908,27 +908,16 @@ describe("Re-export Path Calculation", () => {
 });
 
 describe("ADT Constructor Imports", () => {
-  test("imports constructors instead of type name for ExportTypeAll", () => {
+  test("emits named imports from resolvedImports", () => {
     const mockProgram = {
       moduleName: "ExampleApp",
       packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Maybe",
-            exposing: {
-              kind: "Explicit",
-              exports: [{ kind: "ExportTypeAll", name: "Maybe" }],
-            },
-          },
-        ],
-      },
-      adts: {
-        Maybe: {
-          constructors: ["Just", "Nothing"],
+      resolvedImports: [
+        {
+          moduleName: "Vibe.Maybe",
+          namedImports: ["Just", "Nothing"],
         },
-      },
-      opaqueTypes: {},
+      ],
     } as unknown as IRProgram;
     const modulePackages = new Map([["Vibe.Maybe", "Vibe"]]);
 
@@ -936,174 +925,40 @@ describe("ADT Constructor Imports", () => {
     expect(imports).toContain(
       'import { Just, Nothing } from "../Vibe/Vibe/Maybe.js";',
     );
-    expect(imports).not.toContain("import { Maybe }");
+    expect(imports).not.toContain("Maybe");
   });
 
-  test("imports specific constructors for ExportTypeSome", () => {
+  test("emits namespace import from resolvedImports", () => {
     const mockProgram = {
       moduleName: "ExampleApp",
       packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Maybe",
-            exposing: {
-              kind: "Explicit",
-              exports: [
-                { kind: "ExportTypeSome", name: "Maybe", members: ["Just"] },
-              ],
-            },
-          },
-        ],
-      },
-      adts: {
-        Maybe: {
-          constructors: ["Just", "Nothing"],
+      resolvedImports: [
+        {
+          moduleName: "Vibe",
+          namespaceImport: "Vibe",
+          namedImports: [],
         },
-      },
-      opaqueTypes: {},
+      ],
     } as unknown as IRProgram;
-    const modulePackages = new Map([["Vibe.Maybe", "Vibe"]]);
-
-    const imports = generateDependencyImports(mockProgram, modulePackages);
-    expect(imports).toContain('import { Just } from "../Vibe/Vibe/Maybe.js";');
-    expect(imports).not.toContain("Nothing");
-  });
-
-  test("handles protocol ExportTypeAll without generating imports", () => {
-    const mockProgram = {
-      moduleName: "ExampleApp",
-      packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe",
-            exposing: {
-              kind: "Explicit",
-              exports: [{ kind: "ExportTypeAll", name: "Eq" }],
-            },
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {},
-    } as IRProgram;
     const modulePackages = new Map([["Vibe", "Vibe"]]);
 
     const imports = generateDependencyImports(mockProgram, modulePackages);
-    // Protocols don't have constructors, so only namespace import is generated
     expect(imports.length).toBe(1);
     expect(imports[0]).toContain("import * as Vibe");
   });
 
-  test("skips protocol names when imported as ExportValue", () => {
-    // This tests the case where a user writes:
-    // import Vibe.Basics exposing (Show, Eq)
-    // which is parsed as ExportValue specs, not ExportTypeAll
-    const mockDepModule = {
-      protocols: {
-        Show: { name: "Show", methods: new Map() },
-        Eq: { name: "Eq", methods: new Map() },
-      },
-      adts: {},
-      values: {},
-    };
-
-    const mockProgram = {
-      moduleName: "Vibe.Unit",
-      packageName: "Vibe",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Basics",
-            exposing: {
-              kind: "Explicit",
-              exports: [
-                { kind: "ExportValue", name: "Show" },
-                { kind: "ExportValue", name: "Eq" },
-              ],
-            },
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {},
-      dependencies: new Map([["Vibe.Basics", mockDepModule]]),
-    } as unknown as IRProgram;
-    const modulePackages = new Map([["Vibe.Basics", "Vibe"]]);
-
-    const imports = generateDependencyImports(mockProgram, modulePackages);
-    // Should generate namespace import since no non-protocol values are imported
-    expect(imports.length).toBe(1);
-    expect(imports[0]).toContain("import * as Basics");
-    // Should NOT contain protocol names as named imports
-    expect(imports[0]).not.toContain("{ Show");
-    expect(imports[0]).not.toContain("{ Eq");
-  });
-
-  test("imports non-protocol values while skipping protocols in same exposing clause", () => {
-    // Test mixing protocols and values in the same import
-    const mockDepModule = {
-      protocols: {
-        Show: { name: "Show", methods: new Map() },
-      },
-      adts: {},
-      values: {
-        toString: { type: {} },
-      },
-    };
-
+  test("emits both namespace and named imports when both present", () => {
     const mockProgram = {
       moduleName: "ExampleApp",
       packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Basics",
-            exposing: {
-              kind: "Explicit",
-              exports: [
-                { kind: "ExportValue", name: "Show" },
-                { kind: "ExportValue", name: "toString" },
-              ],
-            },
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {},
-      dependencies: new Map([["Vibe.Basics", mockDepModule]]),
+      resolvedImports: [
+        {
+          moduleName: "Vibe.Bool",
+          namespaceImport: "Bool",
+          namedImports: ["not"],
+        },
+      ],
     } as unknown as IRProgram;
-    const modulePackages = new Map([["Vibe.Basics", "Vibe"]]);
-
-    const imports = generateDependencyImports(mockProgram, modulePackages);
-    // Should import toString but not Show
-    expect(imports.length).toBe(1);
-    expect(imports[0]).toContain(
-      'import { toString } from "../Vibe/Vibe/Basics.js";',
-    );
-    expect(imports[0]).not.toContain("Show");
-  });
-
-  test("generates both namespace and named imports for alias with exposing", () => {
-    const mockProgram = {
-      moduleName: "ExampleApp",
-      packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Bool",
-            alias: "Bool",
-            exposing: {
-              kind: "Explicit",
-              exports: [{ kind: "ExportValue", name: "not" }],
-            },
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {},
-    } as IRProgram;
     const modulePackages = new Map([["Vibe.Bool", "Vibe"]]);
 
     const imports = generateDependencyImports(mockProgram, modulePackages);
@@ -1111,159 +966,77 @@ describe("ADT Constructor Imports", () => {
     expect(imports).toContain('import { not } from "../Vibe/Vibe/Bool.js";');
   });
 
-  test("generates only namespace import for alias without exposing", () => {
+  test("emits only namespace import when namedImports is empty", () => {
     const mockProgram = {
       moduleName: "ExampleApp",
       packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Bool",
-            alias: "Bool",
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {},
-    } as IRProgram;
+      resolvedImports: [
+        {
+          moduleName: "Vibe.Bool",
+          namespaceImport: "Bool",
+          namedImports: [],
+        },
+      ],
+    } as unknown as IRProgram;
     const modulePackages = new Map([["Vibe.Bool", "Vibe"]]);
 
     const imports = generateDependencyImports(mockProgram, modulePackages);
     expect(imports).toEqual(['import * as Bool from "../Vibe/Vibe/Bool.js";']);
   });
 
-  test("skips opaque types when imported as ExportTypeAll", () => {
-    // This tests the bug fix where opaque types (types without constructors)
-    // were incorrectly being imported. For example:
-    //   import Vibe.Never exposing (Never)
-    // Should NOT try to import `Never` since it's an opaque type with no
-    // runtime representation.
-    const mockDepModule = {
-      opaqueTypes: {
-        Never: { name: "Never", params: [], span: { start: 0, end: 0 } },
-      },
-      adts: {},
-      protocols: {},
-      values: {
-        never: { type: {} },
-      },
-    };
-
+  test("sanitizes operator names in named imports", () => {
     const mockProgram = {
       moduleName: "ExampleApp",
       packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Never",
-            exposing: {
-              kind: "Explicit",
-              exports: [
-                { kind: "ExportTypeAll", name: "Never" },
-                { kind: "ExportValue", name: "never" },
-              ],
-            },
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {},
-      dependencies: new Map([["Vibe.Never", mockDepModule]]),
+      resolvedImports: [
+        {
+          moduleName: "Vibe.Basics",
+          namedImports: ["_PLUS_PLUS", "not"],
+        },
+      ],
     } as unknown as IRProgram;
-    const modulePackages = new Map([["Vibe.Never", "Vibe"]]);
+    const modulePackages = new Map([["Vibe.Basics", "Vibe"]]);
 
     const imports = generateDependencyImports(mockProgram, modulePackages);
-
-    // Should import the `never` function, but NOT try to import `Never`
-    expect(imports.length).toBe(1);
-    expect(imports[0]).toContain(
-      'import { never } from "../Vibe/Vibe/Never.js";',
-    );
-    // Should NOT contain Never as a named import (it appears in the path, but not as `{ Never }`)
-    expect(imports[0]).not.toContain("{ Never");
+    expect(imports[0]).toContain("_PLUS_PLUS");
+    expect(imports[0]).toContain("not");
   });
 
-  test("skips opaque types from current module when imported as ExportTypeAll", () => {
-    // Test when the opaque type is in the current program's opaqueTypes
+  test("skips resolved import with no namespace and no named imports", () => {
     const mockProgram = {
       moduleName: "ExampleApp",
       packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Never",
-            exposing: {
-              kind: "Explicit",
-              exports: [{ kind: "ExportTypeAll", name: "Never" }],
-            },
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {
-        Never: { name: "Never", params: [], span: { start: 0, end: 0 } },
-      },
-      dependencies: new Map(),
+      resolvedImports: [
+        {
+          moduleName: "Vibe.Result",
+          namedImports: [],
+        },
+      ],
     } as unknown as IRProgram;
-    const modulePackages = new Map([["Vibe.Never", "Vibe"]]);
+    const modulePackages = new Map([["Vibe.Result", "Vibe"]]);
 
     const imports = generateDependencyImports(mockProgram, modulePackages);
-
-    // Should generate namespace import since no values are imported
-    expect(imports.length).toBe(1);
-    expect(imports[0]).toContain("import * as Never");
-    // Should NOT try to import Never as a named import
-    expect(imports[0]).not.toContain("{ Never }");
+    expect(imports.length).toBe(0);
   });
 
-  test("skips opaque types when imported as ExportValue (bare type name)", () => {
-    // This tests the case where an opaque type is imported without (..)
-    // For example: import Vibe.Never exposing (Never, never)
-    // The `Never` without (..) is parsed as ExportValue, not ExportTypeAll
-    const mockDepModule = {
-      opaqueTypes: {
-        Never: { name: "Never", params: [], span: { start: 0, end: 0 } },
-      },
-      adts: {},
-      protocols: {},
-      values: {
-        never: { type: {} },
-      },
-    };
-
+  test("emits implicit instance namespace imports", () => {
     const mockProgram = {
       moduleName: "ExampleApp",
       packageName: "ExampleApp",
-      sourceProgram: {
-        imports: [
-          {
-            moduleName: "Vibe.Never",
-            exposing: {
-              kind: "Explicit",
-              exports: [
-                // Never without (..) is parsed as ExportValue
-                { kind: "ExportValue", name: "Never" },
-                { kind: "ExportValue", name: "never" },
-              ],
-            },
-          },
-        ],
-      },
-      adts: {},
-      opaqueTypes: {},
-      dependencies: new Map([["Vibe.Never", mockDepModule]]),
+      resolvedImports: [
+        {
+          moduleName: "Vibe.String",
+          namespaceImport: "$inst_String",
+          namedImports: [],
+        },
+      ],
     } as unknown as IRProgram;
-    const modulePackages = new Map([["Vibe.Never", "Vibe"]]);
+    const modulePackages = new Map([["Vibe.String", "Vibe"]]);
 
     const imports = generateDependencyImports(mockProgram, modulePackages);
-
-    // Should import the `never` function, but NOT the opaque type `Never`
-    expect(imports.length).toBe(1);
-    expect(imports[0]).toContain(
-      'import { never } from "../Vibe/Vibe/Never.js";',
-    );
-    // Should NOT contain Never as a named import
-    expect(imports[0]).not.toContain("{ Never");
+    expect(imports).toEqual([
+      'import * as $inst_String from "../Vibe/Vibe/String.js";',
+    ]);
   });
 });
 

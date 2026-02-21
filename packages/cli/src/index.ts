@@ -3,7 +3,12 @@ import path from "node:path";
 import { Command } from "commander";
 import { lex } from "@vibe/lexer";
 import { parse, ParseError, collectInfixDeclarations } from "@vibe/parser";
-import { analyze, SemanticError, MultipleSemanticErrors, type SemanticModule } from "@vibe/semantics";
+import {
+  analyze,
+  SemanticError,
+  MultipleSemanticErrors,
+  type SemanticModule,
+} from "@vibe/semantics";
 import { lower, printProgram, IRError, type IRProgram } from "@vibe/ir";
 import { loadConfig } from "@vibe/config";
 import {
@@ -367,9 +372,11 @@ function executeCommand(
 
       for (const ir of irPrograms) {
         const generated = generate(ir, { modulePackages });
+        const moduleNode = moduleGraph.modules.get(ir.moduleName);
         const outputPath = writeModule(generated, {
           distDir,
           packageName: generated.packageName,
+          sourceFilePath: moduleNode?.filePath,
         });
         generatedFiles.push(outputPath);
         stderr.write(`📦 Built ${generated.moduleName} -> ${outputPath}\n`);
@@ -579,7 +586,7 @@ function watchMode(opts: ExecuteCommandOptions, exec: ExecuteOptions): never {
     }
 
     // Keep the process alive
-    return new Promise(() => { }) as never;
+    return new Promise(() => {}) as never;
   } catch (error) {
     stderr.write(`${(error as Error).message}\n`);
     process.exit(1);

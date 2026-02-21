@@ -4,7 +4,7 @@
  * Main orchestration logic for lowering a semantic module to IR.
  */
 
-import type { Program, Expr } from "@vibe/syntax";
+import type { Program, Expr, ImportDeclaration } from "@vibe/syntax";
 import { sanitizeOperator } from "@vibe/syntax";
 import type { SemanticModule } from "@vibe/semantics";
 import type {
@@ -17,6 +17,7 @@ import type {
   IRExpr,
   IRType,
   IRPattern,
+  IRResolvedImport,
 } from "../types";
 import {
   createLoweringContext,
@@ -640,6 +641,11 @@ export function lower(
     }
   }
 
+  // Resolve imports: determine which names have runtime representations.
+  // ADT type names, protocols, and opaque types are type-level only —
+  // they don't exist at runtime. Only values, constructors, and operators do.
+  const resolvedImports = resolveImports(imports, dependencies, semantics);
+
   // Package name comes from options, or defaults to first segment of module name
   const packageName: string =
     options.packageName ?? semantics.module.name.split(".")[0]!;
@@ -659,9 +665,163 @@ export function lower(
     constraintMetadata,
     externalImports,
     importAliases,
+    resolvedImports,
     sourceModule: semantics,
     sourceProgram: program,
     exports: semantics.exports,
-    dependencies,
   };
+}
+
+/**
+ * Resolve imports to determine which names have runtime representations.
+ *
+ * Type-level-only names (ADT type names, protocols, opaque types) are filtered
+ * out since they don't exist at runtime. Only values, constructors, and
+ * operators produce runtime import specifiers.
+ *
+ * This keeps semantic reasoning in the IR layer so codegen can remain a
+ * target-agnostic emitter.
+ */
+function resolveImports(
+  imports: ImportDeclaration[],
+  dependencies: Map<string, SemanticModule>,
+  semantics: SemanticModule,
+): IRResolvedImport[] {
+  const resolved: IRResolvedImport[] = [];
+
+  for (const imp of imports) {
+    const depModule = dependencies.get(imp.moduleName);
+    const alias =
+      imp.alias || imp.moduleName.split(".").pop() || imp.moduleName;
+
+    if (imp.alias) {
+      // Explicit alias always needs a namespace import for qualified access
+      resolved.push({
+        moduleName: imp.moduleName,
+        namespaceImport: alias,
+        namedImports: [],
+      });
+    }
+
+    if (imp.exposing?.kind === "All") {
+      if (!imp.alias) {
+        resolved.push({
+          moduleName: imp.moduleName,
+          namespaceImport: alias,
+          namedImports: [],
+        });
+      }
+    } else if (imp.exposing?.kind === "Explicit") {
+      const names: string[] = [];
+
+      for (const spec of imp.exposing.exports) {
+        switch (spec.kind) {
+          case "ExportValue": {
+            if (isTypeOnly(spec.name, depModule, semantics)) break;
+            names.push(spec.name);
+            break;
+          }
+          case "ExportOperator":
+            names.push(sanitizeOperator(spec.operator));
+            break;
+          case "ExportTypeAll": {
+            // Protocols and opaque types have no runtime representation — skip.
+            // ADTs are handled below: the type name has no runtime value,
+            // but its constructors do.
+            const isProtocol =
+              (depModule?.protocols &&
+                Object.hasOwn(depModule.protocols, spec.name)) ||
+              Object.hasOwn(semantics.protocols, spec.name);
+            const isOpaque =
+              (depModule?.opaqueTypes &&
+                Object.hasOwn(depModule.opaqueTypes, spec.name)) ||
+              Object.hasOwn(semantics.opaqueTypes, spec.name);
+            if (isProtocol || isOpaque) break;
+
+            const adtInfo =
+              depModule?.adts[spec.name] ?? semantics.adts[spec.name];
+            if (adtInfo && adtInfo.constructors.length > 0) {
+              for (const ctorName of adtInfo.constructors) {
+                names.push(ctorName);
+              }
+            }
+            break;
+          }
+          case "ExportTypeSome": {
+            if (spec.members) {
+              for (const ctorName of spec.members) {
+                names.push(ctorName);
+              }
+            }
+            break;
+          }
+        }
+      }
+
+      if (names.length > 0) {
+        const existing = imp.alias
+          ? resolved.find((r) => r.moduleName === imp.moduleName)
+          : undefined;
+        if (existing) {
+          existing.namedImports = names;
+        } else {
+          resolved.push({
+            moduleName: imp.moduleName,
+            namedImports: names,
+          });
+        }
+      } else if (!imp.alias) {
+        // All explicit imports are type-only — no runtime import needed.
+        // Instance imports are handled separately via $inst_ aliases.
+      }
+    } else if (!imp.alias) {
+      resolved.push({
+        moduleName: imp.moduleName,
+        namespaceImport: alias,
+        namedImports: [],
+      });
+    }
+  }
+
+  // Add implicit instance imports for modules not explicitly imported
+  const importedModuleNames = new Set(imports.map((i) => i.moduleName));
+  for (const semInst of semantics.instances) {
+    const srcModule = semInst.moduleName;
+    if (
+      srcModule &&
+      srcModule !== semantics.module.name &&
+      !importedModuleNames.has(srcModule) &&
+      !resolved.some((r) => r.moduleName === srcModule)
+    ) {
+      const instAlias = "$inst_" + srcModule.split(".").pop()!;
+      resolved.push({
+        moduleName: srcModule,
+        namespaceImport: instAlias,
+        namedImports: [],
+      });
+    }
+  }
+
+  return resolved;
+}
+
+/**
+ * Check if a name is type-level only (no runtime representation).
+ * ADT type names, protocols, and opaque types are type-only.
+ */
+function isTypeOnly(
+  name: string,
+  depModule: SemanticModule | undefined,
+  semantics: SemanticModule,
+): boolean {
+  const isProtocol =
+    (depModule?.protocols && Object.hasOwn(depModule.protocols, name)) ||
+    Object.hasOwn(semantics.protocols, name);
+  const isOpaque =
+    (depModule?.opaqueTypes && Object.hasOwn(depModule.opaqueTypes, name)) ||
+    Object.hasOwn(semantics.opaqueTypes, name);
+  const isADT =
+    (depModule?.adts && Object.hasOwn(depModule.adts, name)) ||
+    Object.hasOwn(semantics.adts, name);
+  return isProtocol || isOpaque || isADT;
 }

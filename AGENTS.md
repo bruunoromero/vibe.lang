@@ -35,7 +35,22 @@ The project follows a standard compiler pipeline architecture distributed across
 1.  **Lexer** (`@vibe/lexer`): Tokenizes the source code.
 2.  **Parser** (`@vibe/parser`): Parses tokens into an Abstract Syntax Tree (AST).
 3.  **Semantics** (`@vibe/semantics`): Performs semantic analysis, scope resolution, and et.c.
-4.  **Codegen** (`@vibe/codegen`): Generates JavaScript code from the analyzed IR.
+4.  **IR** (`@vibe/ir`): Lowers the analyzed AST into an intermediate representation. All semantic reasoning about "what to emit" lives here.
+5.  **Codegen** (`@vibe/codegen`): Generates JavaScript code from the analyzed IR.
+
+### Codegen Must Be Target-Agnostic
+
+Codegen is a **dumb emitter**. It reads the IR and produces target code (currently JavaScript) without making semantic decisions. This separation exists so we can later add more code generation targets (e.g., WASM, native) by writing new codegen backends that consume the same IR.
+
+**Rules for codegen:**
+
+- **No semantic reasoning**: Codegen must never inspect protocols, ADTs, opaque types, or any semantic metadata to decide _what_ to emit. That decision belongs in IR lowering.
+- **Target-specific concerns only**: Codegen handles path calculation (e.g., relative import paths for JS modules), name sanitization (e.g., JS reserved word escaping), and syntax formatting.
+- **IR is the contract**: If codegen needs information to make an emission decision, that information must be present on the IR types, populated during IR lowering.
+
+**Example — Import Resolution:**
+
+IR lowering resolves which imported names have runtime representations (values, constructors, operators) vs type-only names (ADT type names, protocols, opaque types). The result is stored in `IRProgram.resolvedImports`. Codegen reads `resolvedImports` and emits JS import statements, applying only path calculation and name sanitization. It never checks whether a name is a protocol or ADT — that decision was already made upstream.
 
 ## Directory Structure
 

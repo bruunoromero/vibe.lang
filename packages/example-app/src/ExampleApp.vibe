@@ -3,9 +3,9 @@ module ExampleApp exposing (..)
 import Vibe exposing (..)
 import Vibe.Ref as Ref
 import Vibe.Promise as Promise exposing (Promise)
-import Vibe.Console as Console
+import Vibe.Task as Task
 
-@external "node:fs/promises" "readFile"
+@external "./ExampleApp.ffi.js" "readFile"
 readFile : String -> Promise String
 
-main = readFile "~/example.txt" |> Promise.map Console.log
+main = readFile "/Users/bromero/example.txt" |> Task.fromPromise

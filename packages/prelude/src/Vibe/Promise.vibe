@@ -1,4 +1,4 @@
-module Vibe.Promise exposing (Promise, create)
+module Vibe.Promise exposing (Promise, create, map, flatMap, catch)
 
 import Vibe.Result exposing (Result)
 import Vibe.Dynamic exposing (Dynamic)

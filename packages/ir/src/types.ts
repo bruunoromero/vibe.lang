@@ -430,6 +430,28 @@ export type IRImportAlias = {
 };
 
 /**
+ * A resolved import ready for code generation.
+ *
+ * IR lowering resolves which names from each dependency module have runtime
+ * representations (values, constructors, operators) vs type-only names
+ * (ADT type names, protocols, opaque types). Codegen receives these
+ * pre-resolved imports and only needs to calculate target-specific paths
+ * and apply target-specific name sanitization.
+ */
+export type IRResolvedImport = {
+  /** Full module name (e.g., "Vibe.Result") — used by codegen for path calculation */
+  moduleName: string;
+  /** If set, emit a namespace import: `import * as {alias} from "..."` */
+  namespaceImport?: string;
+  /**
+   * Raw Vibe names to import as named imports.
+   * Codegen applies target-specific sanitization (e.g., JS reserved word escaping).
+   * Empty array means no named imports.
+   */
+  namedImports: string[];
+};
+
+/**
  * The complete IR program representation.
  */
 export type IRProgram = {
@@ -489,6 +511,14 @@ export type IRProgram = {
    */
   importAliases: IRImportAlias[];
 
+  /**
+   * Pre-resolved imports for code generation.
+   * IR lowering determines which imported names have runtime representations
+   * (values, constructors) vs type-only (ADT names, protocols, opaque types).
+   * Codegen only needs to calculate paths and apply name sanitization.
+   */
+  resolvedImports: IRResolvedImport[];
+
   /** Original source module for reference */
   sourceModule: SemanticModule;
 
@@ -497,13 +527,6 @@ export type IRProgram = {
 
   /** Export information from the module's exposing clause */
   exports: ExportInfo;
-
-  /**
-   * Pre-analyzed dependency modules for import resolution.
-   * Maps module name to its semantic analysis result.
-   * Used by codegen to determine which imported names are protocols vs values.
-   */
-  dependencies?: Map<string, SemanticModule>;
 };
 
 // ============================================================================

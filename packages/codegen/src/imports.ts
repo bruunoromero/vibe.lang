@@ -5,7 +5,6 @@
  */
 
 import type { IRProgram } from "@vibe/ir";
-import { sanitizeOperator } from "@vibe/syntax";
 import { sanitizeIdentifier } from "./sanitize.js";
 
 /**
@@ -68,146 +67,29 @@ export function generateDependencyImports(
 ): string[] {
   const lines: string[] = [];
 
-  // Get imports from source program
-  const imports = program.sourceProgram.imports || [];
-  const currentModule = program.moduleName;
   const currentPackage = program.packageName;
-  const importedModules = new Set<string>();
+  const currentDepth = program.moduleName.split(".").length - 1;
 
-  // Get dependency modules for protocol/ADT checking
-  const dependencies = program.dependencies;
-
-  // Calculate the depth of the current module within its package
-  // e.g., "SimpleTest" -> 0, "Sub.Module" -> 1
-  const currentDepth = currentModule.split(".").length - 1;
-
-  for (const imp of imports) {
-    const moduleName = imp.moduleName;
-    importedModules.add(moduleName);
-
-    // Get the dependency module for protocol checking
-    const depModule = dependencies?.get(moduleName);
-
-    // Get the imported module's package
-    const importedPackage = modulePackages.get(moduleName) || moduleName;
-
-    // Calculate relative import path
-    const importPath = calculateImportPath(
-      currentPackage,
-      currentDepth,
-      importedPackage,
-      moduleName,
-    );
-
-    // Determine alias name: explicit alias or default to last segment
-    const alias = imp.alias || moduleName.split(".").pop() || moduleName;
-
-    // If there's an alias, always generate namespace import
-    // This is needed for qualified access like `Bool.eq`
-    if (imp.alias) {
-      lines.push(`import * as ${alias} from "${importPath}";`);
-    }
-
-    if (imp.exposing?.kind === "All") {
-      // import * as ModuleName from "..."
-      // Only generate if we didn't already generate it above for the alias
-      if (!imp.alias) {
-        lines.push(`import * as ${alias} from "${importPath}";`);
-      }
-    } else if (imp.exposing?.kind === "Explicit") {
-      // Extract names from the export specs
-      const names: string[] = [];
-
-      for (const spec of imp.exposing.exports) {
-        switch (spec.kind) {
-          case "ExportValue": {
-            // Skip if the name is a protocol - protocols don't exist at runtime,
-            // only their instance dictionaries do.
-            // Use Object.hasOwn to avoid inherited properties like toString
-            const isProtocol =
-              depModule?.protocols &&
-              Object.hasOwn(depModule.protocols, spec.name);
-            // Skip if the name is an opaque type - opaque types have no runtime representation
-            const isOpaque =
-              (depModule?.opaqueTypes &&
-                Object.hasOwn(depModule.opaqueTypes, spec.name)) ||
-              Object.hasOwn(program.opaqueTypes, spec.name);
-            if (!isProtocol && !isOpaque) {
-              names.push(sanitizeIdentifier(spec.name));
-            }
-            break;
-          }
-          case "ExportOperator":
-            names.push(sanitizeOperator(spec.operator));
-            break;
-          case "ExportTypeAll": {
-            // Opaque types have no constructors and no runtime representation - skip them
-            const isOpaque =
-              (depModule?.opaqueTypes &&
-                Object.hasOwn(depModule.opaqueTypes, spec.name)) ||
-              Object.hasOwn(program.opaqueTypes, spec.name);
-            if (isOpaque) {
-              break;
-            }
-
-            // For ADTs, import the constructors, not the type name
-            // Types don't exist at runtime, only constructors do
-            // Check the dependency module's ADTs first, fall back to current module's ADTs
-            const adtInfo =
-              depModule?.adts[spec.name] ?? program.adts[spec.name];
-            if (adtInfo && adtInfo.constructors.length > 0) {
-              for (const ctorName of adtInfo.constructors) {
-                names.push(sanitizeIdentifier(ctorName));
-              }
-            }
-            // For protocols, ExportTypeAll means the protocol itself is imported,
-            // but protocols don't exist at runtime - only instance dictionaries do.
-            // So we skip adding anything for protocols.
-            break;
-          }
-          case "ExportTypeSome": {
-            // For ExportTypeSome, import only the specified constructors
-            if (spec.members) {
-              for (const ctorName of spec.members) {
-                names.push(sanitizeIdentifier(ctorName));
-              }
-            }
-            break;
-          }
-          default:
-            break;
-        }
-      }
-
-      if (names.length > 0) {
-        // import { specific, names } from "..."
-        lines.push(`import { ${names.join(", ")} } from "${importPath}";`);
-      } else if (!imp.alias) {
-        // No explicit imports and no alias, import everything as namespace
-        lines.push(`import * as ${alias} from "${importPath}";`);
-      }
-      // If we have alias but no names, namespace import was already generated above
-    } else if (!imp.alias) {
-      // Default: import everything (exposing all) - only if no alias
-      lines.push(`import * as ${alias} from "${importPath}";`);
-    }
-  }
-
-  // Generate imports for modules that provide instances but aren't explicitly
-  // imported by the user. These are added to importAliases during IR lowering
-  // with a $inst_ prefix to avoid collisions with user aliases.
-  for (const aliasEntry of program.importAliases ?? []) {
-    if (importedModules.has(aliasEntry.moduleName)) continue;
+  for (const resolved of program.resolvedImports) {
     const importedPackage =
-      modulePackages.get(aliasEntry.moduleName) ||
-      aliasEntry.moduleName.split(".")[0]!;
+      modulePackages.get(resolved.moduleName) || resolved.moduleName;
     const importPath = calculateImportPath(
       currentPackage,
       currentDepth,
       importedPackage,
-      aliasEntry.moduleName,
+      resolved.moduleName,
     );
-    lines.push(`import * as ${aliasEntry.alias} from "${importPath}";`);
+
+    if (resolved.namespaceImport) {
+      lines.push(
+        `import * as ${resolved.namespaceImport} from "${importPath}";`,
+      );
+    }
+
+    if (resolved.namedImports.length > 0) {
+      const sanitized = resolved.namedImports.map((n) => sanitizeIdentifier(n));
+      lines.push(`import { ${sanitized.join(", ")} } from "${importPath}";`);
+    }
   }
 
   return lines;

@@ -2243,6 +2243,11 @@ export interface WriteOptions {
 
   /** Whether to create directories if they don't exist */
   createDirs?: boolean;
+
+  /** Absolute path to the source .vibe file.
+   *  When provided, relative-path FFI files referenced via @external
+   *  are copied next to the generated JS output so imports resolve at runtime. */
+  sourceFilePath?: string;
 }
 
 /**
@@ -2278,6 +2283,25 @@ export function writeModule(
   }
 
   fs.writeFileSync(filePath, module.code, "utf8");
+
+  // Copy FFI files referenced by relative paths so imports resolve at runtime.
+  //   src/ExampleApp.vibe  →  @external "./ExampleApp.ffi.js" "readFile"
+  //   dist/ExampleApp/ExampleApp.js  →  import { readFile } from "./ExampleApp.ffi.js";
+  // We resolve the FFI path relative to the source .vibe file and copy it
+  // to the same relative location from the generated .js file.
+  if (options.sourceFilePath) {
+    const sourceDir = path.dirname(options.sourceFilePath);
+    for (const modulePath of module.imports.keys()) {
+      if (modulePath.startsWith("./") || modulePath.startsWith("../")) {
+        const srcFile = path.resolve(sourceDir, modulePath);
+        const destFile = path.resolve(moduleDir, modulePath);
+        if (fs.existsSync(srcFile)) {
+          fs.mkdirSync(path.dirname(destFile), { recursive: true });
+          fs.copyFileSync(srcFile, destFile);
+        }
+      }
+    }
+  }
 
   return filePath;
 }

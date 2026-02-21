@@ -261,22 +261,25 @@ export const resolve = <T>(value: T | Promise<T>) => {
   return Promise.resolve(PromiseWrapper.wrap(value));
 };
 
-export const flatMapPromise = <T, U>(
-  promise: Promise<T>,
-  fn: (value: T) => PromiseWrapper<U>,
-) => {
-  return promise.then((value) => fn(PromiseWrapper.unwrap(value)));
-};
+export const flatMapPromise =
+  <T, U>(fn: (value: T) => PromiseWrapper<U>) =>
+  (promise: Promise<T>) => {
+    return promise.then((value) => fn(PromiseWrapper.unwrap(value)));
+  };
 
-export const mapPromise = <T, U>(promise: Promise<T>, fn: (value: T) => U) => {
-  return promise.then((value) =>
-    PromiseWrapper.wrap(fn(PromiseWrapper.unwrap(value))),
-  );
-};
+export const mapPromise =
+  <T, U>(fn: (value: T) => U) =>
+  (promise: Promise<T>) => {
+    return promise.then((value) =>
+      PromiseWrapper.wrap(fn(PromiseWrapper.unwrap(value))),
+    );
+  };
 
-export const catchPromise = <T>(promise: Promise<T>, fn: (error: any) => T) => {
-  return promise.catch((error) => PromiseWrapper.wrap(fn(error)));
-};
+export const catchPromise =
+  <T>(fn: (error: any) => T) =>
+  (promise: Promise<T>) => {
+    return promise.catch((error) => PromiseWrapper.wrap(fn(error)));
+  };
 
 // =============================================================================
 // Debug / Development

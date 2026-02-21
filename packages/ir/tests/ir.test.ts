@@ -40,7 +40,9 @@ function compileToIR(source: string): IRProgram {
     ? source
     : `module Test exposing (..)\n\n${source}`;
   const ast = parse(fullSource);
-  const semantics = analyze(ast, { fileContext: { filePath: "Test", srcDir: "" } });
+  const semantics = analyze(ast, {
+    fileContext: { filePath: "Test", srcDir: "" },
+  });
   return lower(ast, semantics);
 }
 
@@ -399,7 +401,12 @@ f = d
     const ir = compileToIR(source);
 
     // Validate topological order
-    const graph = buildDependencyGraph(ir.values, ir.instances, ir.protocols, ir.constructors);
+    const graph = buildDependencyGraph(
+      ir.values,
+      ir.instances,
+      ir.protocols,
+      ir.constructors,
+    );
     const validation = validateTopologicalOrder(ir.dependencyOrder, graph);
     expect(validation.valid).toBe(true);
   });
@@ -958,5 +965,153 @@ implement Ord Int where
         }
       }
     }
+  });
+});
+
+// ============================================================================
+// Import Resolution Tests
+// ============================================================================
+
+describe("Import resolution", () => {
+  function compileWithDeps(depSource: string, mainSource: string): IRProgram {
+    const depAst = parse(depSource);
+    const depSemantics = analyze(depAst, {
+      fileContext: { filePath: "Dep", srcDir: "" },
+    });
+    const mainAst = parse(mainSource);
+    const deps = new Map([[depAst.module.name, depSemantics]]);
+    const mainSemantics = analyze(mainAst, {
+      dependencies: deps,
+      fileContext: { filePath: "Main", srcDir: "" },
+    });
+    return lower(mainAst, mainSemantics, { dependencies: deps });
+  }
+
+  test("ADT type name without constructors produces no named import", () => {
+    // This is the bug that caused Promise.js to fail:
+    // `import Vibe.Result exposing (Result)` should NOT emit `import { Result }`
+    // because Result is an ADT type name with no runtime representation.
+    const ir = compileWithDeps(
+      `module Dep exposing (Result(..))
+type Result e a = Ok a | Err e`,
+      `module Main exposing (..)
+import Dep exposing (Result)
+x = 42`,
+    );
+    const resultImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    // Should produce no import at all — Result is type-only
+    expect(resultImport).toBeUndefined();
+  });
+
+  test("ADT type with (..) produces constructor named imports", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (Result(..))
+type Result e a = Ok a | Err e`,
+      `module Main exposing (..)
+import Dep exposing (Result(..))
+x = Ok 1`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeDefined();
+    expect(depImport!.namedImports).toContain("Ok");
+    expect(depImport!.namedImports).toContain("Err");
+    expect(depImport!.namedImports).not.toContain("Result");
+  });
+
+  test("ADT type with specific constructors imports only those", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (Maybe(..))
+type Maybe a = Just a | Nothing`,
+      `module Main exposing (..)
+import Dep exposing (Maybe(Just))
+x = Just 1`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeDefined();
+    expect(depImport!.namedImports).toContain("Just");
+    expect(depImport!.namedImports).not.toContain("Nothing");
+  });
+
+  test("protocol name produces no named import", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (Eq(..))
+protocol Eq a where
+  eq : a -> a -> Bool`,
+      `module Main exposing (..)
+import Dep exposing (Eq)
+x = 42`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeUndefined();
+  });
+
+  test("plain value produces named import", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (helper)
+helper x = x`,
+      `module Main exposing (..)
+import Dep exposing (helper)
+x = helper 42`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeDefined();
+    expect(depImport!.namedImports).toContain("helper");
+  });
+
+  test("exposing (..) produces namespace import", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (helper)
+helper x = x`,
+      `module Main exposing (..)
+import Dep exposing (..)
+x = helper 42`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeDefined();
+    expect(depImport!.namespaceImport).toBe("Dep");
+    expect(depImport!.namedImports).toEqual([]);
+  });
+
+  test("alias produces namespace import", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (helper)
+helper x = x`,
+      `module Main exposing (..)
+import Dep as D
+x = D.helper 42`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeDefined();
+    expect(depImport!.namespaceImport).toBe("D");
+  });
+
+  test("alias with explicit names produces both namespace and named imports", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (helper, other)
+helper x = x
+other y = y`,
+      `module Main exposing (..)
+import Dep as D exposing (helper)
+x = helper 42`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeDefined();
+    expect(depImport!.namespaceImport).toBe("D");
+    expect(depImport!.namedImports).toContain("helper");
+  });
+
+  test("mix of type-only and value imports only includes values", () => {
+    const ir = compileWithDeps(
+      `module Dep exposing (Result(..), helper)
+type Result e a = Ok a | Err e
+helper x = x`,
+      `module Main exposing (..)
+import Dep exposing (Result, helper)
+x = helper 42`,
+    );
+    const depImport = ir.resolvedImports.find((r) => r.moduleName === "Dep");
+    expect(depImport).toBeDefined();
+    expect(depImport!.namedImports).toContain("helper");
+    expect(depImport!.namedImports).not.toContain("Result");
   });
 });
