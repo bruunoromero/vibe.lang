@@ -2371,8 +2371,11 @@ class SemanticAnalyzer {
       // Import ALL instances from the dependency, including transitively imported ones.
       // This matches Haskell's behavior where instances are globally visible once imported.
       // Deduplication happens via the instance's unique (protocolName, moduleName, typeArgs) identity.
+      // Skip instances that originate from the current module to prevent false overlap
+      // errors when a downstream module's cache carries our own instances back to us.
+      const currentModuleName = this.getModuleName();
       for (const instance of depModule.instances) {
-        // Check for duplicates by comparing protocol name and module name (origin)
+        if (instance.moduleName === currentModuleName) continue;
         const isDuplicate = this.instances.some(
           (existing) =>
             existing.protocolName === instance.protocolName &&
@@ -2561,11 +2564,6 @@ class SemanticAnalyzer {
           }
         }
 
-        // Import all instances (always imported regardless of exports)
-        for (const instance of depModule.instances) {
-          this.instances.push(instance);
-        }
-
         // Import exported operator declarations
         for (const [op, info] of depModule.operators) {
           if (isExportedFromModule(depModule, op, "operator")) {
@@ -2585,9 +2583,11 @@ class SemanticAnalyzer {
     const importedModuleNames = new Set(
       this.imports.map((imp) => imp.moduleName),
     );
+    const thisModuleName = this.getModuleName();
     for (const [depName, depModule] of this.dependencies) {
       if (importedModuleNames.has(depName)) continue;
       for (const instance of depModule.instances) {
+        if (instance.moduleName === thisModuleName) continue;
         const isDuplicate = this.instances.some(
           (existing) =>
             existing.protocolName === instance.protocolName &&

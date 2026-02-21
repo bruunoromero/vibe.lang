@@ -261,3 +261,53 @@ type Wrapper a = Wrapper a
     expect(hasAppendableString).toBe(true);
   });
 });
+
+describe("self-instance leak prevention", () => {
+  // Defense-in-depth: if a dependency's cached SemanticModule contains
+  // instances that originated from the current module (e.g., because a
+  // downstream module transitively carried them), those instances must NOT
+  // be imported back — otherwise the overlap check falsely fires.
+
+  test("should not import own instances back from dependency cache", () => {
+    // 1. Analyze the upstream module that defines a protocol + instance
+    const upstreamModule = analyzeNoPrelude(`
+module Upstream exposing (..)
+
+protocol MyProto a where
+    myMethod : a -> a
+
+implement MyProto Int where
+    myMethod x = x
+`);
+
+    expect(upstreamModule.instances.length).toBeGreaterThan(0);
+
+    // 2. Build a fake downstream module whose instances array contains
+    //    upstream's instances (simulating transitive import propagation)
+    const fakeDownstream: SemanticModule = {
+      ...upstreamModule,
+      module: { ...upstreamModule.module, name: "Downstream" },
+    };
+
+    // 3. Re-analyze upstream with the fake downstream as a dependency.
+    //    The global-instance-visibility loop sees fakeDownstream's instances
+    //    which include "Upstream.MyProto Int". The defense-in-depth filter
+    //    must skip them since their moduleName === "Upstream".
+    expect(() => {
+      analyze(
+        parse(`module Upstream exposing (..)
+
+protocol MyProto a where
+    myMethod : a -> a
+
+implement MyProto Int where
+    myMethod x = x
+`),
+        {
+          dependencies: new Map([["Downstream", fakeDownstream]]),
+          fileContext: { filePath: "Upstream", srcDir: "" },
+        },
+      );
+    }).not.toThrow();
+  });
+});

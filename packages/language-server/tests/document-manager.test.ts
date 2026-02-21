@@ -265,6 +265,65 @@ implement MyProto Int where
       );
       expect(overlapping).toHaveLength(0);
     });
+
+    test("should not report overlapping implementation when a downstream module transitively carries the instance", () => {
+      // Reproduces: open ExampleApp.vibe (which imports Vibe.String), then
+      // open Vibe/String.vibe. ExampleApp's cached SemanticModule carries
+      // Vibe.String's instances transitively. If loadDependencies dumps ALL
+      // cached modules as dependencies, semantics sees the transitive Eq String
+      // instance and falsely reports overlap when String.vibe defines its own.
+
+      const upstreamSource = `module Upstream exposing (..)
+
+protocol MyProto a where
+    myMethod : a -> a
+
+implement MyProto Int where
+    myMethod x = x
+`;
+
+      // Analyze upstream module
+      const upstreamDoc = TextDocument.create(
+        "file:///Upstream.vibe",
+        "vibe",
+        1,
+        upstreamSource,
+      );
+      const upstreamCache = manager.updateDocument(upstreamDoc);
+      expect(
+        upstreamCache.diagnostics.filter((d) =>
+          d.message.includes("Overlapping implementation"),
+        ),
+      ).toHaveLength(0);
+
+      // Simulate a downstream module that imported upstream and thus carries
+      // upstream's instances transitively in its own SemanticModule
+      if (upstreamCache.semanticResult?.module) {
+        const fakeDownstream = {
+          ...upstreamCache.semanticResult.module,
+          module: {
+            ...upstreamCache.semanticResult.module.module,
+            name: "Downstream",
+          },
+        };
+        (manager as any).loadedModules.set("Downstream", fakeDownstream);
+      }
+
+      // Re-analyze upstream — downstream is cached but upstream does NOT
+      // import downstream, so it should NOT appear in the dependency set
+      const upstreamDoc2 = TextDocument.create(
+        "file:///Upstream.vibe",
+        "vibe",
+        2,
+        upstreamSource,
+      );
+      const upstreamCache2 = manager.updateDocument(upstreamDoc2);
+
+      const overlapping = upstreamCache2.diagnostics.filter((d) =>
+        d.message.includes("Overlapping implementation"),
+      );
+      expect(overlapping).toHaveLength(0);
+    });
   });
 
   describe("formatTypeScheme", () => {

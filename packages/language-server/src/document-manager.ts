@@ -240,29 +240,20 @@ export class DocumentManager {
    */
   private loadDependencies(ast: Program): Map<string, SemanticModule> {
     const dependencies = new Map<string, SemanticModule>();
-    const currentModuleName = ast.module.name;
 
-    // Add already-loaded modules, excluding the module being analyzed
-    // to prevent its stale cached instances from poisoning re-analysis
-    for (const [name, module] of this.loadedModules) {
-      if (name === currentModuleName) continue;
-      dependencies.set(name, module);
-    }
-
-    // Extract imports from AST and load them
     if (ast.imports) {
-      const toLoad: string[] = [];
       for (const imp of ast.imports) {
-        if (!dependencies.has(imp.moduleName)) {
-          toLoad.push(imp.moduleName);
-        }
-      }
+        if (dependencies.has(imp.moduleName)) continue;
 
-      // Load modules (non-recursively for LSP to avoid performance issues)
-      for (const moduleName of toLoad) {
-        const loaded = this.loadModule(moduleName);
-        if (loaded) {
-          dependencies.set(moduleName, loaded);
+        // Prefer already-loaded (cached) modules to avoid redundant disk I/O
+        const cached = this.loadedModules.get(imp.moduleName);
+        if (cached) {
+          dependencies.set(imp.moduleName, cached);
+        } else {
+          const loaded = this.loadModule(imp.moduleName);
+          if (loaded) {
+            dependencies.set(imp.moduleName, loaded);
+          }
         }
       }
     }
