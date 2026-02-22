@@ -2212,25 +2212,14 @@ class SemanticAnalyzer {
           return;
         }
 
-        // Check if it's a record type (records have no constructors, (..) just imports the type)
+        // Check if it's a record type - records cannot use (..) syntax since they have no constructors
         const depRecord = depModule.records[name];
         if (depRecord) {
-          if (!isExportedFromModule(depModule, name, "type")) {
-            throw new SemanticError(
-              `Cannot import record type '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
-              spec.span,
-              this.getFilePath(),
-            );
-          }
-          this.checkTypeCollision(
-            name,
-            imp.moduleName,
-            this.records[name],
-            imp.span,
-            "record type",
+          throw new SemanticError(
+            `Record type '${name}' cannot use (..) syntax - records have no constructors. Use '${name}' instead`,
+            spec.span,
+            this.getFilePath(),
           );
-          this.records[name] = depRecord;
-          return;
         }
 
         throw new SemanticError(
@@ -5808,10 +5797,13 @@ class SemanticAnalyzer {
             );
           }
 
-          // Record types with (..) just export the type (records have no constructors)
+          // Record types cannot use (..) syntax since they have no constructors
           if (Object.hasOwn(records, name)) {
-            exports.types.set(name, { allConstructors: false });
-            continue;
+            throw new SemanticError(
+              `Record type '${name}' cannot use (..) syntax - records have no constructors. Use '${name}' instead`,
+              spec.span,
+              this.getFilePath(),
+            );
           }
 
           throw new SemanticError(

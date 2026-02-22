@@ -2112,4 +2112,12 @@ q = { p | age = 31 }
     const scheme = result.typeSchemes["q"];
     expect(formatTypeSchemeForDisplay(scheme!)).toBe("Person");
   });
+
+  test("rejects Record(..) syntax in module exports", () => {
+    expectError(
+      `module Test exposing (Point(..))
+type Point = { x : Int, y : Int }`,
+      "Record type 'Point' cannot use (..) syntax - records have no constructors",
+    );
+  });
 });
