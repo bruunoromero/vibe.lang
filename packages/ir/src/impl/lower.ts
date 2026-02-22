@@ -167,10 +167,11 @@ export function lower(
     const decl = valueInfo.declaration;
     const type = semantics.types[name];
 
-    // Check if this is an external or property declaration (no body)
+    // Check if this is an external, property, or imported value declaration (no body)
     const isExternal =
       decl.kind === "ExternalDeclaration" ||
-      decl.kind === "PropertyDeclaration";
+      decl.kind === "PropertyDeclaration" ||
+      decl.kind === "ImportedValueDeclaration";
 
     // Lower the expression body (external/property declarations have no body)
     let body: IRExpr;
@@ -228,7 +229,9 @@ export function lower(
       body,
       type: irType,
       constraints,
-      isExternal: decl.kind === "ExternalDeclaration",
+      isExternal:
+        decl.kind === "ExternalDeclaration" ||
+        decl.kind === "ImportedValueDeclaration",
       externalTarget:
         decl.kind === "ExternalDeclaration"
           ? {
@@ -679,13 +682,13 @@ export function lower(
   const packageName: string =
     options.packageName ?? semantics.module.name.split(".")[0]!;
 
-  // Collect default imports from @import type declarations
+  // Collect default imports from @import value declarations
   const defaultImports: Array<{ name: string; modulePath: string }> = [];
-  for (const opaqueType of Object.values(semantics.opaqueTypes)) {
-    if (opaqueType.importPath) {
+  for (const valueInfo of Object.values(semantics.values)) {
+    if (valueInfo.declaration.kind === "ImportedValueDeclaration") {
       defaultImports.push({
-        name: opaqueType.name,
-        modulePath: opaqueType.importPath,
+        name: valueInfo.declaration.name,
+        modulePath: valueInfo.declaration.modulePath,
       });
     }
   }

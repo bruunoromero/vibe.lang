@@ -17,10 +17,10 @@ import Vibe exposing (..)
 import Vibe.Promise exposing (Promise)
 
 
-@import "node:fs/promises" type FS
+type FS
 
-@val "FS"
-fsModule : FS
+@import "node:fs/promises"
+fs : FS
 
 type FileStat
 
@@ -28,37 +28,37 @@ type FileStat
 fsReadFile : FS -> String -> String -> Promise String
 
 readFile : String -> Promise String
-readFile path = fsReadFile fsModule path "utf-8"
+readFile path = fsReadFile fs path "utf-8"
 
 @call "writeFile"
 fsWriteFile : FS -> String -> String -> String -> Promise ()
 
 writeFile : String -> String -> Promise ()
-writeFile path contents = fsWriteFile fsModule path contents "utf-8"
+writeFile path contents = fsWriteFile fs path contents "utf-8"
 
 @call "appendFile"
 fsAppendFile : FS -> String -> String -> String -> Promise ()
 
 appendFile : String -> String -> Promise ()
-appendFile path contents = fsAppendFile fsModule path contents "utf-8"
+appendFile path contents = fsAppendFile fs path contents "utf-8"
 
 @call "unlink"
 fsUnlink : FS -> String -> Promise ()
 
 removeFile : String -> Promise ()
-removeFile path = fsUnlink fsModule path
+removeFile path = fsUnlink fs path
 
 @call "readdir"
 fsReaddir : FS -> String -> Promise (List String)
 
 readDir : String -> Promise (List String)
-readDir path = fsReaddir fsModule path
+readDir path = fsReaddir fs path
 
 @call "stat"
 fsStat : FS -> String -> Promise FileStat
 
 stat : String -> Promise FileStat
-stat path = fsStat fsModule path
+stat path = fsStat fs path
 
 @external "./FileSystem.ffi.js" "makeDir"
 makeDir : String -> Promise ()

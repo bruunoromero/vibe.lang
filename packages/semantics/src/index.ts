@@ -4,6 +4,7 @@ import type {
   TypeAnnotationDeclaration,
   ExternalDeclaration,
   PropertyDeclaration,
+  ImportedValueDeclaration,
   TypeDeclaration,
   TypeAliasDeclaration,
   OpaqueTypeDeclaration,
@@ -1229,11 +1230,16 @@ class SemanticAnalyzer {
   }
 
   seedValueType(
-    decl: ValueDeclaration | ExternalDeclaration | PropertyDeclaration,
+    decl:
+      | ValueDeclaration
+      | ExternalDeclaration
+      | PropertyDeclaration
+      | ImportedValueDeclaration,
   ): Type {
     if (
       decl.kind === "ExternalDeclaration" ||
-      decl.kind === "PropertyDeclaration"
+      decl.kind === "PropertyDeclaration" ||
+      decl.kind === "ImportedValueDeclaration"
     ) {
       return this.typeFromAnnotation(decl.annotation, new Map());
     }
@@ -2339,7 +2345,11 @@ class SemanticAnalyzer {
   }
 
   registerValue(
-    decl: ValueDeclaration | ExternalDeclaration | PropertyDeclaration,
+    decl:
+      | ValueDeclaration
+      | ExternalDeclaration
+      | PropertyDeclaration
+      | ImportedValueDeclaration,
   ) {
     // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
     if (Object.hasOwn(this.values, decl.name)) {
@@ -2351,7 +2361,8 @@ class SemanticAnalyzer {
     }
     const hasBuiltinAnnotation =
       decl.kind === "ExternalDeclaration" ||
-      decl.kind === "PropertyDeclaration";
+      decl.kind === "PropertyDeclaration" ||
+      decl.kind === "ImportedValueDeclaration";
     this.values[decl.name] = {
       declaration: decl,
       annotation: hasBuiltinAnnotation ? decl.annotation : undefined,
@@ -3226,18 +3237,6 @@ class SemanticAnalyzer {
         this.registerOpaqueType(decl);
         continue;
       }
-      if (decl.kind === "ImportedTypeDeclaration") {
-        if (decl.typeDecl.kind !== "OpaqueTypeDeclaration") {
-          throw new SemanticError(
-            `@import requires an opaque type declaration (e.g., \`type Name\`), ` +
-              `but found a ${decl.typeDecl.kind === "TypeDeclaration" ? "type with constructors" : "type alias"}`,
-            decl.typeDecl.span,
-            this.getFilePath(),
-          );
-        }
-        this.registerOpaqueType(decl.typeDecl, decl.modulePath);
-        continue;
-      }
     }
   }
 
@@ -3250,7 +3249,7 @@ class SemanticAnalyzer {
    *
    * Example: `type Promise a` creates an opaque type that takes one parameter.
    */
-  registerOpaqueType(decl: OpaqueTypeDeclaration, importPath?: string) {
+  registerOpaqueType(decl: OpaqueTypeDeclaration) {
     // Check for duplicate type name
     // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
     if (Object.hasOwn(this.opaqueTypes, decl.name)) {
@@ -3288,7 +3287,6 @@ class SemanticAnalyzer {
       name: decl.name,
       moduleName: this.getModuleName(),
       params: decl.params,
-      importPath,
       span: decl.span,
     };
   }
@@ -4377,7 +4375,8 @@ class SemanticAnalyzer {
       if (
         decl.kind === "ValueDeclaration" ||
         decl.kind === "ExternalDeclaration" ||
-        decl.kind === "PropertyDeclaration"
+        decl.kind === "PropertyDeclaration" ||
+        decl.kind === "ImportedValueDeclaration"
       ) {
         this.registerValue(decl);
         continue;
@@ -4697,10 +4696,11 @@ class SemanticAnalyzer {
       const value = this.values[name]!;
       if (
         value.declaration.kind === "ExternalDeclaration" ||
-        value.declaration.kind === "PropertyDeclaration"
+        value.declaration.kind === "PropertyDeclaration" ||
+        value.declaration.kind === "ImportedValueDeclaration"
       ) {
         throw new SemanticError(
-          `${value.declaration.kind === "ExternalDeclaration" ? "External" : "Property"} declaration '${name}' already includes a type annotation`,
+          `${value.declaration.kind === "ExternalDeclaration" ? "External" : value.declaration.kind === "PropertyDeclaration" ? "Property" : "Imported value"} declaration '${name}' already includes a type annotation`,
           ann.span,
           this.getFilePath(),
         );
@@ -4716,7 +4716,9 @@ class SemanticAnalyzer {
           ? info.declaration.annotation
           : info.declaration.kind === "PropertyDeclaration"
             ? info.declaration.annotation
-            : undefined);
+            : info.declaration.kind === "ImportedValueDeclaration"
+              ? info.declaration.annotation
+              : undefined);
 
       let annotationType: Type | undefined;
       let annotatedConstraints: Constraint[] | undefined;
@@ -4874,7 +4876,8 @@ class SemanticAnalyzer {
         const info = this.values[name]!;
         if (
           info.declaration.kind === "ExternalDeclaration" ||
-          info.declaration.kind === "PropertyDeclaration"
+          info.declaration.kind === "PropertyDeclaration" ||
+          info.declaration.kind === "ImportedValueDeclaration"
         ) {
           externals.push(name);
         } else {
@@ -4882,12 +4885,13 @@ class SemanticAnalyzer {
         }
       }
 
-      // Process externals and property declarations first
+      // Process externals, property, and imported value declarations first
       for (const name of externals) {
         const info = this.values[name]!;
         if (
           info.declaration.kind === "ExternalDeclaration" ||
-          info.declaration.kind === "PropertyDeclaration"
+          info.declaration.kind === "PropertyDeclaration" ||
+          info.declaration.kind === "ImportedValueDeclaration"
         ) {
           const result = this.typeFromAnnotationWithConstraints(
             info.declaration.annotation,

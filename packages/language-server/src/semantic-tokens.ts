@@ -410,18 +410,15 @@ function extractDeclarationTokens(
       break;
     }
 
-    case "ImportedTypeDeclaration": {
-      const nameSpan = getNameSpan(
-        decl.typeDecl.span,
-        decl.typeDecl.name,
-        content,
-      );
+    case "ImportedValueDeclaration": {
+      const nameSpan = getNameSpan(decl.span, decl.name, content);
       addToken(
         tokens,
         nameSpan,
-        TokenTypeIndex.Type,
+        TokenTypeIndex.External,
         TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
       );
+      extractTypeExprTokens(decl.annotation, content, tokens);
       break;
     }
   }

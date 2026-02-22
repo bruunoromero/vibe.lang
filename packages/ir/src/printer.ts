@@ -67,7 +67,7 @@ export function printProgram(
     lines.push("");
   }
 
-  // Default imports (@import type declarations)
+  // Default imports (@import value declarations)
   if (program.defaultImports.length > 0) {
     lines.push("-- Default Imports");
     for (const imp of program.defaultImports) {

@@ -406,23 +406,27 @@ export type PropertyDeclaration = {
 };
 
 /**
- * An imported type declaration that emits a default JS import.
+ * An imported value declaration that emits a default JS import.
  *
- * Syntax: @import "module-path" type Name params...
+ * Syntax: @import "module-path"
+ *         name : Type
  *
  * Example:
- *   @import "node:fs/promises" type FileSystem
+ *   @import "node:fs/promises"
+ *   fs : FS
  *
- * Compiles to: import FileSystem from "node:fs/promises";
+ * Compiles to: import fs from "node:fs/promises";
  *
- * The type is opaque (no constructors, no pattern matching).
+ * The value must have an opaque return type.
  */
-export type ImportedTypeDeclaration = {
-  kind: "ImportedTypeDeclaration";
+export type ImportedValueDeclaration = {
+  kind: "ImportedValueDeclaration";
   /** The JS module path to import from */
   modulePath: string;
-  /** The inner type declaration (must be opaque, validated in semantics) */
-  typeDecl: TypeDeclaration | TypeAliasDeclaration | OpaqueTypeDeclaration;
+  /** The Vibe binding name */
+  name: string;
+  /** Type annotation (always required) */
+  annotation: TypeExpr;
   /** Source location span */
   span: Span;
 };
@@ -587,7 +591,7 @@ export type Declaration =
   | TypeAnnotationDeclaration
   | ExternalDeclaration
   | PropertyDeclaration
-  | ImportedTypeDeclaration
+  | ImportedValueDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
   | OpaqueTypeDeclaration

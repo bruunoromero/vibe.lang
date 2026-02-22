@@ -6,6 +6,7 @@ import type {
   ValueDeclaration,
   ExternalDeclaration,
   PropertyDeclaration,
+  ImportedValueDeclaration,
   ModuleDeclaration,
   ImportDeclaration,
   InfixDeclaration,
@@ -263,8 +264,6 @@ export type OpaqueTypeInfo = {
   moduleName?: string;
   /** Type parameters (e.g., ["a"] for Promise a) */
   params: string[];
-  /** JS module path for @import declarations (e.g., "node:fs/promises") */
-  importPath?: string;
   /** Source span for error messages */
   span: Span;
 };
@@ -347,7 +346,11 @@ export type InstanceInfo = {
 };
 
 export type ValueInfo = {
-  declaration: ValueDeclaration | ExternalDeclaration | PropertyDeclaration;
+  declaration:
+    | ValueDeclaration
+    | ExternalDeclaration
+    | PropertyDeclaration
+    | ImportedValueDeclaration;
   annotation?: TypeExpr;
   externalTarget?: ExternalDeclaration["target"];
   type?: Type;

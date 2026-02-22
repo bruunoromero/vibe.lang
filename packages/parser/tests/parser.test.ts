@@ -256,31 +256,32 @@ globalWindow : Window`);
     }
   });
 
-  test("parses @import type declaration", () => {
-    const program = parseTest(`@import "node:fs/promises" type FileSystem`);
+  test("parses @import value declaration", () => {
+    const program = parseTest(
+      `type FileSystem\n\n@import "node:fs/promises"\nfs : FileSystem`,
+    );
 
-    expect(program.declarations.length).toBe(1);
-    const decl = program.declarations[0]!;
-    expect(decl.kind).toBe("ImportedTypeDeclaration");
-    if (decl.kind === "ImportedTypeDeclaration") {
+    expect(program.declarations.length).toBe(2);
+    const decl = program.declarations[1]!;
+    expect(decl.kind).toBe("ImportedValueDeclaration");
+    if (decl.kind === "ImportedValueDeclaration") {
       expect(decl.modulePath).toBe("node:fs/promises");
-      expect(decl.typeDecl.kind).toBe("OpaqueTypeDeclaration");
-      expect(decl.typeDecl.name).toBe("FileSystem");
-      expect(decl.typeDecl.params).toEqual([]);
+      expect(decl.name).toBe("fs");
+      expect(decl.annotation.kind).toBe("TypeRef");
     }
   });
 
-  test("parses @import type declaration with params", () => {
-    const program = parseTest(`@import "some-lib" type Container a b`);
+  test("parses @import value declaration with complex type", () => {
+    const program = parseTest(
+      `type Container a\n\n@import "some-lib"\ncontainer : Container Int`,
+    );
 
-    expect(program.declarations.length).toBe(1);
-    const decl = program.declarations[0]!;
-    expect(decl.kind).toBe("ImportedTypeDeclaration");
-    if (decl.kind === "ImportedTypeDeclaration") {
+    expect(program.declarations.length).toBe(2);
+    const decl = program.declarations[1]!;
+    expect(decl.kind).toBe("ImportedValueDeclaration");
+    if (decl.kind === "ImportedValueDeclaration") {
       expect(decl.modulePath).toBe("some-lib");
-      expect(decl.typeDecl.kind).toBe("OpaqueTypeDeclaration");
-      expect(decl.typeDecl.name).toBe("Container");
-      expect(decl.typeDecl.params).toEqual(["a", "b"]);
+      expect(decl.name).toBe("container");
     }
   });
 

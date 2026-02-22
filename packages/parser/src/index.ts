@@ -465,9 +465,9 @@ class Parser {
       return this.parseExternalDeclaration();
     }
 
-    // Check for imported type declaration (@import "path" type Name)
+    // Check for imported value declaration (@import "path" name : Type)
     if (this.peekImportAttribute()) {
-      return this.parseImportedTypeDeclaration();
+      return this.parseImportedValueDeclaration();
     }
 
     // Check for property access declaration (@get ... or @call ... or @val ...)
@@ -2746,19 +2746,23 @@ class Parser {
     );
   }
 
-  private parseImportedTypeDeclaration(): Declaration {
+  private parseImportedValueDeclaration(): Declaration {
     const atToken = this.expectOperator("@");
     this.expectKeyword("import");
 
     const pathTok = this.expect(TokenKind.String, "module path string");
-    const typeDecl = this.parseTypeOrAliasDeclaration();
 
-    const span: Span = { start: atToken.span.start, end: typeDecl.span.end };
+    const { name } = this.parseDeclarationName();
+    this.expect(TokenKind.Colon, "type annotation");
+    const annotation = this.parseTypeExpression();
+
+    const span: Span = { start: atToken.span.start, end: annotation.span.end };
 
     return {
-      kind: "ImportedTypeDeclaration",
+      kind: "ImportedValueDeclaration",
       modulePath: this.unquote(pathTok.lexeme),
-      typeDecl,
+      name,
+      annotation,
       span,
     };
   }

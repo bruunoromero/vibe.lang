@@ -1682,26 +1682,32 @@ globalWindow : Window
 });
 
 // ============================================================================
-// Imported Type Declaration Tests (@import)
+// Imported Value Declaration Tests (@import)
 // ============================================================================
 
-describe("Imported Type Declarations", () => {
+describe("Imported Value Declarations", () => {
   test("@import emits default import statement", () => {
     const source = `
 module Test exposing (..)
 
-@import "node:fs/promises" type FileSystem
+type FileSystem
+
+@import "node:fs/promises"
+fs : FileSystem
 `;
 
     const { code } = compileToJS(source);
-    expect(code).toContain('import FileSystem from "node:fs/promises";');
+    expect(code).toContain('import fs from "node:fs/promises";');
   });
 
   test("@import hoists import before other declarations", () => {
     const source = `
 module Test exposing (..)
 
-@import "node:fs/promises" type FileSystem
+type FileSystem
+
+@import "node:fs/promises"
+fs : FileSystem
 
 myValue : Int
 myValue = 42
@@ -1709,49 +1715,44 @@ myValue = 42
 
     const { code } = compileToJS(source);
     // The import should appear before the value declaration
-    const importIdx = code.indexOf('import FileSystem from "node:fs/promises"');
+    const importIdx = code.indexOf('import fs from "node:fs/promises"');
     const valueIdx = code.indexOf("const myValue");
     expect(importIdx).toBeGreaterThanOrEqual(0);
     expect(valueIdx).toBeGreaterThanOrEqual(0);
     expect(importIdx).toBeLessThan(valueIdx);
   });
 
-  test("@import type is usable as opaque type", () => {
+  test("@import value is usable as opaque type argument", () => {
     const source = `
 module Test exposing (..)
 
-@import "node:fs/promises" type FileSystem
+type FileSystem
+
+@import "node:fs/promises"
+fs : FileSystem
 
 @get "readFile"
 readFile : FileSystem -> String
 `;
 
     const { code } = compileToJS(source);
-    expect(code).toContain('import FileSystem from "node:fs/promises";');
+    expect(code).toContain('import fs from "node:fs/promises";');
     expect(code).toContain("const readFile = ($recv) => $recv.readFile;");
-  });
-
-  test("@import with type parameters", () => {
-    const source = `
-module Test exposing (..)
-
-@import "some-lib" type Container a
-`;
-
-    const { code } = compileToJS(source);
-    expect(code).toContain('import Container from "some-lib";');
   });
 
   test("IR has correct defaultImports for @import", () => {
     const source = `
 module Test exposing (..)
 
-@import "node:fs/promises" type FileSystem
+type FileSystem
+
+@import "node:fs/promises"
+fs : FileSystem
 `;
 
     const { ir } = compileToJS(source);
     expect(ir.defaultImports).toHaveLength(1);
-    expect(ir.defaultImports[0]!.name).toBe("FileSystem");
+    expect(ir.defaultImports[0]!.name).toBe("fs");
     expect(ir.defaultImports[0]!.modulePath).toBe("node:fs/promises");
   });
 
@@ -1759,13 +1760,19 @@ module Test exposing (..)
     const source = `
 module Test exposing (..)
 
-@import "node:fs/promises" type FS
-@import "node:path" type Path
+type FS
+type Path
+
+@import "node:fs/promises"
+fs : FS
+
+@import "node:path"
+path : Path
 `;
 
     const { code, ir } = compileToJS(source);
     expect(ir.defaultImports).toHaveLength(2);
-    expect(code).toContain('import FS from "node:fs/promises";');
-    expect(code).toContain('import Path from "node:path";');
+    expect(code).toContain('import fs from "node:fs/promises";');
+    expect(code).toContain('import path from "node:path";');
   });
 });

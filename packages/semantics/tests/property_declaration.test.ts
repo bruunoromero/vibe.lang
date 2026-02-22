@@ -179,31 +179,53 @@ jsParseInt : String -> Int
 });
 
 describe("@import declaration", () => {
-  test("accepts @import with opaque type", () => {
+  test("accepts @import as a value with opaque return type", () => {
     const result = analyzeSource(`
-@import "node:fs/promises" type FileSystem
+type FileSystem
+
+@import "node:fs/promises"
+fs : FileSystem
 `);
+    expect(result.types["fs"]).toBeDefined();
     expect(result.opaqueTypes["FileSystem"]).toBeDefined();
-    expect(result.opaqueTypes["FileSystem"]!.importPath).toBe(
-      "node:fs/promises",
+  });
+
+  test("accepts @import with polymorphic opaque type", () => {
+    const result = analyzeSource(`
+type Container a
+
+@import "some-lib"
+container : Container Int
+`);
+    expect(result.types["container"]).toBeDefined();
+  });
+
+  test("rejects duplicate definition for @import declaration", () => {
+    expectError(
+      `
+type FS
+
+fs : FS
+fs = 42
+
+@import "node:fs/promises"
+fs : FS
+`,
+      "Duplicate definition",
     );
   });
 
-  test("rejects @import with ADT (type with constructors)", () => {
+  test("rejects separate type annotation for @import declaration", () => {
     expectError(
       `
-@import "some-lib" type Color = Red | Blue
-`,
-      "@import requires an opaque type declaration",
-    );
-  });
+type FS
 
-  test("rejects @import with type alias", () => {
-    expectError(
-      `
-@import "some-lib" type alias MyInt = Int
+@import "node:fs/promises"
+fs : FS
+
+fs : FS
 `,
-      "@import requires an opaque type declaration",
+      "already includes a type annotation",
     );
   });
 });

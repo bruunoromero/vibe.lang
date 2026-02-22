@@ -55,7 +55,7 @@ Declaration = ExternalDeclaration
             | PropertyGetDeclaration
             | PropertyCallDeclaration
             | PropertyValDeclaration
-            | ImportedTypeDeclaration
+            | ImportedValueDeclaration
             | TypeAnnotationDeclaration
             | ValueDeclaration
             | TypeDeclaration
@@ -80,12 +80,12 @@ PropertyCallDeclaration = "@", "call", String, DeclarationName, ":", TypeExpr ;
 (* Compiles to: const globalWindow = window; *)
 PropertyValDeclaration = "@", "val", String, DeclarationName, ":", TypeExpr ;
 
-(* Imported type declaration - emits a default JS import and declares an opaque type *)
-(* The type after the module path must be an opaque type (no constructors, no alias). *)
-(* This is validated in the semantic analyzer. *)
-(* Example: @import "node:fs/promises" type FileSystem *)
-(* Compiles to: import FileSystem from "node:fs/promises"; *)
-ImportedTypeDeclaration = "@", "import", String, (TypeDeclaration | TypeAliasDeclaration | OpaqueTypeDeclaration) ;
+(* Imported value declaration - emits a default JS import and binds a value *)
+(* The value must return an opaque type. *)
+(* Example: @import "node:fs/promises" *)
+(*          fs : FS *)
+(* Compiles to: import fs from "node:fs/promises"; *)
+ImportedValueDeclaration = "@", "import", String, DeclarationName, ":", TypeExpr ;
 
 TypeAnnotationDeclaration = DeclarationName, ":", TypeExpr ;
 
