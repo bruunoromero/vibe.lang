@@ -263,6 +263,8 @@ export type OpaqueTypeInfo = {
   moduleName?: string;
   /** Type parameters (e.g., ["a"] for Promise a) */
   params: string[];
+  /** JS module path for @import declarations (e.g., "node:fs/promises") */
+  importPath?: string;
   /** Source span for error messages */
   span: Span;
 };

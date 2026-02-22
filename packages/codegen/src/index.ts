@@ -45,6 +45,7 @@ import { sanitizeIdentifier } from "./sanitize";
 import {
   generateExternalImports,
   generateDependencyImports,
+  generateDefaultImports,
   calculateReExportPath,
   type ExternalBindingsMap,
 } from "./imports";
@@ -374,6 +375,13 @@ export function generate(
   const { modulePackages = new Map() } = options;
   const headerLines: string[] = [];
   const bodyLines: string[] = [];
+
+  // 0. Generate default imports from @import type declarations (hoisted)
+  const defaultImportLines = generateDefaultImports(program);
+  if (defaultImportLines.length > 0) {
+    headerLines.push(...defaultImportLines);
+    headerLines.push("");
+  }
 
   // 1. Generate imports for external modules
   const importLines = generateImports(ctx);
@@ -835,15 +843,21 @@ function generateSCC(scc: SCC, ctx: CodegenContext): string[] {
 }
 
 /**
- * Generate an arrow function for @get/@call property access declarations.
+ * Generate an arrow function for @get/@call property access declarations,
+ * or a direct global reference for @val declarations.
  *
  *   @get "key"  name : Opaque -> Ret         => ($recv) => $recv.key
  *   @call "key" name : Opaque -> Ret         => ($recv) => $recv.key()
  *   @call "key" name : Opaque -> A -> Ret    => ($recv) => ($a0) => $recv.key($a0)
  *   @call "key" name : Opaque -> A -> B -> Ret => ($recv) => ($a0) => ($a1) => $recv.key($a0, $a1)
+ *   @val "key"  name : Type                  => key
  */
 function generatePropertyAccess(value: IRValue): string {
   const { variant, key, callArity } = value.propertyAccess!;
+
+  if (variant === "val") {
+    return key;
+  }
 
   if (variant === "get") {
     return `($recv) => $recv.${key}`;

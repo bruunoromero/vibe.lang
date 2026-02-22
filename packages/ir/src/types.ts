@@ -355,11 +355,11 @@ export type IRValue = {
     modulePath: string;
     exportName: string;
   };
-  /** For @get/@call property access declarations */
+  /** For @get/@call/@val property access declarations */
   propertyAccess?: {
-    variant: "get" | "call";
+    variant: "get" | "call" | "val";
     key: string;
-    /** Number of extra arguments beyond the receiver (0 for @get, 0+ for @call) */
+    /** Number of extra arguments beyond the receiver (0 for @get/@val, 0+ for @call) */
     callArity: number;
   };
   /** Source span for error messages */
@@ -534,6 +534,13 @@ export type IRProgram = {
 
   /** Export information from the module's exposing clause */
   exports: ExportInfo;
+
+  /**
+   * Default JS imports from @import type declarations.
+   * Emitted as: import {name} from "{modulePath}";
+   * These must be hoisted to the top of the generated JS file.
+   */
+  defaultImports: Array<{ name: string; modulePath: string }>;
 };
 
 // ============================================================================

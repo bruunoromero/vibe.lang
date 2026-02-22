@@ -119,7 +119,7 @@ export function provideSemanticTokens(cache: DocumentCache): number[] {
       cache.parseResult.ast,
       cache.semanticResult?.module,
       cache.content,
-      tokens
+      tokens,
     );
   }
 
@@ -140,7 +140,7 @@ function extractASTTokens(
   ast: Program,
   semantics: SemanticModule | undefined,
   content: string,
-  tokens: SemanticToken[]
+  tokens: SemanticToken[],
 ): void {
   // Module declaration
   if (ast.module) {
@@ -148,7 +148,7 @@ function extractASTTokens(
       tokens,
       ast.module.span,
       TokenTypeIndex.Namespace,
-      TokenModifierFlags.Declaration
+      TokenModifierFlags.Declaration,
     );
   }
 
@@ -178,7 +178,7 @@ function extractDeclarationTokens(
   decl: Declaration,
   semantics: SemanticModule | undefined,
   content: string,
-  tokens: SemanticToken[]
+  tokens: SemanticToken[],
 ): void {
   if (!decl) return;
 
@@ -198,7 +198,7 @@ function extractDeclarationTokens(
         typeIdx,
         TokenModifierFlags.Declaration |
           TokenModifierFlags.Definition |
-          TokenModifierFlags.Readonly
+          TokenModifierFlags.Readonly,
       );
 
       // Parameters
@@ -227,7 +227,7 @@ function extractDeclarationTokens(
         tokens,
         nameSpan,
         isFunction ? TokenTypeIndex.Function : TokenTypeIndex.Variable,
-        TokenModifierFlags.Declaration
+        TokenModifierFlags.Declaration,
       );
 
       // Type expression
@@ -244,7 +244,7 @@ function extractDeclarationTokens(
         tokens,
         nameSpan,
         TokenTypeIndex.Type,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Definition
+        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
       );
 
       // Type parameters
@@ -257,7 +257,7 @@ function extractDeclarationTokens(
             tokens,
             ctor.span,
             TokenTypeIndex.Constructor,
-            TokenModifierFlags.Declaration
+            TokenModifierFlags.Declaration,
           );
 
           // Constructor argument types
@@ -285,7 +285,7 @@ function extractDeclarationTokens(
         tokens,
         nameSpan,
         TokenTypeIndex.TypeAlias,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Definition
+        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
       );
 
       // Value type
@@ -300,7 +300,7 @@ function extractDeclarationTokens(
         tokens,
         nameSpan,
         TokenTypeIndex.Type,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Definition
+        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
       );
       break;
     }
@@ -312,7 +312,7 @@ function extractDeclarationTokens(
         tokens,
         nameSpan,
         TokenTypeIndex.Protocol,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Definition
+        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
       );
 
       // Methods
@@ -323,7 +323,7 @@ function extractDeclarationTokens(
           tokens,
           methodSpan,
           TokenTypeIndex.Function,
-          TokenModifierFlags.Declaration
+          TokenModifierFlags.Declaration,
         );
 
         // Method type
@@ -340,7 +340,7 @@ function extractDeclarationTokens(
             method.defaultImpl.body,
             semantics,
             content,
-            tokens
+            tokens,
           );
         }
       }
@@ -364,7 +364,7 @@ function extractDeclarationTokens(
           tokens,
           methodSpan,
           TokenTypeIndex.Function,
-          TokenModifierFlags.Definition
+          TokenModifierFlags.Definition,
         );
         extractExprTokens(method.implementation, semantics, content, tokens);
       }
@@ -378,7 +378,7 @@ function extractDeclarationTokens(
         tokens,
         nameSpan,
         TokenTypeIndex.External,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Definition
+        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
       );
 
       // Type annotation
@@ -393,7 +393,34 @@ function extractDeclarationTokens(
         tokens,
         opSpan,
         TokenTypeIndex.Operator,
-        TokenModifierFlags.Declaration
+        TokenModifierFlags.Declaration,
+      );
+      break;
+    }
+
+    case "PropertyDeclaration": {
+      const nameSpan = getNameSpan(decl.span, decl.name, content);
+      addToken(
+        tokens,
+        nameSpan,
+        TokenTypeIndex.External,
+        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
+      );
+      extractTypeExprTokens(decl.annotation, content, tokens);
+      break;
+    }
+
+    case "ImportedTypeDeclaration": {
+      const nameSpan = getNameSpan(
+        decl.typeDecl.span,
+        decl.typeDecl.name,
+        content,
+      );
+      addToken(
+        tokens,
+        nameSpan,
+        TokenTypeIndex.Type,
+        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
       );
       break;
     }
@@ -407,7 +434,7 @@ function extractExprTokens(
   expr: Expr,
   semantics: SemanticModule | undefined,
   content: string,
-  tokens: SemanticToken[]
+  tokens: SemanticToken[],
 ): void {
   if (!expr || !expr.kind) return;
 
@@ -485,7 +512,7 @@ function extractExprTokens(
           tokens,
           nameSpan,
           isFunction ? TokenTypeIndex.Function : TokenTypeIndex.Variable,
-          TokenModifierFlags.Declaration | TokenModifierFlags.Readonly
+          TokenModifierFlags.Declaration | TokenModifierFlags.Readonly,
         );
 
         // Parameters
@@ -576,7 +603,7 @@ function extractPatternTokens(
   pattern: Pattern,
   content: string,
   tokens: SemanticToken[],
-  isParameter: boolean
+  isParameter: boolean,
 ): void {
   if (!pattern || !pattern.kind) return;
 
@@ -586,7 +613,7 @@ function extractPatternTokens(
         tokens,
         pattern.span,
         isParameter ? TokenTypeIndex.Parameter : TokenTypeIndex.Variable,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Readonly
+        TokenModifierFlags.Declaration | TokenModifierFlags.Readonly,
       );
       break;
 
@@ -628,7 +655,7 @@ function extractPatternTokens(
 function extractTypeExprTokens(
   typeExpr: TypeExpr,
   content: string,
-  tokens: SemanticToken[]
+  tokens: SemanticToken[],
 ): void {
   if (!typeExpr || !typeExpr.kind) return;
 
@@ -675,7 +702,7 @@ function extractTypeExprTokens(
         const protocolSpan = getNameSpan(
           constraint.span,
           constraint.protocolName,
-          content
+          content,
         );
         addToken(tokens, protocolSpan, TokenTypeIndex.Protocol, 0);
         for (const arg of constraint.typeArgs) {
@@ -695,7 +722,7 @@ function addToken(
   tokens: SemanticToken[],
   span: Span,
   type: number,
-  modifiers: number
+  modifiers: number,
 ): void {
   const length = span.end.offset - span.start.offset;
   if (length <= 0) return;
@@ -738,7 +765,7 @@ function getNameSpan(fullSpan: Span, name: string, content: string): Span {
   // Extract the text from the full span
   const spanText = content.substring(
     fullSpan.start.offset,
-    fullSpan.end.offset
+    fullSpan.end.offset,
   );
 
   // Find the name within this text
@@ -791,7 +818,7 @@ function getNameSpan(fullSpan: Span, name: string, content: string): Span {
 function getModuleNameSpan(
   fullSpan: Span,
   moduleName: string,
-  content: string
+  content: string,
 ): Span {
   return getNameSpan(fullSpan, moduleName, content);
 }

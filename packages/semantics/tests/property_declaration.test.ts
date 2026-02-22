@@ -149,3 +149,61 @@ fileStatSize : FileStat -> Int
     );
   });
 });
+
+describe("@val declaration", () => {
+  test("accepts @val with opaque type", () => {
+    const result = analyzeSource(`
+type Window
+
+@val "window"
+globalWindow : Window
+`);
+    expect(result.types["globalWindow"]).toBeDefined();
+  });
+
+  test("accepts @val with non-function type", () => {
+    const result = analyzeSource(`
+@val "undefined"
+jsUndefined : ()
+`);
+    expect(result.types["jsUndefined"]).toBeDefined();
+  });
+
+  test("accepts @val with function type", () => {
+    const result = analyzeSource(`
+@val "parseInt"
+jsParseInt : String -> Int
+`);
+    expect(result.types["jsParseInt"]).toBeDefined();
+  });
+});
+
+describe("@import declaration", () => {
+  test("accepts @import with opaque type", () => {
+    const result = analyzeSource(`
+@import "node:fs/promises" type FileSystem
+`);
+    expect(result.opaqueTypes["FileSystem"]).toBeDefined();
+    expect(result.opaqueTypes["FileSystem"]!.importPath).toBe(
+      "node:fs/promises",
+    );
+  });
+
+  test("rejects @import with ADT (type with constructors)", () => {
+    expectError(
+      `
+@import "some-lib" type Color = Red | Blue
+`,
+      "@import requires an opaque type declaration",
+    );
+  });
+
+  test("rejects @import with type alias", () => {
+    expectError(
+      `
+@import "some-lib" type alias MyInt = Int
+`,
+      "@import requires an opaque type declaration",
+    );
+  });
+});

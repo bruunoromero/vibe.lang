@@ -3226,6 +3226,18 @@ class SemanticAnalyzer {
         this.registerOpaqueType(decl);
         continue;
       }
+      if (decl.kind === "ImportedTypeDeclaration") {
+        if (decl.typeDecl.kind !== "OpaqueTypeDeclaration") {
+          throw new SemanticError(
+            `@import requires an opaque type declaration (e.g., \`type Name\`), ` +
+              `but found a ${decl.typeDecl.kind === "TypeDeclaration" ? "type with constructors" : "type alias"}`,
+            decl.typeDecl.span,
+            this.getFilePath(),
+          );
+        }
+        this.registerOpaqueType(decl.typeDecl, decl.modulePath);
+        continue;
+      }
     }
   }
 
@@ -3238,7 +3250,7 @@ class SemanticAnalyzer {
    *
    * Example: `type Promise a` creates an opaque type that takes one parameter.
    */
-  registerOpaqueType(decl: OpaqueTypeDeclaration) {
+  registerOpaqueType(decl: OpaqueTypeDeclaration, importPath?: string) {
     // Check for duplicate type name
     // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
     if (Object.hasOwn(this.opaqueTypes, decl.name)) {
@@ -3276,6 +3288,7 @@ class SemanticAnalyzer {
       name: decl.name,
       moduleName: this.getModuleName(),
       params: decl.params,
+      importPath,
       span: decl.span,
     };
   }
@@ -4624,7 +4637,13 @@ class SemanticAnalyzer {
     decl: PropertyDeclaration,
     type: Type,
   ): void {
-    const variant = decl.variant; // "get" or "call"
+    const variant = decl.variant; // "get", "call", or "val"
+
+    // @val has no structural constraints on the type
+    if (variant === "val") {
+      return;
+    }
+
     const params = flattenFunctionParams(type);
 
     if (variant === "get") {

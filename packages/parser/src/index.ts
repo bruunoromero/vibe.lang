@@ -465,7 +465,12 @@ class Parser {
       return this.parseExternalDeclaration();
     }
 
-    // Check for property access declaration (@get ... or @call ...)
+    // Check for imported type declaration (@import "path" type Name)
+    if (this.peekImportAttribute()) {
+      return this.parseImportedTypeDeclaration();
+    }
+
+    // Check for property access declaration (@get ... or @call ... or @val ...)
     const propertyVariant = this.peekPropertyAttribute();
     if (propertyVariant) {
       return this.parsePropertyDeclaration(propertyVariant);
@@ -2711,7 +2716,7 @@ class Parser {
     );
   }
 
-  private peekPropertyAttribute(): "get" | "call" | null {
+  private peekPropertyAttribute(): "get" | "call" | "val" | null {
     const current = this.current();
     const next = this.peekAhead(1);
     if (
@@ -2719,14 +2724,48 @@ class Parser {
       current.lexeme === "@" &&
       next?.kind === TokenKind.LowerIdentifier
     ) {
-      if (next.lexeme === "get" || next.lexeme === "call") {
+      if (
+        next.lexeme === "get" ||
+        next.lexeme === "call" ||
+        next.lexeme === "val"
+      ) {
         return next.lexeme;
       }
     }
     return null;
   }
 
-  private parsePropertyDeclaration(variant: "get" | "call"): Declaration {
+  private peekImportAttribute(): boolean {
+    const current = this.current();
+    const next = this.peekAhead(1);
+    return (
+      current.kind === TokenKind.Operator &&
+      current.lexeme === "@" &&
+      next?.kind === TokenKind.Keyword &&
+      next.lexeme === "import"
+    );
+  }
+
+  private parseImportedTypeDeclaration(): Declaration {
+    const atToken = this.expectOperator("@");
+    this.expectKeyword("import");
+
+    const pathTok = this.expect(TokenKind.String, "module path string");
+    const typeDecl = this.parseTypeOrAliasDeclaration();
+
+    const span: Span = { start: atToken.span.start, end: typeDecl.span.end };
+
+    return {
+      kind: "ImportedTypeDeclaration",
+      modulePath: this.unquote(pathTok.lexeme),
+      typeDecl,
+      span,
+    };
+  }
+
+  private parsePropertyDeclaration(
+    variant: "get" | "call" | "val",
+  ): Declaration {
     const atToken = this.expectOperator("@");
     const variantToken = this.expect(
       TokenKind.LowerIdentifier,

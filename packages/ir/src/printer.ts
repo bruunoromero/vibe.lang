@@ -67,6 +67,15 @@ export function printProgram(
     lines.push("");
   }
 
+  // Default imports (@import type declarations)
+  if (program.defaultImports.length > 0) {
+    lines.push("-- Default Imports");
+    for (const imp of program.defaultImports) {
+      lines.push(`import ${imp.name} from "${imp.modulePath}"`);
+    }
+    lines.push("");
+  }
+
   // ADTs
   if (Object.keys(program.adts).length > 0) {
     lines.push("-- Types");

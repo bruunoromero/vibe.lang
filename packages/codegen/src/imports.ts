@@ -13,6 +13,21 @@ import { sanitizeIdentifier } from "./sanitize.js";
 export type ExternalBindingsMap = Map<string, Map<string, string>>;
 
 /**
+ * Generate default import statements from @import type declarations.
+ * These are hoisted to the top of the generated file.
+ *
+ * Example: @import "node:fs/promises" type FileSystem
+ * Emits:   import FileSystem from "node:fs/promises";
+ */
+export function generateDefaultImports(program: IRProgram): string[] {
+  const lines: string[] = [];
+  for (const { name, modulePath } of program.defaultImports) {
+    lines.push(`import ${name} from "${modulePath}";`);
+  }
+  return lines;
+}
+
+/**
  * Generate import statements for external (FFI) modules.
  */
 export function generateExternalImports(

@@ -17,28 +17,51 @@ import Vibe exposing (..)
 import Vibe.Promise exposing (Promise)
 
 
+@import "node:fs/promises" type FS
+
+@val "FS"
+fsModule : FS
+
 type FileStat
 
-@external "./FileSystem.ffi.js" "readFile"
+@call "readFile"
+fsReadFile : FS -> String -> String -> Promise String
+
 readFile : String -> Promise String
+readFile path = fsReadFile fsModule path "utf-8"
 
-@external "./FileSystem.ffi.js" "writeFile"
+@call "writeFile"
+fsWriteFile : FS -> String -> String -> String -> Promise ()
+
 writeFile : String -> String -> Promise ()
+writeFile path contents = fsWriteFile fsModule path contents "utf-8"
 
-@external "./FileSystem.ffi.js" "appendFile"
+@call "appendFile"
+fsAppendFile : FS -> String -> String -> String -> Promise ()
+
 appendFile : String -> String -> Promise ()
+appendFile path contents = fsAppendFile fsModule path contents "utf-8"
 
-@external "./FileSystem.ffi.js" "removeFile"
+@call "unlink"
+fsUnlink : FS -> String -> Promise ()
+
 removeFile : String -> Promise ()
+removeFile path = fsUnlink fsModule path
 
-@external "./FileSystem.ffi.js" "readDir"
+@call "readdir"
+fsReaddir : FS -> String -> Promise (List String)
+
 readDir : String -> Promise (List String)
+readDir path = fsReaddir fsModule path
+
+@call "stat"
+fsStat : FS -> String -> Promise FileStat
+
+stat : String -> Promise FileStat
+stat path = fsStat fsModule path
 
 @external "./FileSystem.ffi.js" "makeDir"
 makeDir : String -> Promise ()
-
-@external "./FileSystem.ffi.js" "stat"
-stat : String -> Promise FileStat
 
 @external "./FileSystem.ffi.js" "exists"
 exists : String -> Promise Bool

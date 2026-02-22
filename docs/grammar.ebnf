@@ -54,6 +54,8 @@ ModuleName = UpperIdentifier, {".", UpperIdentifier} ;
 Declaration = ExternalDeclaration
             | PropertyGetDeclaration
             | PropertyCallDeclaration
+            | PropertyValDeclaration
+            | ImportedTypeDeclaration
             | TypeAnnotationDeclaration
             | ValueDeclaration
             | TypeDeclaration
@@ -72,6 +74,18 @@ PropertyGetDeclaration = "@", "get", String, DeclarationName, ":", TypeExpr ;
 (* Example: @call "toString" toString : FileStat -> String *)
 (* With args: @call "write" write : Handle -> String -> Promise () *)
 PropertyCallDeclaration = "@", "call", String, DeclarationName, ":", TypeExpr ;
+
+(* Global value reference for FFI - references a global JS variable *)
+(* Example: @val "window" globalWindow : Window *)
+(* Compiles to: const globalWindow = window; *)
+PropertyValDeclaration = "@", "val", String, DeclarationName, ":", TypeExpr ;
+
+(* Imported type declaration - emits a default JS import and declares an opaque type *)
+(* The type after the module path must be an opaque type (no constructors, no alias). *)
+(* This is validated in the semantic analyzer. *)
+(* Example: @import "node:fs/promises" type FileSystem *)
+(* Compiles to: import FileSystem from "node:fs/promises"; *)
+ImportedTypeDeclaration = "@", "import", String, (TypeDeclaration | TypeAliasDeclaration | OpaqueTypeDeclaration) ;
 
 TypeAnnotationDeclaration = DeclarationName, ":", TypeExpr ;
 

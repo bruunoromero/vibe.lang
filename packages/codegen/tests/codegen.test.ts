@@ -1618,4 +1618,154 @@ getSize path = fileStatSize (getStat path)
     expect(code).toContain("const fileStatSize = ($recv) => $recv.size;");
     expect(code).toContain("fileStatSize(getStat(path))");
   });
+
+  test("@val compiles to direct global variable reference", () => {
+    const source = `
+module Test exposing (..)
+
+type Window
+
+@val "window"
+globalWindow : Window
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain("const globalWindow = window;");
+    expect(code).not.toContain("$recv");
+  });
+
+  test("@val with non-function type works", () => {
+    const source = `
+module Test exposing (..)
+
+@val "undefined"
+jsUndefined : ()
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain("const jsUndefined = undefined;");
+  });
+
+  test("@val values are exported", () => {
+    const source = `
+module Test exposing (..)
+
+type Console
+
+@val "console"
+jsConsole : Console
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain("const jsConsole = console;");
+    expect(code).toContain("jsConsole");
+  });
+
+  test("IR has correct propertyAccess for @val", () => {
+    const source = `
+module Test exposing (..)
+
+type Window
+
+@val "window"
+globalWindow : Window
+`;
+
+    const { ir } = compileToJS(source);
+    const value = ir.values["globalWindow"];
+    expect(value).toBeDefined();
+    expect(value!.propertyAccess).toBeDefined();
+    expect(value!.propertyAccess!.variant).toBe("val");
+    expect(value!.propertyAccess!.key).toBe("window");
+    expect(value!.propertyAccess!.callArity).toBe(0);
+  });
+});
+
+// ============================================================================
+// Imported Type Declaration Tests (@import)
+// ============================================================================
+
+describe("Imported Type Declarations", () => {
+  test("@import emits default import statement", () => {
+    const source = `
+module Test exposing (..)
+
+@import "node:fs/promises" type FileSystem
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain('import FileSystem from "node:fs/promises";');
+  });
+
+  test("@import hoists import before other declarations", () => {
+    const source = `
+module Test exposing (..)
+
+@import "node:fs/promises" type FileSystem
+
+myValue : Int
+myValue = 42
+`;
+
+    const { code } = compileToJS(source);
+    // The import should appear before the value declaration
+    const importIdx = code.indexOf('import FileSystem from "node:fs/promises"');
+    const valueIdx = code.indexOf("const myValue");
+    expect(importIdx).toBeGreaterThanOrEqual(0);
+    expect(valueIdx).toBeGreaterThanOrEqual(0);
+    expect(importIdx).toBeLessThan(valueIdx);
+  });
+
+  test("@import type is usable as opaque type", () => {
+    const source = `
+module Test exposing (..)
+
+@import "node:fs/promises" type FileSystem
+
+@get "readFile"
+readFile : FileSystem -> String
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain('import FileSystem from "node:fs/promises";');
+    expect(code).toContain("const readFile = ($recv) => $recv.readFile;");
+  });
+
+  test("@import with type parameters", () => {
+    const source = `
+module Test exposing (..)
+
+@import "some-lib" type Container a
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain('import Container from "some-lib";');
+  });
+
+  test("IR has correct defaultImports for @import", () => {
+    const source = `
+module Test exposing (..)
+
+@import "node:fs/promises" type FileSystem
+`;
+
+    const { ir } = compileToJS(source);
+    expect(ir.defaultImports).toHaveLength(1);
+    expect(ir.defaultImports[0]!.name).toBe("FileSystem");
+    expect(ir.defaultImports[0]!.modulePath).toBe("node:fs/promises");
+  });
+
+  test("multiple @import declarations", () => {
+    const source = `
+module Test exposing (..)
+
+@import "node:fs/promises" type FS
+@import "node:path" type Path
+`;
+
+    const { code, ir } = compileToJS(source);
+    expect(ir.defaultImports).toHaveLength(2);
+    expect(code).toContain('import FS from "node:fs/promises";');
+    expect(code).toContain('import Path from "node:path";');
+  });
 });

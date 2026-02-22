@@ -240,6 +240,50 @@ handleWrite : Handle -> String -> Int`);
     }
   });
 
+  test("parses @val property declaration", () => {
+    const program = parseTest(`type Window
+
+@val "window"
+globalWindow : Window`);
+
+    expect(program.declarations.length).toBe(2);
+    const prop = program.declarations[1]!;
+    expect(prop.kind).toBe("PropertyDeclaration");
+    if (prop.kind === "PropertyDeclaration") {
+      expect(prop.variant).toBe("val");
+      expect(prop.key).toBe("window");
+      expect(prop.name).toBe("globalWindow");
+    }
+  });
+
+  test("parses @import type declaration", () => {
+    const program = parseTest(`@import "node:fs/promises" type FileSystem`);
+
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0]!;
+    expect(decl.kind).toBe("ImportedTypeDeclaration");
+    if (decl.kind === "ImportedTypeDeclaration") {
+      expect(decl.modulePath).toBe("node:fs/promises");
+      expect(decl.typeDecl.kind).toBe("OpaqueTypeDeclaration");
+      expect(decl.typeDecl.name).toBe("FileSystem");
+      expect(decl.typeDecl.params).toEqual([]);
+    }
+  });
+
+  test("parses @import type declaration with params", () => {
+    const program = parseTest(`@import "some-lib" type Container a b`);
+
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0]!;
+    expect(decl.kind).toBe("ImportedTypeDeclaration");
+    if (decl.kind === "ImportedTypeDeclaration") {
+      expect(decl.modulePath).toBe("some-lib");
+      expect(decl.typeDecl.kind).toBe("OpaqueTypeDeclaration");
+      expect(decl.typeDecl.name).toBe("Container");
+      expect(decl.typeDecl.params).toEqual(["a", "b"]);
+    }
+  });
+
   test("parses opaque type followed by function definition", () => {
     // Regression test: opaque types should not consume the next declaration's name
     // as a type parameter (layout-sensitive parsing)

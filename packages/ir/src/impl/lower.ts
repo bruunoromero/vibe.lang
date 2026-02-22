@@ -199,19 +199,27 @@ export function lower(
     // Compute property access metadata
     let propertyAccess: IRValue["propertyAccess"];
     if (decl.kind === "PropertyDeclaration") {
-      // Count curried function args to determine call arity
-      let argCount = 0;
-      let t = irType;
-      while (t.kind === "fun") {
-        argCount++;
-        t = t.to;
+      if (decl.variant === "val") {
+        propertyAccess = {
+          variant: "val",
+          key: decl.key,
+          callArity: 0,
+        };
+      } else {
+        // Count curried function args to determine call arity
+        let argCount = 0;
+        let t = irType;
+        while (t.kind === "fun") {
+          argCount++;
+          t = t.to;
+        }
+        // callArity = total args minus the receiver (first arg)
+        propertyAccess = {
+          variant: decl.variant,
+          key: decl.key,
+          callArity: Math.max(0, argCount - 1),
+        };
       }
-      // callArity = total args minus the receiver (first arg)
-      propertyAccess = {
-        variant: decl.variant,
-        key: decl.key,
-        callArity: Math.max(0, argCount - 1),
-      };
     }
 
     const irValue: IRValue = {
@@ -671,6 +679,17 @@ export function lower(
   const packageName: string =
     options.packageName ?? semantics.module.name.split(".")[0]!;
 
+  // Collect default imports from @import type declarations
+  const defaultImports: Array<{ name: string; modulePath: string }> = [];
+  for (const opaqueType of Object.values(semantics.opaqueTypes)) {
+    if (opaqueType.importPath) {
+      defaultImports.push({
+        name: opaqueType.name,
+        modulePath: opaqueType.importPath,
+      });
+    }
+  }
+
   return {
     moduleName: semantics.module.name,
     packageName,
@@ -690,6 +709,7 @@ export function lower(
     sourceModule: semantics,
     sourceProgram: program,
     exports: semantics.exports,
+    defaultImports,
   };
 }
 

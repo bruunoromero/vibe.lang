@@ -380,24 +380,49 @@ export type ExternalDeclaration = {
  * Syntax:
  *   @get "key" name : OpaqueType -> ReturnType
  *   @call "key" name : OpaqueType -> Arg1 -> ... -> ReturnType
+ *   @val "key" name : Type
  *
  * @get compiles to: (recv) => recv.key
  * @call compiles to: (recv) => (a0) => ... => recv.key(a0, ...)
+ * @val compiles to: name = key (direct global variable reference)
  *
- * The first argument must be an opaque type.
+ * The first argument of @get/@call must be an opaque type.
  * @get requires exactly one argument (A -> B).
  * @call requires at least one argument (A -> B, A -> B -> C, etc.).
+ * @val has no constraint on the type shape.
  */
 export type PropertyDeclaration = {
   kind: "PropertyDeclaration";
-  /** Whether this is a property get or a method call */
-  variant: "get" | "call";
-  /** The JS property key to access */
+  /** Whether this is a property get, method call, or global value reference */
+  variant: "get" | "call" | "val";
+  /** The JS property/global key to access */
   key: string;
   /** The Vibe binding name */
   name: string;
   /** Type annotation (always required) */
   annotation: TypeExpr;
+  /** Source location span */
+  span: Span;
+};
+
+/**
+ * An imported type declaration that emits a default JS import.
+ *
+ * Syntax: @import "module-path" type Name params...
+ *
+ * Example:
+ *   @import "node:fs/promises" type FileSystem
+ *
+ * Compiles to: import FileSystem from "node:fs/promises";
+ *
+ * The type is opaque (no constructors, no pattern matching).
+ */
+export type ImportedTypeDeclaration = {
+  kind: "ImportedTypeDeclaration";
+  /** The JS module path to import from */
+  modulePath: string;
+  /** The inner type declaration (must be opaque, validated in semantics) */
+  typeDecl: TypeDeclaration | TypeAliasDeclaration | OpaqueTypeDeclaration;
   /** Source location span */
   span: Span;
 };
@@ -562,6 +587,7 @@ export type Declaration =
   | TypeAnnotationDeclaration
   | ExternalDeclaration
   | PropertyDeclaration
+  | ImportedTypeDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
   | OpaqueTypeDeclaration
