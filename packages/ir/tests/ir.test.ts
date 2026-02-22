@@ -279,6 +279,8 @@ moveX p =
 
   test("simple record construction", () => {
     const source = `
+type AB = { a : Int, b : Int }
+
 x = { a = 1, b = 2 }
 `;
     const value = getValueIR(source, "x");

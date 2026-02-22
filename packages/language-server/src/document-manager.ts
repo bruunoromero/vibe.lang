@@ -59,11 +59,8 @@ export class DocumentManager {
   /** Cached loaded modules by name */
   private loadedModules = new Map<string, SemanticModule>();
 
-  /** Project config for resolving modules */
-  private projectConfig: ResolvedVibeConfig | null = null;
-
-  /** Flag to indicate project config loading has been attempted */
-  private projectConfigAttempted = false;
+  /** Cached project configs keyed by the absolute path of the config file */
+  private configCache = new Map<string, ResolvedVibeConfig>();
 
   /**
    * Update a document and trigger reanalysis.
@@ -124,22 +121,18 @@ export class DocumentManager {
   }
 
   /**
-   * Initialize project config from a document URI.
-   * This is called lazily on the first document analysis.
+   * Resolve the project config for a given document URI.
+   * Walks up from the document's directory looking for vibe.json or package.json with a vibe key.
+   * Results are cached by the config file path so repeated lookups are cheap.
    */
-  private initProjectConfig(documentUri: string): void {
-    if (this.projectConfigAttempted) {
-      return;
-    }
-    this.projectConfigAttempted = true;
-
+  private resolveConfigForDocument(
+    documentUri: string,
+  ): ResolvedVibeConfig | null {
     try {
-      // Extract file path from URI
       const filePath = documentUri.startsWith("file://")
         ? decodeURIComponent(documentUri.slice(7))
         : documentUri;
 
-      // Find the workspace root by looking for vibe.json or package.json
       let dir = path.dirname(filePath);
 
       while (dir && dir !== path.dirname(dir)) {
@@ -147,19 +140,24 @@ export class DocumentManager {
         const packageJsonPath = path.join(dir, "package.json");
 
         if (fs.existsSync(vibeConfigPath)) {
-          this.projectConfig = loadConfig({ path: vibeConfigPath });
-          return;
+          const cached = this.configCache.get(vibeConfigPath);
+          if (cached) return cached;
+          const config = loadConfig({ path: vibeConfigPath });
+          this.configCache.set(vibeConfigPath, config);
+          return config;
         }
 
-        // Check if package.json has vibe config
         if (fs.existsSync(packageJsonPath)) {
           try {
             const pkgJson = JSON.parse(
               fs.readFileSync(packageJsonPath, "utf8"),
             );
             if (pkgJson.vibe) {
-              this.projectConfig = loadConfig({ path: packageJsonPath });
-              return;
+              const cached = this.configCache.get(packageJsonPath);
+              if (cached) return cached;
+              const config = loadConfig({ path: packageJsonPath });
+              this.configCache.set(packageJsonPath, config);
+              return config;
             }
           } catch {
             // Ignore parse errors
@@ -171,6 +169,7 @@ export class DocumentManager {
     } catch {
       // Config not found, module loading will be limited
     }
+    return null;
   }
 
   /**
@@ -178,20 +177,19 @@ export class DocumentManager {
    * Recursively loads the module's own imports first.
    * Returns null if the module cannot be loaded.
    */
-  private loadModule(moduleName: string): SemanticModule | null {
+  private loadModule(
+    moduleName: string,
+    config: ResolvedVibeConfig,
+  ): SemanticModule | null {
     // Check if already cached
     if (this.loadedModules.has(moduleName)) {
       return this.loadedModules.get(moduleName) || null;
     }
 
-    if (!this.projectConfig) {
-      return null;
-    }
-
     try {
       // Resolve the module
       const resolved = resolveModule({
-        config: this.projectConfig,
+        config,
         moduleName,
         preferDist: false,
       });
@@ -204,7 +202,7 @@ export class DocumentManager {
       if (program.imports) {
         for (const imp of program.imports) {
           if (!this.loadedModules.has(imp.moduleName)) {
-            const depModule = this.loadModule(imp.moduleName);
+            const depModule = this.loadModule(imp.moduleName, config);
             if (depModule) {
               moduleDeps.set(imp.moduleName, depModule);
             }
@@ -222,7 +220,7 @@ export class DocumentManager {
         dependencies: moduleDeps,
         fileContext: {
           filePath: resolved.filePath,
-          srcDir: this.projectConfig.srcDir,
+          srcDir: resolved.srcDir,
         },
       });
 
@@ -238,7 +236,10 @@ export class DocumentManager {
   /**
    * Recursively load all dependencies from an AST.
    */
-  private loadDependencies(ast: Program): Map<string, SemanticModule> {
+  private loadDependencies(
+    ast: Program,
+    config: ResolvedVibeConfig,
+  ): Map<string, SemanticModule> {
     const dependencies = new Map<string, SemanticModule>();
 
     if (ast.imports) {
@@ -250,7 +251,7 @@ export class DocumentManager {
         if (cached) {
           dependencies.set(imp.moduleName, cached);
         } else {
-          const loaded = this.loadModule(imp.moduleName);
+          const loaded = this.loadModule(imp.moduleName, config);
           if (loaded) {
             dependencies.set(imp.moduleName, loaded);
           }
@@ -265,8 +266,7 @@ export class DocumentManager {
    * Analyze a document through all compilation phases.
    */
   private analyzeDocument(cache: DocumentCache): void {
-    // Initialize project config on first analysis (needed for resolving imports)
-    this.initProjectConfig(cache.uri);
+    const config = this.resolveConfigForDocument(cache.uri);
 
     const diagnostics: Diagnostic[] = [];
 
@@ -316,8 +316,10 @@ export class DocumentManager {
     // Phase 3: Semantic Analysis
     if (cache.parseResult?.ast) {
       try {
-        // Load all dependencies for this module
-        const dependencies = this.loadDependencies(cache.parseResult.ast);
+        // Load all dependencies for this module (requires config for module resolution)
+        const dependencies = config
+          ? this.loadDependencies(cache.parseResult.ast, config)
+          : new Map<string, SemanticModule>();
 
         // Convert URI to file path for semantic analysis
         const docFilePath = cache.uri.startsWith("file://")
@@ -329,7 +331,7 @@ export class DocumentManager {
           dependencies,
           fileContext: {
             filePath: docFilePath,
-            srcDir: this.projectConfig?.srcDir || "",
+            srcDir: config?.srcDir || "",
           },
         };
 

@@ -1,0 +1,6 @@
+{
+  "name": "VibeNode",
+  "src": "src",
+  "dist": "dist",
+  "packages": ["@vibe/prelude"]
+}

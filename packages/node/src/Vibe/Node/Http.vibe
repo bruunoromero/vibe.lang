@@ -1,0 +1,26 @@
+module Vibe.Node.Http exposing
+    ( get
+    , post
+    , Response
+    , responseStatus
+    , responseBody
+    )
+
+import Vibe exposing (..)
+import Vibe.Promise exposing (Promise)
+
+
+type Response
+
+
+@external "./Http.ffi.js" "httpGet"
+get : String -> Promise Response
+
+@external "./Http.ffi.js" "httpPost"
+post : String -> String -> Promise Response
+
+@external "./Http.ffi.js" "responseStatus"
+responseStatus : Response -> Int
+
+@external "./Http.ffi.js" "responseBody"
+responseBody : Response -> String

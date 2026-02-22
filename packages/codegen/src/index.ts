@@ -1018,6 +1018,28 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
  *
  * Regular functions and external bindings are referenced directly by name.
  */
+/**
+ * Check if a type is fully concrete (contains no type variables).
+ */
+function isFullyConcrete(type: IRType): boolean {
+  switch (type.kind) {
+    case "var":
+      return false;
+    case "con":
+      return type.args.every(isFullyConcrete);
+    case "list":
+      return isFullyConcrete(type.element);
+    case "tuple":
+      return type.elements.every(isFullyConcrete);
+    case "fun":
+      return isFullyConcrete(type.from) && isFullyConcrete(type.to);
+    case "record":
+      return Object.values(type.fields).every(isFullyConcrete);
+    default:
+      return true;
+  }
+}
+
 function generateVar(
   expr: Extract<IRExpr, { kind: "IRVar" }>,
   ctx: CodegenContext,
@@ -1050,9 +1072,27 @@ function generateVar(
     const sanitizedName = sanitizeIdentifier(expr.name);
     const dictParam = `$dict_${protocolName}`;
 
+    // If the IR provides an explicit constraint with a fully concrete type,
+    // resolve directly to that type's dictionary. This handles auto-derived
+    // instance methods where the self-constraint dict is in scope but the
+    // operator should resolve to the field-type-specific dictionary.
+    if (expr.constraint) {
+      const typeArg = expr.constraint.typeArgs[0];
+      if (typeArg && typeArg.kind === "con" && isFullyConcrete(typeArg)) {
+        const typeKey = formatTypeKey(typeArg);
+        const dictRef = resolveDictReferenceCtx(
+          protocolName,
+          typeKey,
+          ctx,
+          typeArg,
+          expr.constraint.typeArgs,
+        );
+        return `${dictRef}.${sanitizedName}`;
+      }
+    }
+
     // Check if we have a dictionary parameter in scope (polymorphic context)
     if (ctx.dictParamsInScope.has(dictParam)) {
-      // Use the dictionary parameter
       return `${dictParam}.${sanitizedName}`;
     }
 
@@ -1307,7 +1347,7 @@ function tryGenerateProtocolMethodApply(
   ctx: CodegenContext,
 ): string | null {
   // Extract the root method and all operands from nested applies
-  const { methodName, operands } = extractMethodAndOperands(expr);
+  const { methodName, methodVar, operands } = extractMethodAndOperands(expr);
 
   if (!methodName) {
     return null;
@@ -1317,6 +1357,29 @@ function tryGenerateProtocolMethodApply(
   const protocolName = ctx.protocolMethodMap.get(methodName);
   if (!protocolName) {
     return null;
+  }
+
+  // If the root IRVar has an explicit constraint with a fully concrete type,
+  // resolve directly using that constraint (handles auto-derived instances).
+  if (methodVar?.constraint) {
+    const typeArg = methodVar.constraint.typeArgs[0];
+    if (typeArg && typeArg.kind === "con" && isFullyConcrete(typeArg)) {
+      const sanitizedName = sanitizeIdentifier(methodName);
+      const typeKey = formatTypeKey(typeArg);
+      const dictRef = resolveDictReferenceCtx(
+        protocolName,
+        typeKey,
+        ctx,
+        typeArg,
+        methodVar.constraint.typeArgs,
+      );
+      let result = `${dictRef}.${sanitizedName}`;
+      for (const operand of operands) {
+        const argCode = generateExpr(operand, ctx);
+        result = `${result}(${argCode})`;
+      }
+      return result;
+    }
   }
 
   // If we're in polymorphic context (dictionary param in scope), let normal path handle it
@@ -1382,6 +1445,7 @@ function tryGenerateProtocolMethodApply(
  */
 function extractMethodAndOperands(expr: Extract<IRExpr, { kind: "IRApply" }>): {
   methodName: string | null;
+  methodVar: Extract<IRExpr, { kind: "IRVar" }> | null;
   operands: IRExpr[];
 } {
   const operands: IRExpr[] = [];
@@ -1396,10 +1460,10 @@ function extractMethodAndOperands(expr: Extract<IRExpr, { kind: "IRApply" }>): {
 
   // The innermost callee should be a variable
   if (current.kind === "IRVar" && current.namespace === "value") {
-    return { methodName: current.name, operands };
+    return { methodName: current.name, methodVar: current, operands };
   }
 
-  return { methodName: null, operands: [] };
+  return { methodName: null, methodVar: null, operands: [] };
 }
 
 /**

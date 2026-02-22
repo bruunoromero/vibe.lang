@@ -112,6 +112,7 @@ import type {
   TypeInferenceContext,
   TypeVarContext,
   AnnotationResult,
+  ProtocolMethodUsage,
 } from "./types";
 
 import { Scope, RegistryManager } from "./types";
@@ -308,6 +309,10 @@ class SemanticAnalyzer {
     // Implementations are registered after protocols but before value inference
     // so that we can resolve constraints during type checking.
     this.registerImplementationDeclarations();
+
+    // Set the module-level record registry for synthesis functions
+    _recordRegistry = this.records;
+    _protocolMethodUsages = this._resolvedProtocolUsages;
 
     // ===== PASS 1.6: Auto-implement Eq for all type declarations =====
     // After explicit implementations are registered, auto-generate Eq for types that:
@@ -642,7 +647,6 @@ class SemanticAnalyzer {
       case "Record": {
         const fields: Record<string, Type> = {};
         for (const field of expr.fields) {
-          // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
           if (Object.hasOwn(fields, field.name)) {
             throw new SemanticError(
               `Duplicate record field '${field.name}'`,
@@ -655,7 +659,96 @@ class SemanticAnalyzer {
             substitution,
           });
         }
-        return { kind: "record", fields };
+
+        const literalFieldNames = new Set(Object.keys(fields));
+
+        // Try to resolve the record literal to a named record type.
+        // 1. If expectedType is a TypeCon for a known record, use it directly.
+        // 2. Otherwise, search all records in scope for a unique field-name match.
+        let targetRecord: RecordInfo | undefined;
+
+        if (expectedType) {
+          const expected = applySubstitution(expectedType, substitution);
+          if (expected.kind === "con") {
+            const rec = this.resolveRecordInfo(expected.name);
+            if (rec) {
+              targetRecord = rec;
+            }
+          }
+        }
+
+        if (!targetRecord) {
+          const candidates = this.findRecordsByFieldNames(literalFieldNames);
+          if (candidates.length === 0) {
+            const shape = Object.entries(fields)
+              .map(([k, v]) => `${k} : ${formatType(v)}`)
+              .join(", ");
+            throw new SemanticError(
+              `No record type in scope has shape { ${shape} }. ` +
+                `Define a named record type with these fields.`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          if (candidates.length > 1) {
+            const names = candidates.map((r) => r.name).join(", ");
+            throw new SemanticError(
+              `Ambiguous record literal \u2014 multiple types in scope match this shape: ${names}. ` +
+                `Add a type annotation to disambiguate.`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          targetRecord = candidates[0]!;
+        }
+
+        // Validate: literal fields must match record type fields exactly
+        const recordFieldNames = new Set(
+          targetRecord.fields.map((f) => f.name),
+        );
+        for (const fname of literalFieldNames) {
+          if (!recordFieldNames.has(fname)) {
+            throw new SemanticError(
+              `Field '${fname}' is not a field of record type '${targetRecord.name}'`,
+              expr.fields.find((f) => f.name === fname)!.span,
+              this.getFilePath(),
+            );
+          }
+        }
+        for (const fname of recordFieldNames) {
+          if (!literalFieldNames.has(fname)) {
+            throw new SemanticError(
+              `Missing field '${fname}' for record type '${targetRecord.name}'`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+        }
+
+        // Create fresh type vars for record params and unify field types
+        const paramVars: TypeVar[] = targetRecord.params.map(() => freshType());
+        const resolveCtx = new Map<string, TypeVar>();
+        targetRecord.params.forEach((p, i) => {
+          resolveCtx.set(p, paramVars[i]!);
+        });
+
+        for (const fieldInfo of targetRecord.fields) {
+          const declaredFieldType = this.typeFromAnnotation(
+            fieldInfo.typeExpr,
+            resolveCtx,
+          );
+          this.unify(
+            fields[fieldInfo.name]!,
+            declaredFieldType,
+            expr.fields.find((f) => f.name === fieldInfo.name)!.span,
+            substitution,
+          );
+        }
+
+        const resolvedArgs = paramVars.map((v) =>
+          applySubstitution(v, substitution),
+        );
+        return { kind: "con", name: targetRecord.name, args: resolvedArgs };
       }
       case "RecordUpdate": {
         const baseType = this.lookupSymbol(
@@ -665,6 +758,62 @@ class SemanticAnalyzer {
           substitution,
         );
         const concreteBase = applySubstitution(baseType, substitution);
+
+        if (concreteBase.kind === "con") {
+          const recordInfo = this.resolveRecordInfo(concreteBase.name);
+          if (recordInfo) {
+            // Named record update — resolve fields via RecordInfo
+            const paramVars: TypeVar[] = recordInfo.params.map(() =>
+              freshType(),
+            );
+            const resolveCtx = new Map<string, TypeVar>();
+            recordInfo.params.forEach((p, i) => {
+              resolveCtx.set(p, paramVars[i]!);
+            });
+            // Unify param vars with the concrete type args
+            paramVars.forEach((v, i) => {
+              if (concreteBase.args[i]) {
+                this.unify(v, concreteBase.args[i]!, expr.span, substitution);
+              }
+            });
+
+            const recordFieldNames = new Set(
+              recordInfo.fields.map((f) => f.name),
+            );
+            for (const field of expr.fields) {
+              if (!recordFieldNames.has(field.name)) {
+                throw new SemanticError(
+                  `Record '${concreteBase.name}' has no field '${field.name}'`,
+                  field.span,
+                  this.getFilePath(),
+                );
+              }
+              const fieldInfo = recordInfo.fields.find(
+                (f) => f.name === field.name,
+              )!;
+              const declaredFieldType = this.typeFromAnnotation(
+                fieldInfo.typeExpr,
+                resolveCtx,
+              );
+              const fieldType = this.analyzeExpr(field.value, {
+                scope,
+                substitution,
+              });
+              this.unify(
+                fieldType,
+                declaredFieldType,
+                field.span,
+                substitution,
+              );
+            }
+
+            const resolvedArgs = paramVars.map((v) =>
+              applySubstitution(v, substitution),
+            );
+            return { kind: "con", name: concreteBase.name, args: resolvedArgs };
+          }
+        }
+
         if (concreteBase.kind !== "record") {
           throw new SemanticError(
             `Cannot update non-record '${expr.base}'`,
@@ -1194,35 +1343,17 @@ class SemanticAnalyzer {
         if (resolved && resolved.kind === "record") {
           const recordInfo = resolved.info as RecordInfo;
           if (annotation.args.length === recordInfo.params.length) {
-            // Convert args
             const argTypes: Type[] = [];
             for (let i = 0; i < recordInfo.params.length; i++) {
               argTypes.push(
                 this.typeFromAnnotation(annotation.args[i]!, context),
               );
             }
-            // Subst map
-            const recordContext: TypeVarContext = new Map(context);
-            const substitutionMap = new Map<number, Type>();
-            for (let i = 0; i < recordInfo.params.length; i++) {
-              const pname = recordInfo.params[i]!;
-              const fresh = freshType();
-              recordContext.set(pname, fresh);
-              substitutionMap.set(fresh.id, argTypes[i]!);
-            }
-            // Build fields
-            const fields: Record<string, Type> = {};
-            for (const field of recordInfo.fields) {
-              const fieldType = this.typeFromAnnotation(
-                field.typeExpr,
-                recordContext,
-              );
-              fields[field.name] = applySubstitution(
-                fieldType,
-                substitutionMap,
-              );
-            }
-            return { kind: "record", fields };
+            return {
+              kind: "con",
+              name: recordInfo.name,
+              args: argTypes,
+            };
           }
         }
 
@@ -1696,6 +1827,49 @@ class SemanticAnalyzer {
     }
   }
 
+  /**
+   * Look up a RecordInfo by name from local records and imported dependencies.
+   */
+  resolveRecordInfo(name: string): RecordInfo | undefined {
+    if (this.records[name]) return this.records[name];
+    for (const [, dep] of this.dependencies) {
+      if (dep.records[name]) return dep.records[name];
+    }
+    return undefined;
+  }
+
+  /**
+   * Find all record types (local + imported) whose field name set exactly
+   * matches the given set. Used to resolve un-annotated record literals.
+   */
+  findRecordsByFieldNames(fieldNames: Set<string>): RecordInfo[] {
+    const results: RecordInfo[] = [];
+    const seen = new Set<string>();
+
+    const check = (rec: RecordInfo) => {
+      if (seen.has(rec.name)) return;
+      seen.add(rec.name);
+      const recFieldNames = new Set(rec.fields.map((f) => f.name));
+      if (
+        recFieldNames.size === fieldNames.size &&
+        [...fieldNames].every((f) => recFieldNames.has(f))
+      ) {
+        results.push(rec);
+      }
+    };
+
+    for (const rec of Object.values(this.records)) {
+      check(rec);
+    }
+    for (const [, dep] of this.dependencies) {
+      for (const rec of Object.values(dep.records)) {
+        check(rec);
+      }
+    }
+
+    return results;
+  }
+
   analyzeValueDeclaration(
     decl: ValueDeclaration,
     scope: Scope,
@@ -1871,6 +2045,17 @@ class SemanticAnalyzer {
             this.opaqueTypes[name] = depModule.opaqueTypes[name]!;
             return;
           }
+          if (depModule.records[name]) {
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.records[name],
+              imp.span,
+              "record type",
+            );
+            this.records[name] = depModule.records[name]!;
+            return;
+          }
           if (
             isExportedFromModule(depModule, name, "protocol") &&
             depModule.protocols[name]
@@ -2024,6 +2209,27 @@ class SemanticAnalyzer {
           for (const [methodName, scheme] of methodSchemes) {
             this.typeSchemes[methodName] = scheme;
           }
+          return;
+        }
+
+        // Check if it's a record type (records have no constructors, (..) just imports the type)
+        const depRecord = depModule.records[name];
+        if (depRecord) {
+          if (!isExportedFromModule(depModule, name, "type")) {
+            throw new SemanticError(
+              `Cannot import record type '${name}(..)' from module '${imp.moduleName}' - it is not exported`,
+              spec.span,
+              this.getFilePath(),
+            );
+          }
+          this.checkTypeCollision(
+            name,
+            imp.moduleName,
+            this.records[name],
+            imp.span,
+            "record type",
+          );
+          this.records[name] = depRecord;
           return;
         }
 
@@ -2533,6 +2739,23 @@ class SemanticAnalyzer {
               );
             }
             this.opaqueTypes[name] = opaque;
+          }
+        }
+
+        // Import all exported record types
+        for (const [name, rec] of Object.entries(depModule.records) as [
+          string,
+          RecordInfo,
+        ][]) {
+          if (isExportedFromModule(depModule, name, "type")) {
+            this.checkTypeCollision(
+              name,
+              imp.moduleName,
+              this.records[name],
+              imp.span,
+              "record type",
+            );
+            this.records[name] = rec;
           }
         }
 
@@ -3622,16 +3845,28 @@ class SemanticAnalyzer {
       right: b,
       span,
     });
-    const toString = (val: Expr): Expr => ({
-      kind: "Apply",
-      callee: { kind: "Var", name: "toString", namespace: "lower", span },
-      args: [val],
-      span,
-    });
+    const toStringWithUsage = (val: Expr, valType: Type): Expr => {
+      const callee: Expr = {
+        kind: "Var",
+        name: "toString",
+        namespace: "lower",
+        span,
+      };
+      const node: Expr = {
+        kind: "Apply",
+        callee,
+        args: [val],
+        span,
+      };
+      this._resolvedProtocolUsages.set(callee, {
+        protocolName: "Show",
+        typeArgs: [valType],
+      });
+      return node;
+    };
 
     if (decl.recordFields) {
-      // Type(field = val, ...)
-      let expr: Expr = str(`${decl.name}(`);
+      let expr: Expr = str(`${decl.name} { `);
 
       decl.recordFields.forEach((field, i) => {
         if (i > 0) expr = append(expr, str(", "));
@@ -3644,13 +3879,13 @@ class SemanticAnalyzer {
           field: field.name,
           span,
         };
-        expr = append(expr, toString(fieldAccess));
+        const fieldType = this.typeFromAnnotation(field.type, paramMap);
+        expr = append(expr, toStringWithUsage(fieldAccess, fieldType));
       });
 
-      expr = append(expr, str(")"));
+      expr = append(expr, str(" }"));
       body = expr;
     } else if (decl.constructors) {
-      // case x_impl of ...
       const branches = decl.constructors.map((ctor) => {
         const args = ctor.args.map((_, i) => `a${i}`);
         const pattern: Pattern = {
@@ -3667,9 +3902,13 @@ class SemanticAnalyzer {
           expr = str(`${ctor.name}(`);
           args.forEach((a, i) => {
             if (i > 0) expr = append(expr, str(", "));
+            const argType = this.typeFromAnnotation(ctor.args[i]!, paramMap);
             expr = append(
               expr,
-              toString({ kind: "Var", name: a, namespace: "lower", span }),
+              toStringWithUsage(
+                { kind: "Var", name: a, namespace: "lower", span },
+                argType,
+              ),
             );
           });
           expr = append(expr, str(")"));
@@ -3775,23 +4014,31 @@ class SemanticAnalyzer {
     let body: Expr;
 
     if (decl.recordFields) {
-      const checks: Expr[] = decl.recordFields.map((field) => ({
-        kind: "Infix",
-        left: {
-          kind: "FieldAccess",
-          target: { kind: "Var", name: xVar, namespace: "lower", span },
-          field: field.name,
+      const checks: Expr[] = decl.recordFields.map((field) => {
+        const node: Expr = {
+          kind: "Infix",
+          left: {
+            kind: "FieldAccess",
+            target: { kind: "Var", name: xVar, namespace: "lower", span },
+            field: field.name,
+            span,
+          },
+          operator: "==",
+          right: {
+            kind: "FieldAccess",
+            target: { kind: "Var", name: yVar, namespace: "lower", span },
+            field: field.name,
+            span,
+          },
           span,
-        },
-        operator: "==",
-        right: {
-          kind: "FieldAccess",
-          target: { kind: "Var", name: yVar, namespace: "lower", span },
-          field: field.name,
-          span,
-        },
-        span,
-      }));
+        };
+        const fieldType = this.typeFromAnnotation(field.type, paramMap);
+        this._resolvedProtocolUsages.set(node, {
+          protocolName: "Eq",
+          typeArgs: [fieldType],
+        });
+        return node;
+      });
 
       if (checks.length === 0) {
         body = { kind: "Var", name: "True", namespace: "upper", span };
@@ -3839,17 +4086,21 @@ class SemanticAnalyzer {
           span,
         };
 
-        const checks: Expr[] = ctor.args.map((_, i) => ({
-          kind: "Infix",
-          left: { kind: "Var", name: `a_${i}`, namespace: "lower", span },
-          operator: "==",
-          right: { kind: "Var", name: `b_${i}`, namespace: "lower", span },
-          operatorInfo: {
-            precedence: 4, // Default for ==
-            associativity: "none",
-          },
-          span,
-        }));
+        const checks: Expr[] = ctor.args.map((arg, i) => {
+          const node: Expr = {
+            kind: "Infix",
+            left: { kind: "Var", name: `a_${i}`, namespace: "lower", span },
+            operator: "==",
+            right: { kind: "Var", name: `b_${i}`, namespace: "lower", span },
+            span,
+          };
+          const argType = this.typeFromAnnotation(arg, paramMap);
+          this._resolvedProtocolUsages.set(node, {
+            protocolName: "Eq",
+            typeArgs: [argType],
+          });
+          return node;
+        });
 
         let branchBody: Expr;
         if (checks.length === 0) {
@@ -5361,6 +5612,7 @@ class SemanticAnalyzer {
       adts,
       typeAliases,
       opaqueTypes,
+      records,
       protocols,
       importedValues,
     } = this;
@@ -5414,6 +5666,11 @@ class SemanticAnalyzer {
         exports.types.set(name, { allConstructors: false });
       }
 
+      // Export all record types
+      for (const name of Object.keys(records)) {
+        exports.types.set(name, { allConstructors: false });
+      }
+
       // Export all protocols with all methods
       for (const [name, protocol] of Object.entries(protocols)) {
         exports.protocols.set(name, {
@@ -5458,6 +5715,10 @@ class SemanticAnalyzer {
             continue;
           }
           if (Object.hasOwn(opaqueTypes, name)) {
+            exports.types.set(name, { allConstructors: false });
+            continue;
+          }
+          if (Object.hasOwn(records, name)) {
             exports.types.set(name, { allConstructors: false });
             continue;
           }
@@ -5545,6 +5806,12 @@ class SemanticAnalyzer {
               spec.span,
               this.getFilePath(),
             );
+          }
+
+          // Record types with (..) just export the type (records have no constructors)
+          if (Object.hasOwn(records, name)) {
+            exports.types.set(name, { allConstructors: false });
+            continue;
           }
 
           throw new SemanticError(
@@ -6083,7 +6350,7 @@ class SemanticAnalyzer {
     importingFrom: string,
     existing: { moduleName?: string } | undefined,
     span: Span,
-    kind: "type" | "type alias" | "protocol",
+    kind: "type" | "type alias" | "protocol" | "record type",
   ): void {
     if (!existing) return;
 
@@ -6106,7 +6373,9 @@ class SemanticAnalyzer {
             ? "Type"
             : kind === "type alias"
               ? "Type alias"
-              : "Protocol"
+              : kind === "record type"
+                ? "Record type"
+                : "Protocol"
         } '${name}' conflicts with ${kind} from module '${
           existing.moduleName
         }'. ` + `Consider using qualified imports or aliasing one of them.`,
@@ -7652,6 +7921,85 @@ const syntheticSpan: Span = {
   end: { offset: 0, line: 0, column: 0 },
 };
 
+/**
+ * Module-level record registry reference, set by the analyzer before
+ * auto-derive runs. Used by standalone synthesis functions to resolve
+ * TypeCon records to their field names.
+ */
+let _recordRegistry: Record<string, RecordInfo> = {};
+let _protocolMethodUsages: Map<Expr, ProtocolMethodUsage> | undefined;
+
+function getRecordFieldNames(type: Type): string[] | undefined {
+  if (type.kind === "record") {
+    return Object.keys(type.fields).sort();
+  }
+  if (type.kind === "con") {
+    const info = _recordRegistry[type.name];
+    if (info) return info.fields.map((f) => f.name).sort();
+  }
+  return undefined;
+}
+
+function getRecordFieldTypes(type: Type): Record<string, Type> | undefined {
+  if (type.kind === "record") {
+    return type.fields;
+  }
+  if (type.kind === "con") {
+    const info = _recordRegistry[type.name];
+    if (info) {
+      const fields: Record<string, Type> = {};
+      const resolveCtx = new Map<string, TypeVar>();
+      info.params.forEach((p, i) => {
+        const v: TypeVar =
+          type.args[i]?.kind === "var"
+            ? (type.args[i] as TypeVar)
+            : freshType();
+        resolveCtx.set(p, v);
+      });
+      for (const field of info.fields) {
+        fields[field.name] = resolveTypeExprForRecord(
+          field.typeExpr,
+          resolveCtx,
+        );
+      }
+      return fields;
+    }
+  }
+  return undefined;
+}
+
+function resolveTypeExprForRecord(
+  typeExpr: TypeExpr,
+  context: Map<string, TypeVar>,
+): Type {
+  switch (typeExpr.kind) {
+    case "TypeRef": {
+      const tv = context.get(typeExpr.name);
+      if (tv) return tv;
+      return {
+        kind: "con",
+        name: typeExpr.name,
+        args: typeExpr.args.map((a) => resolveTypeExprForRecord(a, context)),
+      };
+    }
+    case "FunctionType":
+      return {
+        kind: "fun",
+        from: resolveTypeExprForRecord(typeExpr.from, context),
+        to: resolveTypeExprForRecord(typeExpr.to, context),
+      };
+    case "TupleType":
+      return {
+        kind: "tuple",
+        elements: typeExpr.elements.map((e) =>
+          resolveTypeExprForRecord(e, context),
+        ),
+      };
+    default:
+      return freshType();
+  }
+}
+
 function trySynthesizeInstance(
   protocolName: string,
   type: Type,
@@ -7661,30 +8009,35 @@ function trySynthesizeInstance(
 
   // Tuples
   if (type.kind === "tuple") {
-    // 1. Check constraints on elements
     for (const elem of type.elements) {
       if (!findInstanceForTypeInternal(protocolName, elem, instances)) {
         return false;
       }
     }
 
-    // 2. Generate instance
-    const instance = generateSyntheticInstance(protocolName, type);
+    const instance = generateSyntheticInstance(
+      protocolName,
+      type,
+      _protocolMethodUsages,
+    );
     instances.push(instance);
     return true;
   }
 
-  // Records
-  if (type.kind === "record") {
-    // 1. Check constraints on fields
-    for (const fieldType of Object.values(type.fields)) {
+  // Records (structural or named TypeCon)
+  const fieldTypes = getRecordFieldTypes(type);
+  if (fieldTypes) {
+    for (const fieldType of Object.values(fieldTypes)) {
       if (!findInstanceForTypeInternal(protocolName, fieldType, instances)) {
         return false;
       }
     }
 
-    // 2. Generate instance
-    const instance = generateSyntheticInstance(protocolName, type);
+    const instance = generateSyntheticInstance(
+      protocolName,
+      type,
+      _protocolMethodUsages,
+    );
     instances.push(instance);
     return true;
   }
@@ -7695,15 +8048,15 @@ function trySynthesizeInstance(
 function generateSyntheticInstance(
   protocolName: string,
   type: Type,
+  usages?: Map<Expr, ProtocolMethodUsage>,
 ): InstanceInfo {
   const methods = new Map<string, Expr>();
   const span = syntheticSpan;
 
   if (protocolName === "Eq") {
-    methods.set("==", generateSyntheticEq(type));
-    // /= default impl handles it
+    methods.set("==", generateSyntheticEq(type, usages));
   } else if (protocolName === "Show") {
-    methods.set("toString", generateSyntheticShow(type));
+    methods.set("toString", generateSyntheticShow(type, usages));
   }
 
   return {
@@ -7720,11 +8073,13 @@ function generateSyntheticInstance(
   };
 }
 
-function generateSyntheticEq(type: Type): Expr {
+function generateSyntheticEq(
+  type: Type,
+  usages?: Map<Expr, ProtocolMethodUsage>,
+): Expr {
   const span = syntheticSpan;
   // (==) x y = ...
   if (type.kind === "tuple") {
-    // case (x, y) of ((x0, x1...), (y0, y1...)) -> (x0 == y0) && (x1 == y1)
     const arity = type.elements.length;
     const xVars = Array.from({ length: arity }, (_, i) => `x${i}`);
     const yVars = Array.from({ length: arity }, (_, i) => `y${i}`);
@@ -7732,13 +8087,22 @@ function generateSyntheticEq(type: Type): Expr {
     let body: Expr = { kind: "Var", name: "True", namespace: "upper", span };
 
     if (arity > 0) {
-      const checks: Expr[] = xVars.map((xv, i) => ({
-        kind: "Infix",
-        left: { kind: "Var", name: xv, namespace: "lower", span },
-        operator: "==",
-        right: { kind: "Var", name: yVars[i]!, namespace: "lower", span },
-        span,
-      }));
+      const checks: Expr[] = xVars.map((xv, i) => {
+        const node: Expr = {
+          kind: "Infix",
+          left: { kind: "Var", name: xv, namespace: "lower", span },
+          operator: "==",
+          right: { kind: "Var", name: yVars[i]!, namespace: "lower", span },
+          span,
+        };
+        if (usages) {
+          usages.set(node, {
+            protocolName: "Eq",
+            typeArgs: [type.elements[i]!],
+          });
+        }
+        return node;
+      });
 
       body = checks.reduce((acc, check) => ({
         kind: "Infix",
@@ -7787,67 +8151,77 @@ function generateSyntheticEq(type: Type): Expr {
       },
       span,
     };
-  } else if (type.kind === "record") {
-    // x.f1 == y.f1 && ...
-    const fields = Object.keys(type.fields).sort();
-    let body: Expr = { kind: "Var", name: "True", namespace: "upper", span };
+  } else {
+    const fieldTypes = getRecordFieldTypes(type);
+    if (fieldTypes) {
+      const fields = Object.keys(fieldTypes).sort();
+      let body: Expr = { kind: "Var", name: "True", namespace: "upper", span };
 
-    if (fields.length > 0) {
-      const checks: Expr[] = fields.map((f) => ({
-        kind: "Infix",
-        left: {
-          kind: "FieldAccess",
-          target: { kind: "Var", name: "x_impl", namespace: "lower", span },
-          field: f,
+      if (fields.length > 0) {
+        const checks: Expr[] = fields.map((f) => {
+          const node: Expr = {
+            kind: "Infix",
+            left: {
+              kind: "FieldAccess",
+              target: { kind: "Var", name: "x_impl", namespace: "lower", span },
+              field: f,
+              span,
+            },
+            operator: "==",
+            right: {
+              kind: "FieldAccess",
+              target: { kind: "Var", name: "y_impl", namespace: "lower", span },
+              field: f,
+              span,
+            },
+            span,
+          };
+          if (usages) {
+            usages.set(node, {
+              protocolName: "Eq",
+              typeArgs: [fieldTypes[f]!],
+            });
+          }
+          return node;
+        });
+        body = checks.reduce((acc, check) => ({
+          kind: "Infix",
+          left: acc,
+          operator: "&&",
+          right: check,
           span,
-        },
-        operator: "==",
-        right: {
-          kind: "FieldAccess",
-          target: { kind: "Var", name: "y_impl", namespace: "lower", span },
-          field: f,
-          span,
-        },
+        }));
+      }
+
+      return {
+        kind: "Lambda",
+        args: [
+          { kind: "VarPattern", name: "x_impl", span },
+          { kind: "VarPattern", name: "y_impl", span },
+        ],
+        body,
         span,
-      }));
-      body = checks.reduce((acc, check) => ({
-        kind: "Infix",
-        left: acc,
-        operator: "&&",
-        right: check,
-        span,
-      }));
+      };
     }
-
-    return {
-      kind: "Lambda",
-      args: [
-        { kind: "VarPattern", name: "x_impl", span },
-        { kind: "VarPattern", name: "y_impl", span },
-      ],
-      body,
-      span,
-    };
   }
   throw new Error("Unsupported type for synthetic Eq");
 }
 
-function generateSyntheticShow(type: Type): Expr {
+function generateSyntheticShow(
+  type: Type,
+  usages?: Map<Expr, ProtocolMethodUsage>,
+): Expr {
   const span = syntheticSpan;
-  // toString x = ...
 
   if (type.kind === "tuple") {
-    // case x of (x0, x1...) -> "(" ++ toString x0 ++ ", " ++ toString x1 ++ ")"
     const arity = type.elements.length;
     const vars = Array.from({ length: arity }, (_, i) => `x${i}`);
 
-    // Helper to make string literal expr
     const str = (s: string): Expr => ({
       kind: "String",
       value: `"${s}"`,
       span,
     });
-    // Helper for append: a ++ b
     const append = (a: Expr, b: Expr): Expr => ({
       kind: "Infix",
       left: a,
@@ -7855,21 +8229,30 @@ function generateSyntheticShow(type: Type): Expr {
       right: b,
       span,
     });
-    // Helper for toString call: toString val
-    const toStringCall = (valName: string): Expr => ({
-      kind: "Apply",
-      callee: { kind: "Var", name: "toString", namespace: "lower", span },
-      args: [{ kind: "Var", name: valName, namespace: "lower", span }],
-      span,
-    });
+    const toStringCall = (valName: string, elemType: Type): Expr => {
+      const callee: Expr = {
+        kind: "Var",
+        name: "toString",
+        namespace: "lower",
+        span,
+      };
+      const node: Expr = {
+        kind: "Apply",
+        callee,
+        args: [{ kind: "Var", name: valName, namespace: "lower", span }],
+        span,
+      };
+      if (usages) {
+        usages.set(callee, { protocolName: "Show", typeArgs: [elemType] });
+      }
+      return node;
+    };
 
     let body: Expr = str("(");
-
     vars.forEach((v, i) => {
       if (i > 0) body = append(body, str(", "));
-      body = append(body, toStringCall(v));
+      body = append(body, toStringCall(v, type.elements[i]!));
     });
-
     body = append(body, str(")"));
 
     const pattern: Pattern = {
@@ -7889,55 +8272,67 @@ function generateSyntheticShow(type: Type): Expr {
       },
       span,
     };
-  } else if (type.kind === "record") {
-    // "Record(x = " ++ toString x.x ++ ", ...)"
-    // But anonymous records usually printed as { x = ..., y = ... }
-    // User requested: "Point(x = ..., y = ...)" for named types.
-    // But here we have TypeRecord which is structural/anonymous (unless it came from TypeDeclaration, but then it's wrapped in TypeCon?)
-    // If it's TypeRecord, it's anonymous record `{x: Int}`.
-    // I'll emit `{ x = ..., ... }`.
-
-    const fields = Object.keys(type.fields).sort();
-    const str = (s: string): Expr => ({
-      kind: "String",
-      value: `"${s}"`,
-      span,
-    });
-    const append = (a: Expr, b: Expr): Expr => ({
-      kind: "Infix",
-      left: a,
-      operator: "++",
-      right: b,
-      span,
-    });
-    const toStringField = (f: string): Expr => ({
-      kind: "Apply",
-      callee: { kind: "Var", name: "toString", namespace: "lower", span },
-      args: [
-        {
-          kind: "FieldAccess",
-          target: { kind: "Var", name: "x_impl", namespace: "lower", span },
-          field: f,
+  } else {
+    const fieldTypes = getRecordFieldTypes(type);
+    if (fieldTypes) {
+      const fields = Object.keys(fieldTypes).sort();
+      const typeName = type.kind === "con" ? type.name : null;
+      const str = (s: string): Expr => ({
+        kind: "String",
+        value: `"${s}"`,
+        span,
+      });
+      const append = (a: Expr, b: Expr): Expr => ({
+        kind: "Infix",
+        left: a,
+        operator: "++",
+        right: b,
+        span,
+      });
+      const toStringField = (f: string): Expr => {
+        const callee: Expr = {
+          kind: "Var",
+          name: "toString",
+          namespace: "lower",
           span,
-        },
-      ],
-      span,
-    });
+        };
+        const node: Expr = {
+          kind: "Apply",
+          callee,
+          args: [
+            {
+              kind: "FieldAccess",
+              target: { kind: "Var", name: "x_impl", namespace: "lower", span },
+              field: f,
+              span,
+            },
+          ],
+          span,
+        };
+        if (usages) {
+          usages.set(callee, {
+            protocolName: "Show",
+            typeArgs: [fieldTypes[f]!],
+          });
+        }
+        return node;
+      };
 
-    let body: Expr = str("{ ");
-    fields.forEach((f, i) => {
-      if (i > 0) body = append(body, str(", "));
-      body = append(body, str(`${f} = `));
-      body = append(body, toStringField(f));
-    });
-    body = append(body, str(" }"));
+      let body: Expr = str(typeName ? `${typeName} { ` : "{ ");
+      fields.forEach((f, i) => {
+        if (i > 0) body = append(body, str(", "));
+        body = append(body, str(`${f} = `));
+        body = append(body, toStringField(f));
+      });
+      body = append(body, str(" }"));
 
-    return {
-      kind: "Lambda",
-      args: [{ kind: "VarPattern", name: "x_impl", span }],
-      body,
-      span,
-    };
+      return {
+        kind: "Lambda",
+        args: [{ kind: "VarPattern", name: "x_impl", span }],
+        body,
+        span,
+      };
+    }
   }
   throw new Error("Unsupported type for synthetic Show");
 }

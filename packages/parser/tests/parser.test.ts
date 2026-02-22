@@ -472,6 +472,57 @@ next = 6`),
     }
   });
 
+  test("parses constructor with multiple concrete type arguments", () => {
+    const program = parseTest(`type A = A Int String Bool`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeDeclaration");
+    if (decl?.kind === "TypeDeclaration") {
+      expect(decl.name).toBe("A");
+      expect(decl.params).toEqual([]);
+      expect(decl.constructors?.length).toBe(1);
+
+      const ctor = decl.constructors?.[0];
+      expect(ctor?.name).toBe("A");
+      expect(ctor?.args.length).toBe(3);
+      expect(ctor?.args[0]?.kind).toBe("TypeRef");
+      if (ctor?.args[0]?.kind === "TypeRef")
+        expect(ctor.args[0].name).toBe("Int");
+      expect(ctor?.args[1]?.kind).toBe("TypeRef");
+      if (ctor?.args[1]?.kind === "TypeRef")
+        expect(ctor.args[1].name).toBe("String");
+      expect(ctor?.args[2]?.kind).toBe("TypeRef");
+      if (ctor?.args[2]?.kind === "TypeRef")
+        expect(ctor.args[2].name).toBe("Bool");
+    }
+  });
+
+  test("parses constructor with mixed atom and parenthesized type args", () => {
+    const program = parseTest(`type Foo a = Foo Int (Maybe a) String`);
+    expect(program.declarations.length).toBe(1);
+    const decl = program.declarations[0];
+    expect(decl?.kind).toBe("TypeDeclaration");
+    if (decl?.kind === "TypeDeclaration") {
+      const ctor = decl.constructors?.[0];
+      expect(ctor?.name).toBe("Foo");
+      expect(ctor?.args.length).toBe(3);
+
+      // First arg: Int (bare atom)
+      if (ctor?.args[0]?.kind === "TypeRef")
+        expect(ctor.args[0].name).toBe("Int");
+
+      // Second arg: (Maybe a) (parenthesized applied type)
+      if (ctor?.args[1]?.kind === "TypeRef") {
+        expect(ctor.args[1].name).toBe("Maybe");
+        expect(ctor.args[1].args.length).toBe(1);
+      }
+
+      // Third arg: String (bare atom)
+      if (ctor?.args[2]?.kind === "TypeRef")
+        expect(ctor.args[2].name).toBe("String");
+    }
+  });
+
   // ===== Type Alias Tests =====
 
   test("parses simple type alias", () => {

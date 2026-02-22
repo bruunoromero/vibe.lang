@@ -1,0 +1,30 @@
+module Vibe.Node.Process exposing
+    ( argv
+    , cwd
+    , exit
+    , getEnv
+    , setEnv
+    , platform
+    )
+
+import Vibe exposing (..)
+import Vibe.Maybe exposing (Maybe)
+
+
+@external "./Process.ffi.js" "processArgv"
+argv : List String
+
+@external "./Process.ffi.js" "processCwd"
+cwd : () -> String
+
+@external "./Process.ffi.js" "processExit"
+exit : Int -> ()
+
+@external "./Process.ffi.js" "processGetEnv"
+getEnv : (String -> Maybe String) -> Maybe String -> String -> Maybe String
+
+@external "./Process.ffi.js" "processSetEnv"
+setEnv : String -> String -> ()
+
+@external "./Process.ffi.js" "processPlatform"
+platform : String

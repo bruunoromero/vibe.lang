@@ -1,0 +1,53 @@
+module Vibe.Node.FileSystem exposing
+    ( readFile
+    , writeFile
+    , appendFile
+    , removeFile
+    , readDir
+    , makeDir
+    , stat
+    , exists
+    , FileStat
+    , fileStatSize
+    , fileStatIsFile
+    , fileStatIsDirectory
+    )
+
+import Vibe exposing (..)
+import Vibe.Promise exposing (Promise)
+
+
+type FileStat
+
+@external "./FileSystem.ffi.js" "readFile"
+readFile : String -> Promise String
+
+@external "./FileSystem.ffi.js" "writeFile"
+writeFile : String -> String -> Promise ()
+
+@external "./FileSystem.ffi.js" "appendFile"
+appendFile : String -> String -> Promise ()
+
+@external "./FileSystem.ffi.js" "removeFile"
+removeFile : String -> Promise ()
+
+@external "./FileSystem.ffi.js" "readDir"
+readDir : String -> Promise (List String)
+
+@external "./FileSystem.ffi.js" "makeDir"
+makeDir : String -> Promise ()
+
+@external "./FileSystem.ffi.js" "stat"
+stat : String -> Promise FileStat
+
+@external "./FileSystem.ffi.js" "exists"
+exists : String -> Promise Bool
+
+@external "./FileSystem.ffi.js" "fileStatSize"
+fileStatSize : FileStat -> Int
+
+@external "./FileSystem.ffi.js" "fileStatIsFile"
+fileStatIsFile : FileStat -> Bool
+
+@external "./FileSystem.ffi.js" "fileStatIsDirectory"
+fileStatIsDirectory : FileStat -> Bool

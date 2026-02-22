@@ -8,4 +8,10 @@ import Vibe.Task as Task
 @external "./ExampleApp.ffi.js" "readFile"
 readFile : String -> Promise String
 
-main = readFile "/Users/bromero/example.txt" |> Task.fromPromise
+type Person =
+    { name : String
+    , age : Int
+    }
+
+main = toString { name = "Vibe", age = 10}
+-- main = "String"

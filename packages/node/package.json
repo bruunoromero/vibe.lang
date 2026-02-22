@@ -1,0 +1,15 @@
+{
+  "name": "@vibe/node",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "bun ../cli/src/index.ts build",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@vibe/prelude": "workspace:*"
+  },
+  "devDependencies": {
+    "@vibe/cli": "workspace:*"
+  }
+}

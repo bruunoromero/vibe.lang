@@ -1,0 +1,37 @@
+module Vibe.Node.Path exposing
+    ( join
+    , resolve
+    , basename
+    , dirname
+    , extname
+    , normalize
+    , isAbsolute
+    , separator
+    )
+
+import Vibe exposing (..)
+
+
+@external "./Path.ffi.js" "pathJoin"
+join : List String -> String
+
+@external "./Path.ffi.js" "pathResolve"
+resolve : List String -> String
+
+@external "./Path.ffi.js" "pathBasename"
+basename : String -> String
+
+@external "./Path.ffi.js" "pathDirname"
+dirname : String -> String
+
+@external "./Path.ffi.js" "pathExtname"
+extname : String -> String
+
+@external "./Path.ffi.js" "pathNormalize"
+normalize : String -> String
+
+@external "./Path.ffi.js" "pathIsAbsolute"
+isAbsolute : String -> Bool
+
+@external "./Path.ffi.js" "pathSeparator"
+separator : String

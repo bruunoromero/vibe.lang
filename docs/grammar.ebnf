@@ -137,7 +137,7 @@ TypeDeclaration = "type", [Constraints, "=>"], UpperIdentifier, {LowerIdentifier
 (* Opaque types cannot have constraints and do not auto-implement Eq *)
 OpaqueTypeDeclaration = "type", UpperIdentifier, {LowerIdentifier} ;
 
-ConstructorDef = UpperIdentifier, {TypeTerm} ;
+ConstructorDef = UpperIdentifier, {TypeArg} ;
 
 (* Type alias declarations - for both record types and simple type aliases *)
 (* Type aliases do not auto-implement Eq; they inherit the Eq instance of the aliased type *)

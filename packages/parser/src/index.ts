@@ -739,7 +739,7 @@ class Parser {
       this.onSameLine(lastSpan, this.current()) &&
       !this.peek(TokenKind.Pipe) // Stop before next variant
     ) {
-      const arg = this.parseTypeTerm();
+      const arg = this.parseTypeAtom();
       args.push(arg);
       lastSpan = arg.span;
     }

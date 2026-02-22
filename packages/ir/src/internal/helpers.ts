@@ -8,7 +8,6 @@ import type { IRType } from "../types";
 import type { LoweringContext } from "../lowering";
 import { formatTypeKey } from "../utils";
 
-
 /**
  * Substitute protocol method references in an expression with concrete implementations.
  * This is used when lowering default implementations for specific instances.
@@ -21,6 +20,8 @@ export function substituteProtocolMethods(
   expr: Expr,
   methodSubstitutions: Map<string, Expr>,
 ): Expr {
+  if (methodSubstitutions.size === 0) return expr;
+
   switch (expr.kind) {
     case "Var":
       // Check if this variable is a protocol method that needs substitution
