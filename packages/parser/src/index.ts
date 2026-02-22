@@ -453,6 +453,8 @@ class Parser {
    *   type Maybe a = Just a | Nothing        (Type declaration - ADT)
    *   type alias UserId = number             (Type alias)
    *   @external "module" "func" foo : Int -> Int     (External FFI)
+   *   @get "key" foo : OpaqueType -> ReturnType      (Property get)
+   *   @call "key" foo : OpaqueType -> ReturnType     (Method call)
    *   foo : Int -> Int                               (Type annotation)
    *   foo x = x + 1                                  (Value declaration)
    *   (+) a b = add a b                              (Operator declaration)
@@ -461,6 +463,12 @@ class Parser {
     // Check for external declaration (@external ...)
     if (this.peekExternalAttribute()) {
       return this.parseExternalDeclaration();
+    }
+
+    // Check for property access declaration (@get ... or @call ...)
+    const propertyVariant = this.peekPropertyAttribute();
+    if (propertyVariant) {
+      return this.parsePropertyDeclaration(propertyVariant);
     }
 
     // Check for type declaration or type alias (type ...)
@@ -2701,6 +2709,49 @@ class Parser {
       next?.kind === TokenKind.LowerIdentifier &&
       next.lexeme === "external"
     );
+  }
+
+  private peekPropertyAttribute(): "get" | "call" | null {
+    const current = this.current();
+    const next = this.peekAhead(1);
+    if (
+      current.kind === TokenKind.Operator &&
+      current.lexeme === "@" &&
+      next?.kind === TokenKind.LowerIdentifier
+    ) {
+      if (next.lexeme === "get" || next.lexeme === "call") {
+        return next.lexeme;
+      }
+    }
+    return null;
+  }
+
+  private parsePropertyDeclaration(variant: "get" | "call"): Declaration {
+    const atToken = this.expectOperator("@");
+    const variantToken = this.expect(
+      TokenKind.LowerIdentifier,
+      `${variant} tag`,
+    );
+    if (variantToken.lexeme !== variant) {
+      throw this.error(`${variant} tag`, variantToken);
+    }
+
+    const keyTok = this.expect(TokenKind.String, "property key string");
+
+    const { name } = this.parseDeclarationName();
+    this.expect(TokenKind.Colon, "property type annotation");
+    const annotation = this.parseTypeExpression();
+
+    const span: Span = { start: atToken.span.start, end: annotation.span.end };
+
+    return {
+      kind: "PropertyDeclaration",
+      variant,
+      key: this.unquote(keyTok.lexeme),
+      name,
+      annotation,
+      span,
+    };
   }
 
   private unquote(lexeme: string): string {

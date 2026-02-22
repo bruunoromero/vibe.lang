@@ -815,6 +815,13 @@ function generateSCC(scc: SCC, ctx: CodegenContext): string[] {
         if (value.isExternal) continue;
 
         const safeName = sanitizeIdentifier(name);
+
+        // Property access declarations generate an arrow function wrapper
+        if (value.propertyAccess) {
+          lines.push(`const ${safeName} = ${generatePropertyAccess(value)};`);
+          continue;
+        }
+
         const body = generateValue(value, ctx);
         lines.push(`const ${safeName} = ${body};`);
       } else if (ctx.instanceMap.has(name)) {
@@ -825,6 +832,34 @@ function generateSCC(scc: SCC, ctx: CodegenContext): string[] {
   }
 
   return lines;
+}
+
+/**
+ * Generate an arrow function for @get/@call property access declarations.
+ *
+ *   @get "key"  name : Opaque -> Ret         => ($recv) => $recv.key
+ *   @call "key" name : Opaque -> Ret         => ($recv) => $recv.key()
+ *   @call "key" name : Opaque -> A -> Ret    => ($recv) => ($a0) => $recv.key($a0)
+ *   @call "key" name : Opaque -> A -> B -> Ret => ($recv) => ($a0) => ($a1) => $recv.key($a0, $a1)
+ */
+function generatePropertyAccess(value: IRValue): string {
+  const { variant, key, callArity } = value.propertyAccess!;
+
+  if (variant === "get") {
+    return `($recv) => $recv.${key}`;
+  }
+
+  // @call — build curried parameter chain then invoke
+  const argNames = Array.from({ length: callArity }, (_, i) => `$a${i}`);
+  let result = `$recv.${key}(${argNames.join(", ")})`;
+
+  // Wrap in curried arrow functions (innermost first)
+  for (let i = argNames.length - 1; i >= 0; i--) {
+    result = `(${argNames[i]}) => ${result}`;
+  }
+  result = `($recv) => ${result}`;
+
+  return result;
 }
 
 /**

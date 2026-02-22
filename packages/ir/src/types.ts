@@ -355,6 +355,13 @@ export type IRValue = {
     modulePath: string;
     exportName: string;
   };
+  /** For @get/@call property access declarations */
+  propertyAccess?: {
+    variant: "get" | "call";
+    key: string;
+    /** Number of extra arguments beyond the receiver (0 for @get, 0+ for @call) */
+    callArity: number;
+  };
   /** Source span for error messages */
   span: Span;
 };

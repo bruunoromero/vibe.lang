@@ -43,11 +43,11 @@ stat : String -> Promise FileStat
 @external "./FileSystem.ffi.js" "exists"
 exists : String -> Promise Bool
 
-@external "./FileSystem.ffi.js" "fileStatSize"
+@get "size"
 fileStatSize : FileStat -> Int
 
-@external "./FileSystem.ffi.js" "fileStatIsFile"
+@call "isFile"
 fileStatIsFile : FileStat -> Bool
 
-@external "./FileSystem.ffi.js" "fileStatIsDirectory"
+@call "isDirectory"
 fileStatIsDirectory : FileStat -> Bool

@@ -3,6 +3,7 @@ import type {
   ValueDeclaration,
   TypeAnnotationDeclaration,
   ExternalDeclaration,
+  PropertyDeclaration,
   TypeDeclaration,
   TypeAliasDeclaration,
   OpaqueTypeDeclaration,
@@ -1227,8 +1228,13 @@ class SemanticAnalyzer {
     }
   }
 
-  seedValueType(decl: ValueDeclaration | ExternalDeclaration): Type {
-    if (decl.kind === "ExternalDeclaration") {
+  seedValueType(
+    decl: ValueDeclaration | ExternalDeclaration | PropertyDeclaration,
+  ): Type {
+    if (
+      decl.kind === "ExternalDeclaration" ||
+      decl.kind === "PropertyDeclaration"
+    ) {
       return this.typeFromAnnotation(decl.annotation, new Map());
     }
     const argTypes = decl.args.map(() => freshType());
@@ -2332,7 +2338,9 @@ class SemanticAnalyzer {
     }
   }
 
-  registerValue(decl: ValueDeclaration | ExternalDeclaration) {
+  registerValue(
+    decl: ValueDeclaration | ExternalDeclaration | PropertyDeclaration,
+  ) {
     // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
     if (Object.hasOwn(this.values, decl.name)) {
       throw new SemanticError(
@@ -2341,10 +2349,12 @@ class SemanticAnalyzer {
         this.getFilePath(),
       );
     }
+    const hasBuiltinAnnotation =
+      decl.kind === "ExternalDeclaration" ||
+      decl.kind === "PropertyDeclaration";
     this.values[decl.name] = {
       declaration: decl,
-      annotation:
-        decl.kind === "ExternalDeclaration" ? decl.annotation : undefined,
+      annotation: hasBuiltinAnnotation ? decl.annotation : undefined,
       externalTarget:
         decl.kind === "ExternalDeclaration" ? decl.target : undefined,
     };
@@ -4353,7 +4363,8 @@ class SemanticAnalyzer {
     for (const decl of this.getDeclarations()) {
       if (
         decl.kind === "ValueDeclaration" ||
-        decl.kind === "ExternalDeclaration"
+        decl.kind === "ExternalDeclaration" ||
+        decl.kind === "PropertyDeclaration"
       ) {
         this.registerValue(decl);
         continue;
@@ -4609,6 +4620,49 @@ class SemanticAnalyzer {
     }
   }
 
+  private validatePropertyDeclaration(
+    decl: PropertyDeclaration,
+    type: Type,
+  ): void {
+    const variant = decl.variant; // "get" or "call"
+    const params = flattenFunctionParams(type);
+
+    if (variant === "get") {
+      if (params.length !== 1) {
+        throw new SemanticError(
+          `@get declaration '${decl.name}' must have type A -> B (exactly one argument), got ${params.length} argument(s)`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+    } else {
+      if (params.length < 1) {
+        throw new SemanticError(
+          `@call declaration '${decl.name}' must have at least one argument`,
+          decl.span,
+          this.getFilePath(),
+        );
+      }
+    }
+
+    const firstArg = params[0]!;
+    if (firstArg.kind !== "con") {
+      throw new SemanticError(
+        `@${variant} declaration '${decl.name}': first argument must be an opaque type, got a ${firstArg.kind === "var" ? "type variable" : firstArg.kind} type`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    if (!this.opaqueTypes[firstArg.name]) {
+      throw new SemanticError(
+        `@${variant} declaration '${decl.name}': first argument type '${firstArg.name}' is not an opaque type`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+  }
+
   private validateAnnotationsAndSeedGlobalNames(): void {
     // ===== PASS 2a: Validate infix declarations have definitions =====
     this.validateInfixDeclarationsHaveDefinitions();
@@ -4622,9 +4676,12 @@ class SemanticAnalyzer {
         );
       }
       const value = this.values[name]!;
-      if (value.declaration.kind === "ExternalDeclaration") {
+      if (
+        value.declaration.kind === "ExternalDeclaration" ||
+        value.declaration.kind === "PropertyDeclaration"
+      ) {
         throw new SemanticError(
-          `External declaration '${name}' already includes a type annotation`,
+          `${value.declaration.kind === "ExternalDeclaration" ? "External" : "Property"} declaration '${name}' already includes a type annotation`,
           ann.span,
           this.getFilePath(),
         );
@@ -4638,7 +4695,9 @@ class SemanticAnalyzer {
         info.annotation ??
         (info.declaration.kind === "ExternalDeclaration"
           ? info.declaration.annotation
-          : undefined);
+          : info.declaration.kind === "PropertyDeclaration"
+            ? info.declaration.annotation
+            : undefined);
 
       let annotationType: Type | undefined;
       let annotatedConstraints: Constraint[] | undefined;
@@ -4794,17 +4853,23 @@ class SemanticAnalyzer {
 
       for (const name of scc) {
         const info = this.values[name]!;
-        if (info.declaration.kind === "ExternalDeclaration") {
+        if (
+          info.declaration.kind === "ExternalDeclaration" ||
+          info.declaration.kind === "PropertyDeclaration"
+        ) {
           externals.push(name);
         } else {
           valueDecls.push(name);
         }
       }
 
-      // Process externals first
+      // Process externals and property declarations first
       for (const name of externals) {
         const info = this.values[name]!;
-        if (info.declaration.kind === "ExternalDeclaration") {
+        if (
+          info.declaration.kind === "ExternalDeclaration" ||
+          info.declaration.kind === "PropertyDeclaration"
+        ) {
           const result = this.typeFromAnnotationWithConstraints(
             info.declaration.annotation,
             new Map(),
@@ -4813,6 +4878,11 @@ class SemanticAnalyzer {
 
           if (result.constraints.length > 0) {
             info.annotatedConstraints = result.constraints;
+          }
+
+          // Validate @get/@call declarations
+          if (info.declaration.kind === "PropertyDeclaration") {
+            this.validatePropertyDeclaration(info.declaration, info.type);
           }
 
           // Quantify all free type variables so the scheme can be properly

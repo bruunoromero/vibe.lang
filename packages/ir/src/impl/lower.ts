@@ -167,15 +167,16 @@ export function lower(
     const decl = valueInfo.declaration;
     const type = semantics.types[name];
 
-    // Check if this is an external declaration (no body)
-    const isExternal = decl.kind === "ExternalDeclaration";
+    // Check if this is an external or property declaration (no body)
+    const isExternal =
+      decl.kind === "ExternalDeclaration" ||
+      decl.kind === "PropertyDeclaration";
 
-    // Lower the expression body (external declarations have no body)
+    // Lower the expression body (external/property declarations have no body)
     let body: IRExpr;
     let params: IRPattern[] = [];
 
     if (isExternal) {
-      // External declarations have no body - create a placeholder
       body = {
         kind: "IRUnit" as const,
         span: decl.span,
@@ -195,21 +196,41 @@ export function lower(
       ? convertConstraints(typeScheme.constraints)
       : [];
 
+    // Compute property access metadata
+    let propertyAccess: IRValue["propertyAccess"];
+    if (decl.kind === "PropertyDeclaration") {
+      // Count curried function args to determine call arity
+      let argCount = 0;
+      let t = irType;
+      while (t.kind === "fun") {
+        argCount++;
+        t = t.to;
+      }
+      // callArity = total args minus the receiver (first arg)
+      propertyAccess = {
+        variant: decl.variant,
+        key: decl.key,
+        callArity: Math.max(0, argCount - 1),
+      };
+    }
+
     const irValue: IRValue = {
       name,
       params,
       body,
       type: irType,
       constraints,
-      isExternal,
-      externalTarget: isExternal
-        ? {
-            modulePath: (decl as import("@vibe/syntax").ExternalDeclaration)
-              .target.modulePath,
-            exportName: (decl as import("@vibe/syntax").ExternalDeclaration)
-              .target.exportName,
-          }
-        : undefined,
+      isExternal: decl.kind === "ExternalDeclaration",
+      externalTarget:
+        decl.kind === "ExternalDeclaration"
+          ? {
+              modulePath: (decl as import("@vibe/syntax").ExternalDeclaration)
+                .target.modulePath,
+              exportName: (decl as import("@vibe/syntax").ExternalDeclaration)
+                .target.exportName,
+            }
+          : undefined,
+      propertyAccess,
       span: decl.span,
     };
 

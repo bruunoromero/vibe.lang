@@ -38,9 +38,3 @@ export const exists = (path) => {
     .then(() => true)
     .catch(() => false);
 };
-
-export const fileStatSize = (s) => s.size;
-
-export const fileStatIsFile = (s) => s.isFile;
-
-export const fileStatIsDirectory = (s) => s.isDirectory;

@@ -140,7 +140,11 @@ export type Pattern =
   | { kind: "TuplePattern"; elements: Pattern[]; span: Span }
   | { kind: "ListPattern"; elements: Pattern[]; span: Span }
   | { kind: "ConsPattern"; head: Pattern; tail: Pattern; span: Span }
-  | { kind: "RecordPattern"; fields: { name: string; pattern?: Pattern }[]; span: Span }
+  | {
+      kind: "RecordPattern";
+      fields: { name: string; pattern?: Pattern }[];
+      span: Span;
+    }
   | { kind: "IntPattern"; value: string; span: Span }
   | { kind: "FloatPattern"; value: string; span: Span }
   | { kind: "StringPattern"; value: string; span: Span }
@@ -187,7 +191,7 @@ export type TypeExpr =
   | { kind: "TupleType"; elements: TypeExpr[]; span: Span }
   | {
       kind: "RecordType";
-    fields: Array<{ name: string; type: TypeExpr; span: Span }>;
+      fields: Array<{ name: string; type: TypeExpr; span: Span }>;
       span: Span;
     }
   | QualifiedType;
@@ -371,6 +375,34 @@ export type ExternalDeclaration = {
 };
 
 /**
+ * A property access declaration for FFI.
+ *
+ * Syntax:
+ *   @get "key" name : OpaqueType -> ReturnType
+ *   @call "key" name : OpaqueType -> Arg1 -> ... -> ReturnType
+ *
+ * @get compiles to: (recv) => recv.key
+ * @call compiles to: (recv) => (a0) => ... => recv.key(a0, ...)
+ *
+ * The first argument must be an opaque type.
+ * @get requires exactly one argument (A -> B).
+ * @call requires at least one argument (A -> B, A -> B -> C, etc.).
+ */
+export type PropertyDeclaration = {
+  kind: "PropertyDeclaration";
+  /** Whether this is a property get or a method call */
+  variant: "get" | "call";
+  /** The JS property key to access */
+  key: string;
+  /** The Vibe binding name */
+  name: string;
+  /** Type annotation (always required) */
+  annotation: TypeExpr;
+  /** Source location span */
+  span: Span;
+};
+
+/**
  * A method signature in a protocol declaration, optionally with a default implementation.
  *
  * Example (required method with explicit type):
@@ -529,6 +561,7 @@ export type Declaration =
   | ValueDeclaration
   | TypeAnnotationDeclaration
   | ExternalDeclaration
+  | PropertyDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
   | OpaqueTypeDeclaration

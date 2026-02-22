@@ -52,6 +52,8 @@ ModuleName = UpperIdentifier, {".", UpperIdentifier} ;
 (* ===== Declarations ===== *)
 
 Declaration = ExternalDeclaration
+            | PropertyGetDeclaration
+            | PropertyCallDeclaration
             | TypeAnnotationDeclaration
             | ValueDeclaration
             | TypeDeclaration
@@ -61,6 +63,15 @@ Declaration = ExternalDeclaration
             | InfixDeclaration ;
 
 ExternalDeclaration = "@", "external", String, String, DeclarationName, ":", TypeExpr ;
+
+(* Property access for FFI - accesses a JS property on an opaque type instance *)
+(* Example: @get "size" fileStatSize : FileStat -> Int *)
+PropertyGetDeclaration = "@", "get", String, DeclarationName, ":", TypeExpr ;
+
+(* Method call for FFI - calls a JS method on an opaque type instance *)
+(* Example: @call "toString" toString : FileStat -> String *)
+(* With args: @call "write" write : Handle -> String -> Promise () *)
+PropertyCallDeclaration = "@", "call", String, DeclarationName, ":", TypeExpr ;
 
 TypeAnnotationDeclaration = DeclarationName, ":", TypeExpr ;
 

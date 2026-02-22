@@ -206,6 +206,40 @@ myList2 : () -> MyList`);
     expect((myList2 as { name: string }).name).toBe("myList2");
   });
 
+  test("parses @get property declaration", () => {
+    const program = parseTest(`type FileStat
+
+@get "size"
+fileStatSize : FileStat -> Int`);
+
+    expect(program.declarations.length).toBe(2);
+    const prop = program.declarations[1]!;
+    expect(prop.kind).toBe("PropertyDeclaration");
+    if (prop.kind === "PropertyDeclaration") {
+      expect(prop.variant).toBe("get");
+      expect(prop.key).toBe("size");
+      expect(prop.name).toBe("fileStatSize");
+      expect(prop.annotation.kind).toBe("FunctionType");
+    }
+  });
+
+  test("parses @call property declaration", () => {
+    const program = parseTest(`type Handle
+
+@call "write"
+handleWrite : Handle -> String -> Int`);
+
+    expect(program.declarations.length).toBe(2);
+    const prop = program.declarations[1]!;
+    expect(prop.kind).toBe("PropertyDeclaration");
+    if (prop.kind === "PropertyDeclaration") {
+      expect(prop.variant).toBe("call");
+      expect(prop.key).toBe("write");
+      expect(prop.name).toBe("handleWrite");
+      expect(prop.annotation.kind).toBe("FunctionType");
+    }
+  });
+
   test("parses opaque type followed by function definition", () => {
     // Regression test: opaque types should not consume the next declaration's name
     // as a type parameter (layout-sensitive parsing)

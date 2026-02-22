@@ -5,6 +5,7 @@ import type {
   Pattern,
   ValueDeclaration,
   ExternalDeclaration,
+  PropertyDeclaration,
   ModuleDeclaration,
   ImportDeclaration,
   InfixDeclaration,
@@ -344,7 +345,7 @@ export type InstanceInfo = {
 };
 
 export type ValueInfo = {
-  declaration: ValueDeclaration | ExternalDeclaration;
+  declaration: ValueDeclaration | ExternalDeclaration | PropertyDeclaration;
   annotation?: TypeExpr;
   externalTarget?: ExternalDeclaration["target"];
   type?: Type;

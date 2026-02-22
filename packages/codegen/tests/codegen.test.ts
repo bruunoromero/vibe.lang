@@ -1459,3 +1459,163 @@ main = toString <| value
     expect(code).not.toContain("$dict_Show_String.toString");
   });
 });
+
+// ============================================================================
+// Property Access Declaration Tests (@get / @call)
+// ============================================================================
+
+describe("Property Access Declarations", () => {
+  test("@get compiles to property access arrow function", () => {
+    const source = `
+module Test exposing (..)
+
+type FileStat
+
+@get "size"
+fileStatSize : FileStat -> Int
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain("const fileStatSize = ($recv) => $recv.size;");
+    // Should NOT generate an import for this
+    expect(code).not.toContain("import");
+  });
+
+  test("@call with zero extra args compiles to method call", () => {
+    const source = `
+module Test exposing (..)
+
+type FileStat
+
+@call "toString"
+fileStatToString : FileStat -> String
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain(
+      "const fileStatToString = ($recv) => $recv.toString();",
+    );
+  });
+
+  test("@call with one extra arg compiles to curried method call", () => {
+    const source = `
+module Test exposing (..)
+
+type Handle
+
+@call "write"
+handleWrite : Handle -> String -> Int
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain(
+      "const handleWrite = ($recv) => ($a0) => $recv.write($a0);",
+    );
+  });
+
+  test("@call with multiple extra args compiles to curried method call", () => {
+    const source = `
+module Test exposing (..)
+
+type Canvas
+
+@call "drawRect"
+drawRect : Canvas -> Int -> Int -> Int -> Int -> String
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain(
+      "const drawRect = ($recv) => ($a0) => ($a1) => ($a2) => ($a3) => $recv.drawRect($a0, $a1, $a2, $a3);",
+    );
+  });
+
+  test("@get with parametric opaque type", () => {
+    const source = `
+module Test exposing (..)
+
+type Container a
+
+@get "length"
+containerLength : Container a -> Int
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain("const containerLength = ($recv) => $recv.length;");
+  });
+
+  test("@get values are exported", () => {
+    const source = `
+module Test exposing (fileStatSize)
+
+type FileStat
+
+@get "size"
+fileStatSize : FileStat -> Int
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toMatch(/export\s*\{[^}]*fileStatSize/);
+  });
+
+  test("IR has correct propertyAccess for @get", () => {
+    const source = `
+module Test exposing (..)
+
+type FileStat
+
+@get "size"
+fileStatSize : FileStat -> Int
+`;
+
+    const { ir } = compileToJS(source);
+    const value = ir.values["fileStatSize"];
+    expect(value).toBeDefined();
+    expect(value!.propertyAccess).toEqual({
+      variant: "get",
+      key: "size",
+      callArity: 0,
+    });
+    expect(value!.isExternal).toBe(false);
+  });
+
+  test("IR has correct propertyAccess for @call with arity", () => {
+    const source = `
+module Test exposing (..)
+
+type Handle
+
+@call "write"
+handleWrite : Handle -> String -> Int
+`;
+
+    const { ir } = compileToJS(source);
+    const value = ir.values["handleWrite"];
+    expect(value).toBeDefined();
+    expect(value!.propertyAccess).toEqual({
+      variant: "call",
+      key: "write",
+      callArity: 1,
+    });
+  });
+
+  test("@get can be used in expressions", () => {
+    const source = `
+module Test exposing (..)
+
+type FileStat
+
+@get "size"
+fileStatSize : FileStat -> Int
+
+@external "./test.ffi.js" "getStat"
+getStat : String -> FileStat
+
+getSize : String -> Int
+getSize path = fileStatSize (getStat path)
+`;
+
+    const { code } = compileToJS(source);
+    expect(code).toContain("const fileStatSize = ($recv) => $recv.size;");
+    expect(code).toContain("fileStatSize(getStat(path))");
+  });
+});
