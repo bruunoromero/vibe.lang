@@ -2,6 +2,13 @@ module Vibe.Console exposing
   ( log
   )
 
+type Console
 
-@external "./Console.ffi.js" "consoleLog"
-log: String -> ()
+@val "console"
+_console : Console
+
+@call "log"
+_log: Console -> String -> ()
+
+log : String -> ()
+log = _log _console

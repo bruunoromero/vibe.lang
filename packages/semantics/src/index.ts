@@ -4662,23 +4662,6 @@ class SemanticAnalyzer {
         );
       }
     }
-
-    const firstArg = params[0]!;
-    if (firstArg.kind !== "con") {
-      throw new SemanticError(
-        `@${variant} declaration '${decl.name}': first argument must be an opaque type, got a ${firstArg.kind === "var" ? "type variable" : firstArg.kind} type`,
-        decl.span,
-        this.getFilePath(),
-      );
-    }
-
-    if (!this.opaqueTypes[firstArg.name]) {
-      throw new SemanticError(
-        `@${variant} declaration '${decl.name}': first argument type '${firstArg.name}' is not an opaque type`,
-        decl.span,
-        this.getFilePath(),
-      );
-    }
   }
 
   private validateAnnotationsAndSeedGlobalNames(): void {

@@ -9,7 +9,7 @@ module Vibe.List exposing
 
 import Vibe.String as String
 import Vibe.Maybe exposing (Maybe(..))
-import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..))
+import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..), flip)
 
 infixr 5 ::
 
@@ -29,44 +29,51 @@ implement Show a => Show (List a) where
             "[" ++ (String.join ", " elementStrings) ++ "]"
 
 implement Appendable (List a) where
-    (++) = _append
-
-{-| Constructs a new list by prepending an element to the front of an existing list.
-
-    1 :: [2, 3]  ==  [1, 2, 3]
--}
-@external "./List.ffi.js" "listCons"
-(::) : a -> List a -> List a
+    (++) = _concat
 
 {-| Appends two lists together.
 
     [1, 2] ++ [3, 4]  ==  [1, 2, 3, 4]
 -}
-@external "./List.ffi.js" "listAppend"
-_append : List a -> List a -> List a
+@call "concat"
+_concat : List a -> List a -> List a
 
+{-| Constructs a new list by prepending an element to the front of an existing list.
+
+    1 :: [2, 3]  ==  [1, 2, 3]
+-}
+(::) : a -> List a -> List a
+(::) x xs = _concat [x] xs
+
+@call "reduce"
+_reduce : List a -> (b -> a -> b) -> b -> b
 
 {-| Left fold over a list.
 
     foldl (+) 0 [1, 2, 3, 4]  ==  10
 -}
-@external "./List.ffi.js" "listFoldl"
 foldl : (b -> a -> b) -> b -> List a -> b
+foldl fn initial lst = _reduce lst fn initial
+
+@call "map"
+_map : List a -> (a -> b) -> List b
 
 {-| Maps a function over a list.
 
     map (\x -> x * 2) [1, 2, 3]  ==  [2, 4, 6]
 -}
-@external "./List.ffi.js" "listMap"
 map : (a -> b) -> List a -> List b
+map = flip _map
+
+@call "filter"
+_filter : List a -> (a -> Bool) -> List a
 
 {-| Filters a list based on a predicate function.
 
     filter (\x -> x > 2) [1, 2, 3, 4]  ==  [3, 4]
 -}
-@external "./List.ffi.js" "listFilter"
 filter : (a -> Bool) -> List a -> List a
-
+filter = flip _filter
 {-| Returns the first element of a list, or `Nothing` if the list is empty.
 
     head [1, 2, 3]  ==  Just 1

@@ -378,15 +378,14 @@ export type ExternalDeclaration = {
  * A property access declaration for FFI.
  *
  * Syntax:
- *   @get "key" name : OpaqueType -> ReturnType
- *   @call "key" name : OpaqueType -> Arg1 -> ... -> ReturnType
+ *   @get "key" name : ReceiverType -> ReturnType
+ *   @call "key" name : ReceiverType -> Arg1 -> ... -> ReturnType
  *   @val "key" name : Type
  *
  * @get compiles to: (recv) => recv.key
  * @call compiles to: (recv) => (a0) => ... => recv.key(a0, ...)
  * @val compiles to: name = key (direct global variable reference)
  *
- * The first argument of @get/@call must be an opaque type.
  * @get requires exactly one argument (A -> B).
  * @call requires at least one argument (A -> B, A -> B -> C, etc.).
  * @val has no constraint on the type shape.

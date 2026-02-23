@@ -66,11 +66,11 @@ Declaration = ExternalDeclaration
 
 ExternalDeclaration = "@", "external", String, String, DeclarationName, ":", TypeExpr ;
 
-(* Property access for FFI - accesses a JS property on an opaque type instance *)
+(* Property access for FFI - accesses a JS property on a receiver *)
 (* Example: @get "size" fileStatSize : FileStat -> Int *)
 PropertyGetDeclaration = "@", "get", String, DeclarationName, ":", TypeExpr ;
 
-(* Method call for FFI - calls a JS method on an opaque type instance *)
+(* Method call for FFI - calls a JS method on a receiver *)
 (* Example: @call "toString" toString : FileStat -> String *)
 (* With args: @call "write" write : Handle -> String -> Promise () *)
 PropertyCallDeclaration = "@", "call", String, DeclarationName, ":", TypeExpr ;

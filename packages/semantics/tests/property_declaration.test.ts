@@ -42,26 +42,22 @@ fileStatSize : FileStat -> Int
     expect(result.types["fileStatSize"]).toBeDefined();
   });
 
-  test("rejects @get with non-opaque (ADT) first argument", () => {
-    expectError(
-      `
+  test("accepts @get with ADT first argument", () => {
+    const result = analyzeSource(`
 type Color = Red | Blue
 
 @get "size"
 getSize : Color -> Int
-`,
-      "is not an opaque type",
-    );
+`);
+    expect(result.types["getSize"]).toBeDefined();
   });
 
-  test("rejects @get with type variable first argument", () => {
-    expectError(
-      `
+  test("accepts @get with type variable first argument", () => {
+    const result = analyzeSource(`
 @get "size"
 getSize : a -> Int
-`,
-      "first argument must be an opaque type",
-    );
+`);
+    expect(result.types["getSize"]).toBeDefined();
   });
 
   test("rejects @get with more than one argument", () => {
@@ -98,26 +94,22 @@ handleWrite : Handle -> String -> Int
     expect(result.types["handleWrite"]).toBeDefined();
   });
 
-  test("rejects @call with non-opaque first argument", () => {
-    expectError(
-      `
+  test("accepts @call with ADT first argument", () => {
+    const result = analyzeSource(`
 type Color = Red | Blue
 
 @call "show"
 showColor : Color -> String
-`,
-      "is not an opaque type",
-    );
+`);
+    expect(result.types["showColor"]).toBeDefined();
   });
 
-  test("rejects @call with type variable first argument", () => {
-    expectError(
-      `
+  test("accepts @call with type variable first argument", () => {
+    const result = analyzeSource(`
 @call "show"
 showThing : a -> String
-`,
-      "first argument must be an opaque type",
-    );
+`);
+    expect(result.types["showThing"]).toBeDefined();
   });
 
   test("rejects duplicate definition for property declaration", () => {
