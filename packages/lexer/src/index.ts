@@ -35,6 +35,8 @@ class LexerState {
     if (char === "\n") {
       this.line += 1;
       this.column = 1;
+    } else if (char === "\t") {
+      this.column = Math.floor((this.column - 1) / 8) * 8 + 9;
     } else {
       this.column += 1;
     }
@@ -47,7 +49,10 @@ class LexerState {
 }
 
 export class LexError extends Error {
-  constructor(message: string, public readonly span: Span) {
+  constructor(
+    message: string,
+    public readonly span: Span,
+  ) {
     super(message);
   }
 }
@@ -55,30 +60,57 @@ export class LexError extends Error {
 export function lex(source: string): Token[] {
   const state = new LexerState(source);
   const tokens: Token[] = [];
+  let sawNewline = false;
+  let hasEmittedToken = false;
 
   while (!state.isAtEnd()) {
-    const current = state.peek();
+    // Skip whitespace and comments, tracking line breaks
+    let advanced = true;
+    while (advanced && !state.isAtEnd()) {
+      advanced = false;
+      const ch = state.peek();
 
-    if (current === undefined) {
-      break;
+      if (ch !== undefined && isWhitespace(ch)) {
+        if (ch === "\n" || ch === "\r") sawNewline = true;
+        skipWhitespace(state);
+        advanced = true;
+        continue;
+      }
+
+      if (ch === "-" && state.peek(1) === "-") {
+        skipLineComment(state);
+        sawNewline = true;
+        advanced = true;
+        continue;
+      }
+
+      if (ch === "{" && state.peek(1) === "-") {
+        const lineBefore = state.position().line;
+        skipBlockComment(state);
+        if (state.position().line > lineBefore) sawNewline = true;
+        advanced = true;
+        continue;
+      }
     }
 
-    if (isWhitespace(current)) {
-      skipWhitespace(state);
-      continue;
-    }
+    if (state.isAtEnd()) break;
 
-    if (current === "-" && state.peek(1) === "-") {
-      skipLineComment(state);
-      continue;
+    // Emit Newline token if a line break was crossed
+    if (sawNewline && hasEmittedToken) {
+      const pos = state.position();
+      tokens.push({
+        kind: TokenKind.Newline,
+        lexeme: "\n",
+        span: { start: pos, end: pos },
+      });
     }
-
-    if (current === "{" && state.peek(1) === "-") {
-      skipBlockComment(state);
-      continue;
-    }
+    sawNewline = false;
+    hasEmittedToken = true;
 
     const startPosition = state.position();
+    const current = state.peek();
+
+    if (current === undefined) break;
 
     if (isIdentifierStart(current)) {
       tokens.push(readIdentifierOrKeyword(state, startPosition));
@@ -239,7 +271,7 @@ function readChar(state: LexerState, start: Position): Token {
 
 function readPunctuationOrOperator(
   state: LexerState,
-  start: Position
+  start: Position,
 ): Token | null {
   const startIndex = state.offset();
   const current = state.peek();
@@ -365,7 +397,7 @@ function makeToken(
   state: LexerState,
   start: Position,
   kind: TokenKind,
-  startIndex: number
+  startIndex: number,
 ): Token {
   const end = state.position();
   const lexeme = state.slice(startIndex, state.offset());
@@ -376,7 +408,7 @@ function makeSimpleToken(
   state: LexerState,
   start: Position,
   kind: TokenKind,
-  length: number
+  length: number,
 ): Token {
   const startIndex = state.offset();
   for (let i = 0; i < length; i += 1) {
@@ -474,7 +506,7 @@ function isIdentifierPart(char: string): boolean {
 function unterminated(
   kind: "string" | "char",
   start: Position,
-  state: LexerState
+  state: LexerState,
 ): LexError {
   return new LexError(`Unterminated ${kind} literal`, {
     start,

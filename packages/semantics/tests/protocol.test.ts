@@ -20,7 +20,9 @@ protocol Num a where
   minus : a -> a -> a
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.protocols.Num).toBeDefined();
     expect(result.protocols.Num?.name).toBe("Num");
@@ -40,18 +42,20 @@ protocol Show a where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("Duplicate protocol");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Duplicate protocol");
   });
 
   test("rejects protocol with no methods", () => {
     const source = `
 protocol Empty a where
 `;
-    // The parser will reject this with "Expected at least one method signature"
-    expect(() => parseTest(source)).toThrow(
-      "Expected at least one method signature",
-    );
+    // The layout pass expects an indented block after 'where' but finds EOF
+    expect(() => parseTest(source)).toThrow("Expected indented block");
   });
 
   test("rejects duplicate method names in protocol", () => {
@@ -62,8 +66,12 @@ protocol Bad a where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("Duplicate method");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Duplicate method");
   });
 });
 
@@ -80,7 +88,9 @@ implement Num Int where
   plus = intPlus
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.protocolName).toBe("Num");
@@ -105,8 +115,12 @@ implement Num Int where
     }
     expect(thrownError).toBeDefined();
     // Check that one of the errors mentions the undefined function
-    const errorMessages = thrownError.errors?.map((e: any) => e.message) ?? [thrownError.message];
-    expect(errorMessages.some((msg: string) => msg.includes("undefinedFunction"))).toBe(true);
+    const errorMessages = thrownError.errors?.map((e: any) => e.message) ?? [
+      thrownError.message,
+    ];
+    expect(
+      errorMessages.some((msg: string) => msg.includes("undefinedFunction")),
+    ).toBe(true);
   });
 
   test("validates module-qualified access in implementation", () => {
@@ -118,7 +132,9 @@ module Vibe.Int exposing (add)
 add : Int -> Int -> Int
 `;
     const intProgram = parseTest(intModuleSource);
-    const intModule = analyze(intProgram, { fileContext: { filePath: "Vibe.Int", srcDir: "" } });
+    const intModule = analyze(intProgram, {
+      fileContext: { filePath: "Vibe.Int", srcDir: "" },
+    });
 
     // Create the main module that imports and uses the function
     const mainSource = `
@@ -134,7 +150,10 @@ implement Num Int where
     const dependencies = new Map([["Vibe.Int", intModule]]);
 
     // Should succeed since Int.add exists and is exported
-    const result = analyze(mainProgram, { dependencies, fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(mainProgram, {
+      dependencies,
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
     expect(result.instances).toHaveLength(1);
   });
 
@@ -147,7 +166,9 @@ module Vibe.Int exposing (sub)
 sub : Int -> Int -> Int
 `;
     const intProgram = parseTest(intModuleSource);
-    const intModule = analyze(intProgram, { fileContext: { filePath: "Vibe.Int", srcDir: "" } });
+    const intModule = analyze(intProgram, {
+      fileContext: { filePath: "Vibe.Int", srcDir: "" },
+    });
 
     // Create the main module that tries to use a non-existent function
     const mainSource = `
@@ -162,10 +183,18 @@ implement Num Int where
     const mainProgram = parseTest(mainSource);
     const dependencies = new Map([["Vibe.Int", intModule]]);
 
-    expect(() => analyze(mainProgram, { dependencies, fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(mainProgram, { dependencies, fileContext: { filePath: "Test", srcDir: "" } })).toThrow(
-      "'add' is not defined in module 'Vibe.Int'",
-    );
+    expect(() =>
+      analyze(mainProgram, {
+        dependencies,
+        fileContext: { filePath: "Test", srcDir: "" },
+      }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(mainProgram, {
+        dependencies,
+        fileContext: { filePath: "Test", srcDir: "" },
+      }),
+    ).toThrow("'add' is not defined in module 'Vibe.Int'");
   });
 
   test("rejects implementation with unexported module field", () => {
@@ -180,7 +209,9 @@ add : Int -> Int -> Int
 sub : Int -> Int -> Int
 `;
     const intProgram = parseTest(intModuleSource);
-    const intModule = analyze(intProgram, { fileContext: { filePath: "Vibe.Int", srcDir: "" } });
+    const intModule = analyze(intProgram, {
+      fileContext: { filePath: "Vibe.Int", srcDir: "" },
+    });
 
     // Create the main module that tries to use the non-exported function
     const mainSource = `
@@ -195,10 +226,18 @@ implement Num Int where
     const mainProgram = parseTest(mainSource);
     const dependencies = new Map([["Vibe.Int", intModule]]);
 
-    expect(() => analyze(mainProgram, { dependencies, fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(mainProgram, { dependencies, fileContext: { filePath: "Test", srcDir: "" } })).toThrow(
-      "'add' is not exported from module 'Vibe.Int'",
-    );
+    expect(() =>
+      analyze(mainProgram, {
+        dependencies,
+        fileContext: { filePath: "Test", srcDir: "" },
+      }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(mainProgram, {
+        dependencies,
+        fileContext: { filePath: "Test", srcDir: "" },
+      }),
+    ).toThrow("'add' is not exported from module 'Vibe.Int'");
   });
 
   test("rejects implementation for non-existent protocol", () => {
@@ -208,8 +247,12 @@ implement NonExistent Int where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("Unknown protocol");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Unknown protocol");
   });
 
   test("rejects implementation with undefined protocol in constraint", () => {
@@ -226,10 +269,12 @@ implement UndefinedConstraint a => Show Int where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(
-      "Unknown protocol 'UndefinedConstraint' in constraint",
-    );
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Unknown protocol 'UndefinedConstraint' in constraint");
   });
 
   test("rejects implementation missing required methods", () => {
@@ -246,8 +291,12 @@ implement Num Int where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("missing implementation for method");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("missing implementation for method");
   });
 
   test("rejects implementation with extra methods", () => {
@@ -267,8 +316,12 @@ implement Num Int where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("not part of protocol");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("not part of protocol");
   });
 
   test("rejects overlapping implementations", () => {
@@ -290,8 +343,12 @@ implement Num Int where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("Overlapping implementation");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Overlapping implementation");
   });
 
   test("allows implementations for different types", () => {
@@ -312,7 +369,9 @@ implement Num Float where
   plus = floatPlus
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(2);
   });
@@ -337,7 +396,9 @@ implement MyProtocol (List a) where
   method _ = False
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Both implementations should be allowed since List a doesn't satisfy Eq
     expect(result.instances).toHaveLength(2);
@@ -373,8 +434,12 @@ implement MyProtocol Int where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("Overlapping implementation");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Overlapping implementation");
   });
 
   test("allows multiple constrained implementations with different constraints", () => {
@@ -400,7 +465,9 @@ implement Eq a => MyProtocol a where
   method = eqMethod
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Single constrained implementation should work
     expect(result.instances).toHaveLength(1);
@@ -428,7 +495,9 @@ implement Sortable (List a) where
   sort = noSort
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Both should be allowed: List a doesn't automatically have Ord
     expect(result.instances).toHaveLength(2);
@@ -448,7 +517,9 @@ implement Show a => Show (List a) where
   show = showList
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.constraints).toHaveLength(1);
@@ -472,7 +543,9 @@ implement (Num a, Show a) => Show (Pair a a) where
   show = showPair
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.constraints).toHaveLength(2);
@@ -489,7 +562,9 @@ protocol Num a where
   plus : a -> a -> a
 `;
     const depProgram = parseTest(depSource);
-    const depModule = analyze(depProgram, { fileContext: { filePath: "Dep", srcDir: "" } });
+    const depModule = analyze(depProgram, {
+      fileContext: { filePath: "Dep", srcDir: "" },
+    });
 
     // Create a module that imports the dependency with exposing (..)
     const source = `
@@ -520,7 +595,9 @@ protocol Num a where
   plus : a -> a -> a
 `;
     const depProgram = parseTest(depSource);
-    const depModule = analyze(depProgram, { fileContext: { filePath: "Dep", srcDir: "" } });
+    const depModule = analyze(depProgram, {
+      fileContext: { filePath: "Dep", srcDir: "" },
+    });
 
     // Create a module that imports without exposing - should NOT get protocol
     const source = `
@@ -536,10 +613,16 @@ implement Num Int where
 
     // Should fail because Num protocol is not imported
     expect(() =>
-      analyze(program, { dependencies: new Map([["Dep", depModule]]), fileContext: { filePath: "Test", srcDir: "" } }),
+      analyze(program, {
+        dependencies: new Map([["Dep", depModule]]),
+        fileContext: { filePath: "Test", srcDir: "" },
+      }),
     ).toThrow(SemanticError);
     expect(() =>
-      analyze(program, { dependencies: new Map([["Dep", depModule]]), fileContext: { filePath: "Test", srcDir: "" } }),
+      analyze(program, {
+        dependencies: new Map([["Dep", depModule]]),
+        fileContext: { filePath: "Test", srcDir: "" },
+      }),
     ).toThrow("Unknown protocol 'Num'");
   });
 
@@ -557,7 +640,9 @@ implement Show Int where
   show = showInt
 `;
     const depProgram = parse(depSource);
-    const depModule = analyze(depProgram, { fileContext: { filePath: "Dep", srcDir: "" } });
+    const depModule = analyze(depProgram, {
+      fileContext: { filePath: "Dep", srcDir: "" },
+    });
 
     // Create a module that imports with exposing (..) to get protocol AND instances
     const source = `module Main
@@ -595,7 +680,9 @@ protocol Show a where
   toString : a -> String
 `;
     const basicsProgram = parse(basicsSource);
-    const basicsModule = analyze(basicsProgram, { fileContext: { filePath: "Basics", srcDir: "" } });
+    const basicsModule = analyze(basicsProgram, {
+      fileContext: { filePath: "Basics", srcDir: "" },
+    });
 
     // Create a "MyString" module that imports Show internally but only exposes append
     // Note: Module does NOT re-export Show
@@ -662,7 +749,9 @@ protocol Show a where
   toString : a -> String
 `;
     const depProgram = parse(depSource);
-    const depModule = analyze(depProgram, { fileContext: { filePath: "Dep", srcDir: "" } });
+    const depModule = analyze(depProgram, {
+      fileContext: { filePath: "Dep", srcDir: "" },
+    });
 
     // Import only Num, not Show
     const mainSource = `module Main
@@ -679,10 +768,16 @@ implement Show Int where
 
     // Should fail because Show is not imported
     expect(() =>
-      analyze(mainProgram, { dependencies: new Map([["Dep", depModule]]), fileContext: { filePath: "Main", srcDir: "" } }),
+      analyze(mainProgram, {
+        dependencies: new Map([["Dep", depModule]]),
+        fileContext: { filePath: "Main", srcDir: "" },
+      }),
     ).toThrow(SemanticError);
     expect(() =>
-      analyze(mainProgram, { dependencies: new Map([["Dep", depModule]]), fileContext: { filePath: "Main", srcDir: "" } }),
+      analyze(mainProgram, {
+        dependencies: new Map([["Dep", depModule]]),
+        fileContext: { filePath: "Main", srcDir: "" },
+      }),
     ).toThrow("Unknown protocol 'Show'");
   });
 
@@ -694,7 +789,9 @@ protocol Show a where
   toString : a -> String
 `;
     const basicsProgram = parse(basicsSource);
-    const basicsModule = analyze(basicsProgram, { fileContext: { filePath: "Basics", srcDir: "" } });
+    const basicsModule = analyze(basicsProgram, {
+      fileContext: { filePath: "Basics", srcDir: "" },
+    });
 
     // Create a "Wrapper" module that imports and RE-EXPORTS Show
     const wrapperSource = `module Wrapper exposing (Show(..))
@@ -740,7 +837,9 @@ protocol Show a where
   toString : a -> String
 `;
     const basicsProgram = parse(basicsSource);
-    const basicsModule = analyze(basicsProgram, { fileContext: { filePath: "Basics", srcDir: "" } });
+    const basicsModule = analyze(basicsProgram, {
+      fileContext: { filePath: "Basics", srcDir: "" },
+    });
 
     // Create a "StringShow" module that implements Show for String
     const stringShowSource = `module StringShow
@@ -795,7 +894,9 @@ protocol Eq a where
   neq x y = not (eq x y)
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.protocols.Eq).toBeDefined();
     expect(result.protocols.Eq?.methods.size).toBe(2);
@@ -824,7 +925,9 @@ implement Eq Int where
   eq = intEqual
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     // The instance should have both methods: explicit eq and default neq
@@ -854,7 +957,9 @@ implement Eq Int where
   neq = intNotEqual
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.methods.size).toBe(2);
@@ -879,8 +984,12 @@ implement Eq Int where
     const program = parseTest(source);
 
     // Should error because eq has no default and isn't implemented
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("missing implementation for method");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("missing implementation for method");
   });
 
   test("registers protocol with all default methods", () => {
@@ -892,7 +1001,9 @@ protocol Describable a where
   longDescription x = describe x
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.protocols.Describable).toBeDefined();
     expect(result.protocols.Describable?.methods.size).toBe(2);
@@ -930,7 +1041,9 @@ implement Describable Int where
   describe = showInt
 `;
     const program = parseTest(source2);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     // Both methods should exist: explicit describe and default longDescription
@@ -953,7 +1066,9 @@ implement Show Int where
   show = showInt
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     // Both methods should exist
@@ -978,7 +1093,9 @@ implement Describable Color where
   describe _ = "A color"
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.protocolName).toBe("Describable");
@@ -1011,7 +1128,9 @@ implement Eq Int where
   allEqual = customAllEqual
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.methods.size).toBe(3);
@@ -1031,7 +1150,9 @@ protocol Helper a where
   debug x = show x
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.protocols.Helper).toBeDefined();
     expect(result.protocols.Helper?.methods.size).toBe(2);
@@ -1052,7 +1173,9 @@ protocol Defaulted a where
   bar x y = foo x
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.protocols.Defaulted).toBeDefined();
     expect(result.protocols.Defaulted?.methods.size).toBe(2);
@@ -1077,7 +1200,9 @@ implement Showable Int where
   show = intToString
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.instances).toHaveLength(1);
     expect(result.instances[0]?.methods.size).toBe(2);
@@ -1095,7 +1220,9 @@ protocol Num a where
 add x y = plus x y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // The function 'add' uses 'plus' which is a protocol method
     // This should result in a Num constraint being collected
@@ -1115,7 +1242,9 @@ implement Num Int where
 addOne x = x + 1
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Using + operator should collect Num constraint
     // Note: The constraint may be on a concrete type (Int) due to the literal
@@ -1131,7 +1260,9 @@ add x y = plus x y
 double x = add x x
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Both 'add' and 'double' should have Num constraints
     expect(result.typeSchemes.add).toBeDefined();
@@ -1158,7 +1289,9 @@ concreteAdd : Int -> Int -> Int
 concreteAdd x y = plus x y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // With concrete types, the constraint should be resolved
     expect(result.typeSchemes.concreteAdd).toBeDefined();
@@ -1174,7 +1307,9 @@ protocol Eq a where
 isEqual x y = eq x y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // typeSchemes should be populated
     expect(result.typeSchemes).toBeDefined();
@@ -1194,7 +1329,9 @@ add : Num a => a -> a -> a
 add x y = plus x y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // The constraint from the annotation should be included in the type scheme
     expect(result.typeSchemes.add).toBeDefined();
@@ -1216,7 +1353,9 @@ addIfEq : (Num a, Eq a) => a -> a -> a -> a
 addIfEq x y z = plus x y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     expect(result.typeSchemes.addIfEq).toBeDefined();
     const constraints = result.typeSchemes.addIfEq?.constraints ?? [];
@@ -1231,8 +1370,12 @@ foo x = x
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("Unknown protocol 'Unknown'");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Unknown protocol 'Unknown'");
   });
 
   test("rejects constraints with wrong number of type arguments", () => {
@@ -1245,8 +1388,12 @@ foo x = x
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("expects 1 type argument");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("expects 1 type argument");
   });
 
   test("rejects constraints on concrete types in annotations", () => {
@@ -1259,8 +1406,12 @@ foo x = x
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("must be applied to type variables");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("must be applied to type variables");
   });
 
   test("stores annotated constraints in value info", () => {
@@ -1272,7 +1423,9 @@ display : Show a => a -> String
 display x = show x
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Check that annotated constraints are stored
     expect(result.values.display).toBeDefined();
@@ -1296,7 +1449,9 @@ compute : (Num a, Eq a) => a -> a -> a
 compute x y = plus x y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Both Num (from inference) and Eq (from annotation) should be in the scheme
     const constraints = result.typeSchemes.compute?.constraints ?? [];
@@ -1313,7 +1468,9 @@ protocol Num a where
 jsAdd : Num a => a -> a -> a
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // External declaration should have the constraint from annotation
     expect(result.values.jsAdd).toBeDefined();
@@ -1334,7 +1491,9 @@ add : Num a => a -> a -> a
 add x y = plus x y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // Should only have one Num constraint, not duplicates
     const numConstraints =
@@ -1366,7 +1525,9 @@ implement Appendable b => Convert Int b where
 `;
     const program = parseTest(source);
     // Should not throw - List is Appendable
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
     expect(result.instances.length).toBe(2);
   });
 
@@ -1386,9 +1547,15 @@ implement Appendable b => Convert Float b where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(/Appendable/);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(/Int/);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(/Appendable/);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(/Int/);
   });
 
   test("validates multi-parameter protocol with constraint on first param", () => {
@@ -1405,7 +1572,9 @@ implement Eq a => Transform a Int where
 `;
     const program = parseTest(source);
     // Should pass - transform takes an Eq a and returns Int
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
     expect(result.instances.length).toBe(1);
   });
 
@@ -1425,7 +1594,9 @@ implement Appendable b => Convert String b where
   convert _ = []
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
     expect(result.instances.length).toBe(2);
   });
 
@@ -1443,8 +1614,12 @@ implement Appendable b => Convert Int b where
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(/Appendable/);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(/Appendable/);
   });
 
   test("validates constraint on nested type parameter", () => {
@@ -1463,7 +1638,9 @@ implement Show b => Wrap Int b where
   wrap _ = []
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
     expect(result.instances.length).toBe(2);
   });
 
@@ -1490,7 +1667,9 @@ implement Appendable a => ExampleProtocol3 Float a where
 main = convert3 10.0
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
 
     // The instance for ExampleProtocol3 should have typeArgs [Float, List Int]
     // after concretization, not [Float, a] with Appendable a constraint
@@ -1545,9 +1724,13 @@ main = convert3 10.0 []
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
     // The error should be a type mismatch, not a missing instance error
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("Type mismatch");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("Type mismatch");
   });
 
   test("still produces correct error for missing instance when not over-applied", () => {
@@ -1563,8 +1746,12 @@ main = show MyType
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow("No instance of");
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow("No instance of");
   });
 });
 
@@ -1587,8 +1774,12 @@ main = [] == []
 `;
     const program = parseTest(source);
 
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(SemanticError);
-    expect(() => analyze(program, { fileContext: { filePath: "Test", srcDir: "" } })).toThrow(/[Aa]mbiguous/);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(SemanticError);
+    expect(() =>
+      analyze(program, { fileContext: { filePath: "Test", srcDir: "" } }),
+    ).toThrow(/[Aa]mbiguous/);
   });
 
   test("accepts list equality when type is concrete", () => {
@@ -1611,7 +1802,9 @@ xs = []
 main = xs == []
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
     expect(result.values.main).toBeDefined();
   });
 
@@ -1629,7 +1822,9 @@ eq : Eq a => a -> a -> Bool
 eq x y = x == y
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Test", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Test", srcDir: "" },
+    });
     expect(result.values.eq).toBeDefined();
   });
 });
@@ -1653,7 +1848,9 @@ protocol Eq a where
 type Color = Red | Green | Blue
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Vibe.vibe", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Vibe.vibe", srcDir: "" },
+    });
 
     // Should auto-generate Eq instance
     expect(
@@ -1690,7 +1887,9 @@ implement Eq Int where
 type Point = { x : Int, y : Int }
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Vibe", srcDir: "" },
+    });
 
     // Should auto-generate Eq instance for Point
     expect(
@@ -1718,7 +1917,9 @@ protocol Eq a where
 type FuncHolder = Holder (Int -> Int)
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Vibe", srcDir: "" },
+    });
 
     // Should NOT auto-generate Eq instance (function type can't implement Eq)
     expect(
@@ -1753,7 +1954,9 @@ implement Eq Color where
   (==) _ _ = True
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Vibe", srcDir: "" },
+    });
 
     // Should only have one Eq instance for Color (the explicit one)
     const colorInstances = result.instances.filter(
@@ -1783,7 +1986,9 @@ protocol Eq a where
 type Box a = MkBox a
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "Vibe", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "Vibe", srcDir: "" },
+    });
 
     // Should auto-generate Eq instance with Eq a constraint
     const boxInstance = result.instances.find(
@@ -1809,7 +2014,9 @@ protocol Eq a where
 type Color = Red | Green | Blue
 `;
     const program = parseTest(source);
-    const result = analyze(program, { fileContext: { filePath: "CustomModule", srcDir: "" } });
+    const result = analyze(program, {
+      fileContext: { filePath: "CustomModule", srcDir: "" },
+    });
 
     // Should NOT auto-generate Eq instance (not from Vibe/Vibe.Basics)
     expect(

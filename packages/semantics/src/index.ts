@@ -2,9 +2,7 @@ import type {
   Program,
   ValueDeclaration,
   TypeAnnotationDeclaration,
-  ExternalDeclaration,
-  PropertyDeclaration,
-  ImportedValueDeclaration,
+  DecoratedDeclaration,
   TypeDeclaration,
   TypeAliasDeclaration,
   OpaqueTypeDeclaration,
@@ -1229,18 +1227,8 @@ class SemanticAnalyzer {
     }
   }
 
-  seedValueType(
-    decl:
-      | ValueDeclaration
-      | ExternalDeclaration
-      | PropertyDeclaration
-      | ImportedValueDeclaration,
-  ): Type {
-    if (
-      decl.kind === "ExternalDeclaration" ||
-      decl.kind === "PropertyDeclaration" ||
-      decl.kind === "ImportedValueDeclaration"
-    ) {
+  seedValueType(decl: ValueDeclaration | DecoratedDeclaration): Type {
+    if (decl.kind === "DecoratedDeclaration") {
       return this.typeFromAnnotation(decl.annotation, new Map());
     }
     const argTypes = decl.args.map(() => freshType());
@@ -2344,13 +2332,7 @@ class SemanticAnalyzer {
     }
   }
 
-  registerValue(
-    decl:
-      | ValueDeclaration
-      | ExternalDeclaration
-      | PropertyDeclaration
-      | ImportedValueDeclaration,
-  ) {
+  registerValue(decl: ValueDeclaration | DecoratedDeclaration) {
     // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
     if (Object.hasOwn(this.values, decl.name)) {
       throw new SemanticError(
@@ -2359,15 +2341,24 @@ class SemanticAnalyzer {
         this.getFilePath(),
       );
     }
-    const hasBuiltinAnnotation =
-      decl.kind === "ExternalDeclaration" ||
-      decl.kind === "PropertyDeclaration" ||
-      decl.kind === "ImportedValueDeclaration";
+    const hasBuiltinAnnotation = decl.kind === "DecoratedDeclaration";
+
+    // Extract external target for @external decorator
+    let externalTarget:
+      | { modulePath: string; exportName: string; span: Span }
+      | undefined;
+    if (decl.kind === "DecoratedDeclaration" && decl.decorator === "external") {
+      externalTarget = {
+        modulePath: decl.args[0]!,
+        exportName: decl.args[1]!,
+        span: decl.span,
+      };
+    }
+
     this.values[decl.name] = {
       declaration: decl,
       annotation: hasBuiltinAnnotation ? decl.annotation : undefined,
-      externalTarget:
-        decl.kind === "ExternalDeclaration" ? decl.target : undefined,
+      externalTarget,
     };
   }
 
@@ -4374,10 +4365,12 @@ class SemanticAnalyzer {
     for (const decl of this.getDeclarations()) {
       if (
         decl.kind === "ValueDeclaration" ||
-        decl.kind === "ExternalDeclaration" ||
-        decl.kind === "PropertyDeclaration" ||
-        decl.kind === "ImportedValueDeclaration"
+        decl.kind === "DecoratedDeclaration"
       ) {
+        // Validate DecoratedDeclaration before registering
+        if (decl.kind === "DecoratedDeclaration") {
+          this.validateDecoratedDeclaration(decl);
+        }
         this.registerValue(decl);
         continue;
       }
@@ -4632,11 +4625,71 @@ class SemanticAnalyzer {
     }
   }
 
-  private validatePropertyDeclaration(
-    decl: PropertyDeclaration,
+  /**
+   * Validate a DecoratedDeclaration has correct decorator and argument count.
+   * This is where we enforce decorator semantics that were deferred from the parser.
+   */
+  private validateDecoratedDeclaration(decl: DecoratedDeclaration): void {
+    const validDecorators = ["external", "get", "call", "val", "import"];
+    if (!validDecorators.includes(decl.decorator)) {
+      throw new SemanticError(
+        `Unknown decorator '@${decl.decorator}'. Valid decorators are: @external, @get, @call, @val, @import`,
+        decl.span,
+        this.getFilePath(),
+      );
+    }
+
+    // Validate argument counts for each decorator type
+    switch (decl.decorator) {
+      case "external":
+        if (decl.args.length !== 2) {
+          throw new SemanticError(
+            `@external requires exactly 2 string arguments (module path and export name), got ${decl.args.length}`,
+            decl.span,
+            this.getFilePath(),
+          );
+        }
+        break;
+      case "get":
+      case "call":
+      case "val":
+        if (decl.args.length !== 1) {
+          throw new SemanticError(
+            `@${decl.decorator} requires exactly 1 string argument (property key), got ${decl.args.length}`,
+            decl.span,
+            this.getFilePath(),
+          );
+        }
+        break;
+      case "import":
+        if (decl.args.length !== 1) {
+          throw new SemanticError(
+            `@import requires exactly 1 string argument (module path), got ${decl.args.length}`,
+            decl.span,
+            this.getFilePath(),
+          );
+        }
+        break;
+    }
+  }
+
+  /**
+   * Check if a declaration is an FFI-style declaration (no Vibe body to infer from).
+   */
+  private isFFIDeclaration(
+    decl: ValueDeclaration | DecoratedDeclaration,
+  ): boolean {
+    return decl.kind === "DecoratedDeclaration";
+  }
+
+  /**
+   * Validate @get/@call type structure for DecoratedDeclaration.
+   */
+  private validateDecoratedPropertyType(
+    decl: DecoratedDeclaration,
     type: Type,
   ): void {
-    const variant = decl.variant; // "get", "call", or "val"
+    const variant = decl.decorator; // "get", "call", or "val"
 
     // @val has no structural constraints on the type
     if (variant === "val") {
@@ -4653,7 +4706,7 @@ class SemanticAnalyzer {
           this.getFilePath(),
         );
       }
-    } else {
+    } else if (variant === "call") {
       if (params.length < 1) {
         throw new SemanticError(
           `@call declaration '${decl.name}' must have at least one argument`,
@@ -4677,13 +4730,9 @@ class SemanticAnalyzer {
         );
       }
       const value = this.values[name]!;
-      if (
-        value.declaration.kind === "ExternalDeclaration" ||
-        value.declaration.kind === "PropertyDeclaration" ||
-        value.declaration.kind === "ImportedValueDeclaration"
-      ) {
+      if (value.declaration.kind === "DecoratedDeclaration") {
         throw new SemanticError(
-          `${value.declaration.kind === "ExternalDeclaration" ? "External" : value.declaration.kind === "PropertyDeclaration" ? "Property" : "Imported value"} declaration '${name}' already includes a type annotation`,
+          `Decorated declaration '${name}' already includes a type annotation`,
           ann.span,
           this.getFilePath(),
         );
@@ -4695,13 +4744,9 @@ class SemanticAnalyzer {
     for (const [name, info] of Object.entries(this.values)) {
       const annotationExpr =
         info.annotation ??
-        (info.declaration.kind === "ExternalDeclaration"
+        (info.declaration.kind === "DecoratedDeclaration"
           ? info.declaration.annotation
-          : info.declaration.kind === "PropertyDeclaration"
-            ? info.declaration.annotation
-            : info.declaration.kind === "ImportedValueDeclaration"
-              ? info.declaration.annotation
-              : undefined);
+          : undefined);
 
       let annotationType: Type | undefined;
       let annotatedConstraints: Constraint[] | undefined;
@@ -4857,11 +4902,7 @@ class SemanticAnalyzer {
 
       for (const name of scc) {
         const info = this.values[name]!;
-        if (
-          info.declaration.kind === "ExternalDeclaration" ||
-          info.declaration.kind === "PropertyDeclaration" ||
-          info.declaration.kind === "ImportedValueDeclaration"
-        ) {
+        if (this.isFFIDeclaration(info.declaration)) {
           externals.push(name);
         } else {
           valueDecls.push(name);
@@ -4871,13 +4912,10 @@ class SemanticAnalyzer {
       // Process externals, property, and imported value declarations first
       for (const name of externals) {
         const info = this.values[name]!;
-        if (
-          info.declaration.kind === "ExternalDeclaration" ||
-          info.declaration.kind === "PropertyDeclaration" ||
-          info.declaration.kind === "ImportedValueDeclaration"
-        ) {
+        const decl = info.declaration;
+        if (decl.kind === "DecoratedDeclaration") {
           const result = this.typeFromAnnotationWithConstraints(
-            info.declaration.annotation,
+            decl.annotation,
             new Map(),
           );
           info.type = result.type;
@@ -4887,8 +4925,8 @@ class SemanticAnalyzer {
           }
 
           // Validate @get/@call declarations
-          if (info.declaration.kind === "PropertyDeclaration") {
-            this.validatePropertyDeclaration(info.declaration, info.type);
+          if (decl.decorator === "get" || decl.decorator === "call") {
+            this.validateDecoratedPropertyType(decl, info.type);
           }
 
           // Quantify all free type variables so the scheme can be properly

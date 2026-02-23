@@ -51,11 +51,7 @@ ModuleName = UpperIdentifier, {".", UpperIdentifier} ;
 
 (* ===== Declarations ===== *)
 
-Declaration = ExternalDeclaration
-            | PropertyGetDeclaration
-            | PropertyCallDeclaration
-            | PropertyValDeclaration
-            | ImportedValueDeclaration
+Declaration = DecoratedDeclaration
             | TypeAnnotationDeclaration
             | ValueDeclaration
             | TypeDeclaration
@@ -64,28 +60,26 @@ Declaration = ExternalDeclaration
             | ImplementationDeclaration
             | InfixDeclaration ;
 
-ExternalDeclaration = "@", "external", String, String, DeclarationName, ":", TypeExpr ;
-
-(* Property access for FFI - accesses a JS property on a receiver *)
-(* Example: @get "size" fileStatSize : FileStat -> Int *)
-PropertyGetDeclaration = "@", "get", String, DeclarationName, ":", TypeExpr ;
-
-(* Method call for FFI - calls a JS method on a receiver *)
-(* Example: @call "toString" toString : FileStat -> String *)
-(* With args: @call "write" write : Handle -> String -> Promise () *)
-PropertyCallDeclaration = "@", "call", String, DeclarationName, ":", TypeExpr ;
-
-(* Global value reference for FFI - references a global JS variable *)
-(* Example: @val "window" globalWindow : Window *)
-(* Compiles to: const globalWindow = window; *)
-PropertyValDeclaration = "@", "val", String, DeclarationName, ":", TypeExpr ;
-
-(* Imported value declaration - emits a default JS import and binds a value *)
-(* The value must return an opaque type. *)
-(* Example: @import "node:fs/promises" *)
-(*          fs : FS *)
-(* Compiles to: import fs from "node:fs/promises"; *)
-ImportedValueDeclaration = "@", "import", String, DeclarationName, ":", TypeExpr ;
+(* Decorated declarations: FFI bindings with @-prefixed decorators
+   The parser collects decorator arguments generically; validation happens in semantics.
+   
+   Layout rule: The declaration name must start at column 1 (Elm-style).
+   The decorator and arguments can span multiple indented lines, but the name/type
+   must be on a new line at column 1.
+   
+   Known decorators:
+   - @external "module" "export"   -- External binding from JS module
+     name : Type
+   - @get "key"                    -- Property getter
+     name : Receiver -> Result
+   - @call "method"                -- Method call
+     name : Receiver -> Args... -> Result
+   - @val "global"                 -- Global value reference
+     name : Type
+   - @import "module"              -- Default import from JS module
+     name : Type
+*)
+DecoratedDeclaration = "@", Identifier, { String }, Newline, DeclarationName, ":", TypeExpr ;
 
 TypeAnnotationDeclaration = DeclarationName, ":", TypeExpr ;
 
@@ -175,14 +169,22 @@ TypeAliasDeclaration = "type", "alias", UpperIdentifier, {LowerIdentifier}, "=",
 (* Protocol (type class) declarations *)
 (* Methods can be regular identifiers or operators in parentheses *)
 (* Protocols may have superclass constraints: protocol Eq a => Ord a where ... *)
-ProtocolDeclaration = "protocol", [Constraints, "=>"], UpperIdentifier, {LowerIdentifier}, "where", {MethodSignature} ;
+(* The 'where' keyword opens a layout block: methods are separated by BLOCK_SEP *)
+ProtocolDeclaration = "protocol", [Constraints, "=>"], UpperIdentifier, {LowerIdentifier}, "where",
+                      BLOCK_START, ProtocolItem, {BLOCK_SEP, ProtocolItem}, BLOCK_END ;
+
+ProtocolItem = MethodSignature | MethodDefaultImpl ;
 
 MethodSignature = LowerIdentifier, ":", TypeExpr
                 | "(", Operator, ")", ":", TypeExpr ;
 
+MethodDefaultImpl = DeclarationName, {Pattern}, "=", Expr ;
+
 (* Implementation (instance) declarations *)
 (* Type arguments are optional - zero type args means a nullary protocol implementation *)
-ImplementationDeclaration = "implement", [Constraints, "=>"], UpperIdentifier, {TypeTerm}, "where", {MethodImpl} ;
+(* The 'where' keyword opens a layout block: methods are separated by BLOCK_SEP *)
+ImplementationDeclaration = "implement", [Constraints, "=>"], UpperIdentifier, {TypeTerm}, "where",
+                            BLOCK_START, MethodImpl, {BLOCK_SEP, MethodImpl}, BLOCK_END ;
 
 (* Method implementations can be either:
    - Simple expression: `plus = intPlus` (reference to existing function)
@@ -289,16 +291,20 @@ Primary = IfExpr
         | "(", Expr, ")" ;                    (* grouped expression *)
 
 IfExpr = "if", Expr, "then", Expr, "else", Expr ;
+(* Indentation rule: when 'then' or 'else' appear on a separate line from 'if',
+   they must be indented past the column of 'if'. *)
 
-LetInExpr = "let", {LetBinding}, "in", Expr ;
+LetInExpr = "let", BLOCK_START, LetBinding, {BLOCK_SEP, LetBinding}, BLOCK_END, "in", Expr ;
 
-LetBinding = ValueDeclaration ;  (* indentation-sensitive *)
+LetBinding = ValueDeclaration ;
 
-CaseExpr = "case", Expr, "of", {CaseBranch} ;
+CaseExpr = "case", Expr, "of", BLOCK_START, CaseBranch, {BLOCK_SEP, CaseBranch}, BLOCK_END ;
 
-CaseBranch = Pattern, "->", Expr ;  (* indentation-sensitive *)
+CaseBranch = Pattern, "->", Expr ;
 
 LambdaExpr = "\", {Pattern}, "->", Expr ;
+(* Indentation rule: when the body appears on a separate line from '->',
+   it must be indented past the column of '\'. *)
 
 Variable = LowerIdentifier
          | UpperIdentifier ;
@@ -402,15 +408,62 @@ Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
 (* ===== Layout Rules ===== *)
 
 (*
-  Vibe uses significant indentation (layout-sensitive parsing):
+  Vibe uses Elm/Haskell-style layout-sensitive parsing with a dedicated
+  preprocessing pass between the lexer and parser.
+
+  === Pipeline ===
   
-  1. Let bindings: All bindings must be indented past the "let" keyword
-  2. Case branches: All branches must be indented past the "of" keyword
-  3. Record fields: Continuation on new lines requires consistent indentation
-  4. List/Tuple elements: Continuation on new lines requires consistent indentation
-  5. Function application: Arguments on new lines must maintain or increase indentation
+    Source → Lexer (+ Newline tokens) → Layout Pass (→ Block tokens) → Parser
   
-  Layout rule: A construct continues if the next token is either:
-    - On the same line, OR
-    - On a new line with column >= base indentation column
+  === Virtual tokens ===
+  
+  The layout pass inserts three virtual token types:
+    BLOCK_START  - Opens a layout block (like '{' in Haskell)
+    BLOCK_SEP    - Separates items in a layout block (like ';')
+    BLOCK_END    - Closes a layout block (like '}')
+  
+  === Layout keywords ===
+  
+  Three keywords trigger layout blocks:
+    "let"   → bindings block, closed by dedent or "in" keyword
+    "of"    → case branches block, closed by dedent
+    "where" → protocol/implement method block, closed by dedent
+  
+  After a layout keyword, the column of the next non-empty token establishes
+  the layout indent. Subsequent lines at that column produce BLOCK_SEP, lines
+  at a lesser column produce BLOCK_END, and lines at a greater column are
+  continuation of the current item.
+  
+  === Top-level enforcement ===
+  
+  All top-level constructs (module, import, declarations) must start at column 1.
+  
+  === If/then/else enforcement ===
+  
+  When 'then' or 'else' appear on a separate line from 'if', they must be
+  indented past the column of 'if'.
+  
+  === Function body enforcement ===
+  
+  When a function body appears on a separate line from '=', it must be
+  indented past the column of the declaration name.
+  
+  === Lambda body enforcement ===
+  
+  When a lambda body appears on a separate line from '->', it must be
+  indented past the column of '\'.
+  
+  === Multi-line expressions ===
+  
+  Function application continues on a new line if the column is ≥ the
+  callee's column. Otherwise, the application ends and the parser returns.
+  
+  === Brackets ===
+  
+  Closing brackets (')' ']' '}') force-close any layout contexts opened
+  inside the corresponding opening bracket.
+  
+  === Tabs ===
+  
+  Tabs are expanded to the next 8-column tab stop (columns 1, 9, 17, 25, ...).
 *)

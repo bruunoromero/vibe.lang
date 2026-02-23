@@ -25,7 +25,10 @@ import {
  * Uses the same shape as ParseError for consistency.
  */
 export class InfixParseError extends Error {
-  constructor(message: string, public readonly span: Span) {
+  constructor(
+    message: string,
+    public readonly span: Span,
+  ) {
     super(message);
   }
 }
@@ -74,6 +77,12 @@ export function buildRegistryFromTokens(tokens: Token[]): RegistryBuildResult {
   while (i < tokens.length && tokens[i]!.kind !== TokenKind.Eof) {
     const tok = tokens[i]!;
 
+    // Skip Newline tokens (emitted by lexer for layout processing)
+    if (tok.kind === TokenKind.Newline) {
+      i++;
+      continue;
+    }
+
     // Look for infix/infixl/infixr keywords
     if (
       tok.kind === TokenKind.Keyword &&
@@ -90,8 +99,8 @@ export function buildRegistryFromTokens(tokens: Token[]): RegistryBuildResult {
         errors.push(
           new InfixParseError(
             "Expected precedence number after infix keyword",
-            tokens[i - 1]!.span
-          )
+            tokens[i - 1]!.span,
+          ),
         );
         continue;
       }
@@ -108,8 +117,8 @@ export function buildRegistryFromTokens(tokens: Token[]): RegistryBuildResult {
           errors.push(
             new InfixParseError(
               "Expected operator inside parentheses",
-              tokens[i - 1]!.span
-            )
+              tokens[i - 1]!.span,
+            ),
           );
           continue;
         }
@@ -119,8 +128,8 @@ export function buildRegistryFromTokens(tokens: Token[]): RegistryBuildResult {
           errors.push(
             new InfixParseError(
               "Expected closing parenthesis after operator",
-              tokens[i - 1]!.span
-            )
+              tokens[i - 1]!.span,
+            ),
           );
           continue;
         }
@@ -134,8 +143,8 @@ export function buildRegistryFromTokens(tokens: Token[]): RegistryBuildResult {
         errors.push(
           new InfixParseError(
             "Expected operator after precedence in infix declaration",
-            tokens[i - 1]!.span
-          )
+            tokens[i - 1]!.span,
+          ),
         );
         continue;
       }
@@ -149,8 +158,8 @@ export function buildRegistryFromTokens(tokens: Token[]): RegistryBuildResult {
         errors.push(
           new InfixParseError(
             `Duplicate infix declaration for operator '${operator}'`,
-            { start, end }
-          )
+            { start, end },
+          ),
         );
         continue;
       }
@@ -180,7 +189,7 @@ export function buildRegistryFromTokens(tokens: Token[]): RegistryBuildResult {
  */
 export function getOperatorInfo(
   registry: OperatorRegistry,
-  operator: string
+  operator: string,
 ): OperatorInfo {
   return registry.get(operator) ?? DEFAULT_OPERATOR_INFO;
 }
@@ -197,7 +206,7 @@ export function getOperatorInfo(
  */
 export function mergeRegistries(
   base: OperatorRegistry,
-  override: OperatorRegistry
+  override: OperatorRegistry,
 ): OperatorRegistry {
   const merged: OperatorRegistry = new Map(base);
   for (const [op, info] of override) {
@@ -227,7 +236,7 @@ export function createEmptyRegistry(): OperatorRegistry {
  * Built from BUILTIN_OPERATOR_FIXITY in @vibe/syntax.
  */
 export const BUILTIN_OPERATOR_REGISTRY: OperatorRegistry = new Map(
-  Object.entries(BUILTIN_OPERATOR_FIXITY)
+  Object.entries(BUILTIN_OPERATOR_FIXITY),
 );
 
 // Re-export types for convenience

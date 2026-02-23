@@ -371,8 +371,8 @@ function extractDeclarationTokens(
       break;
     }
 
-    case "ExternalDeclaration": {
-      // External binding name
+    case "DecoratedDeclaration": {
+      // Decorated binding name
       const nameSpan = getNameSpan(decl.span, decl.name, content);
       addToken(
         tokens,
@@ -395,30 +395,6 @@ function extractDeclarationTokens(
         TokenTypeIndex.Operator,
         TokenModifierFlags.Declaration,
       );
-      break;
-    }
-
-    case "PropertyDeclaration": {
-      const nameSpan = getNameSpan(decl.span, decl.name, content);
-      addToken(
-        tokens,
-        nameSpan,
-        TokenTypeIndex.External,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
-      );
-      extractTypeExprTokens(decl.annotation, content, tokens);
-      break;
-    }
-
-    case "ImportedValueDeclaration": {
-      const nameSpan = getNameSpan(decl.span, decl.name, content);
-      addToken(
-        tokens,
-        nameSpan,
-        TokenTypeIndex.External,
-        TokenModifierFlags.Declaration | TokenModifierFlags.Definition,
-      );
-      extractTypeExprTokens(decl.annotation, content, tokens);
       break;
     }
   }

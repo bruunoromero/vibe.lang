@@ -167,13 +167,10 @@ export function lower(
     const decl = valueInfo.declaration;
     const type = semantics.types[name];
 
-    // Check if this is an external, property, or imported value declaration (no body)
-    const isExternal =
-      decl.kind === "ExternalDeclaration" ||
-      decl.kind === "PropertyDeclaration" ||
-      decl.kind === "ImportedValueDeclaration";
+    // Check if this is a decorated declaration (no body)
+    const isExternal = decl.kind === "DecoratedDeclaration";
 
-    // Lower the expression body (external/property declarations have no body)
+    // Lower the expression body (decorated declarations have no body)
     let body: IRExpr;
     let params: IRPattern[] = [];
 
@@ -199,11 +196,17 @@ export function lower(
 
     // Compute property access metadata
     let propertyAccess: IRValue["propertyAccess"];
-    if (decl.kind === "PropertyDeclaration") {
-      if (decl.variant === "val") {
+    if (
+      decl.kind === "DecoratedDeclaration" &&
+      (decl.decorator === "get" ||
+        decl.decorator === "call" ||
+        decl.decorator === "val")
+    ) {
+      const key = decl.args[0]!;
+      if (decl.decorator === "val") {
         propertyAccess = {
           variant: "val",
-          key: decl.key,
+          key,
           callArity: 0,
         };
       } else {
@@ -214,13 +217,21 @@ export function lower(
           argCount++;
           t = t.to;
         }
-        // callArity = total args minus the receiver (first arg)
         propertyAccess = {
-          variant: decl.variant,
-          key: decl.key,
+          variant: decl.decorator as "get" | "call",
+          key,
           callArity: Math.max(0, argCount - 1),
         };
       }
+    }
+
+    // Extract external target info
+    let externalTarget: { modulePath: string; exportName: string } | undefined;
+    if (decl.kind === "DecoratedDeclaration" && decl.decorator === "external") {
+      externalTarget = {
+        modulePath: decl.args[0]!,
+        exportName: decl.args[1]!,
+      };
     }
 
     const irValue: IRValue = {
@@ -230,17 +241,9 @@ export function lower(
       type: irType,
       constraints,
       isExternal:
-        decl.kind === "ExternalDeclaration" ||
-        decl.kind === "ImportedValueDeclaration",
-      externalTarget:
-        decl.kind === "ExternalDeclaration"
-          ? {
-              modulePath: (decl as import("@vibe/syntax").ExternalDeclaration)
-                .target.modulePath,
-              exportName: (decl as import("@vibe/syntax").ExternalDeclaration)
-                .target.exportName,
-            }
-          : undefined,
+        decl.kind === "DecoratedDeclaration" &&
+        (decl.decorator === "external" || decl.decorator === "import"),
+      externalTarget,
       propertyAccess,
       span: decl.span,
     };
@@ -685,10 +688,11 @@ export function lower(
   // Collect default imports from @import value declarations
   const defaultImports: Array<{ name: string; modulePath: string }> = [];
   for (const valueInfo of Object.values(semantics.values)) {
-    if (valueInfo.declaration.kind === "ImportedValueDeclaration") {
+    const decl = valueInfo.declaration;
+    if (decl.kind === "DecoratedDeclaration" && decl.decorator === "import") {
       defaultImports.push({
-        name: valueInfo.declaration.name,
-        modulePath: valueInfo.declaration.modulePath,
+        name: decl.name,
+        modulePath: decl.args[0]!,
       });
     }
   }

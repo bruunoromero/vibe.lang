@@ -41,6 +41,7 @@ import {
   type InfixDeclaration,
   type OperatorRegistry,
   type RecordFieldType,
+  type DecoratedDeclaration,
 } from "@vibe/syntax";
 import {
   buildRegistryFromTokens,
@@ -49,6 +50,7 @@ import {
   BUILTIN_OPERATOR_REGISTRY,
   mergeRegistries,
 } from "./operator-registry";
+import { insertLayoutTokens } from "./layout";
 
 // Re-export BUILTIN_OPERATOR_REGISTRY for use by other packages
 export { BUILTIN_OPERATOR_REGISTRY } from "./operator-registry";
@@ -80,12 +82,15 @@ export function parse(
   operatorRegistry?: OperatorRegistry,
 ): Program {
   // Step 1: Tokenize the source code
-  const tokens = lex(source);
+  const rawTokens = lex(source);
 
-  // Step 2: Create parser instance with token stream and operator registry
+  // Step 2: Insert layout tokens (BlockStart, BlockSep, BlockEnd)
+  const tokens = insertLayoutTokens(rawTokens);
+
+  // Step 3: Create parser instance with token stream and operator registry
   const parser = new Parser(tokens, operatorRegistry);
 
-  // Step 3: Parse tokens into AST
+  // Step 4: Parse tokens into AST
   return parser.parseProgram();
 }
 
@@ -127,11 +132,17 @@ export function parseWithInfix(source: string): {
   operatorRegistry: OperatorRegistry;
   infixErrors: ParseError[];
 } {
-  const { registry, errors } = collectInfixDeclarations(source);
+  // Pre-scan on raw tokens (before layout pass)
+  const rawTokens = lex(source);
+  const { registry, errors } = buildRegistryFromTokens(rawTokens);
   // Merge with builtin operators to ensure && and || have correct precedence
   const mergedRegistry = mergeRegistries(BUILTIN_OPERATOR_REGISTRY, registry);
-  const program = parse(source, mergedRegistry);
-  return { program, operatorRegistry: mergedRegistry, infixErrors: errors };
+  // Run layout pass then parse
+  const layoutTokens = insertLayoutTokens(rawTokens);
+  const parser = new Parser(layoutTokens, mergedRegistry);
+  const program = parser.parseProgram();
+  const infixErrors = errors.map((e) => new ParseError(e.message, e.span));
+  return { program, operatorRegistry: mergedRegistry, infixErrors };
 }
 
 /**
@@ -141,9 +152,6 @@ export function parseWithInfix(source: string): {
 class Parser {
   /** Current position in token stream */
   private index = 0;
-
-  /** Stack tracking indentation levels for layout-sensitive constructs */
-  private layoutStack: number[] = [];
 
   /** Custom operator registry for user-defined precedence/associativity */
   private operatorRegistry: OperatorRegistry;
@@ -178,6 +186,8 @@ class Parser {
    * Parse complete program: module header (required), imports, and declarations
    *
    * Grammar: Program = ModuleDeclaration, {ImportDeclaration}, {Declaration}
+   *
+   * All top-level constructs must start at column 1.
    */
   parseProgram(): Program {
     // Parse module declaration (required - every Vibe file must start with one)
@@ -189,21 +199,37 @@ class Parser {
         currentToken.span,
       );
     }
+
+    this.enforceColumn1(this.current(), "module declaration");
     const module = this.parseModuleDeclaration();
 
     // Parse all import declarations
     const imports: ImportDeclaration[] = [];
     while (this.peekKeyword("import")) {
+      this.enforceColumn1(this.current(), "import declaration");
       imports.push(this.parseImport());
     }
 
     // Parse all top-level declarations (functions, type annotations, externals)
     const declarations: Declaration[] = [];
     while (!this.isAtEnd()) {
+      this.enforceColumn1(this.current(), "top-level declaration");
       declarations.push(this.parseDeclaration());
     }
 
     return { module, imports, declarations };
+  }
+
+  /**
+   * Enforce that a token starts at column 1 (top-level requirement).
+   */
+  private enforceColumn1(token: Token, label: string): void {
+    if (token.span.start.column !== 1) {
+      throw new ParseError(
+        `${label} must start at column 1, but found at column ${token.span.start.column}`,
+        token.span,
+      );
+    }
   }
 
   /**
@@ -447,33 +473,22 @@ class Parser {
   /**
    * Parse top-level declaration
    *
-   * Grammar: Declaration = TypeDeclaration | TypeAliasDeclaration | ExternalDeclaration | TypeAnnotationDeclaration | ValueDeclaration
+   * Grammar: Declaration = TypeDeclaration | TypeAliasDeclaration | DecoratedDeclaration | TypeAnnotationDeclaration | ValueDeclaration
    *
    * Examples:
    *   type Maybe a = Just a | Nothing        (Type declaration - ADT)
    *   type alias UserId = number             (Type alias)
-   *   @external "module" "func" foo : Int -> Int     (External FFI)
-   *   @get "key" foo : OpaqueType -> ReturnType      (Property get)
-   *   @call "key" foo : OpaqueType -> ReturnType     (Method call)
-   *   foo : Int -> Int                               (Type annotation)
-   *   foo x = x + 1                                  (Value declaration)
-   *   (+) a b = add a b                              (Operator declaration)
+   *   @external "module" "func" foo : Int    (Decorated - external FFI)
+   *   @get "key" foo : Opaque -> Ret         (Decorated - property get)
+   *   @call "key" foo : Opaque -> Ret        (Decorated - method call)
+   *   foo : Int -> Int                       (Type annotation)
+   *   foo x = x + 1                          (Value declaration)
+   *   (+) a b = add a b                      (Operator declaration)
    */
   private parseDeclaration(): Declaration {
-    // Check for external declaration (@external ...)
-    if (this.peekExternalAttribute()) {
-      return this.parseExternalDeclaration();
-    }
-
-    // Check for imported value declaration (@import "path" name : Type)
-    if (this.peekImportAttribute()) {
-      return this.parseImportedValueDeclaration();
-    }
-
-    // Check for property access declaration (@get ... or @call ... or @val ...)
-    const propertyVariant = this.peekPropertyAttribute();
-    if (propertyVariant) {
-      return this.parsePropertyDeclaration(propertyVariant);
+    // Check for decorated declaration (@name ...)
+    if (this.peekDecorator()) {
+      return this.parseDecoratedDeclaration();
     }
 
     // Check for type declaration or type alias (type ...)
@@ -517,7 +532,7 @@ class Parser {
 
     // Otherwise, parse value declaration (name args = body)
     // Uses shared parseMethodBody for consistency with protocol/implementation methods
-    const { args, body } = this.parseMethodBody();
+    const { args, body } = this.parseMethodBody(nameSpan.start.column);
     const span: Span = { start: nameSpan.start, end: body.span.end };
 
     return {
@@ -668,22 +683,16 @@ class Parser {
    * The => must appear before the equals sign or end of declaration (for opaque types).
    */
   private peekConstraintContextInTypeDecl(): boolean {
-    // Look ahead to find => operator
     let i = 0;
     let parenDepth = 0;
 
-    // Get the starting line to detect when we move to a new declaration
-    const startLine = this.current().span.start.line;
-
-    while (this.peekAhead(i)) {
-      const tok = this.peekAhead(i);
+    while (this.peekAheadSkipLayout(i)) {
+      const tok = this.peekAheadSkipLayout(i);
       if (!tok) break;
 
-      // Track parentheses depth
       if (tok.kind === TokenKind.LParen) parenDepth++;
       if (tok.kind === TokenKind.RParen) parenDepth--;
 
-      // Found => at top level - we have constraints
       if (
         parenDepth === 0 &&
         tok.kind === TokenKind.Operator &&
@@ -692,13 +701,10 @@ class Parser {
         return true;
       }
 
-      // Stop looking if we hit '=' - valid boundary for type def
       if (tok.kind === TokenKind.Equals && parenDepth === 0) {
         return false;
       }
 
-      // Stop at keywords that start new declarations (prevents lookahead into next declaration)
-      // This is critical for opaque types like "type Ref a" which have no "=" boundary
       if (tok.kind === TokenKind.Keyword && parenDepth === 0) {
         const keyword = tok.lexeme;
         if (
@@ -716,8 +722,6 @@ class Parser {
       }
 
       i++;
-
-      // Don't look too far ahead
       if (i > 50) break;
     }
 
@@ -816,213 +820,103 @@ class Parser {
   /**
    * Parse protocol declaration
    *
-   * Grammar: protocol UpperIdentifier {LowerIdentifier} where {MethodSignature}
+   * Grammar: protocol UpperIdentifier {LowerIdentifier} where BlockStart {MethodItem BlockSep} BlockEnd
    *
-   * MethodSignature:
-   *   - Required method: name : Type
-   *   - Method with default: name : Type, followed by name args = expr
+   * Method items in the where-block:
+   *   - Type annotation: name : Type
+   *   - Default implementation: name args = expr
+   *
+   * After collecting all items, consecutive annotation+implementation pairs
+   * for the same method are merged into a single ProtocolMethod.
    *
    * Example:
-   *   protocol Num a where
-   *     plus : a -> a -> a
-   *     minus : a -> a -> a
-   *     times : a -> a -> a
-   *
    *   protocol Eq a where
    *     eq : a -> a -> Bool
    *     neq : a -> a -> Bool
    *     neq x y = not (eq x y)
    */
   private parseProtocolDeclaration(): ProtocolDeclaration {
-    // Consume "protocol" keyword
     const protocolToken = this.expectKeyword("protocol");
 
-    // Try to parse constraints (optional superclass context)
+    // Parse optional constraints
     const constraints: Constraint[] = [];
-
-    // Check if we have constraints (look ahead for =>)
     const hasConstraints = this.peekConstraintContextInProtocol();
-
     if (hasConstraints) {
-      // Parse constraint(s) before =>
       if (this.match(TokenKind.LParen)) {
-        // Multiple constraints: (Eq a, Show a) =>
         do {
           constraints.push(this.parseConstraint());
         } while (this.match(TokenKind.Comma));
-
         this.expect(TokenKind.RParen, "close constraint list");
       } else {
-        // Single constraint: Eq a =>
         constraints.push(this.parseConstraint());
       }
-
-      // Consume =>
       this.expectOperator("=>");
     }
 
-    // Parse protocol name (must be uppercase)
     const nameToken = this.expect(TokenKind.UpperIdentifier, "protocol name");
     const name = nameToken.lexeme;
 
-    // Parse type parameters (typically one, but support multiple)
     const params: string[] = [];
     while (this.peek(TokenKind.LowerIdentifier)) {
       const param = this.expect(TokenKind.LowerIdentifier, "type parameter");
       params.push(param.lexeme);
     }
 
-    // Consume "where" keyword
+    // "where" triggers a layout block
     this.expectKeyword("where");
+    this.expectBlockStart();
 
-    // Parse method signatures with optional default implementations (indented block)
-    const methods: ProtocolMethod[] = [];
+    // Collect all items in the where-block
+    type ProtocolItem =
+      | { kind: "annotation"; name: string; type: TypeExpr; span: Span }
+      | {
+          kind: "implementation";
+          name: string;
+          args: Pattern[];
+          body: Expr;
+          span: Span;
+        };
 
-    // Get base indentation from first method
-    // Methods can be either LowerIdentifier or (Operator)
-    if (!this.peek(TokenKind.LowerIdentifier) && !this.peek(TokenKind.LParen)) {
-      throw new ParseError(
-        "Expected at least one method signature in protocol",
-        this.currentSpan(),
-      );
+    const items: ProtocolItem[] = [];
+    items.push(this.parseProtocolItem());
+    while (this.matchBlockSep()) {
+      items.push(this.parseProtocolItem());
     }
+    this.expectBlockEnd();
 
-    const firstMethodStart = this.current().span.start;
-    const baseIndent = firstMethodStart.column;
-
-    // Parse all method signatures (and optionally their default implementations)
-    while (
-      this.peek(TokenKind.LowerIdentifier) ||
-      this.peek(TokenKind.LParen)
-    ) {
-      const methodToken = this.current();
-
-      // Check indentation
-      if (methodToken.span.start.column < baseIndent) {
-        break;
-      }
-
-      // Parse method name - either identifier or operator in parens
-      let methodName: string;
-      const methodStart = methodToken.span.start;
-
-      if (this.match(TokenKind.LParen)) {
-        // Operator method: (==), (+), etc.
-        const opToken = this.expect(
-          TokenKind.Operator,
-          "operator in protocol method",
-        );
-        methodName = opToken.lexeme;
-        this.expect(TokenKind.RParen, "close paren after operator");
-      } else {
-        // Regular method name
-        this.advance();
-        methodName = methodToken.lexeme;
-      }
-
-      // Check if there's a type annotation (: Type) or just a default implementation
-      let methodType: TypeExpr | undefined = undefined;
-      let defaultImpl: ProtocolMethod["defaultImpl"] = undefined;
-
-      if (this.peek(TokenKind.Colon)) {
-        // Has explicit type annotation
-        this.advance(); // consume colon
-
-        // Parse method type
-        methodType = this.parseTypeExpression();
-
-        // Check if this method has a default implementation on the next line
-        // The default implementation has the form: methodName args = expr
-        // and must be at the same indentation level as the method signature
-        if (
-          (this.peek(TokenKind.LowerIdentifier) ||
-            this.peek(TokenKind.LParen)) &&
-          this.current().span.start.column === baseIndent
-        ) {
-          // Save position to potentially backtrack
-          const savedIndex = this.index;
-
-          // Try to parse a default implementation
-          const nextToken = this.current();
-          let nextMethodName: string | null = null;
-
-          if (this.peek(TokenKind.LParen)) {
-            // Operator method: (==) x y = ...
-            this.advance(); // consume (
-            if (this.peek(TokenKind.Operator)) {
-              nextMethodName = this.current().lexeme;
-              this.advance(); // consume operator
-              if (this.peek(TokenKind.RParen)) {
-                this.advance(); // consume )
-              } else {
-                // Not a valid default impl start, backtrack
-                this.index = savedIndex;
-                nextMethodName = null;
-              }
-            } else {
-              this.index = savedIndex;
-            }
-          } else if (this.peek(TokenKind.LowerIdentifier)) {
-            // Check if it's the same method name
-            if (nextToken.lexeme === methodName) {
-              nextMethodName = nextToken.lexeme;
-              this.advance(); // consume method name
-            }
-          }
-
-          // If we matched the method name, check for arguments and =
-          if (nextMethodName === methodName) {
-            // Parse pattern arguments (if any)
-            // Use isFunctionParamPatternStart for consistency with standard functions
-            const args: Pattern[] = [];
-            while (this.isFunctionParamPatternStart(this.current())) {
-              args.push(this.parseFunctionParamPattern());
-            }
-
-            // Check for equals sign
-            if (this.peek(TokenKind.Equals)) {
-              this.advance(); // consume =
-              // Parse the default implementation expression
-              const body = this.parseExpression();
-              defaultImpl = { args, body };
-            } else {
-              // Not a default implementation, backtrack
-              this.index = savedIndex;
-            }
-          } else if (nextMethodName !== null) {
-            // Different method name, backtrack
-            this.index = savedIndex;
-          }
+    // Merge annotations with their default implementations
+    const methods: ProtocolMethod[] = [];
+    let idx = 0;
+    while (idx < items.length) {
+      const item = items[idx]!;
+      if (item.kind === "annotation") {
+        const next = items[idx + 1];
+        if (next && next.kind === "implementation" && next.name === item.name) {
+          methods.push({
+            name: item.name,
+            type: item.type,
+            defaultImpl: { args: next.args, body: next.body },
+            span: { start: item.span.start, end: next.span.end },
+          });
+          idx += 2;
+        } else {
+          methods.push({
+            name: item.name,
+            type: item.type,
+            defaultImpl: undefined,
+            span: item.span,
+          });
+          idx += 1;
         }
-      } else if (
-        this.isFunctionParamPatternStart(this.current()) ||
-        this.peek(TokenKind.Equals)
-      ) {
-        // No type annotation, must have default implementation
-        // Uses shared parseMethodBody for consistency
-        const { args, body } = this.parseMethodBody();
-        defaultImpl = { args, body };
       } else {
-        throw new ParseError(
-          `Protocol method '${methodName}' must have either a type annotation or a default implementation`,
-          this.currentSpan(),
-        );
+        methods.push({
+          name: item.name,
+          type: undefined,
+          defaultImpl: { args: item.args, body: item.body },
+          span: item.span,
+        });
+        idx += 1;
       }
-
-      const methodSpan: Span = {
-        start: methodStart,
-        end:
-          defaultImpl?.body.span.end ??
-          methodType?.span.end ??
-          this.current().span.end,
-      };
-
-      methods.push({
-        name: methodName,
-        type: methodType,
-        defaultImpl,
-        span: methodSpan,
-      });
     }
 
     const lastMethod = methods[methods.length - 1]!;
@@ -1039,6 +933,60 @@ class Parser {
       methods,
       span,
     } satisfies ProtocolDeclaration;
+  }
+
+  /**
+   * Parse a single protocol item (inside the where-block).
+   * Returns either a type annotation or a default implementation.
+   */
+  private parseProtocolItem():
+    | { kind: "annotation"; name: string; type: TypeExpr; span: Span }
+    | {
+        kind: "implementation";
+        name: string;
+        args: Pattern[];
+        body: Expr;
+        span: Span;
+      } {
+    let methodName: string;
+    const methodStart = this.current().span.start;
+
+    if (this.match(TokenKind.LParen)) {
+      const opToken = this.expect(
+        TokenKind.Operator,
+        "operator in protocol method",
+      );
+      methodName = opToken.lexeme;
+      this.expect(TokenKind.RParen, "close paren after operator");
+    } else {
+      const tok = this.expect(TokenKind.LowerIdentifier, "method name");
+      methodName = tok.lexeme;
+    }
+
+    if (this.peek(TokenKind.Colon)) {
+      this.advance();
+      const methodType = this.parseTypeExpression();
+      return {
+        kind: "annotation",
+        name: methodName,
+        type: methodType,
+        span: { start: methodStart, end: methodType.span.end },
+      };
+    } else {
+      const args: Pattern[] = [];
+      while (this.isFunctionParamPatternStart(this.current())) {
+        args.push(this.parseFunctionParamPattern());
+      }
+      this.expect(TokenKind.Equals, "'=' after parameters");
+      const body = this.parseExpression();
+      return {
+        kind: "implementation",
+        name: methodName,
+        args,
+        body,
+        span: { start: methodStart, end: body.span.end },
+      };
+    }
   }
 
   /**
@@ -1098,52 +1046,22 @@ class Parser {
       typeArgs.push(this.parseTypeAtom());
     }
 
-    // Check for "where" keyword
+    // Check for "where" keyword — the layout pass opens a block after it
     const methods: MethodImplementation[] = [];
 
     if (this.matchKeyword("where")) {
-      // Methods can be either LowerIdentifier or (Operator)
-      if (
-        !this.peek(TokenKind.LowerIdentifier) &&
-        !this.peek(TokenKind.LParen)
-      ) {
-        throw new ParseError(
-          "Expected at least one method implementation in implementation",
-          this.currentSpan(),
-        );
+      this.expectBlockStart();
+
+      // Parse first method implementation
+      const firstMethod = this.parseImplementationMethod();
+      methods.push(firstMethod);
+
+      // Parse remaining methods separated by BlockSep
+      while (this.matchBlockSep()) {
+        methods.push(this.parseImplementationMethod());
       }
 
-      const firstMethodStart = this.current().span.start;
-      const baseIndent = firstMethodStart.column;
-
-      // Parse all method implementations
-      while (
-        this.peek(TokenKind.LowerIdentifier) ||
-        this.peek(TokenKind.LParen)
-      ) {
-        const methodToken = this.current();
-
-        // Check indentation
-        if (methodToken.span.start.column < baseIndent) {
-          break;
-        }
-
-        // Parse method name using shared parseDeclarationName
-        // This handles both regular identifiers and operators in parens
-        const { name: methodName, span: nameSpan } =
-          this.parseDeclarationName();
-
-        // Parse method body using shared parseMethodBody
-        // This ensures consistent pattern parsing with standard functions
-        const { args, body: implementation } = this.parseMethodBody();
-
-        methods.push({
-          name: methodName,
-          args: args.length > 0 ? args : undefined,
-          implementation,
-          span: { start: nameSpan.start, end: implementation.span.end },
-        });
-      }
+      this.expectBlockEnd();
     }
 
     const lastMethod =
@@ -1165,6 +1083,20 @@ class Parser {
       methods,
       span,
     } satisfies ImplementationDeclaration;
+  }
+
+  /**
+   * Parse a single method implementation inside an implement...where block.
+   */
+  private parseImplementationMethod(): MethodImplementation {
+    const { name: methodName, span: nameSpan } = this.parseDeclarationName();
+    const { args, body: implementation } = this.parseMethodBody();
+    return {
+      name: methodName,
+      args: args.length > 0 ? args : undefined,
+      implementation,
+      span: { start: nameSpan.start, end: implementation.span.end },
+    };
   }
 
   /**
@@ -1277,25 +1209,20 @@ class Parser {
    * Check if we have a constraint context (looks ahead for =>)
    */
   private peekConstraintContext(): boolean {
-    // Look ahead to find => operator
     let i = 0;
-    while (this.peekAhead(i)) {
-      const tok = this.peekAhead(i);
+    while (this.peekAheadSkipLayout(i)) {
+      const tok = this.peekAheadSkipLayout(i);
       if (!tok) break;
 
-      // Found => - we have constraints
       if (tok.kind === TokenKind.Operator && tok.lexeme === "=>") {
         return true;
       }
 
-      // Stop looking if we hit 'where' - no constraints
       if (tok.kind === TokenKind.Keyword && tok.lexeme === "where") {
         return false;
       }
 
       i++;
-
-      // Don't look too far ahead
       if (i > 20) break;
     }
 
@@ -1308,19 +1235,16 @@ class Parser {
    * The => must appear before the protocol name (UpperIdentifier followed by 'where').
    */
   private peekConstraintContextInProtocol(): boolean {
-    // Look ahead to find => operator before we hit the protocol name + 'where'
     let i = 0;
     let parenDepth = 0;
 
-    while (this.peekAhead(i)) {
-      const tok = this.peekAhead(i);
+    while (this.peekAheadSkipLayout(i)) {
+      const tok = this.peekAheadSkipLayout(i);
       if (!tok) break;
 
-      // Track parentheses depth for nested constraints like (Eq a, Show a)
       if (tok.kind === TokenKind.LParen) parenDepth++;
       if (tok.kind === TokenKind.RParen) parenDepth--;
 
-      // Found => at top level - we have constraints
       if (
         parenDepth === 0 &&
         tok.kind === TokenKind.Operator &&
@@ -1329,14 +1253,11 @@ class Parser {
         return true;
       }
 
-      // Stop looking if we hit 'where' - no constraints before protocol name
       if (tok.kind === TokenKind.Keyword && tok.lexeme === "where") {
         return false;
       }
 
       i++;
-
-      // Don't look too far ahead
       if (i > 30) break;
     }
 
@@ -1394,27 +1315,21 @@ class Parser {
    * The => must be on the same line as the start of the type expression.
    */
   private peekConstraintContextInType(): boolean {
-    // Look ahead to find => operator
     let i = 0;
     let parenDepth = 0;
-
-    // Get the current line to ensure we don't cross line boundaries
     const startLine = this.current().span.start.line;
 
-    while (this.peekAhead(i)) {
-      const tok = this.peekAhead(i);
+    while (this.peekAheadSkipLayout(i)) {
+      const tok = this.peekAheadSkipLayout(i);
       if (!tok) break;
 
-      // Stop looking if we've moved to a different line (constraint must be on same line)
       if (tok.span.start.line !== startLine) {
         return false;
       }
 
-      // Track parentheses depth
       if (tok.kind === TokenKind.LParen) parenDepth++;
       if (tok.kind === TokenKind.RParen) parenDepth--;
 
-      // Found => at top level - we have constraints
       if (
         parenDepth === 0 &&
         tok.kind === TokenKind.Operator &&
@@ -1423,15 +1338,12 @@ class Parser {
         return true;
       }
 
-      // Stop looking if we hit certain tokens that indicate no constraints
       if (parenDepth === 0) {
         if (tok.kind === TokenKind.Equals) return false;
         if (tok.kind === TokenKind.Keyword) return false;
       }
 
       i++;
-
-      // Don't look too far ahead
       if (i > 30) break;
     }
 
@@ -2198,12 +2110,25 @@ class Parser {
 
     if (this.match(TokenKind.Backslash)) {
       const start = this.previousSpan().start;
+      const lambdaCol = start.column;
       const args: Pattern[] = [];
       while (!this.matchOperator("->")) {
         if (!this.isPatternStart(this.current())) {
           throw this.error("lambda argument", this.current());
         }
         args.push(this.parsePattern());
+      }
+      const arrowSpan = this.previousSpan();
+      const bodyToken = this.current();
+      if (
+        bodyToken.span.start.line !== arrowSpan.start.line &&
+        bodyToken.span.start.column <= lambdaCol
+      ) {
+        throw new ParseError(
+          `Lambda body must be indented past '\\' (column ${lambdaCol}) when on a separate line, ` +
+            `but found at column ${bodyToken.span.start.column}`,
+          bodyToken.span,
+        );
       }
       const body = this.parseExpression();
       return {
@@ -2423,10 +2348,37 @@ class Parser {
 
   private parseIf(): Expr {
     const ifToken = this.expectKeyword("if");
+    const ifCol = ifToken.span.start.column;
+    const ifLine = ifToken.span.start.line;
+
     const condition = this.parseExpression();
-    this.expectKeyword("then");
+
+    const thenToken = this.expectKeyword("then");
+    if (
+      thenToken.span.start.line !== ifLine &&
+      thenToken.span.start.column <= ifCol
+    ) {
+      throw new ParseError(
+        `'then' must be indented past 'if' (column ${ifCol}) when on a separate line, ` +
+          `but found at column ${thenToken.span.start.column}`,
+        thenToken.span,
+      );
+    }
+
     const thenBranch = this.parseExpression();
-    this.expectKeyword("else");
+
+    const elseToken = this.expectKeyword("else");
+    if (
+      elseToken.span.start.line !== ifLine &&
+      elseToken.span.start.column <= ifCol
+    ) {
+      throw new ParseError(
+        `'else' must be indented past 'if' (column ${ifCol}) when on a separate line, ` +
+          `but found at column ${elseToken.span.start.column}`,
+        elseToken.span,
+      );
+    }
+
     const elseBranch = this.parseExpression();
     return {
       kind: "If",
@@ -2440,7 +2392,7 @@ class Parser {
   /**
    * Parse let-in expression
    *
-   * Grammar: LetInExpr = "let", {LetBinding}, "in", Expr
+   * Grammar: LetInExpr = "let", BlockStart, {LetBinding, BlockSep}, BlockEnd, "in", Expr
    * Example:
    *   let
    *     x = 10
@@ -2448,56 +2400,36 @@ class Parser {
    *   in
    *     x + y
    *
-   * Note: Indentation-sensitive - bindings must be indented past "let"
+   * Layout tokens handle indentation: BlockStart opens bindings,
+   * BlockSep separates them, BlockEnd closes them before "in".
    */
   private parseLetIn(): Expr {
-    // Consume "let" keyword
     const letToken = this.expectKeyword("let");
     const bindings: ValueDeclaration[] = [];
 
-    // Establish layout context: bindings must be indented past "let"
-    const layoutIndent = letToken.span.start.column + 1;
-    let exitedLayoutEarly = false;
+    this.expectBlockStart();
 
-    this.withLayout(layoutIndent, () => {
-      // Parse declarations until we see "in" or exit layout
-      while (!this.peekKeyword("in") && this.inCurrentLayout(this.current())) {
-        if (this.isAtEnd()) {
-          throw this.error("'in' to close let expression", this.current());
-        }
-
-        // Parse declaration (can be value or type annotation)
-        // NOTE: We defer validation of whether type annotations are allowed
-        // to the semantic analyzer, and just parse the structure here
-        const decl = this.parseDeclaration();
-
-        // Store as ValueDeclaration in AST (semantic analyzer will validate)
-        if (decl.kind === "ValueDeclaration") {
-          bindings.push(decl);
-        } else {
-          // For type annotations, store them anyway - semantics will check later
-          bindings.push(decl as any);
-        }
-      }
-
-      // Check if we exited layout without seeing "in"
-      if (!this.peekKeyword("in") && !this.isAtEnd()) {
-        exitedLayoutEarly = true;
-      }
-    });
-
-    // Report error if layout was exited early
-    if (exitedLayoutEarly) {
-      throw new ParseError(
-        `Expected 'in' to close let at column ${layoutIndent} or beyond`,
-        this.current().span,
-      );
+    // Parse first binding
+    const firstDecl = this.parseDeclaration();
+    if (firstDecl.kind === "ValueDeclaration") {
+      bindings.push(firstDecl);
+    } else {
+      bindings.push(firstDecl as any);
     }
 
-    // Consume "in" keyword
+    // Parse remaining bindings separated by BlockSep
+    while (this.matchBlockSep()) {
+      const decl = this.parseDeclaration();
+      if (decl.kind === "ValueDeclaration") {
+        bindings.push(decl);
+      } else {
+        bindings.push(decl as any);
+      }
+    }
+
+    this.expectBlockEnd();
     this.expectKeyword("in");
 
-    // Parse body expression
     const body = this.parseExpression();
     return {
       kind: "LetIn",
@@ -2510,7 +2442,7 @@ class Parser {
   /**
    * Parse case expression
    *
-   * Grammar: CaseExpr = "case", Expr, "of", {CaseBranch}
+   * Grammar: CaseExpr = "case", Expr, "of", BlockStart, {CaseBranch, BlockSep}, BlockEnd
    * Grammar: CaseBranch = Pattern, "->", Expr
    *
    * Example:
@@ -2518,87 +2450,43 @@ class Parser {
    *     Just x -> x
    *     Nothing -> 0
    *
-   * Note: Indentation-sensitive - branches must be indented past "of"
+   * Layout tokens handle indentation: BlockStart opens branches,
+   * BlockSep separates them, BlockEnd closes them.
    */
   private parseCase(): Expr {
-    // Consume "case" keyword
     const caseToken = this.expectKeyword("case");
-
-    // Parse discriminant expression
     const discriminant = this.parseExpression();
+    this.expectKeyword("of");
 
-    // Consume "of" keyword
-    const ofToken = this.expectKeyword("of");
-    const ofColumn = ofToken.span.start.column;
-
-    // Parse case branches
     const branches: Array<{ pattern: Pattern; body: Expr; span: Span }> = [];
 
-    // Establish layout context: branches must be indented past "case"
-    const layoutIndent = caseToken.span.start.column + 1;
+    this.expectBlockStart();
 
-    this.withLayout(layoutIndent, () => {
-      // Check if first token after "of" is properly indented
-      const firstAfterOf = this.current();
-      if (
-        !this.inCurrentLayout(firstAfterOf) &&
-        !this.peekKeyword("in") &&
-        !this.peekKeyword("else") &&
-        !this.peek(TokenKind.Eof)
-      ) {
-        throw new ParseError(
-          `Case branches must be indented to at least column ${layoutIndent} (or column ${
-            ofColumn + 1
-          } relative to 'of'), but found column ${
-            firstAfterOf.span.start.column
-          }`,
-          firstAfterOf.span,
-        );
-      }
-
-      // Parse branches while in layout context
-      while (
-        !this.isAtEnd() &&
-        this.inCurrentLayout(this.current()) &&
-        !this.peekKeyword("in") &&
-        !this.peekKeyword("else")
-      ) {
-        const next = this.current();
-
-        // Verify proper indentation
-        if (next.span.start.column < layoutIndent) {
-          throw new ParseError(
-            `Case branch must be indented to at least column ${layoutIndent} (or column ${
-              ofColumn + 1
-            } relative to 'of'), but found column ${next.span.start.column}`,
-            next.span,
-          );
-        }
-
-        // Parse pattern
-        const pattern = this.parsePattern();
-
-        // Consume "->" arrow
-        this.expectOperator("->");
-
-        // Parse branch body
-        const branchIndent = pattern.span.start.column + 1;
-        const body = this.parseExpression(branchIndent);
-
-        // Add branch to list
-        branches.push({
-          pattern,
-          body,
-          span: { start: pattern.span.start, end: body.span.end },
-        });
-
-        if (this.peek(TokenKind.Eof)) break;
-      }
+    // Parse first branch
+    const firstPattern = this.parsePattern();
+    this.expectOperator("->");
+    const firstBranchIndent = firstPattern.span.start.column + 1;
+    const firstBody = this.parseExpression(firstBranchIndent);
+    branches.push({
+      pattern: firstPattern,
+      body: firstBody,
+      span: { start: firstPattern.span.start, end: firstBody.span.end },
     });
 
-    // NOTE: We defer validation of whether case has branches to semantic analyzer
-    // The grammar allows empty case, but it's semantically invalid
-    // We still report it here for better error messages
+    // Parse remaining branches separated by BlockSep
+    while (this.matchBlockSep()) {
+      const pattern = this.parsePattern();
+      this.expectOperator("->");
+      const branchIndent = pattern.span.start.column + 1;
+      const body = this.parseExpression(branchIndent);
+      branches.push({
+        pattern,
+        body,
+        span: { start: pattern.span.start, end: body.span.end },
+      });
+    }
+
+    this.expectBlockEnd();
 
     const end = branches.at(-1)?.span.end ?? discriminant.span.end;
     return {
@@ -2651,7 +2539,10 @@ class Parser {
    *
    * @returns The parsed arguments and body expression
    */
-  private parseMethodBody(): { args: Pattern[]; body: Expr } {
+  private parseMethodBody(declColumn?: number): {
+    args: Pattern[];
+    body: Expr;
+  } {
     // Parse pattern arguments (if any)
     // Uses isFunctionParamPatternStart for consistency with standard functions
     const args: Pattern[] = [];
@@ -2660,7 +2551,22 @@ class Parser {
     }
 
     // Expect equals sign
-    this.expect(TokenKind.Equals, "'=' after parameters");
+    const eqToken = this.expect(TokenKind.Equals, "'=' after parameters");
+
+    // Enforce body indentation: when on a separate line, body must be indented past the declaration name
+    if (declColumn !== undefined) {
+      const bodyToken = this.current();
+      if (
+        bodyToken.span.start.line !== eqToken.span.start.line &&
+        bodyToken.span.start.column <= declColumn
+      ) {
+        throw new ParseError(
+          `Function body must be indented past column ${declColumn} when on a separate line, ` +
+            `but found at column ${bodyToken.span.start.column}`,
+          bodyToken.span,
+        );
+      }
+    }
 
     // Parse the body expression
     const body = this.parseExpression();
@@ -2668,129 +2574,86 @@ class Parser {
     return { args, body };
   }
 
-  private parseExternalDeclaration(): Declaration {
-    const atToken = this.expectOperator("@");
-    const externalToken = this.expect(
-      TokenKind.LowerIdentifier,
-      "external tag",
-    );
-    if (externalToken.lexeme !== "external") {
-      throw this.error("external tag", externalToken);
-    }
-
-    const modulePathTok = this.expect(TokenKind.String, "external module path");
-    const exportTok = this.expect(TokenKind.String, "external export name");
-
-    const { name, span: nameSpan } = this.parseDeclarationName();
-    this.expect(TokenKind.Colon, "external type annotation");
-    const annotation = this.parseTypeExpression();
-
-    const targetSpan: Span = {
-      start: modulePathTok.span.start,
-      end: exportTok.span.end,
-    };
-
-    const span: Span = { start: atToken.span.start, end: annotation.span.end };
-
-    return {
-      kind: "ExternalDeclaration",
-      name,
-      target: {
-        modulePath: this.unquote(modulePathTok.lexeme),
-        exportName: this.unquote(exportTok.lexeme),
-        span: targetSpan,
-      },
-      annotation,
-      span,
-    };
-  }
-
-  private peekExternalAttribute(): boolean {
+  /**
+   * Check if we're at a decorator (@name)
+   * Works for both @identifier and @keyword (like @import)
+   */
+  private peekDecorator(): boolean {
     const current = this.current();
     const next = this.peekAhead(1);
     return (
       current.kind === TokenKind.Operator &&
       current.lexeme === "@" &&
-      next?.kind === TokenKind.LowerIdentifier &&
-      next.lexeme === "external"
+      next !== undefined &&
+      (next.kind === TokenKind.LowerIdentifier ||
+        next.kind === TokenKind.Keyword)
     );
   }
 
-  private peekPropertyAttribute(): "get" | "call" | "val" | null {
-    const current = this.current();
-    const next = this.peekAhead(1);
-    if (
-      current.kind === TokenKind.Operator &&
-      current.lexeme === "@" &&
-      next?.kind === TokenKind.LowerIdentifier
-    ) {
-      if (
-        next.lexeme === "get" ||
-        next.lexeme === "call" ||
-        next.lexeme === "val"
-      ) {
-        return next.lexeme;
-      }
-    }
-    return null;
-  }
-
-  private peekImportAttribute(): boolean {
-    const current = this.current();
-    const next = this.peekAhead(1);
-    return (
-      current.kind === TokenKind.Operator &&
-      current.lexeme === "@" &&
-      next?.kind === TokenKind.Keyword &&
-      next.lexeme === "import"
-    );
-  }
-
-  private parseImportedValueDeclaration(): Declaration {
+  /**
+   * Parse a decorated declaration generically.
+   *
+   * Syntax: @decorator [string-args...] name : Type
+   *
+   * The parser collects all string arguments between the decorator name
+   * and the declaration name. Semantic analysis validates:
+   *   - The decorator name is known
+   *   - The argument count is correct
+   *   - The type annotation is valid for the decorator
+   *
+   * Examples:
+   *   @external "module" "export" foo : Int -> Int
+   *   @get "key" bar : OpaqueType -> ReturnType
+   *   @import "module-path" fs : FS
+   */
+  private parseDecoratedDeclaration(): DecoratedDeclaration {
     const atToken = this.expectOperator("@");
-    this.expectKeyword("import");
 
-    const pathTok = this.expect(TokenKind.String, "module path string");
+    // Get decorator name (could be identifier or keyword like "import")
+    const decoratorToken = this.current();
+    let decorator: string;
+    if (decoratorToken.kind === TokenKind.LowerIdentifier) {
+      decorator = decoratorToken.lexeme;
+      this.advance();
+    } else if (decoratorToken.kind === TokenKind.Keyword) {
+      decorator = decoratorToken.lexeme;
+      this.advance();
+    } else {
+      throw this.error("decorator name", decoratorToken);
+    }
 
+    // Collect all string arguments (may span multiple indented lines)
+    const args: string[] = [];
+    while (this.current().kind === TokenKind.String) {
+      args.push(this.unquote(this.current().lexeme));
+      this.advance();
+    }
+
+    // Skip any newlines between args and declaration name
+    while (this.current().kind === TokenKind.Newline) {
+      this.advance();
+    }
+
+    // The declaration name must start at column 1 (Elm-style: new top-level element)
+    const nameToken = this.current();
+    if (nameToken.span.start.column !== 1) {
+      throw this.error(
+        "declaration name at column 1 (decorator arguments are complete, name must be unindented)",
+        nameToken,
+      );
+    }
+
+    // Parse declaration name and type annotation
     const { name } = this.parseDeclarationName();
-    this.expect(TokenKind.Colon, "type annotation");
+    this.expect(TokenKind.Colon, "type annotation after decorated declaration");
     const annotation = this.parseTypeExpression();
 
     const span: Span = { start: atToken.span.start, end: annotation.span.end };
 
     return {
-      kind: "ImportedValueDeclaration",
-      modulePath: this.unquote(pathTok.lexeme),
-      name,
-      annotation,
-      span,
-    };
-  }
-
-  private parsePropertyDeclaration(
-    variant: "get" | "call" | "val",
-  ): Declaration {
-    const atToken = this.expectOperator("@");
-    const variantToken = this.expect(
-      TokenKind.LowerIdentifier,
-      `${variant} tag`,
-    );
-    if (variantToken.lexeme !== variant) {
-      throw this.error(`${variant} tag`, variantToken);
-    }
-
-    const keyTok = this.expect(TokenKind.String, "property key string");
-
-    const { name } = this.parseDeclarationName();
-    this.expect(TokenKind.Colon, "property type annotation");
-    const annotation = this.parseTypeExpression();
-
-    const span: Span = { start: atToken.span.start, end: annotation.span.end };
-
-    return {
-      kind: "PropertyDeclaration",
-      variant,
-      key: this.unquote(keyTok.lexeme),
+      kind: "DecoratedDeclaration",
+      decorator,
+      args,
       name,
       annotation,
       span,
@@ -2888,6 +2751,13 @@ class Parser {
   }
 
   private isPatternStart(token: Token): boolean {
+    if (
+      token.kind === TokenKind.BlockStart ||
+      token.kind === TokenKind.BlockSep ||
+      token.kind === TokenKind.BlockEnd
+    ) {
+      return false;
+    }
     return (
       token.kind === TokenKind.LowerIdentifier ||
       token.kind === TokenKind.UpperIdentifier ||
@@ -2911,6 +2781,13 @@ class Parser {
    * List patterns and cons patterns are NOT allowed in function parameters.
    */
   private isFunctionParamPatternStart(token: Token): boolean {
+    if (
+      token.kind === TokenKind.BlockStart ||
+      token.kind === TokenKind.BlockSep ||
+      token.kind === TokenKind.BlockEnd
+    ) {
+      return false;
+    }
     return (
       token.kind === TokenKind.LowerIdentifier ||
       token.kind === TokenKind.UpperIdentifier ||
@@ -3125,6 +3002,13 @@ class Parser {
   }
 
   private isExpressionStart(token: Token): boolean {
+    if (
+      token.kind === TokenKind.BlockStart ||
+      token.kind === TokenKind.BlockSep ||
+      token.kind === TokenKind.BlockEnd
+    ) {
+      return false;
+    }
     if (token.kind === TokenKind.Keyword) {
       return (
         token.lexeme === "if" ||
@@ -3146,6 +3030,13 @@ class Parser {
   }
 
   private isTypeStart(token: Token): boolean {
+    if (
+      token.kind === TokenKind.BlockStart ||
+      token.kind === TokenKind.BlockSep ||
+      token.kind === TokenKind.BlockEnd
+    ) {
+      return false;
+    }
     return (
       token.kind === TokenKind.LowerIdentifier ||
       token.kind === TokenKind.UpperIdentifier ||
@@ -3240,36 +3131,76 @@ class Parser {
     return this.tokens[this.index + offset];
   }
 
-  // ===== Layout Management Helpers =====
-  // These manage the indentation stack for layout-sensitive parsing
-
   /**
-   * Get current layout indentation level
+   * Look ahead in token stream, skipping virtual layout tokens.
+   * Used by constraint context lookahead which needs to see past layout boundaries.
    */
-  private currentLayout(): number | undefined {
-    return this.layoutStack[this.layoutStack.length - 1];
-  }
-
-  /**
-   * Check if token is within current layout (properly indented)
-   */
-  private inCurrentLayout(token: Token): boolean {
-    const layout = this.currentLayout();
-    if (layout === undefined) return true;
-    return token.span.start.column >= layout;
-  }
-
-  /**
-   * Execute function within a new layout context
-   * Layout is automatically popped when function returns
-   */
-  private withLayout<T>(indent: number, fn: () => T): T {
-    this.layoutStack.push(indent);
-    try {
-      return fn();
-    } finally {
-      this.layoutStack.pop();
+  private peekAheadSkipLayout(offset: number): Token | undefined {
+    let j = this.index;
+    let count = 0;
+    while (j < this.tokens.length) {
+      const tok = this.tokens[j]!;
+      if (
+        tok.kind !== TokenKind.BlockStart &&
+        tok.kind !== TokenKind.BlockSep &&
+        tok.kind !== TokenKind.BlockEnd
+      ) {
+        if (count === offset) return tok;
+        count++;
+      }
+      j++;
     }
+    return undefined;
+  }
+
+  // ===== Layout Management Helpers =====
+  // These handle virtual layout tokens from the layout preprocessing pass
+
+  /**
+   * Match and consume a BlockStart token
+   */
+  private matchBlockStart(): boolean {
+    if (this.current().kind === TokenKind.BlockStart) {
+      this.advance();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Expect and consume a BlockStart token
+   */
+  private expectBlockStart(): Token {
+    return this.expect(TokenKind.BlockStart, "indented block");
+  }
+
+  /**
+   * Match and consume a BlockSep token
+   */
+  private matchBlockSep(): boolean {
+    if (this.current().kind === TokenKind.BlockSep) {
+      this.advance();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Match and consume a BlockEnd token
+   */
+  private matchBlockEnd(): boolean {
+    if (this.current().kind === TokenKind.BlockEnd) {
+      this.advance();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Expect and consume a BlockEnd token
+   */
+  private expectBlockEnd(): Token {
+    return this.expect(TokenKind.BlockEnd, "end of indented block");
   }
 
   /**

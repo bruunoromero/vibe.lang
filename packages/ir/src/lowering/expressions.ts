@@ -237,8 +237,11 @@ function tryResolveModuleAccess(
           // Get the external name if this is an external binding
           const decl = valueInfo.declaration;
           let externalName: string | undefined;
-          if (decl.kind === "ExternalDeclaration") {
-            externalName = decl.target.exportName;
+          if (
+            decl.kind === "DecoratedDeclaration" &&
+            decl.decorator === "external"
+          ) {
+            externalName = decl.args[1]!;
           }
 
           return {
@@ -281,8 +284,11 @@ function tryResolveModuleAccess(
             // Get the external name if this is an external binding
             const decl = valueInfo.declaration;
             let externalName: string | undefined;
-            if (decl.kind === "ExternalDeclaration") {
-              externalName = decl.target.exportName;
+            if (
+              decl.kind === "DecoratedDeclaration" &&
+              decl.decorator === "external"
+            ) {
+              externalName = decl.args[1]!;
             }
 
             // For unaliased imports, use the last segment of the module name as the alias

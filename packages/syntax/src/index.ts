@@ -33,6 +33,10 @@ export enum TokenKind {
   Equals = "Equals",
   Pipe = "Pipe",
   Backslash = "Backslash",
+  Newline = "Newline",
+  BlockStart = "BlockStart",
+  BlockSep = "BlockSep",
+  BlockEnd = "BlockEnd",
   Eof = "Eof",
 }
 
@@ -366,62 +370,30 @@ export type ExternalTarget = {
   span: Span;
 };
 
-export type ExternalDeclaration = {
-  kind: "ExternalDeclaration";
-  name: string;
-  target: ExternalTarget;
-  annotation: TypeExpr;
-  span: Span;
-};
-
 /**
- * A property access declaration for FFI.
+ * A decorated declaration is a declaration prefixed with @decorator syntax.
  *
- * Syntax:
- *   @get "key" name : ReceiverType -> ReturnType
- *   @call "key" name : ReceiverType -> Arg1 -> ... -> ReturnType
- *   @val "key" name : Type
+ * The parser captures the decorator name and all string arguments generically.
+ * Semantic analysis validates that:
+ *   - The decorator name is known (external, get, call, val, import)
+ *   - The argument count is correct for the decorator type
+ *   - The type annotation is valid for the decorator semantics
  *
- * @get compiles to: (recv) => recv.key
- * @call compiles to: (recv) => (a0) => ... => recv.key(a0, ...)
- * @val compiles to: name = key (direct global variable reference)
+ * Syntax: @decorator [args...] name : Type
  *
- * @get requires exactly one argument (A -> B).
- * @call requires at least one argument (A -> B, A -> B -> C, etc.).
- * @val has no constraint on the type shape.
+ * Examples:
+ *   @external "module" "export" foo : Int -> Int
+ *   @get "key" bar : OpaqueType -> ReturnType
+ *   @call "method" baz : OpaqueType -> Arg -> ReturnType
+ *   @val "global" qux : Type
+ *   @import "module-path" fs : FS
  */
-export type PropertyDeclaration = {
-  kind: "PropertyDeclaration";
-  /** Whether this is a property get, method call, or global value reference */
-  variant: "get" | "call" | "val";
-  /** The JS property/global key to access */
-  key: string;
-  /** The Vibe binding name */
-  name: string;
-  /** Type annotation (always required) */
-  annotation: TypeExpr;
-  /** Source location span */
-  span: Span;
-};
-
-/**
- * An imported value declaration that emits a default JS import.
- *
- * Syntax: @import "module-path"
- *         name : Type
- *
- * Example:
- *   @import "node:fs/promises"
- *   fs : FS
- *
- * Compiles to: import fs from "node:fs/promises";
- *
- * The value must have an opaque return type.
- */
-export type ImportedValueDeclaration = {
-  kind: "ImportedValueDeclaration";
-  /** The JS module path to import from */
-  modulePath: string;
+export type DecoratedDeclaration = {
+  kind: "DecoratedDeclaration";
+  /** The decorator name (e.g., "external", "get", "call", "val", "import") */
+  decorator: string;
+  /** String arguments to the decorator (parsed generically) */
+  args: string[];
   /** The Vibe binding name */
   name: string;
   /** Type annotation (always required) */
@@ -588,9 +560,7 @@ export type OperatorRegistry = Map<string, OperatorInfo>;
 export type Declaration =
   | ValueDeclaration
   | TypeAnnotationDeclaration
-  | ExternalDeclaration
-  | PropertyDeclaration
-  | ImportedValueDeclaration
+  | DecoratedDeclaration
   | TypeDeclaration
   | TypeAliasDeclaration
   | OpaqueTypeDeclaration

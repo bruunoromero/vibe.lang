@@ -4,9 +4,7 @@ import type {
   Expr,
   Pattern,
   ValueDeclaration,
-  ExternalDeclaration,
-  PropertyDeclaration,
-  ImportedValueDeclaration,
+  DecoratedDeclaration,
   ModuleDeclaration,
   ImportDeclaration,
   InfixDeclaration,
@@ -346,13 +344,9 @@ export type InstanceInfo = {
 };
 
 export type ValueInfo = {
-  declaration:
-    | ValueDeclaration
-    | ExternalDeclaration
-    | PropertyDeclaration
-    | ImportedValueDeclaration;
+  declaration: ValueDeclaration | DecoratedDeclaration;
   annotation?: TypeExpr;
-  externalTarget?: ExternalDeclaration["target"];
+  externalTarget?: { modulePath: string; exportName: string; span: Span };
   type?: Type;
   /** User-annotated protocol constraints from qualified type annotations */
   annotatedConstraints?: Constraint[];
