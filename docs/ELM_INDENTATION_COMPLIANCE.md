@@ -131,9 +131,9 @@ module Foo exposing
 
 ### 2. Type Declaration Constructors
 
-**Status: ⚠️ Works but not strictly enforced**
+**Status: ✅ Implemented in `parseTypeOrAliasDeclaration()`**
 
-ADT constructors can span multiple lines:
+ADT constructors on separate lines must have `|` aligned with `=`:
 
 ```vibe
 type Result e a
@@ -141,10 +141,8 @@ type Result e a
     | Err e
 ```
 
-**Current**: Works because `|` pattern continues expression
-**Elm**: Requires `|` at equal indentation
-
-**Recommendation**: Add layout context for `type` ... `=` to enforce equal indentation for `|` variants. **Medium priority**.
+Single-line ADTs (`type Bool = True | False`) are allowed without alignment checks.
+Multiline ADTs throw a `ParseError` if `|` is not at the same column as `=`.
 
 ### 3. Protocol Method Declarations
 
@@ -206,17 +204,16 @@ result =
 
 ### 7. Lambda Body Indentation
 
-**Status: ⚠️ Could be stricter**
+**Status: ✅ Implemented in `parsePrimary()`**
+
+Lambda body on a new line must be indented past `\`:
 
 ```vibe
 myLambda = \x ->
     x + 1
 ```
 
-**Current**: Body must continue layout
-**Elm**: Body must be indented past `\`
-
-**Recommendation**: Add check that lambda body column > lambda start column when on new line. **Medium priority**.
+Throws a `ParseError` if the lambda body is on a separate line and its column is ≤ the `\` column.
 
 ### 8. If/Then/Else Alignment
 
@@ -258,8 +255,8 @@ pair =
 
 ### Medium Priority (Elm compliance)
 
-1. **Type declaration constructors** - enforce `|` alignment
-2. **Lambda body indentation** - body must be indented past `\`
+1. ~~**Type declaration constructors**~~ ✅ Done - `|` must align with `=`
+2. ~~**Lambda body indentation**~~ ✅ Done - body must be indented past `\`
 
 ### Low Priority (Already works acceptably)
 

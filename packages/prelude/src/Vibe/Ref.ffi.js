@@ -6,8 +6,8 @@ export const getRef = (ref) => {
   return ref.current;
 };
 
-export const setRef = (ref) => (value) => {
+export const setRef = (ref, value) => {
   ref.current = value;
 };
 
-export const refEq = (a) => (b) => a === b;
+export const refEq = (a, b) => a === b;

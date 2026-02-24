@@ -648,10 +648,8 @@ not b = if b then False else True
 
 describe("External Function References", () => {
   test("external function calls use the binding name, not the runtime export name", () => {
-    // This tests the bug where external function calls were compiled using
-    // the runtime export name (e.g., "listCons") instead of the binding name
-    // (e.g., "cons"). Since imports alias the runtime name to the binding name
-    // (import { listCons as cons }), the binding name must be used in the body.
+    // External functions with arity > 0 are imported under a private $$-prefixed
+    // alias and a curried wrapper const is emitted using the Vibe binding name.
     const source = `
 module Test exposing (..)
 
@@ -667,16 +665,22 @@ append xs ys =
 
     const { code } = compileToJS(source);
 
-    // Should import with alias: import { listCons as cons }
-    expect(code).toContain('import { listCons as cons } from "@vibe/runtime"');
+    // Should import under private alias: import { listCons as $$cons }
+    expect(code).toContain(
+      'import { listCons as $$cons } from "@vibe/runtime"',
+    );
 
-    // Should call "cons" in the body, NOT "listCons"
+    // Should emit a curried wrapper
+    expect(code).toContain("const cons = ($a0) => ($a1) => $$cons($a0, $a1);");
+
+    // Should call "cons" in the body, NOT "listCons" or "$$cons"
     expect(code).toContain("cons(x)");
-    expect(code).not.toMatch(/[^a-zA-Z]listCons\(/);
+    expect(code).not.toMatch(/[^$a-zA-Z]listCons\(/);
   });
 
   test("external function with same binding and export name works correctly", () => {
-    // When the Vibe name matches the runtime export name, no alias is needed
+    // When the Vibe name matches the runtime export name, the import still
+    // uses a $$-prefixed alias because a wrapper const is needed.
     const source = `
 module Test exposing (..)
 
@@ -689,8 +693,12 @@ test = listCons 1 []
 
     const { code } = compileToJS(source);
 
-    // Should import directly: import { listCons }
-    expect(code).toContain("listCons");
+    // Should import under private alias
+    expect(code).toContain("listCons as $$listCons");
+    // Should emit wrapper
+    expect(code).toContain(
+      "const listCons = ($a0) => ($a1) => $$listCons($a0, $a1);",
+    );
     // Should call "listCons" in the body
     expect(code).toContain("listCons(1)");
   });
@@ -711,16 +719,60 @@ compute x y = add (sub x y) y
 
     const { code } = compileToJS(source);
 
-    // Should import with aliases
-    expect(code).toContain("intAdd as add");
-    expect(code).toContain("intSub as sub");
+    // Should import under private aliases
+    expect(code).toContain("intAdd as $$add");
+    expect(code).toContain("intSub as $$sub");
+
+    // Should emit curried wrappers
+    expect(code).toContain("const add = ($a0) => ($a1) => $$add($a0, $a1);");
+    expect(code).toContain("const sub = ($a0) => ($a1) => $$sub($a0, $a1);");
 
     // Should use binding names in the body
     expect(code).toContain("add(");
     expect(code).toContain("sub(");
     // Should NOT use the runtime export names directly in the body
-    expect(code).not.toMatch(/[^a-zA-Z_]intAdd\(/);
-    expect(code).not.toMatch(/[^a-zA-Z_]intSub\(/);
+    expect(code).not.toMatch(/[^$a-zA-Z_]intAdd\(/);
+    expect(code).not.toMatch(/[^$a-zA-Z_]intSub\(/);
+  });
+
+  test("external value with arity 0 is imported directly without wrapper", () => {
+    const source = `
+module Test exposing (..)
+
+@external "@vibe/runtime" "emptyList"
+empty : List a
+
+test : List a
+test = empty
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should import directly without $$-prefix (arity 0, no wrapper needed)
+    expect(code).toContain(
+      'import { emptyList as empty } from "@vibe/runtime"',
+    );
+    // Should NOT have a const wrapper
+    expect(code).not.toContain("const empty =");
+  });
+
+  test("external function with arity 1 gets a single-arg wrapper", () => {
+    const source = `
+module Test exposing (..)
+
+@external "./test.ffi.js" "doSomething"
+doIt : Int -> String
+
+test : String
+test = doIt 42
+`;
+
+    const { code } = compileToJS(source);
+
+    // Should import under private alias
+    expect(code).toContain("doSomething as $$doIt");
+    // Should emit a single-arg curried wrapper
+    expect(code).toContain("const doIt = ($a0) => $$doIt($a0);");
   });
 });
 

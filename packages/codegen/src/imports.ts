@@ -8,9 +8,17 @@ import type { IRProgram } from "@vibe/ir";
 import { sanitizeIdentifier } from "./sanitize.js";
 
 /**
- * External bindings map type: module path -> (Vibe name -> runtime name)
+ * External binding info: runtime name and arity for wrapper generation.
  */
-export type ExternalBindingsMap = Map<string, Map<string, string>>;
+export type ExternalBinding = {
+  runtimeName: string;
+  callArity: number;
+};
+
+/**
+ * External bindings map type: module path -> (Vibe name -> binding info)
+ */
+export type ExternalBindingsMap = Map<string, Map<string, ExternalBinding>>;
 
 /**
  * Generate default import statements from @import value declarations.
@@ -38,20 +46,20 @@ export function generateExternalImports(
 
   for (const [modulePath, bindings] of externalBindings) {
     if (bindings.size > 0) {
-      // Generate import specifiers with aliasing where needed
-      // e.g., "intAdd as add" when Vibe name differs from runtime name
       const importSpecifiers: string[] = [];
       const sortedEntries = Array.from(bindings.entries()).sort(([a], [b]) =>
         a.localeCompare(b),
       );
 
-      for (const [vibeName, runtimeName] of sortedEntries) {
+      for (const [vibeName, { runtimeName, callArity }] of sortedEntries) {
         const safeVibeName = sanitizeIdentifier(vibeName);
-        if (runtimeName === vibeName || runtimeName === safeVibeName) {
-          // No aliasing needed
+        if (callArity > 0) {
+          // Functions with arity > 0 get a curried wrapper.
+          // Import under a private alias so the wrapper const can take the public name.
+          importSpecifiers.push(`${runtimeName} as $$${safeVibeName}`);
+        } else if (runtimeName === vibeName || runtimeName === safeVibeName) {
           importSpecifiers.push(runtimeName);
         } else {
-          // Alias runtime name to Vibe name
           importSpecifiers.push(`${runtimeName} as ${safeVibeName}`);
         }
       }

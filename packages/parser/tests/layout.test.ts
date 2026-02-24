@@ -296,3 +296,48 @@ describe("Layout-Aware Parsing", () => {
     expect((program.declarations[1] as ValueDeclaration).name).toBe("bar");
   });
 });
+
+// ===== Type Constructor Alignment Tests =====
+
+describe("Type Constructor Alignment", () => {
+  test("single-line ADT with | on same line as = is valid", () => {
+    const program = parseTest(`type Bool = True | False`);
+    const decl = program.declarations[0]!;
+    expect(decl.kind).toBe("TypeDeclaration");
+    if (decl.kind === "TypeDeclaration") {
+      expect(decl.constructors?.length).toBe(2);
+    }
+  });
+
+  test("multiline ADT with | aligned to = is valid", () => {
+    const program = parseTest(`type Maybe a\n    = Just a\n    | Nothing`);
+    const decl = program.declarations[0]!;
+    expect(decl.kind).toBe("TypeDeclaration");
+    if (decl.kind === "TypeDeclaration") {
+      expect(decl.constructors?.length).toBe(2);
+      expect(decl.constructors?.[0]?.name).toBe("Just");
+      expect(decl.constructors?.[1]?.name).toBe("Nothing");
+    }
+  });
+
+  test("multiline ADT with multiple | aligned to = is valid", () => {
+    const program = parseTest(`type Color\n    = Red\n    | Green\n    | Blue`);
+    const decl = program.declarations[0]!;
+    expect(decl.kind).toBe("TypeDeclaration");
+    if (decl.kind === "TypeDeclaration") {
+      expect(decl.constructors?.length).toBe(3);
+    }
+  });
+
+  test("multiline ADT with misaligned | is rejected", () => {
+    expect(() =>
+      parseTest(`type Maybe a\n    = Just a\n      | Nothing`),
+    ).toThrow(/must align with '='/);
+  });
+
+  test("multiline ADT with | indented less than = is rejected", () => {
+    expect(() => parseTest(`type Maybe a\n    = Just a\n  | Nothing`)).toThrow(
+      /must align with '='/,
+    );
+  });
+});

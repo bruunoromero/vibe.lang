@@ -8,12 +8,12 @@ export const processExit = (code) => {
   process.exit(code);
 };
 
-export const processGetEnv = (just) => (nothing) => (name) => {
+export const processGetEnv = (just, nothing, name) => {
   const value = process.env[name];
   return value !== undefined ? just(value) : nothing;
 };
 
-export const processSetEnv = (name) => (value) => {
+export const processSetEnv = (name, value) => {
   process.env[name] = value;
 };
 

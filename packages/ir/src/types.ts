@@ -354,6 +354,8 @@ export type IRValue = {
   externalTarget?: {
     modulePath: string;
     exportName: string;
+    /** Number of curried arguments (0 for plain values, 1+ for functions) */
+    callArity: number;
   };
   /** For @get/@call/@val property access declarations */
   propertyAccess?: {

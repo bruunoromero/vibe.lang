@@ -648,7 +648,9 @@ class Parser {
     }
 
     // Consume equals sign
-    this.expect(TokenKind.Equals, "type definition");
+    const equalsToken = this.expect(TokenKind.Equals, "type definition");
+    const equalsCol = equalsToken.span.start.column;
+    const equalsLine = equalsToken.span.start.line;
 
     let recordFields: RecordFieldType[] | undefined;
     let constructors: ConstructorVariant[] | undefined;
@@ -662,7 +664,21 @@ class Parser {
       constructors.push(this.parseConstructorVariant());
 
       // Parse additional variants separated by |
-      while (this.match(TokenKind.Pipe)) {
+      // Enforce Elm-style alignment: | must align with =
+      while (this.peek(TokenKind.Pipe)) {
+        const pipeToken = this.current();
+        const pipeLine = pipeToken.span.start.line;
+        const pipeCol = pipeToken.span.start.column;
+
+        if (pipeLine !== equalsLine && pipeCol !== equalsCol) {
+          throw new ParseError(
+            `Constructor variant '|' must align with '=' (column ${equalsCol + 1}), ` +
+              `but found at column ${pipeCol + 1}`,
+            pipeToken.span,
+          );
+        }
+
+        this.advance(); // consume |
         constructors.push(this.parseConstructorVariant());
       }
     }

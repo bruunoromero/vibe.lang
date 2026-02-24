@@ -97,9 +97,12 @@ export interface CodegenContext {
   externalImports: Set<string>;
 
   /** Map from external module path to imported bindings.
-   *  Inner map: Vibe name -> runtime export name (e.g., "add" -> "intAdd")
+   *  Inner map: Vibe name -> binding info (runtime name + arity)
    */
-  externalBindings: Map<string, Map<string, string>>;
+  externalBindings: Map<
+    string,
+    Map<string, { runtimeName: string; callArity: number }>
+  >;
 
   /** Generated instance dictionary names: "Protocol_Type" -> "$dict_Protocol_Type" */
   instanceDictNames: Map<string, string>;
@@ -219,14 +222,16 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
   }
 
   // Collect external bindings by module
-  // Store mapping from Vibe name to runtime export name
+  // Store mapping from Vibe name to runtime export name and arity
   for (const [vibeName, value] of Object.entries(program.values)) {
     if (value.isExternal && value.externalTarget) {
-      const { modulePath, exportName } = value.externalTarget;
+      const { modulePath, exportName, callArity } = value.externalTarget;
       if (!ctx.externalBindings.has(modulePath)) {
         ctx.externalBindings.set(modulePath, new Map());
       }
-      ctx.externalBindings.get(modulePath)!.set(vibeName, exportName);
+      ctx.externalBindings
+        .get(modulePath)!
+        .set(vibeName, { runtimeName: exportName, callArity });
     }
   }
 
@@ -349,8 +354,8 @@ export interface GeneratedModule {
   /** The generated JavaScript code */
   code: string;
 
-  /** External imports required: module path -> (Vibe name -> runtime name) */
-  imports: Map<string, Map<string, string>>;
+  /** External imports required: module path -> (Vibe name -> binding info) */
+  imports: ExternalBindingsMap;
 
   /** Exports from this module */
   exports: string[];
@@ -819,10 +824,24 @@ function generateSCC(scc: SCC, ctx: CodegenContext): string[] {
     for (const name of scc.values) {
       if (ctx.program.values[name]) {
         const value = ctx.program.values[name];
-        // Skip external declarations - they're imported
-        if (value.isExternal) continue;
+        // Skip external declarations that are plain values (arity 0) — they're imported directly
+        if (
+          value.isExternal &&
+          (!value.externalTarget || value.externalTarget.callArity === 0)
+        )
+          continue;
 
         const safeName = sanitizeIdentifier(name);
+
+        // External functions with arity > 0 get a curried wrapper
+        if (
+          value.isExternal &&
+          value.externalTarget &&
+          value.externalTarget.callArity > 0
+        ) {
+          lines.push(`const ${safeName} = ${generateExternalWrapper(value)};`);
+          continue;
+        }
 
         // Property access declarations generate an arrow function wrapper
         if (value.propertyAccess) {
@@ -872,6 +891,26 @@ function generatePropertyAccess(value: IRValue): string {
     result = `(${argNames[i]}) => ${result}`;
   }
   result = `($recv) => ${result}`;
+
+  return result;
+}
+
+/**
+ * Generate a curried wrapper for an @external function.
+ *
+ *   @external "./mod.ffi.js" "fn"
+ *   name : A -> B -> C -> Ret   => ($a0) => ($a1) => ($a2) => $$name($a0, $a1, $a2)
+ */
+function generateExternalWrapper(value: IRValue): string {
+  const { callArity } = value.externalTarget!;
+  const safeName = sanitizeIdentifier(value.name);
+  const privateName = `$$${safeName}`;
+  const argNames = Array.from({ length: callArity }, (_, i) => `$a${i}`);
+  let result = `${privateName}(${argNames.join(", ")})`;
+
+  for (let i = argNames.length - 1; i >= 0; i--) {
+    result = `(${argNames[i]}) => ${result}`;
+  }
 
   return result;
 }

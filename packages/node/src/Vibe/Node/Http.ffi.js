@@ -5,7 +5,7 @@ export const httpGet = (url) => {
   });
 };
 
-export const httpPost = (url) => (body) => {
+export const httpPost = (url, body) => {
   return fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

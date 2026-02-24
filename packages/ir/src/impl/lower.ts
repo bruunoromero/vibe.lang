@@ -226,11 +226,18 @@ export function lower(
     }
 
     // Extract external target info
-    let externalTarget: { modulePath: string; exportName: string } | undefined;
+    let externalTarget: IRValue["externalTarget"];
     if (decl.kind === "DecoratedDeclaration" && decl.decorator === "external") {
+      let argCount = 0;
+      let t = irType;
+      while (t.kind === "fun") {
+        argCount++;
+        t = t.to;
+      }
       externalTarget = {
         modulePath: decl.args[0]!,
         exportName: decl.args[1]!,
+        callArity: argCount,
       };
     }
 

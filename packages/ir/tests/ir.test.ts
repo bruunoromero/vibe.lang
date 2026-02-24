@@ -808,6 +808,7 @@ add : Int -> Int -> Int
     expect(value?.externalTarget).toEqual({
       modulePath: "./math",
       exportName: "add",
+      callArity: 2,
     });
   });
 

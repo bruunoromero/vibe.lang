@@ -21,16 +21,16 @@ export const createPromise = (executor) => {
   );
 };
 
-export const flatMapPromise = (fn) => (promise) => {
+export const flatMapPromise = (fn, promise) => {
   return promise.then((value) => fn(PromiseWrapper.unwrap(value)));
 };
 
-export const mapPromise = (fn) => (promise) => {
+export const mapPromise = (fn, promise) => {
   return promise.then((value) =>
     PromiseWrapper.wrap(fn(PromiseWrapper.unwrap(value))),
   );
 };
 
-export const catchPromise = (fn) => (promise) => {
+export const catchPromise = (fn, promise) => {
   return promise.catch((error) => PromiseWrapper.wrap(fn(error)));
 };

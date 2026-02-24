@@ -1,8 +1,8 @@
-export const stringAppend = (a) => (b) => a + b;
+export const stringAppend = (a, b) => a + b;
 
-export const stringEq = (a) => (b) => a === b;
+export const stringEq = (a, b) => a === b;
 
-export const parseInt = (just) => (nothing) => (s) => {
+export const parseInt = (just, nothing, s) => {
   const n = Number.parseInt(s, 10);
   if (Number.isNaN(n)) {
     return nothing;
@@ -10,7 +10,7 @@ export const parseInt = (just) => (nothing) => (s) => {
   return just(n);
 };
 
-export const parseFloat = (just) => (nothing) => (s) => {
+export const parseFloat = (just, nothing, s) => {
   const n = Number.parseFloat(s);
   if (Number.isNaN(n)) {
     return nothing;
