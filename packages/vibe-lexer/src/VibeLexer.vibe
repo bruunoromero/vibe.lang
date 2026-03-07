@@ -1,0 +1,709 @@
+module VibeLexer exposing
+  ( lex
+  , TokenKind(..)
+  , Position
+  , Span
+  , Token
+  , LexError
+  )
+
+import Vibe exposing (..)
+import Vibe.String as String
+import Vibe.Char as Char
+import Vibe.List as List
+import VibeLexer.Types exposing (..)
+
+
+-- =============================================================================
+-- State Operations
+-- =============================================================================
+
+initState : String -> LexerState
+initState source =
+  { source = source
+  , index = 0
+  , line = 1
+  , column = 1
+  , sourceLen = String.length source
+  }
+
+isAtEnd : LexerState -> Bool
+isAtEnd state =
+  state.index >= state.sourceLen
+
+peek : LexerState -> Maybe Char
+peek state =
+  String.charAt state.index state.source
+
+peekAt : Int -> LexerState -> Maybe Char
+peekAt offset state =
+  String.charAt (state.index + offset) state.source
+
+position : LexerState -> Position
+position state =
+  { offset = state.index, line = state.line, column = state.column }
+
+advance : LexerState -> (Char, LexerState)
+advance state =
+  let ch = String.unsafeCharAt state.index state.source
+      newIndex = state.index + 1
+      newState =
+        case ch of
+          '\n' ->
+            { state | index = newIndex
+                    , line = state.line + 1
+                    , column = 1
+            }
+          '\t' ->
+            { state | index = newIndex
+                    , column = ((state.column - 1) // 8) * 8 + 9
+            }
+          _ ->
+            { state | index = newIndex
+                    , column = state.column + 1
+            }
+  in (ch, newState)
+
+skip : LexerState -> LexerState
+skip state =
+  case advance state of
+    (_, s) -> s
+
+skip2 : LexerState -> LexerState
+skip2 state =
+  skip (skip state)
+
+sliceFrom : Int -> LexerState -> String
+sliceFrom startOffset state =
+  String.slice startOffset state.index state.source
+
+
+-- =============================================================================
+-- Character Classification
+-- =============================================================================
+
+isIdentifierStart : Char -> Bool
+isIdentifierStart c =
+  Char.isAlpha c || c == '_'
+
+isIdentifierPart : Char -> Bool
+isIdentifierPart c =
+  isIdentifierStart c || Char.isDigit c
+
+isWhitespace : Char -> Bool
+isWhitespace c =
+  c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
+isOperatorChar : Char -> Bool
+isOperatorChar c =
+  c == '!' || c == '#' || c == '$' || c == '%' || c == '&'
+  || c == '*' || c == '+' || c == '.' || c == '/' || c == '<'
+  || c == '=' || c == '>' || c == '?' || c == '@' || c == '\\'
+  || c == '^' || c == '|' || c == '~' || c == ':' || c == '-'
+
+
+-- =============================================================================
+-- Keyword Recognition
+-- =============================================================================
+
+isKeyword : String -> Bool
+isKeyword word =
+  case word of
+    "if"        -> True
+    "then"      -> True
+    "else"      -> True
+    "let"       -> True
+    "in"        -> True
+    "case"      -> True
+    "of"        -> True
+    "type"      -> True
+    "alias"     -> True
+    "module"    -> True
+    "import"    -> True
+    "exposing"  -> True
+    "as"        -> True
+    "port"      -> True
+    "infix"     -> True
+    "infixl"    -> True
+    "infixr"    -> True
+    "protocol"  -> True
+    "implement" -> True
+    "where"     -> True
+    _           -> False
+
+
+-- =============================================================================
+-- Whitespace & Comment Skipping
+-- =============================================================================
+
+skipWhitespace : LexerState -> LexerState
+skipWhitespace state =
+  case isAtEnd state of
+    True -> state
+    False ->
+      case peek state of
+        Nothing -> state
+        Just c ->
+          case isWhitespace c of
+            True -> skipWhitespace (skip state)
+            False -> state
+
+skipLineComment : LexerState -> LexerState
+skipLineComment state =
+  case isAtEnd state of
+    True -> state
+    False ->
+      case peek state of
+        Nothing -> state
+        Just c ->
+          case c == '\n' of
+            True -> state
+            False -> skipLineComment (skip state)
+
+skipBlockComment : Int -> LexerState -> Result LexError LexerState
+skipBlockComment depth state =
+  case depth == 0 of
+    True -> Ok state
+    False ->
+      case isAtEnd state of
+        True ->
+          Err { message = "Unterminated block comment"
+              , span = { start = position state, end = position state }
+              }
+        False ->
+          case (peek state, peekAt 1 state) of
+            (Just c1, Just c2) ->
+              skipBlockCommentPair depth state c1 c2
+            _ ->
+              skipBlockComment depth (skip state)
+
+skipBlockCommentPair : Int -> LexerState -> Char -> Char -> Result LexError LexerState
+skipBlockCommentPair depth state c1 c2 =
+  case c1 of
+    '{' ->
+      case c2 of
+        '-' -> skipBlockComment (depth + 1) (skip2 state)
+        _ -> skipBlockComment depth (skip state)
+    '-' ->
+      case c2 of
+        '}' -> skipBlockComment (depth - 1) (skip2 state)
+        _ -> skipBlockComment depth (skip state)
+    _ -> skipBlockComment depth (skip state)
+
+type SkipResult =
+  { state : LexerState
+  , sawNewline : Bool
+  }
+
+skipWhitespaceAndComments : Bool -> LexerState -> Result LexError SkipResult
+skipWhitespaceAndComments sawNl state =
+  case isAtEnd state of
+    True -> Ok { state = state, sawNewline = sawNl }
+    False ->
+      case peek state of
+        Nothing ->
+          Ok { state = state, sawNewline = sawNl }
+        Just c ->
+          skipWsDispatch sawNl state c
+
+skipWsDispatch : Bool -> LexerState -> Char -> Result LexError SkipResult
+skipWsDispatch sawNl state c =
+  case isWhitespace c of
+    True ->
+      let nl = sawNl || c == '\n' || c == '\r'
+      in skipWhitespaceAndComments nl (skip state)
+    False ->
+      case c of
+        '-' -> skipWsMaybeLine sawNl state
+        '{' -> skipWsMaybeBlock sawNl state
+        _   -> Ok { state = state, sawNewline = sawNl }
+
+skipWsMaybeLine : Bool -> LexerState -> Result LexError SkipResult
+skipWsMaybeLine sawNl state =
+  case peekAt 1 state of
+    Just c2 ->
+      case c2 of
+        '-' ->
+          let s1 = skipLineComment state
+          in skipWhitespaceAndComments True s1
+        _ -> Ok { state = state, sawNewline = sawNl }
+    _ -> Ok { state = state, sawNewline = sawNl }
+
+skipWsMaybeBlock : Bool -> LexerState -> Result LexError SkipResult
+skipWsMaybeBlock sawNl state =
+  case peekAt 1 state of
+    Just c2 ->
+      case c2 of
+        '-' ->
+          let lineBefore = state.line
+              s2 = skip2 state
+          in
+          case skipBlockComment 1 s2 of
+            Err e -> Err e
+            Ok s3 ->
+              let nl = sawNl || s3.line > lineBefore
+              in skipWhitespaceAndComments nl s3
+        _ -> Ok { state = state, sawNewline = sawNl }
+    _ -> Ok { state = state, sawNewline = sawNl }
+
+
+-- =============================================================================
+-- Token Readers
+-- =============================================================================
+
+readIdentifierOrKeyword : LexerState -> Position -> (Token, LexerState)
+readIdentifierOrKeyword state startPos =
+  let startIdx = state.index
+  in
+  case advance state of
+    (firstChar, s1) ->
+      let isUpper = Char.isUpper firstChar
+          s2 = consumeIdentifierChars s1
+          text = sliceFrom startIdx s2
+          endPos = position s2
+          span = { start = startPos, end = endPos }
+          kind = identKind text isUpper
+      in ({ kind = kind, lexeme = text, span = span }, s2)
+
+identKind : String -> Bool -> TokenKind
+identKind text isUpper =
+  case isKeyword text of
+    True -> Keyword
+    False ->
+      case isUpper of
+        True -> UpperIdentifier
+        False -> LowerIdentifier
+
+consumeIdentifierChars : LexerState -> LexerState
+consumeIdentifierChars state =
+  case peek state of
+    Nothing -> state
+    Just c ->
+      case isIdentifierPart c || c == '\'' of
+        True -> consumeIdentifierChars (skip state)
+        False -> state
+
+readNumber : LexerState -> Position -> (Token, LexerState)
+readNumber state startPos =
+  let startIdx = state.index
+      s1 = consumeDigits state
+  in readNumberAfterInt s1 startIdx startPos
+
+readNumberAfterInt : LexerState -> Int -> Position -> (Token, LexerState)
+readNumberAfterInt s1 startIdx startPos =
+  case peek s1 of
+    Just c ->
+      case c of
+        '.' -> readNumberAfterDot s1 startIdx startPos
+        _ -> makeNumberToken s1 startIdx startPos
+    _ -> makeNumberToken s1 startIdx startPos
+
+readNumberAfterDot : LexerState -> Int -> Position -> (Token, LexerState)
+readNumberAfterDot s1 startIdx startPos =
+  case peekAt 1 s1 of
+    Just d ->
+      case Char.isDigit d of
+        True ->
+          let s2 = skip s1
+              s3 = consumeDigits s2
+          in makeNumberToken s3 startIdx startPos
+        False -> makeNumberToken s1 startIdx startPos
+    _ -> makeNumberToken s1 startIdx startPos
+
+makeNumberToken : LexerState -> Int -> Position -> (Token, LexerState)
+makeNumberToken state startIdx startPos =
+  let text = sliceFrom startIdx state
+      endPos = position state
+  in ({ kind = NumberToken, lexeme = text, span = { start = startPos, end = endPos } }, state)
+
+consumeDigits : LexerState -> LexerState
+consumeDigits state =
+  case peek state of
+    Nothing -> state
+    Just c ->
+      case Char.isDigit c of
+        True -> consumeDigits (skip state)
+        False -> state
+
+readString : LexerState -> Position -> Result LexError (Token, LexerState)
+readString state startPos =
+  let startIdx = state.index
+      s1 = skip state
+  in readStringBody s1 startIdx startPos
+
+readStringBody : LexerState -> Int -> Position -> Result LexError (Token, LexerState)
+readStringBody state startIdx startPos =
+  case peek state of
+    Nothing ->
+      Err { message = "Unterminated string literal"
+          , span = { start = startPos, end = position state }
+          }
+    Just c ->
+      case c of
+        '"' ->
+          let s1 = skip state
+              text = sliceFrom startIdx s1
+              endPos = position s1
+          in Ok ({ kind = StringToken, lexeme = text, span = { start = startPos, end = endPos } }, s1)
+        '\n' ->
+          Err { message = "Unterminated string literal"
+              , span = { start = startPos, end = position state }
+              }
+        '\\' -> readStringEscape state startIdx startPos
+        _ -> readStringBody (skip state) startIdx startPos
+
+readStringEscape : LexerState -> Int -> Position -> Result LexError (Token, LexerState)
+readStringEscape state startIdx startPos =
+  let s1 = skip state
+  in
+  case peek s1 of
+    Nothing ->
+      Err { message = "Unterminated string literal"
+          , span = { start = startPos, end = position s1 }
+          }
+    Just esc ->
+      case isValidStringEscape esc of
+        True -> readStringBody (skip s1) startIdx startPos
+        False ->
+          Err { message = "Invalid escape in string"
+              , span = { start = startPos, end = position s1 }
+              }
+
+isValidStringEscape : Char -> Bool
+isValidStringEscape esc =
+  esc == 'n' || esc == 'r' || esc == 't' || esc == '"' || esc == '\\'
+
+isValidCharEscape : Char -> Bool
+isValidCharEscape esc =
+  esc == 'n' || esc == 'r' || esc == 't' || esc == '\'' || esc == '\\'
+
+readChar : LexerState -> Position -> Result LexError (Token, LexerState)
+readChar state startPos =
+  let startIdx = state.index
+      s1 = skip state
+  in
+  case peek s1 of
+    Nothing ->
+      Err { message = "Unterminated char literal"
+          , span = { start = startPos, end = position s1 }
+          }
+    Just c ->
+      case c of
+        '\n' ->
+          Err { message = "Unterminated char literal"
+              , span = { start = startPos, end = position s1 }
+              }
+        '\\' -> readCharEscape s1 startIdx startPos
+        _ ->
+          let s2 = skip s1
+          in expectClosingQuote s2 startIdx startPos
+
+readCharEscape : LexerState -> Int -> Position -> Result LexError (Token, LexerState)
+readCharEscape s1 startIdx startPos =
+  let s2 = skip s1
+  in
+  case peek s2 of
+    Nothing ->
+      Err { message = "Unterminated char literal"
+          , span = { start = startPos, end = position s2 }
+          }
+    Just esc ->
+      case isValidCharEscape esc of
+        True ->
+          let s3 = skip s2
+          in expectClosingQuote s3 startIdx startPos
+        False ->
+          Err { message = "Invalid escape in char literal"
+              , span = { start = startPos, end = position s2 }
+              }
+
+expectClosingQuote : LexerState -> Int -> Position -> Result LexError (Token, LexerState)
+expectClosingQuote state startIdx startPos =
+  case peek state of
+    Just c ->
+      case c of
+        '\'' ->
+          let s1 = skip state
+              text = sliceFrom startIdx s1
+              endPos = position s1
+          in Ok ({ kind = CharToken, lexeme = text, span = { start = startPos, end = endPos } }, s1)
+        _ ->
+          Err { message = "Char literal must contain exactly one character"
+              , span = { start = startPos, end = position state }
+              }
+    _ ->
+      Err { message = "Char literal must contain exactly one character"
+          , span = { start = startPos, end = position state }
+          }
+
+
+-- =============================================================================
+-- Punctuation & Operators
+-- =============================================================================
+
+readPunctuationOrOperator : LexerState -> Position -> Result LexError (Maybe (Token, LexerState))
+readPunctuationOrOperator state startPos =
+  let startIdx = state.index
+  in
+  case peek state of
+    Nothing -> Ok Nothing
+    Just c ->
+      case c of
+        '(' -> Ok (Just (makeSimpleToken state startPos LParen))
+        ')' -> Ok (Just (makeSimpleToken state startPos RParen))
+        '{' -> Ok (Just (makeSimpleToken state startPos LBrace))
+        '}' -> Ok (Just (makeSimpleToken state startPos RBrace))
+        '[' -> Ok (Just (makeSimpleToken state startPos LBracket))
+        ']' -> Ok (Just (makeSimpleToken state startPos RBracket))
+        ',' -> Ok (Just (makeSimpleToken state startPos Comma))
+        '.' -> readDot state startPos startIdx
+        ':' -> readColon state startPos startIdx
+        '=' -> readEquals state startPos startIdx
+        '|' -> readPipe state startPos startIdx
+        '<' -> readLAngle state startPos startIdx
+        '-' -> readDash state startPos startIdx
+        '>' -> readGt state startPos startIdx
+        '\\' -> Ok (Just (makeSimpleToken state startPos Backslash))
+        _ -> readGenericOperator state startPos startIdx c
+
+readGenericOperator : LexerState -> Position -> Int -> Char -> Result LexError (Maybe (Token, LexerState))
+readGenericOperator state startPos startIdx c =
+  case isOperatorChar c of
+    True ->
+      let s1 = consumeOperator state
+          text = sliceFrom startIdx s1
+          endPos = position s1
+      in Ok (Just ({ kind = Operator, lexeme = text, span = { start = startPos, end = endPos } }, s1))
+    False -> Ok Nothing
+
+makeSimpleToken : LexerState -> Position -> TokenKind -> (Token, LexerState)
+makeSimpleToken state startPos kind =
+  let startIdx = state.index
+      s1 = skip state
+      text = sliceFrom startIdx s1
+      endPos = position s1
+  in ({ kind = kind, lexeme = text, span = { start = startPos, end = endPos } }, s1)
+
+makeTwoCharToken : LexerState -> Position -> Int -> TokenKind -> (Token, LexerState)
+makeTwoCharToken state startPos startIdx kind =
+  let s2 = skip2 state
+      text = sliceFrom startIdx s2
+      endPos = position s2
+  in ({ kind = kind, lexeme = text, span = { start = startPos, end = endPos } }, s2)
+
+readDot : LexerState -> Position -> Int -> Result LexError (Maybe (Token, LexerState))
+readDot state startPos startIdx =
+  case peekAt 1 state of
+    Just c ->
+      case c of
+        '.' -> Ok (Just (makeTwoCharToken state startPos startIdx Range))
+        _ -> Ok (Just (makeSimpleToken state startPos Dot))
+    _ -> Ok (Just (makeSimpleToken state startPos Dot))
+
+readColon : LexerState -> Position -> Int -> Result LexError (Maybe (Token, LexerState))
+readColon state startPos startIdx =
+  case peekAt 1 state of
+    Just c ->
+      case c of
+        ':' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        _ -> Ok (Just (makeSimpleToken state startPos Colon))
+    _ -> Ok (Just (makeSimpleToken state startPos Colon))
+
+readEquals : LexerState -> Position -> Int -> Result LexError (Maybe (Token, LexerState))
+readEquals state startPos startIdx =
+  case peekAt 1 state of
+    Just c ->
+      case c of
+        '>' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        '=' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        _ -> Ok (Just (makeSimpleToken state startPos Equals))
+    _ -> Ok (Just (makeSimpleToken state startPos Equals))
+
+readPipe : LexerState -> Position -> Int -> Result LexError (Maybe (Token, LexerState))
+readPipe state startPos startIdx =
+  case peekAt 1 state of
+    Just c ->
+      case c of
+        '>' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        '|' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        _ -> Ok (Just (makeSimpleToken state startPos Pipe))
+    _ -> Ok (Just (makeSimpleToken state startPos Pipe))
+
+readLAngle : LexerState -> Position -> Int -> Result LexError (Maybe (Token, LexerState))
+readLAngle state startPos startIdx =
+  case peekAt 1 state of
+    Just c ->
+      case c of
+        '|' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        '=' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        _ ->
+          let s1 = consumeOperator state
+              text = sliceFrom startIdx s1
+              endPos = position s1
+          in Ok (Just ({ kind = Operator, lexeme = text, span = { start = startPos, end = endPos } }, s1))
+    _ ->
+      let s1 = consumeOperator state
+          text = sliceFrom startIdx s1
+          endPos = position s1
+      in Ok (Just ({ kind = Operator, lexeme = text, span = { start = startPos, end = endPos } }, s1))
+
+readDash : LexerState -> Position -> Int -> Result LexError (Maybe (Token, LexerState))
+readDash state startPos startIdx =
+  case peekAt 1 state of
+    Just c ->
+      case c of
+        '>' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        '=' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        _ ->
+          let s1 = consumeOperator state
+              text = sliceFrom startIdx s1
+              endPos = position s1
+          in Ok (Just ({ kind = Operator, lexeme = text, span = { start = startPos, end = endPos } }, s1))
+    _ ->
+      let s1 = consumeOperator state
+          text = sliceFrom startIdx s1
+          endPos = position s1
+      in Ok (Just ({ kind = Operator, lexeme = text, span = { start = startPos, end = endPos } }, s1))
+
+readGt : LexerState -> Position -> Int -> Result LexError (Maybe (Token, LexerState))
+readGt state startPos startIdx =
+  case peekAt 1 state of
+    Just c ->
+      case c of
+        '=' -> Ok (Just (makeTwoCharToken state startPos startIdx Operator))
+        _ ->
+          let s1 = consumeOperator state
+              text = sliceFrom startIdx s1
+              endPos = position s1
+          in Ok (Just ({ kind = Operator, lexeme = text, span = { start = startPos, end = endPos } }, s1))
+    _ ->
+      let s1 = consumeOperator state
+          text = sliceFrom startIdx s1
+          endPos = position s1
+      in Ok (Just ({ kind = Operator, lexeme = text, span = { start = startPos, end = endPos } }, s1))
+
+consumeOperator : LexerState -> LexerState
+consumeOperator state =
+  case peek state of
+    Nothing -> state
+    Just c ->
+      case isOperatorChar c of
+        True -> consumeOperatorCheck state c
+        False -> state
+
+consumeOperatorCheck : LexerState -> Char -> LexerState
+consumeOperatorCheck state c =
+  case c of
+    '-' ->
+      case peekAt 1 state of
+        Just c2 ->
+          case c2 of
+            '>' -> state
+            _ -> consumeOperator (skip state)
+        _ -> consumeOperator (skip state)
+    _ -> consumeOperator (skip state)
+
+
+-- =============================================================================
+-- Main Lexer Loop
+-- =============================================================================
+
+type LexLoop =
+  { tokens : List Token
+  , state : LexerState
+  , sawNewline : Bool
+  , hasEmittedToken : Bool
+  }
+
+lex : String -> Result LexError (List Token)
+lex source =
+  let initial = { tokens = []
+                , state = initState source
+                , sawNewline = False
+                , hasEmittedToken = False
+                }
+  in
+  case lexLoop initial of
+    Err e -> Err e
+    Ok loop ->
+      let endPos = position loop.state
+          eofToken = { kind = Eof, lexeme = "", span = { start = endPos, end = endPos } }
+      in Ok (reverse (eofToken :: loop.tokens))
+
+lexLoop : LexLoop -> Result LexError LexLoop
+lexLoop loop =
+  case isAtEnd loop.state of
+    True -> Ok loop
+    False ->
+      case skipWhitespaceAndComments loop.sawNewline loop.state of
+        Err e -> Err e
+        Ok skipResult ->
+          case isAtEnd skipResult.state of
+            True ->
+              Ok { loop | state = skipResult.state, sawNewline = skipResult.sawNewline }
+            False ->
+              let tokens1 = maybeInsertNewline loop.tokens skipResult.sawNewline loop.hasEmittedToken skipResult.state
+                  startPos = position skipResult.state
+              in
+              case readToken skipResult.state startPos of
+                Err e -> Err e
+                Ok (tok, newState) ->
+                  lexLoop { tokens = tok :: tokens1
+                          , state = newState
+                          , sawNewline = False
+                          , hasEmittedToken = True
+                          }
+
+maybeInsertNewline : List Token -> Bool -> Bool -> LexerState -> List Token
+maybeInsertNewline tokens sawNl hasEmitted state =
+  case sawNl && hasEmitted of
+    True ->
+      let nlPos = position state
+          nlToken = { kind = Newline, lexeme = "\n", span = { start = nlPos, end = nlPos } }
+      in nlToken :: tokens
+    False -> tokens
+
+readToken : LexerState -> Position -> Result LexError (Token, LexerState)
+readToken state startPos =
+  case peek state of
+    Nothing ->
+      Err { message = "Unexpected end of input"
+          , span = { start = startPos, end = startPos }
+          }
+    Just c ->
+      readTokenDispatch state startPos c
+
+readTokenDispatch : LexerState -> Position -> Char -> Result LexError (Token, LexerState)
+readTokenDispatch state startPos c =
+  case isIdentifierStart c of
+    True -> Ok (readIdentifierOrKeyword state startPos)
+    False ->
+      case Char.isDigit c of
+        True -> Ok (readNumber state startPos)
+        False ->
+          case c of
+            '"' -> readString state startPos
+            '\'' -> readChar state startPos
+            _ ->
+              case readPunctuationOrOperator state startPos of
+                Err e -> Err e
+                Ok Nothing ->
+                  Err { message = "Unexpected character '" ++ (toString c) ++ "'"
+                      , span = { start = startPos, end = startPos }
+                      }
+                Ok (Just result) ->
+                  Ok result
+
+
+-- =============================================================================
+-- List Utilities
+-- =============================================================================
+
+reverse : List a -> List a
+reverse lst = reverseHelper lst []
+
+reverseHelper : List a -> List a -> List a
+reverseHelper lst acc =
+  case lst of
+    [] -> acc
+    x :: xs -> reverseHelper xs (x :: acc)

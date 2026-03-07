@@ -4191,80 +4191,73 @@ class SemanticAnalyzer {
           declSpan,
           this.getFilePath(),
         );
-      case "TypeRef":
+      case "TypeRef": {
         const firstChar = type.name.charAt(0);
-        if (
+        const isTypeVariable =
           firstChar === firstChar.toLowerCase() &&
-          firstChar !== firstChar.toUpperCase()
-        ) {
-          if (typeParams.has(type.name)) return;
+          firstChar !== firstChar.toUpperCase();
 
-          // Convert TypeRef to Type for instance lookup
-          // Note: we assume no args for these simple refs in this context
-          // If we had args, we'd need to convert them too
-          const typeForLookup: Type = {
-            kind: "con",
-            name: type.name,
-            args: [],
-          };
-          if (
-            findInstanceForTypeInternal("Eq", typeForLookup, this.instances)
-          ) {
-            return;
-          }
+        if (isTypeVariable && typeParams.has(type.name)) return;
 
-          if (type.name === "List" && type.args.length === 1) {
-            this.validateTypeImplementsEq(
-              type.args[0]!,
-              declSpan,
-              typeParams,
-              checkedTypes,
-            );
-            return;
-          }
-
-          // Strict check for local types
-          const localDecl = this.getDeclarations().find(
-            (d) =>
-              (d.kind === "TypeDeclaration" ||
-                d.kind === "TypeAliasDeclaration") &&
-              d.name === type.name,
-          );
-
-          if (localDecl) {
-            // If it's a TypeDeclaration (ADT/Record)
-            if (localDecl.kind === "TypeDeclaration") {
-              // Check explicit implementation
-              const hasExplicit = this.getDeclarations().some(
-                (d) =>
-                  d.kind === "ImplementationDeclaration" &&
-                  d.protocolName === "Eq" &&
-                  d.typeArgs.length > 0 &&
-                  d.typeArgs[0]!.kind === "TypeRef" &&
-                  (d.typeArgs[0]! as any).name === type.name,
-              );
-
-              if (hasExplicit) return;
-
-              throw new SemanticError(
-                `Type '${type.name}' does not implement 'Eq'. Implicit 'Eq' requires all fields to implement 'Eq'.`,
-                declSpan,
-                this.getFilePath(),
-              );
-            }
-          }
-
-          type.args.forEach((arg) =>
-            this.validateTypeImplementsEq(
-              arg,
-              declSpan,
-              typeParams,
-              checkedTypes,
-            ),
-          );
-          break;
+        // Convert TypeRef to Type for instance lookup
+        const typeForLookup: Type = {
+          kind: "con",
+          name: type.name,
+          args: [],
+        };
+        if (findInstanceForTypeInternal("Eq", typeForLookup, this.instances)) {
+          return;
         }
-        return; // End of TypeRef case block scope (implicit in how code was structured, but cleaner with break or return)
+
+        if (type.name === "List" && type.args.length === 1) {
+          this.validateTypeImplementsEq(
+            type.args[0]!,
+            declSpan,
+            typeParams,
+            checkedTypes,
+          );
+          return;
+        }
+
+        // Check local type declarations
+        const localDecl = this.getDeclarations().find(
+          (d) =>
+            (d.kind === "TypeDeclaration" ||
+              d.kind === "TypeAliasDeclaration") &&
+            d.name === type.name,
+        );
+
+        if (localDecl) {
+          if (localDecl.kind === "TypeDeclaration") {
+            const hasExplicit = this.getDeclarations().some(
+              (d) =>
+                d.kind === "ImplementationDeclaration" &&
+                d.protocolName === "Eq" &&
+                d.typeArgs.length > 0 &&
+                d.typeArgs[0]!.kind === "TypeRef" &&
+                (d.typeArgs[0]! as any).name === type.name,
+            );
+
+            if (hasExplicit) return;
+
+            throw new SemanticError(
+              `Type '${type.name}' does not implement 'Eq'. Implicit 'Eq' requires all fields to implement 'Eq'.`,
+              declSpan,
+              this.getFilePath(),
+            );
+          }
+        }
+
+        type.args.forEach((arg) =>
+          this.validateTypeImplementsEq(
+            arg,
+            declSpan,
+            typeParams,
+            checkedTypes,
+          ),
+        );
+        return;
+      }
 
       case "TupleType":
         type.elements.forEach((elem) =>
@@ -4541,15 +4534,9 @@ class SemanticAnalyzer {
           );
         }
 
-        // Unknown type - check type args only
-        return type.args.every((arg) =>
-          this.canTypeImplementProtocol(
-            arg,
-            protocolName,
-            typeParams,
-            checkedTypes,
-          ),
-        );
+        // Concrete type with no instance, no local declaration, and protocol
+        // without all-default methods — can't auto-derive.
+        return false;
       }
 
       case "TupleType":

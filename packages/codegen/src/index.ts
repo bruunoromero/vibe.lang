@@ -1979,9 +1979,20 @@ function generateLiteralPatternValue(
     case "int":
     case "float":
       return String(pat.value);
-    case "string":
-    case "char":
-      return JSON.stringify(pat.value);
+    case "string": {
+      let strVal = String(pat.value);
+      if (strVal.startsWith('"') && strVal.endsWith('"')) {
+        strVal = strVal.slice(1, -1);
+      }
+      return JSON.stringify(strVal);
+    }
+    case "char": {
+      let charVal = String(pat.value);
+      if (charVal.startsWith("'") && charVal.endsWith("'")) {
+        charVal = charVal.slice(1, -1);
+      }
+      return JSON.stringify(charVal);
+    }
     case "bool":
       return pat.value ? "true" : "false";
   }
@@ -2020,7 +2031,7 @@ function generateRecord(
     const value = generateExpr(f.value, ctx);
     return `${f.name}: ${value}`;
   });
-  return `{ ${fields.join(", ")} }`;
+  return `({ ${fields.join(", ")} })`;
 }
 
 /**
@@ -2036,7 +2047,7 @@ function generateRecordUpdate(
     const value = generateExpr(f.value, ctx);
     return `${f.name}: ${value}`;
   });
-  return `{ ...${base}, ${updates.join(", ")} }`;
+  return `({ ...${base}, ${updates.join(", ")} })`;
 }
 
 /**

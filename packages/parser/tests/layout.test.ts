@@ -173,20 +173,24 @@ describe("Indentation Enforcement", () => {
       expect(decl.body.kind).toBe("If");
     });
 
-    test("then at same column as if on separate line is rejected", () => {
-      expect(() =>
-        parse(
-          `module Test exposing (..)\nfoo =\n  if True\n  then 1\n  else 2`,
-        ),
-      ).toThrow("'then' must be indented past 'if'");
+    test("then/else at same column as if on separate line is accepted", () => {
+      const program = parseTest(`foo =\n  if True\n  then 1\n  else 2`);
+      const decl = program.declarations[0] as ValueDeclaration;
+      expect(decl.body.kind).toBe("If");
     });
 
-    test("else at same column as if on separate line is rejected", () => {
+    test("then less indented than if on separate line is rejected", () => {
+      expect(() =>
+        parse(`module Test exposing (..)\nfoo =\n  if True\n then 1\n else 2`),
+      ).toThrow("'then' must be at least as indented as 'if'");
+    });
+
+    test("else less indented than if on separate line is rejected", () => {
       expect(() =>
         parse(
-          `module Test exposing (..)\nfoo =\n  if True\n    then 1\n  else 2`,
+          `module Test exposing (..)\nfoo =\n  if True\n    then 1\n else 2`,
         ),
-      ).toThrow("'else' must be indented past 'if'");
+      ).toThrow("'else' must be at least as indented as 'if'");
     });
   });
 

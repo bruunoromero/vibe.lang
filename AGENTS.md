@@ -159,6 +159,8 @@ Built-in types (`Bool`, `Int`, `Float`, `String`, `Char`, `Unit`, `List`) are al
 
 - Refer to `docs/compiler-plan.md` for the current development status and roadmap.
 - See `docs/ADR-*.md` for architectural decisions regarding parsing, semantics, and codegen.
+- See `docs/LANGUAGE_GUIDE.md` for Vibe language syntax, patterns, and known limitations.
+- See `docs/BOOTSTRAPPING.md` for the self-hosting roadmap and current bootstrapping progress.
 
 ## TypeScript Error Checking
 

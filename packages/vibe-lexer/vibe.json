@@ -1,0 +1,6 @@
+{
+  "name": "VibeLexer",
+  "src": "src",
+  "dist": "dist",
+  "packages": ["@vibe/prelude"]
+}

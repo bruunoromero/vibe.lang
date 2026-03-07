@@ -1,7 +1,16 @@
-module Vibe.Char
+module Vibe.Char exposing
+  ( toCode
+  , fromCode
+  , isAlpha
+  , isDigit
+  , isAlphaNum
+  , isUpper
+  , isLower
+  , isWhitespace
+  )
 
 import Vibe.String
-import Vibe.Basics exposing (Show(..), Eq(..))
+import Vibe.Basics exposing (Show(..), Eq(..), Ord(..))
 
 implement Show Char where
   toString = _toString
@@ -9,5 +18,40 @@ implement Show Char where
 implement Eq Char where
   (==) x y = (toString x) == (toString y)
 
+implement Ord Char where
+  (<) = _lt
+  (>) = _gt
+
 @external "./Char.ffi.js" "charToString"
 _toString : Char -> String
+
+@external "./Char.ffi.js" "charOrd"
+_lt : Char -> Char -> Bool
+
+@external "./Char.ffi.js" "charOrdGt"
+_gt : Char -> Char -> Bool
+
+@external "./Char.ffi.js" "charToCode"
+toCode : Char -> Int
+
+@external "./Char.ffi.js" "charFromCode"
+fromCode : Int -> Char
+
+isUpper : Char -> Bool
+isUpper c = c >= 'A' && c <= 'Z'
+
+isLower : Char -> Bool
+isLower c = c >= 'a' && c <= 'z'
+
+isAlpha : Char -> Bool
+isAlpha c = isUpper c || isLower c
+
+isDigit : Char -> Bool
+isDigit c = c >= '0' && c <= '9'
+
+isAlphaNum : Char -> Bool
+isAlphaNum c = isAlpha c || isDigit c
+
+isWhitespace : Char -> Bool
+isWhitespace c =
+  c == ' ' || c == '\n' || c == '\r' || c == '\t'

@@ -1,0 +1,3 @@
+module Vibe.Nullable exposing (Nullable)
+
+type Nullable a

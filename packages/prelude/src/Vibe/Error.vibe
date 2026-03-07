@@ -1,0 +1,21 @@
+module Vibe.Error exposing (Error, create)
+
+import Vibe exposing (..)
+import Vibe.Nullable exposing (Nullable)
+import Vibe.Maybe as Maybe
+
+type Error
+
+@external "./Error.ffi.js" "create"
+create : a -> Error
+
+@get "stack"
+_stack : Error -> Nullable String
+
+stack error = _stack error |> Maybe.fromNullable
+
+@get "message"
+message : Error -> String
+
+@get "name"
+name : Error -> String

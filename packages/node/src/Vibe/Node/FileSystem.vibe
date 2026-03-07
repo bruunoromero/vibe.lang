@@ -1,76 +1,22 @@
 module Vibe.Node.FileSystem exposing
     ( readFile
-    , writeFile
-    , appendFile
-    , removeFile
-    , readDir
-    , makeDir
-    , stat
-    , exists
-    , FileStat
-    , fileStatSize
-    , fileStatIsFile
-    , fileStatIsDirectory
+    , readFileWithEncoding
     )
 
 import Vibe exposing (..)
 import Vibe.Promise exposing (Promise)
+import Vibe.Dynamic exposing (Dynamic)
+import Vibe.Error exposing (Error)
+import Vibe.Task as Task exposing (Task)
 
 
-type FS
+@external "node:fs/promises" "readFile"
+_readFileWithEncoding : String -> String -> Promise String
 
-@import "node:fs/promises"
-fs : FS
+readFileWithEncoding : String -> String -> Task Error String
+readFileWithEncoding path encoding =
+    _readFileWithEncoding encoding path |> Task.fromPromise
 
-type FileStat
-
-@call "readFile"
-fsReadFile : FS -> String -> String -> Promise String
-
-readFile : String -> Promise String
-readFile path = fsReadFile fs path "utf-8"
-
-@call "writeFile"
-fsWriteFile : FS -> String -> String -> String -> Promise ()
-
-writeFile : String -> String -> Promise ()
-writeFile path contents = fsWriteFile fs path contents "utf-8"
-
-@call "appendFile"
-fsAppendFile : FS -> String -> String -> String -> Promise ()
-
-appendFile : String -> String -> Promise ()
-appendFile path contents = fsAppendFile fs path contents "utf-8"
-
-@call "unlink"
-fsUnlink : FS -> String -> Promise ()
-
-removeFile : String -> Promise ()
-removeFile path = fsUnlink fs path
-
-@call "readdir"
-fsReaddir : FS -> String -> Promise (List String)
-
-readDir : String -> Promise (List String)
-readDir path = fsReaddir fs path
-
-@call "stat"
-fsStat : FS -> String -> Promise FileStat
-
-stat : String -> Promise FileStat
-stat path = fsStat fs path
-
-@external "./FileSystem.ffi.js" "makeDir"
-makeDir : String -> Promise ()
-
-@external "./FileSystem.ffi.js" "exists"
-exists : String -> Promise Bool
-
-@get "size"
-fileStatSize : FileStat -> Int
-
-@call "isFile"
-fileStatIsFile : FileStat -> Bool
-
-@call "isDirectory"
-fileStatIsDirectory : FileStat -> Bool
+readFile : String -> Task Error String
+readFile =
+    readFileWithEncoding "utf-8"

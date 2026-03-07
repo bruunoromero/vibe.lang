@@ -4,10 +4,12 @@ module Vibe.Maybe exposing
     , isJust
     , isNothing 
     , fromResult
+    , fromNullable
     )
 
 import Vibe.Basics exposing (not)
 import Vibe.Result exposing (Result(..))
+import Vibe.Nullable exposing (Nullable)
 
 
 {-| Represents an optional value. Used when a value may or may not exist.
@@ -48,3 +50,10 @@ fromResult result =
     case result of
         Ok value -> Just value
         Err _ -> Nothing
+
+@external "./Maybe.ffi.js" "fromNullable"
+_fromNullable : (a -> Maybe a) -> Maybe a -> Nullable a -> Maybe a
+
+fromNullable : Nullable a -> Maybe a
+fromNullable nullableValue =
+    _fromNullable Just Nothing nullableValue

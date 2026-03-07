@@ -292,7 +292,7 @@ Primary = IfExpr
 
 IfExpr = "if", Expr, "then", Expr, "else", Expr ;
 (* Indentation rule: when 'then' or 'else' appear on a separate line from 'if',
-   they must be indented past the column of 'if'. *)
+   they must be at least as indented as the column of 'if'. *)
 
 LetInExpr = "let", BLOCK_START, LetBinding, {BLOCK_SEP, LetBinding}, BLOCK_END, "in", Expr ;
 
@@ -441,7 +441,7 @@ Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
   === If/then/else enforcement ===
   
   When 'then' or 'else' appear on a separate line from 'if', they must be
-  indented past the column of 'if'.
+  at least as indented as the column of 'if'.
   
   === Function body enforcement ===
   

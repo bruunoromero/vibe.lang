@@ -3,15 +3,16 @@ module Vibe.Task exposing (Task, fromPromise)
 import Vibe.Basics exposing (..)
 import Vibe.Result as Result exposing (Result(..))
 import Vibe.Promise as Promise exposing (Promise)
+import Vibe.Error as Error exposing (Error)
 
 type Task x a 
     = Task (Promise (Result x a))
 
-fromPromise : Promise a -> Task x a
+fromPromise : Promise a -> Task Error a
 fromPromise promise =
     promise 
     |> Promise.map Ok 
-    |> Promise.catch Err 
+    |> Promise.catch (Error.create >> Err)
     |> Task
 
 map : (a -> b) -> Task x a -> Task x b

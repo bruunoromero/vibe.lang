@@ -2372,10 +2372,10 @@ class Parser {
     const thenToken = this.expectKeyword("then");
     if (
       thenToken.span.start.line !== ifLine &&
-      thenToken.span.start.column <= ifCol
+      thenToken.span.start.column < ifCol
     ) {
       throw new ParseError(
-        `'then' must be indented past 'if' (column ${ifCol}) when on a separate line, ` +
+        `'then' must be at least as indented as 'if' (column ${ifCol}) when on a separate line, ` +
           `but found at column ${thenToken.span.start.column}`,
         thenToken.span,
       );
@@ -2386,10 +2386,10 @@ class Parser {
     const elseToken = this.expectKeyword("else");
     if (
       elseToken.span.start.line !== ifLine &&
-      elseToken.span.start.column <= ifCol
+      elseToken.span.start.column < ifCol
     ) {
       throw new ParseError(
-        `'else' must be indented past 'if' (column ${ifCol}) when on a separate line, ` +
+        `'else' must be at least as indented as 'if' (column ${ifCol}) when on a separate line, ` +
           `but found at column ${elseToken.span.start.column}`,
         elseToken.span,
       );

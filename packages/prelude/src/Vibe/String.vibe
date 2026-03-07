@@ -2,13 +2,31 @@ module Vibe.String exposing
   ( join
   , toInt
   , toFloat
+  , length
+  , charAt
+  , unsafeCharAt
+  , slice
+  , isEmpty
+  , startsWith
+  , endsWith
+  , contains
+  , toList
+  , fromList
+  , trim
+  , split
+  , lines
   )
 
-import Vibe.Basics exposing (Eq, Show, Appendable(..), identity)
+import Vibe.Basics exposing (Eq(..), Ord(..), Show, Appendable(..), identity)
 import Vibe.Maybe exposing (Maybe(..))
+import Vibe.Int
 
 implement Eq String where
     (==) = _eq
+
+implement Ord String where
+    (<) = _lt
+    (>) = _gt
 
 implement Show String where
     toString = identity
@@ -22,11 +40,50 @@ _append : String -> String -> String
 @external "./String.ffi.js" "stringEq"
 _eq: String -> String -> Bool
 
+@external "./String.ffi.js" "stringLt"
+_lt : String -> String -> Bool
+
+@external "./String.ffi.js" "stringGt"
+_gt : String -> String -> Bool
+
 @external "./String.ffi.js" "parseInt"
 _parseInt : (Int -> Maybe Int) -> Maybe Int -> String -> Maybe Int
 
 @external "./String.ffi.js" "parseFloat"
 _parseFloat: (Float -> Maybe Float) -> Maybe Float -> String -> Maybe Float
+
+@external "./String.ffi.js" "stringLength"
+length : String -> Int
+
+@external "./String.ffi.js" "stringCharAt"
+_charAt : (Char -> Maybe Char) -> Maybe Char -> Int -> String -> Maybe Char
+
+@external "./String.ffi.js" "unsafeCharAt"
+unsafeCharAt : Int -> String -> Char
+
+@external "./String.ffi.js" "stringSlice"
+slice : Int -> Int -> String -> String
+
+@external "./String.ffi.js" "stringStartsWith"
+startsWith : String -> String -> Bool
+
+@external "./String.ffi.js" "stringEndsWith"
+endsWith : String -> String -> Bool
+
+@external "./String.ffi.js" "stringContains"
+contains : String -> String -> Bool
+
+@external "./String.ffi.js" "stringToList"
+toList : String -> List Char
+
+@external "./String.ffi.js" "stringFromList"
+fromList : List Char -> String
+
+@external "./String.ffi.js" "stringTrim"
+trim : String -> String
+
+@external "./String.ffi.js" "stringSplit"
+split : String -> String -> List String
 
 join : String -> List String -> String
 join separator strings =
@@ -35,8 +92,17 @@ join separator strings =
     [x] -> x
     x :: xs -> x ++ separator ++ (join separator xs)
 
+charAt : Int -> String -> Maybe Char
+charAt = _charAt Just Nothing
+
 toInt : String -> Maybe Int
 toInt = _parseInt Just Nothing
 
 toFloat : String -> Maybe Float
 toFloat = _parseFloat Just Nothing
+
+isEmpty : String -> Bool
+isEmpty s = length s == 0
+
+lines : String -> List String
+lines s = split "\n" s
