@@ -6,10 +6,12 @@
     "build": "bun ../cli/src/index.ts build",
     "test": "bun test"
   },
-  "dependencies": {
-    "@vibe/prelude": "workspace:*"
+  "module": "./dist/VibeLexer/VibeLexer.js",
+  "exports": {
+    ".": "./dist/VibeLexer/VibeLexer.js"
   },
-  "devDependencies": {
-    "@vibe/cli": "workspace:*"
+  "dependencies": {
+    "@vibe/prelude": "workspace:*",
+    "@vibe/vibe-json": "workspace:*"
   }
 }

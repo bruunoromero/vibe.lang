@@ -1291,6 +1291,52 @@ function generateModuleAccess(
 }
 
 /**
+ * Interpret escape sequences in a raw lexeme string.
+ * The lexer stores raw source text (e.g. backslash + n), but JS needs
+ * actual characters (e.g. newline char) so JSON.stringify emits
+ * the correct escape sequences.
+ */
+function interpretEscapes(raw: string): string {
+  let result = "";
+  for (let i = 0; i < raw.length; i++) {
+    if (raw[i] === "\\" && i + 1 < raw.length) {
+      const next = raw[i + 1];
+      switch (next) {
+        case "n":
+          result += "\n";
+          i++;
+          break;
+        case "t":
+          result += "\t";
+          i++;
+          break;
+        case "r":
+          result += "\r";
+          i++;
+          break;
+        case "\\":
+          result += "\\";
+          i++;
+          break;
+        case "'":
+          result += "'";
+          i++;
+          break;
+        case '"':
+          result += '"';
+          i++;
+          break;
+        default:
+          result += raw[i];
+      }
+    } else {
+      result += raw[i];
+    }
+  }
+  return result;
+}
+
+/**
  * Generate a literal value.
  */
 function generateLiteral(expr: Extract<IRExpr, { kind: "IRLiteral" }>): string {
@@ -1299,23 +1345,20 @@ function generateLiteral(expr: Extract<IRExpr, { kind: "IRLiteral" }>): string {
     case "float":
       return String(expr.value);
     case "string": {
-      // The value may include quotes from the lexer, strip them
       let strVal = String(expr.value);
       if (strVal.startsWith('"') && strVal.endsWith('"')) {
         strVal = strVal.slice(1, -1);
       }
-      return JSON.stringify(strVal);
+      return JSON.stringify(interpretEscapes(strVal));
     }
     case "char": {
-      // The value may include quotes from the lexer, strip them
       let charVal = String(expr.value);
       if (charVal.startsWith("'") && charVal.endsWith("'")) {
         charVal = charVal.slice(1, -1);
       }
-      return JSON.stringify(charVal);
+      return JSON.stringify(interpretEscapes(charVal));
     }
     case "bool":
-      // Bool literals compile to JS true/false
       return expr.value ? "true" : "false";
   }
 }
@@ -1994,14 +2037,14 @@ function generateLiteralPatternValue(
       if (strVal.startsWith('"') && strVal.endsWith('"')) {
         strVal = strVal.slice(1, -1);
       }
-      return JSON.stringify(strVal);
+      return JSON.stringify(interpretEscapes(strVal));
     }
     case "char": {
       let charVal = String(pat.value);
       if (charVal.startsWith("'") && charVal.endsWith("'")) {
         charVal = charVal.slice(1, -1);
       }
-      return JSON.stringify(charVal);
+      return JSON.stringify(interpretEscapes(charVal));
     }
     case "bool":
       return pat.value ? "true" : "false";

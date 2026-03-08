@@ -98,6 +98,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@vibe/syntax": "workspace:*",
+        "@vibe/vibe-lexer": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",
@@ -119,9 +120,6 @@
       "dependencies": {
         "@vibe/prelude": "workspace:*",
       },
-      "devDependencies": {
-        "@vibe/cli": "workspace:*",
-      },
     },
     "packages/parser": {
       "name": "@vibe/parser",
@@ -137,9 +135,6 @@
     "packages/prelude": {
       "name": "@vibe/prelude",
       "version": "0.0.0",
-      "devDependencies": {
-        "@vibe/cli": "workspace:*",
-      },
     },
     "packages/semantics": {
       "name": "@vibe/semantics",
@@ -165,18 +160,13 @@
       "dependencies": {
         "@vibe/prelude": "workspace:*",
       },
-      "devDependencies": {
-        "@vibe/cli": "workspace:*",
-      },
     },
     "packages/vibe-lexer": {
       "name": "@vibe/vibe-lexer",
       "version": "0.0.0",
       "dependencies": {
         "@vibe/prelude": "workspace:*",
-      },
-      "devDependencies": {
-        "@vibe/cli": "workspace:*",
+        "@vibe/vibe-json": "workspace:*",
       },
     },
     "packages/vscode-extension": {

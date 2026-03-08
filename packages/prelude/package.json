@@ -5,8 +5,5 @@
   "scripts": {
     "build": "bun ../cli/src/index.ts build",
     "test": "bun test"
-  },
-  "devDependencies": {
-    "@vibe/cli": "workspace:*"
   }
 }

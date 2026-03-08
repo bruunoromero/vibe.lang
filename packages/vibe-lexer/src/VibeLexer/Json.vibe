@@ -1,0 +1,80 @@
+module VibeLexer.Json exposing (lexToJson)
+
+import Vibe exposing (..)
+import Vibe.List as List
+import Json.Encode as E
+import VibeLexer.Types exposing (..)
+
+
+lexToJson : (String -> Result LexError (List Token)) -> String -> String
+lexToJson lexFn source =
+  case lexFn source of
+    Ok tokens ->
+      E.encode 0
+        (E.object
+          [ ("ok", E.bool True)
+          , ("tokens", E.list encodeToken tokens)
+          ])
+    Err err ->
+      E.encode 0
+        (E.object
+          [ ("ok", E.bool False)
+          , ("message", E.string err.message)
+          , ("span", encodeSpan err.span)
+          ])
+
+
+tokenKindToString : TokenKind -> String
+tokenKindToString kind =
+  case kind of
+    LowerIdentifier -> "LowerIdentifier"
+    UpperIdentifier -> "UpperIdentifier"
+    Keyword -> "Keyword"
+    NumberToken -> "Number"
+    StringToken -> "String"
+    CharToken -> "Char"
+    Operator -> "Operator"
+    Range -> "Range"
+    Backslash -> "Backslash"
+    LParen -> "LParen"
+    RParen -> "RParen"
+    LBrace -> "LBrace"
+    RBrace -> "RBrace"
+    LBracket -> "LBracket"
+    RBracket -> "RBracket"
+    Comma -> "Comma"
+    Dot -> "Dot"
+    Colon -> "Colon"
+    Equals -> "Equals"
+    Pipe -> "Pipe"
+    Newline -> "Newline"
+    BlockStart -> "BlockStart"
+    BlockSep -> "BlockSep"
+    BlockEnd -> "BlockEnd"
+    Eof -> "Eof"
+
+
+encodePosition : Position -> E.Value
+encodePosition pos =
+  E.object
+    [ ("offset", E.int pos.offset)
+    , ("line", E.int pos.line)
+    , ("column", E.int pos.column)
+    ]
+
+
+encodeSpan : Span -> E.Value
+encodeSpan span =
+  E.object
+    [ ("start", encodePosition span.start)
+    , ("end", encodePosition span.end)
+    ]
+
+
+encodeToken : Token -> E.Value
+encodeToken tok =
+  E.object
+    [ ("kind", E.string (tokenKindToString tok.kind))
+    , ("lexeme", E.string tok.lexeme)
+    , ("span", encodeSpan tok.span)
+    ]

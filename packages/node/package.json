@@ -8,8 +8,5 @@
   },
   "dependencies": {
     "@vibe/prelude": "workspace:*"
-  },
-  "devDependencies": {
-    "@vibe/cli": "workspace:*"
   }
 }

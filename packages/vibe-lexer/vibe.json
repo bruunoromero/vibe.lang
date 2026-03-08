@@ -2,5 +2,5 @@
   "name": "VibeLexer",
   "src": "src",
   "dist": "dist",
-  "packages": ["@vibe/prelude"]
+  "packages": ["@vibe/prelude", "@vibe/vibe-json"]
 }

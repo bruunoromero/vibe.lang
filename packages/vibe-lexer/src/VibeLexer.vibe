@@ -1,5 +1,6 @@
 module VibeLexer exposing
   ( lex
+  , lexToJson
   , TokenKind(..)
   , Position
   , Span
@@ -12,6 +13,7 @@ import Vibe.String as String
 import Vibe.Char as Char
 import Vibe.List as List
 import VibeLexer.Types exposing (..)
+import VibeLexer.Json as Json
 
 
 -- =============================================================================
@@ -707,3 +709,7 @@ reverseHelper lst acc =
   case lst of
     [] -> acc
     x :: xs -> reverseHelper xs (x :: acc)
+
+
+lexToJson : String -> String
+lexToJson source = Json.lexToJson lex source
