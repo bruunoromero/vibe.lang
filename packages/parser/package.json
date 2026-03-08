@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe/lexer": "workspace:*",
-    "@vibe/syntax": "workspace:*"
+    "@vibe/syntax": "workspace:*",
+    "@vibe/vibe-parser": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest"

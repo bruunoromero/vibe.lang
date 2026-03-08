@@ -1,4 +1,4 @@
-export const dictEmpty = () => new Map();
+export const dictEmpty = new Map();
 
 export const dictInsert = (k, v, d) => {
   const m = new Map(d);

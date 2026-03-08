@@ -1593,9 +1593,7 @@ main = 1
 `;
 
     // Parser should throw before we even reach semantic analysis
-    expect(() => parse(source)).toThrow(
-      "Every Vibe file must begin with a module declaration",
-    );
+    expect(() => parse(source)).toThrow("Expected keyword 'module'");
   });
 
   test("rejects module name that doesn't match file path", () => {

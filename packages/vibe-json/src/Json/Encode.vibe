@@ -185,13 +185,13 @@ joinValues indent depth items =
 
 joinValuesIndented : Int -> Int -> List Value -> String
 joinValuesIndented indent depth items =
-  let go xs acc =
+  let pad = makeIndent indent depth
+      go xs acc =
         case xs of
           [] -> acc
           [x] -> acc ++ renderValue indent depth x
           x :: rest ->
-            let pad = makeIndent indent depth
-            in go rest (acc ++ renderValue indent depth x ++ ",\n" ++ pad)
+            go rest (acc ++ renderValue indent depth x ++ ",\n" ++ pad)
   in go items ""
 
 
@@ -207,13 +207,13 @@ joinPairs indent depth pairs =
 
 joinPairsIndented : Int -> Int -> List (String, Value) -> String
 joinPairsIndented indent depth pairs =
-  let go ps acc =
+  let pad = makeIndent indent depth
+      go ps acc =
         case ps of
           [] -> acc
           [(k, v)] -> acc ++ renderString k ++ ": " ++ renderValue indent depth v
           (k, v) :: rest ->
-            let pad = makeIndent indent depth
-            in go rest (acc ++ renderString k ++ ": " ++ renderValue indent depth v ++ ",\n" ++ pad)
+            go rest (acc ++ renderString k ++ ": " ++ renderValue indent depth v ++ ",\n" ++ pad)
   in go pairs ""
 
 

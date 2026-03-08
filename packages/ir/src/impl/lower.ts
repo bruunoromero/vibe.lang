@@ -703,6 +703,17 @@ export function lower(
   // they don't exist at runtime. Only values, constructors, and operators do.
   const resolvedImports = resolveImports(imports, dependencies, semantics);
 
+  // Augment imports with names referenced by default protocol method implementations
+  // that aren't locally defined. Default bodies are inherited from the protocol's
+  // defining module, so they may reference names the instance module didn't import.
+  augmentImportsFromDefaults(
+    syntheticValues,
+    mergedValues,
+    dependencies,
+    semantics,
+    resolvedImports,
+  );
+
   // Package name comes from options, or defaults to first segment of module name
   const packageName: string =
     options.packageName ?? semantics.module.name.split(".")[0]!;
@@ -873,6 +884,127 @@ function resolveImports(
   }
 
   return resolved;
+}
+
+/**
+ * Collect all bare value-level IRVar names (no moduleName) from an IR expression tree.
+ */
+function collectBareVarNames(expr: IRExpr, out: Set<string>): void {
+  switch (expr.kind) {
+    case "IRVar":
+      if (expr.namespace === "value" && !expr.moduleName) {
+        out.add(expr.name);
+      }
+      break;
+    case "IRLambda":
+      collectBareVarNames(expr.body, out);
+      break;
+    case "IRApply":
+      collectBareVarNames(expr.callee, out);
+      for (const arg of expr.args) collectBareVarNames(arg, out);
+      break;
+    case "IRIf":
+      collectBareVarNames(expr.condition, out);
+      collectBareVarNames(expr.thenBranch, out);
+      collectBareVarNames(expr.elseBranch, out);
+      break;
+    case "IRCase":
+      collectBareVarNames(expr.discriminant, out);
+      for (const branch of expr.branches) collectBareVarNames(branch.body, out);
+      break;
+    case "IRList":
+    case "IRTuple":
+      for (const el of expr.elements) collectBareVarNames(el, out);
+      break;
+    case "IRRecord":
+      for (const f of expr.fields) collectBareVarNames(f.value, out);
+      break;
+    case "IRRecordUpdate":
+      collectBareVarNames(expr.base, out);
+      for (const f of expr.updates) collectBareVarNames(f.value, out);
+      break;
+    case "IRFieldAccess":
+      collectBareVarNames(expr.target, out);
+      break;
+    case "IRUnary":
+      collectBareVarNames(expr.operand, out);
+      break;
+    case "IRConstructor":
+      for (const arg of expr.args) collectBareVarNames(arg, out);
+      break;
+    case "IRSelfLoop":
+      collectBareVarNames(expr.body, out);
+      break;
+    case "IRLoopContinue":
+      for (const arg of expr.args) collectBareVarNames(arg, out);
+      break;
+    // IRLiteral, IRUnit, IRModuleAccess — no sub-expressions with bare vars
+  }
+}
+
+/**
+ * Augment resolvedImports with names referenced in default protocol method
+ * implementations that aren't defined locally. Default method bodies are
+ * inherited from the protocol's defining module and may reference names
+ * (like `not` from Eq's default `/=`) that the instance module didn't import.
+ */
+function augmentImportsFromDefaults(
+  syntheticValues: Record<string, IRValue>,
+  localValues: Record<string, IRValue>,
+  dependencies: Map<string, SemanticModule>,
+  semantics: SemanticModule,
+  resolvedImports: IRResolvedImport[],
+): void {
+  // Collect all bare var names across all synthetic default implementations
+  const bareNames = new Set<string>();
+  for (const [name, value] of Object.entries(syntheticValues)) {
+    if (!name.startsWith("$default_")) continue;
+    collectBareVarNames(value.body, bareNames);
+  }
+
+  // Filter to names that aren't locally defined
+  const missingNames = new Set<string>();
+  for (const name of bareNames) {
+    if (localValues[name]) continue;
+    if (syntheticValues[name]) continue;
+    missingNames.add(name);
+  }
+
+  if (missingNames.size === 0) return;
+
+  // For each missing name, find which dependency module exports it
+  const nameToModule = new Map<string, string>();
+  for (const [moduleName, dep] of dependencies) {
+    for (const missingName of missingNames) {
+      if (nameToModule.has(missingName)) continue;
+      if (dep.values[missingName]) {
+        nameToModule.set(missingName, moduleName);
+      }
+    }
+  }
+
+  // Group by module and add to resolvedImports
+  const moduleToNames = new Map<string, string[]>();
+  for (const [name, moduleName] of nameToModule) {
+    if (!moduleToNames.has(moduleName)) moduleToNames.set(moduleName, []);
+    moduleToNames.get(moduleName)!.push(name);
+  }
+
+  for (const [moduleName, names] of moduleToNames) {
+    const existing = resolvedImports.find((r) => r.moduleName === moduleName);
+    if (existing) {
+      for (const name of names) {
+        if (!existing.namedImports.includes(name)) {
+          existing.namedImports.push(name);
+        }
+      }
+    } else {
+      resolvedImports.push({
+        moduleName,
+        namedImports: names,
+      });
+    }
+  }
 }
 
 /**

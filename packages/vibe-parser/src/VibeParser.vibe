@@ -2,6 +2,9 @@ module VibeParser exposing
   ( parse
   , parseToJson
   , parseWithInfix
+  , parseWithInfixToJson
+  , collectInfixToJson
+  , parseWithRegistryToJson
   , Program
   , ParseError
   , Declaration(..)
@@ -32,6 +35,8 @@ import Vibe exposing (..)
 import Vibe.List as List
 import Vibe.Dict as Dict
 import Vibe.String as String
+import Json.Encode as E
+import Json.Decode as D
 import VibeLexer as Lexer
 import VibeLexer.Types as LT
 import VibeParser.Types exposing (..)
@@ -137,3 +142,101 @@ stringToIntSafe s =
 parseToJson : String -> String
 parseToJson source =
   Json.parseToJson (parse source)
+
+
+parseWithInfixToJson : String -> String
+parseWithInfixToJson source =
+  case Lexer.lex source of
+    Err lexErr ->
+      encodeError lexErr.message { start = lexErr.span.start, end = lexErr.span.end }
+    Ok tokens ->
+      let
+        registry = collectInfixFromTokens tokens OpReg.builtinRegistry
+        layoutTokens = Layout.insertLayoutTokens tokens
+      in
+      case Parser.parseTokens layoutTokens registry of
+        Err err -> encodeError err.message err.span
+        Ok program ->
+          E.encode 0
+            (E.object
+              [ ("ok", E.bool True)
+              , ("program", Json.encodeProgram program)
+              , ("registry", Json.encodeRegistry registry)
+              ])
+
+
+collectInfixToJson : String -> String
+collectInfixToJson source =
+  case Lexer.lex source of
+    Err _ ->
+      E.encode 0 (E.object [ ("registry", E.list identity []) ])
+    Ok tokens ->
+      let
+        registry = collectInfixFromTokens tokens OpReg.emptyRegistry
+      in
+      E.encode 0
+        (E.object
+          [ ("registry", Json.encodeRegistry registry)
+          ])
+
+
+parseWithRegistryToJson : String -> String -> String
+parseWithRegistryToJson registryJson source =
+  case decodeRegistryJson registryJson of
+    Err _ -> Json.parseToJson (parse source)
+    Ok externalRegistry ->
+      let
+        mergedRegistry = OpReg.mergeRegistries OpReg.builtinRegistry externalRegistry
+      in
+      case Lexer.lex source of
+        Err lexErr ->
+          encodeError lexErr.message { start = lexErr.span.start, end = lexErr.span.end }
+        Ok tokens ->
+          let layoutTokens = Layout.insertLayoutTokens tokens
+          in
+          case Parser.parseTokens layoutTokens mergedRegistry of
+            Err err -> encodeError err.message err.span
+            Ok program ->
+              E.encode 0
+                (E.object
+                  [ ("ok", E.bool True)
+                  , ("program", Json.encodeProgram program)
+                  ])
+
+
+encodeError : String -> Span -> String
+encodeError message span =
+  E.encode 0
+    (E.object
+      [ ("ok", E.bool False)
+      , ("message", E.string message)
+      , ("span", Json.encodeSpan span)
+      ])
+
+
+decodeRegistryJson : String -> Result String OpReg.OperatorRegistry
+decodeRegistryJson json =
+  case D.decodeString registryDecoder json of
+    Ok entries -> Ok (Dict.fromList entries)
+    Err err -> Err err
+
+registryDecoder : D.Decoder (List (String, OperatorInfo))
+registryDecoder = D.list registryEntryDecoder
+
+registryEntryDecoder : D.Decoder (String, OperatorInfo)
+registryEntryDecoder =
+  D.map3 (\op p a -> (op, { precedence = p, associativity = a }))
+    (D.field "op" D.string)
+    (D.field "precedence" D.int)
+    (D.field "associativity" assocDecoder)
+
+assocDecoder : D.Decoder Associativity
+assocDecoder =
+  let
+    decode s =
+      case s of
+        "left" -> D.succeed AssocLeft
+        "right" -> D.succeed AssocRight
+        _ -> D.succeed AssocNone
+  in
+  D.andThen decode D.string

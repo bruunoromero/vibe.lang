@@ -125,8 +125,8 @@
       "name": "@vibe/parser",
       "version": "0.0.0",
       "dependencies": {
-        "@vibe/lexer": "workspace:*",
         "@vibe/syntax": "workspace:*",
+        "@vibe/vibe-parser": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "latest",

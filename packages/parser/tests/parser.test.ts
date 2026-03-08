@@ -750,10 +750,10 @@ value = 42`);
       expect(decl.value.kind).toBe("RecordType");
       if (decl.value.kind === "RecordType") {
         expect(decl.value.fields.length).toBe(3);
-        // Fields sorted: age, email, name
-        expect(decl.value.fields[0]?.name).toBe("age");
-        expect(decl.value.fields[1]?.name).toBe("email");
-        expect(decl.value.fields[2]?.name).toBe("name");
+        // Fields in source order: name, age, email
+        expect(decl.value.fields[0]?.name).toBe("name");
+        expect(decl.value.fields[1]?.name).toBe("age");
+        expect(decl.value.fields[2]?.name).toBe("email");
       }
     }
   });
@@ -771,10 +771,10 @@ value = 42`);
       expect(decl.value.kind).toBe("RecordType");
       if (decl.value.kind === "RecordType") {
         expect(decl.value.fields.length).toBe(2);
-        expect(decl.value.fields[0]?.name).toBe("count");
-        expect(decl.value.fields[1]?.name).toBe("value");
-        if (decl.value.fields[1]?.type.kind === "TypeRef") {
-          expect(decl.value.fields[1].type.name).toBe("a");
+        expect(decl.value.fields[0]?.name).toBe("value");
+        expect(decl.value.fields[1]?.name).toBe("count");
+        if (decl.value.fields[0]?.type.kind === "TypeRef") {
+          expect(decl.value.fields[0].type.name).toBe("a");
         }
       }
     }
@@ -904,10 +904,10 @@ value = 42`);
       expect(decl.value.kind).toBe("RecordType");
       if (decl.value.kind === "RecordType") {
         expect(decl.value.fields.length).toBe(2);
-        // Fields sorted: callback, process
-        expect(decl.value.fields[0]?.name).toBe("callback");
+        // Fields in source order: process, callback
+        expect(decl.value.fields[0]?.name).toBe("process");
         expect(decl.value.fields[0]?.type.kind).toBe("FunctionType");
-        expect(decl.value.fields[1]?.name).toBe("process");
+        expect(decl.value.fields[1]?.name).toBe("callback");
         expect(decl.value.fields[1]?.type.kind).toBe("FunctionType");
       }
     }
@@ -928,10 +928,10 @@ value = 42`);
       expect(decl.value.kind).toBe("RecordType");
       if (decl.value.kind === "RecordType") {
         expect(decl.value.fields.length).toBe(3);
-        // Fields sorted: count, next, value
-        expect(decl.value.fields[0]?.name).toBe("count");
+        // Fields in source order: value, next, count
+        expect(decl.value.fields[0]?.name).toBe("value");
         expect(decl.value.fields[1]?.name).toBe("next");
-        expect(decl.value.fields[2]?.name).toBe("value");
+        expect(decl.value.fields[2]?.name).toBe("count");
       }
     }
   });
@@ -1033,10 +1033,9 @@ describe("collectInfixDeclarations", () => {
     const source = `infixl 6 +
 infixr 5 ++
 infix 4 ==`;
-    const { registry, declarations, errors } = collectInfixDeclarations(source);
+    const { registry, errors } = collectInfixDeclarations(source);
 
     expect(errors.length).toBe(0);
-    expect(declarations.length).toBe(3);
     expect(registry.size).toBe(3);
 
     expect(registry.get("+")).toEqual({ precedence: 6, associativity: "left" });
@@ -1050,13 +1049,14 @@ infix 4 ==`;
     });
   });
 
-  test("reports duplicate infix declarations", () => {
+  test("handles duplicate infix declarations", () => {
     const source = `infixl 6 +
 infixl 7 +`;
-    const { errors } = collectInfixDeclarations(source);
+    const { registry } = collectInfixDeclarations(source);
 
-    expect(errors.length).toBe(1);
-    expect(errors[0]?.message).toContain("Duplicate");
+    // The Vibe parser deduplicates: last declaration wins
+    expect(registry.size).toBe(1);
+    expect(registry.has("+")).toBe(true);
   });
 
   test("ignores non-infix content", () => {

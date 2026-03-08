@@ -24,7 +24,7 @@ import {
   type Type,
   type AnalyzeOptions,
 } from "@vibe/semantics";
-import { resolveModule } from "@vibe/module-resolver";
+import { resolveModule, discoverSourceModules } from "@vibe/module-resolver";
 import { loadConfig, type ResolvedVibeConfig } from "@vibe/config";
 import type {
   DocumentCache,
@@ -215,6 +215,16 @@ export class DocumentManager {
         }
       }
 
+      // Include all previously loaded modules so the semantics engine's
+      // global instance visibility can find instances (e.g. Eq Int) from
+      // modules that aren't in the direct import chain.  This mirrors the
+      // CLI where the full analyzedModules map is passed to every module.
+      for (const [name, mod] of this.loadedModules) {
+        if (!moduleDeps.has(name)) {
+          moduleDeps.set(name, mod);
+        }
+      }
+
       // Analyze with the loaded dependencies
       const analyzed = analyze(program, {
         dependencies: moduleDeps,
@@ -259,7 +269,96 @@ export class DocumentManager {
       }
     }
 
+    // Discover ALL source modules from the current package and every
+    // dependency package so that protocol instances (e.g. Eq Int from
+    // Vibe.Int) are visible even when not transitively imported.
+    // Semantics already has "global instance visibility" logic that
+    // pulls instances from every entry in the dependencies map.
+    const currentModule = ast.module?.name;
+    const allSourceModules = this.discoverAllPackageModules(config);
+
+    // Multiple passes: modules may depend on sibling instances that
+    // aren't loaded yet (e.g. Dict needs Eq Int from Int).  On the
+    // first pass some may fail; on the second pass their dependencies
+    // are cached and loadModule will find them.
+    let pending = allSourceModules.filter(
+      (m) => m !== currentModule && !dependencies.has(m),
+    );
+    for (let pass = 0; pass < 2 && pending.length > 0; pass++) {
+      const stillPending: string[] = [];
+      for (const moduleName of pending) {
+        if (dependencies.has(moduleName)) continue;
+        const cached = this.loadedModules.get(moduleName);
+        if (cached) {
+          dependencies.set(moduleName, cached);
+        } else {
+          const loaded = this.loadModule(moduleName, config);
+          if (loaded) {
+            dependencies.set(moduleName, loaded);
+          } else {
+            stillPending.push(moduleName);
+          }
+        }
+      }
+      pending = stillPending;
+    }
+
     return dependencies;
+  }
+
+  /**
+   * Discover all source module names from the current package and its
+   * dependency packages listed in the vibe.json `packages` array.
+   */
+  private discoverAllPackageModules(config: ResolvedVibeConfig): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    const addModules = (srcDir: string) => {
+      for (const name of discoverSourceModules(srcDir)) {
+        if (!seen.has(name)) {
+          seen.add(name);
+          result.push(name);
+        }
+      }
+    };
+
+    // Current package
+    addModules(config.srcDir);
+
+    // Dependency packages
+    for (const pkgName of config.packages) {
+      try {
+        const pkgRoot = this.resolvePackageRoot(pkgName, config.rootDir);
+        if (!pkgRoot) continue;
+        const pkgConfigPath = path.join(pkgRoot, "vibe.json");
+        if (!fs.existsSync(pkgConfigPath)) continue;
+        const pkgConfig = loadConfig({ path: pkgConfigPath });
+        addModules(pkgConfig.srcDir);
+      } catch {
+        // Skip unresolvable packages
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Resolve the root directory of an npm/workspace package by walking up
+   * from startDir looking in node_modules or the workspace packages folder.
+   */
+  private resolvePackageRoot(pkgName: string, startDir: string): string | null {
+    let dir = path.resolve(startDir);
+    while (true) {
+      const candidate = path.join(dir, "node_modules", pkgName);
+      if (fs.existsSync(path.join(candidate, "package.json"))) {
+        return fs.realpathSync(candidate);
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return null;
   }
 
   /**

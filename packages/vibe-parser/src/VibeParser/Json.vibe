@@ -1,7 +1,8 @@
-module VibeParser.Json exposing (parseToJson)
+module VibeParser.Json exposing (parseToJson, encodeProgram, encodeSpan, encodeRegistry)
 
 import Vibe exposing (..)
 import Vibe.List as List
+import Vibe.Dict as Dict
 import Json.Encode as E
 import VibeParser.Types exposing (..)
 
@@ -22,6 +23,28 @@ parseToJson result =
           , ("message", E.string err.message)
           , ("span", encodeSpan err.span)
           ])
+
+
+encodeRegistry : Dict.Dict String OperatorInfo -> E.Value
+encodeRegistry registry =
+  E.list encodeRegistryEntry (Dict.toList registry)
+
+encodeRegistryEntry : (String, OperatorInfo) -> E.Value
+encodeRegistryEntry entry =
+  case entry of
+    (op, info) ->
+      E.object
+        [ ("op", E.string op)
+        , ("precedence", E.int info.precedence)
+        , ("associativity", encodeAssociativity info.associativity)
+        ]
+
+encodeAssociativity : Associativity -> E.Value
+encodeAssociativity assoc =
+  case assoc of
+    AssocLeft -> E.string "left"
+    AssocRight -> E.string "right"
+    AssocNone -> E.string "none"
 
 
 -- =============================================================================
@@ -51,7 +74,7 @@ encodeSpan span =
 encodeProgram : Program -> E.Value
 encodeProgram prog =
   E.object
-    [ ("moduleDecl", encodeModuleDecl prog.moduleDecl)
+    [ ("module", encodeModuleDecl prog.moduleDecl)
     , ("imports", E.list encodeImport prog.imports)
     , ("declarations", E.list encodeDeclaration prog.declarations)
     ]
@@ -63,10 +86,14 @@ encodeProgram prog =
 
 encodeModuleDecl : ModuleDeclaration -> E.Value
 encodeModuleDecl m =
+  let
+    exposingVal = case m.hasExposing of
+      True -> encodeExposing m.exposingClause
+      False -> E.null
+  in
   E.object
     [ ("name", E.string m.name)
-    , ("exposing", encodeExposing m.exposingClause)
-    , ("hasExposing", E.bool m.hasExposing)
+    , ("exposing", exposingVal)
     , ("span", encodeSpan m.span)
     ]
 
@@ -77,12 +104,18 @@ encodeModuleDecl m =
 
 encodeImport : ImportDeclaration -> E.Value
 encodeImport imp =
+  let
+    aliasVal = case imp.hasAlias of
+      True -> E.string imp.aliasName
+      False -> E.null
+    exposingVal = case imp.hasExposing of
+      True -> encodeExposing imp.exposingClause
+      False -> E.null
+  in
   E.object
     [ ("moduleName", E.string imp.moduleName)
-    , ("alias", E.string imp.aliasName)
-    , ("exposing", encodeExposing imp.exposingClause)
-    , ("hasAlias", E.bool imp.hasAlias)
-    , ("hasExposing", E.bool imp.hasExposing)
+    , ("alias", aliasVal)
+    , ("exposing", exposingVal)
     , ("span", encodeSpan imp.span)
     ]
 
@@ -96,13 +129,13 @@ encodeExposing exp =
   case exp of
     ExposeAll span ->
       E.object
-        [ ("kind", E.string "ExposeAll")
+        [ ("kind", E.string "All")
         , ("span", encodeSpan span)
         ]
     ExposeExplicit specs span ->
       E.object
-        [ ("kind", E.string "ExposeExplicit")
-        , ("specs", E.list encodeExportSpec specs)
+        [ ("kind", E.string "Explicit")
+        , ("exports", E.list encodeExportSpec specs)
         , ("span", encodeSpan span)
         ]
 
@@ -118,7 +151,7 @@ encodeExportSpec spec =
     ExportOperator name span ->
       E.object
         [ ("kind", E.string "ExportOperator")
-        , ("name", E.string name)
+        , ("operator", E.string name)
         , ("span", encodeSpan span)
         ]
     ExportTypeAll name span ->
@@ -145,7 +178,7 @@ encodeDeclaration decl =
   case decl of
     DValue vd ->
       E.object
-        [ ("kind", E.string "DValue")
+        [ ("kind", E.string "ValueDeclaration")
         , ("name", E.string vd.name)
         , ("args", E.list encodePattern vd.args)
         , ("body", encodeExpr vd.body)
@@ -153,14 +186,14 @@ encodeDeclaration decl =
         ]
     DTypeAnnotation ta ->
       E.object
-        [ ("kind", E.string "DTypeAnnotation")
+        [ ("kind", E.string "TypeAnnotationDeclaration")
         , ("name", E.string ta.name)
         , ("annotation", encodeTypeExpr ta.annotation)
         , ("span", encodeSpan ta.span)
         ]
     DDecorated decorator args name annotation span ->
       E.object
-        [ ("kind", E.string "DDecorated")
+        [ ("kind", E.string "DecoratedDeclaration")
         , ("decorator", E.string decorator)
         , ("args", E.list E.string args)
         , ("name", E.string name)
@@ -169,7 +202,7 @@ encodeDeclaration decl =
         ]
     DType name params constraints ctors span ->
       E.object
-        [ ("kind", E.string "DType")
+        [ ("kind", E.string "TypeDeclaration")
         , ("name", E.string name)
         , ("params", E.list E.string params)
         , ("constraints", E.list encodeConstraint constraints)
@@ -178,7 +211,7 @@ encodeDeclaration decl =
         ]
     DTypeAlias name params value span ->
       E.object
-        [ ("kind", E.string "DTypeAlias")
+        [ ("kind", E.string "TypeAliasDeclaration")
         , ("name", E.string name)
         , ("params", E.list E.string params)
         , ("value", encodeTypeExpr value)
@@ -186,23 +219,23 @@ encodeDeclaration decl =
         ]
     DOpaqueType name params span ->
       E.object
-        [ ("kind", E.string "DOpaqueType")
+        [ ("kind", E.string "OpaqueTypeDeclaration")
         , ("name", E.string name)
         , ("params", E.list E.string params)
         , ("span", encodeSpan span)
         ]
     DRecordType name params constraints fields span ->
       E.object
-        [ ("kind", E.string "DRecordType")
+        [ ("kind", E.string "TypeDeclaration")
         , ("name", E.string name)
         , ("params", E.list E.string params)
         , ("constraints", E.list encodeConstraint constraints)
-        , ("fields", E.list encodeRecordFieldType fields)
+        , ("recordFields", E.list encodeRecordFieldType fields)
         , ("span", encodeSpan span)
         ]
     DProtocol name params constraints methods span ->
       E.object
-        [ ("kind", E.string "DProtocol")
+        [ ("kind", E.string "ProtocolDeclaration")
         , ("name", E.string name)
         , ("params", E.list E.string params)
         , ("constraints", E.list encodeConstraint constraints)
@@ -211,19 +244,25 @@ encodeDeclaration decl =
         ]
     DImplementation constraints protoName typeArgs methods span ->
       E.object
-        [ ("kind", E.string "DImplementation")
+        [ ("kind", E.string "ImplementationDeclaration")
         , ("constraints", E.list encodeConstraint constraints)
-        , ("protocol", E.string protoName)
+        , ("protocolName", E.string protoName)
         , ("typeArgs", E.list encodeTypeExpr typeArgs)
         , ("methods", E.list encodeMethodImpl methods)
         , ("span", encodeSpan span)
         ]
     DInfix assoc prec name span ->
+      let
+        fixity = case assoc of
+          "left" -> "infixl"
+          "right" -> "infixr"
+          _ -> "infix"
+      in
       E.object
-        [ ("kind", E.string "DInfix")
-        , ("associativity", E.string assoc)
+        [ ("kind", E.string "InfixDeclaration")
+        , ("fixity", E.string fixity)
         , ("precedence", E.int prec)
-        , ("name", E.string name)
+        , ("operator", E.string name)
         , ("span", encodeSpan span)
         ]
 
@@ -237,33 +276,33 @@ encodeTypeExpr te =
   case te of
     TRef name args span ->
       E.object
-        [ ("kind", E.string "TRef")
+        [ ("kind", E.string "TypeRef")
         , ("name", E.string name)
         , ("args", E.list encodeTypeExpr args)
         , ("span", encodeSpan span)
         ]
     TFunction from to span ->
       E.object
-        [ ("kind", E.string "TFunction")
+        [ ("kind", E.string "FunctionType")
         , ("from", encodeTypeExpr from)
         , ("to", encodeTypeExpr to)
         , ("span", encodeSpan span)
         ]
     TTuple elems span ->
       E.object
-        [ ("kind", E.string "TTuple")
-        , ("elems", E.list encodeTypeExpr elems)
+        [ ("kind", E.string "TupleType")
+        , ("elements", E.list encodeTypeExpr elems)
         , ("span", encodeSpan span)
         ]
     TRecord fields span ->
       E.object
-        [ ("kind", E.string "TRecord")
+        [ ("kind", E.string "RecordType")
         , ("fields", E.list encodeRecordFieldType fields)
         , ("span", encodeSpan span)
         ]
     TQualified constraints typ span ->
       E.object
-        [ ("kind", E.string "TQualified")
+        [ ("kind", E.string "QualifiedType")
         , ("constraints", E.list encodeConstraint constraints)
         , ("type", encodeTypeExpr typ)
         , ("span", encodeSpan span)
@@ -279,68 +318,68 @@ encodePattern pat =
   case pat of
     PVar name span ->
       E.object
-        [ ("kind", E.string "PVar")
+        [ ("kind", E.string "VarPattern")
         , ("name", E.string name)
         , ("span", encodeSpan span)
         ]
     PWildcard span ->
       E.object
-        [ ("kind", E.string "PWildcard")
+        [ ("kind", E.string "WildcardPattern")
         , ("span", encodeSpan span)
         ]
     PConstructor name args span ->
       E.object
-        [ ("kind", E.string "PConstructor")
+        [ ("kind", E.string "ConstructorPattern")
         , ("name", E.string name)
         , ("args", E.list encodePattern args)
         , ("span", encodeSpan span)
         ]
     PTuple elems span ->
       E.object
-        [ ("kind", E.string "PTuple")
-        , ("elems", E.list encodePattern elems)
+        [ ("kind", E.string "TuplePattern")
+        , ("elements", E.list encodePattern elems)
         , ("span", encodeSpan span)
         ]
     PList elems span ->
       E.object
-        [ ("kind", E.string "PList")
-        , ("elems", E.list encodePattern elems)
+        [ ("kind", E.string "ListPattern")
+        , ("elements", E.list encodePattern elems)
         , ("span", encodeSpan span)
         ]
     PCons head tail span ->
       E.object
-        [ ("kind", E.string "PCons")
+        [ ("kind", E.string "ConsPattern")
         , ("head", encodePattern head)
         , ("tail", encodePattern tail)
         , ("span", encodeSpan span)
         ]
     PRecord fields span ->
       E.object
-        [ ("kind", E.string "PRecord")
+        [ ("kind", E.string "RecordPattern")
         , ("fields", E.list encodeRecordFieldPattern fields)
         , ("span", encodeSpan span)
         ]
     PInt value span ->
       E.object
-        [ ("kind", E.string "PInt")
+        [ ("kind", E.string "IntPattern")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
     PFloat value span ->
       E.object
-        [ ("kind", E.string "PFloat")
+        [ ("kind", E.string "FloatPattern")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
     PString value span ->
       E.object
-        [ ("kind", E.string "PString")
+        [ ("kind", E.string "StringPattern")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
     PChar value span ->
       E.object
-        [ ("kind", E.string "PChar")
+        [ ("kind", E.string "CharPattern")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
@@ -362,74 +401,74 @@ encodeExpr expr =
   case expr of
     EVar name ns span ->
       E.object
-        [ ("kind", E.string "EVar")
+        [ ("kind", E.string "Var")
         , ("name", E.string name)
         , ("namespace", E.string ns)
         , ("span", encodeSpan span)
         ]
     EInt value span ->
       E.object
-        [ ("kind", E.string "EInt")
+        [ ("kind", E.string "Number")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
     EFloat value span ->
       E.object
-        [ ("kind", E.string "EFloat")
+        [ ("kind", E.string "Number")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
     EString value span ->
       E.object
-        [ ("kind", E.string "EString")
+        [ ("kind", E.string "String")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
     EChar value span ->
       E.object
-        [ ("kind", E.string "EChar")
+        [ ("kind", E.string "Char")
         , ("value", E.string value)
         , ("span", encodeSpan span)
         ]
     ELambda args body span ->
       E.object
-        [ ("kind", E.string "ELambda")
+        [ ("kind", E.string "Lambda")
         , ("args", E.list encodePattern args)
         , ("body", encodeExpr body)
         , ("span", encodeSpan span)
         ]
     EApply callee args span ->
       E.object
-        [ ("kind", E.string "EApply")
+        [ ("kind", E.string "Apply")
         , ("callee", encodeExpr callee)
         , ("args", E.list encodeExpr args)
         , ("span", encodeSpan span)
         ]
-    EIf cond then_ else_ span ->
+    EIf cond thenBranch elseBranch span ->
       E.object
-        [ ("kind", E.string "EIf")
+        [ ("kind", E.string "If")
         , ("condition", encodeExpr cond)
-        , ("then", encodeExpr then_)
-        , ("else", encodeExpr else_)
+        , ("thenBranch", encodeExpr thenBranch)
+        , ("elseBranch", encodeExpr elseBranch)
         , ("span", encodeSpan span)
         ]
     ELetIn bindings body span ->
       E.object
-        [ ("kind", E.string "ELetIn")
+        [ ("kind", E.string "LetIn")
         , ("bindings", E.list encodeValueDecl bindings)
         , ("body", encodeExpr body)
         , ("span", encodeSpan span)
         ]
     ECase discriminant branches span ->
       E.object
-        [ ("kind", E.string "ECase")
+        [ ("kind", E.string "Case")
         , ("discriminant", encodeExpr discriminant)
         , ("branches", E.list encodeCaseBranch branches)
         , ("span", encodeSpan span)
         ]
     EInfix left op right span ->
       E.object
-        [ ("kind", E.string "EInfix")
+        [ ("kind", E.string "Infix")
         , ("left", encodeExpr left)
         , ("operator", E.string op)
         , ("right", encodeExpr right)
@@ -437,58 +476,58 @@ encodeExpr expr =
         ]
     EUnary op operand span ->
       E.object
-        [ ("kind", E.string "EUnary")
+        [ ("kind", E.string "Unary")
         , ("operator", E.string op)
         , ("operand", encodeExpr operand)
         , ("span", encodeSpan span)
         ]
     EParen inner span ->
       E.object
-        [ ("kind", E.string "EParen")
+        [ ("kind", E.string "Paren")
         , ("expression", encodeExpr inner)
         , ("span", encodeSpan span)
         ]
     ETuple elems span ->
       E.object
-        [ ("kind", E.string "ETuple")
-        , ("elems", E.list encodeExpr elems)
+        [ ("kind", E.string "Tuple")
+        , ("elements", E.list encodeExpr elems)
         , ("span", encodeSpan span)
         ]
     EUnit span ->
       E.object
-        [ ("kind", E.string "EUnit")
+        [ ("kind", E.string "Unit")
         , ("span", encodeSpan span)
         ]
     EList elems span ->
       E.object
-        [ ("kind", E.string "EList")
-        , ("elems", E.list encodeExpr elems)
+        [ ("kind", E.string "List")
+        , ("elements", E.list encodeExpr elems)
         , ("span", encodeSpan span)
         ]
-    EListRange from to span ->
+    EListRange start end span ->
       E.object
-        [ ("kind", E.string "EListRange")
-        , ("from", encodeExpr from)
-        , ("to", encodeExpr to)
+        [ ("kind", E.string "ListRange")
+        , ("start", encodeExpr start)
+        , ("end", encodeExpr end)
         , ("span", encodeSpan span)
         ]
     ERecord fields span ->
       E.object
-        [ ("kind", E.string "ERecord")
+        [ ("kind", E.string "Record")
         , ("fields", E.list encodeRecordField fields)
         , ("span", encodeSpan span)
         ]
     ERecordUpdate base fields span ->
       E.object
-        [ ("kind", E.string "ERecordUpdate")
+        [ ("kind", E.string "RecordUpdate")
         , ("base", E.string base)
         , ("fields", E.list encodeRecordField fields)
         , ("span", encodeSpan span)
         ]
-    EFieldAccess expr field span ->
+    EFieldAccess target field span ->
       E.object
-        [ ("kind", E.string "EFieldAccess")
-        , ("expression", encodeExpr expr)
+        [ ("kind", E.string "FieldAccess")
+        , ("target", encodeExpr target)
         , ("field", E.string field)
         , ("span", encodeSpan span)
         ]
@@ -517,7 +556,8 @@ encodeCaseBranch cb =
 encodeValueDecl : ValueDeclaration -> E.Value
 encodeValueDecl vd =
   E.object
-    [ ("name", E.string vd.name)
+    [ ("kind", E.string "ValueDeclaration")
+    , ("name", E.string vd.name)
     , ("args", E.list encodePattern vd.args)
     , ("body", encodeExpr vd.body)
     , ("span", encodeSpan vd.span)
@@ -535,7 +575,7 @@ encodeRecordFieldType : RecordFieldType -> E.Value
 encodeRecordFieldType rft =
   E.object
     [ ("name", E.string rft.name)
-    , ("fieldType", encodeTypeExpr rft.fieldType)
+    , ("type", encodeTypeExpr rft.fieldType)
     , ("span", encodeSpan rft.span)
     ]
 
@@ -549,19 +589,36 @@ encodeConstructor cv =
 
 encodeProtocolMethod : ProtocolMethod -> E.Value
 encodeProtocolMethod pm =
+  let
+    typeVal = case pm.hasType of
+      True -> encodeTypeExpr pm.methodType
+      False -> E.null
+    defaultVal = case pm.hasDefault of
+      True ->
+        E.object
+          [ ("args", E.list encodePattern pm.defaultArgs)
+          , ("body", encodeExpr pm.defaultBody)
+          ]
+      False -> E.null
+  in
   E.object
     [ ("name", E.string pm.name)
-    , ("methodType", encodeTypeExpr pm.methodType)
-    , ("hasDefault", E.bool pm.hasDefault)
-    , ("hasType", E.bool pm.hasType)
+    , ("type", typeVal)
+    , ("defaultImpl", defaultVal)
     , ("span", encodeSpan pm.span)
     ]
 
 encodeMethodImpl : MethodImplementation -> E.Value
 encodeMethodImpl mi =
+  let
+    argsVal =
+      case mi.implArgs of
+        [] -> E.null
+        _ -> E.list encodePattern mi.implArgs
+  in
   E.object
     [ ("name", E.string mi.name)
-    , ("args", E.list encodePattern mi.implArgs)
+    , ("args", argsVal)
     , ("implementation", encodeExpr mi.implementation)
     , ("span", encodeSpan mi.span)
     ]
