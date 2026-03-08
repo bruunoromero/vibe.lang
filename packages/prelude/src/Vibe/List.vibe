@@ -1,15 +1,40 @@
 module Vibe.List exposing
   ( foldl
+  , foldr
   , map
   , filter
   , head
   , tail
+  , last
   , (::)
+  , isEmpty
+  , singleton
+  , length
+  , reverse
+  , nth
+  , take
+  , drop
+  , takeWhile
+  , dropWhile
+  , any
+  , all
+  , member
+  , concat
+  , concatMap
+  , filterMap
+  , indexedMap
+  , zip
+  , unzip
+  , range
+  , repeat
+  , sort
+  , sortBy
+  , intersperse
   )
 
 import Vibe.String as String
 import Vibe.Maybe exposing (Maybe(..))
-import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..), flip)
+import Vibe.Basics exposing (Eq(..), Ord(..), Num(..), Show(..), Appendable(..), flip, not)
 
 infixr 5 ::
 
@@ -95,3 +120,164 @@ tail xs =
     case xs of
         _ :: xtail -> Just xtail
         [] -> Nothing
+
+last : List a -> Maybe a
+last xs =
+    case xs of
+        [] -> Nothing
+        [x] -> Just x
+        _ :: rest -> last rest
+
+isEmpty : List a -> Bool
+isEmpty xs =
+    case xs of
+        [] -> True
+        _ -> False
+
+singleton : a -> List a
+singleton x = [x]
+
+@get "length"
+length : List a -> Int
+
+@external "./List.ffi.js" "listReverse"
+reverse : List a -> List a
+
+@external "./List.ffi.js" "listNth"
+_nth : (a -> Maybe a) -> Maybe a -> Int -> List a -> Maybe a
+
+nth : Int -> List a -> Maybe a
+nth = _nth Just Nothing
+
+foldr : (a -> b -> b) -> b -> List a -> b
+foldr fn acc xs =
+    foldl (\a x -> fn x a) acc (reverse xs)
+
+take : Int -> List a -> List a
+take n xs =
+    case n <= 0 of
+        True -> []
+        False ->
+            case xs of
+                [] -> []
+                x :: rest -> x :: take (n - 1) rest
+
+drop : Int -> List a -> List a
+drop n xs =
+    case n <= 0 of
+        True -> xs
+        False ->
+            case xs of
+                [] -> []
+                _ :: rest -> drop (n - 1) rest
+
+takeWhile : (a -> Bool) -> List a -> List a
+takeWhile pred xs =
+    case xs of
+        [] -> []
+        x :: rest ->
+            case pred x of
+                True -> x :: takeWhile pred rest
+                False -> []
+
+dropWhile : (a -> Bool) -> List a -> List a
+dropWhile pred xs =
+    case xs of
+        [] -> []
+        x :: rest ->
+            case pred x of
+                True -> dropWhile pred rest
+                False -> xs
+
+any : (a -> Bool) -> List a -> Bool
+any pred xs =
+    case xs of
+        [] -> False
+        x :: rest ->
+            case pred x of
+                True -> True
+                False -> any pred rest
+
+all : (a -> Bool) -> List a -> Bool
+all pred xs =
+    case xs of
+        [] -> True
+        x :: rest ->
+            case pred x of
+                False -> False
+                True -> all pred rest
+
+member : Eq a => a -> List a -> Bool
+member target xs =
+    any (\x -> x == target) xs
+
+concat : List (List a) -> List a
+concat lists =
+    foldr (\xs acc -> xs ++ acc) [] lists
+
+concatMap : (a -> List b) -> List a -> List b
+concatMap fn xs =
+    concat (map fn xs)
+
+filterMap : (a -> Maybe b) -> List a -> List b
+filterMap fn xs =
+    let
+        step x acc =
+            case fn x of
+                Just val -> val :: acc
+                Nothing -> acc
+    in
+    foldr step [] xs
+
+indexedMap : (Int -> a -> b) -> List a -> List b
+indexedMap fn xs =
+    let
+        helper i remaining =
+            case remaining of
+                [] -> []
+                x :: rest -> fn i x :: helper (i + 1) rest
+    in
+    helper 0 xs
+
+zip : List a -> List b -> List (a, b)
+zip xs ys =
+    case (xs, ys) of
+        (x :: xrest, y :: yrest) -> (x, y) :: zip xrest yrest
+        _ -> []
+
+unzip : List (a, b) -> (List a, List b)
+unzip pairs =
+    let
+        step pair acc =
+            case (pair, acc) of
+                ((a, b), (as_, bs)) -> (a :: as_, b :: bs)
+    in
+    foldr step ([], []) pairs
+
+range : Int -> Int -> List Int
+range lo hi =
+    case lo > hi of
+        True -> []
+        False -> lo :: range (lo + 1) hi
+
+repeat : Int -> a -> List a
+repeat n val =
+    case n <= 0 of
+        True -> []
+        False -> val :: repeat (n - 1) val
+
+intersperse : a -> List a -> List a
+intersperse sep xs =
+    case xs of
+        [] -> []
+        [x] -> [x]
+        x :: rest -> x :: sep :: intersperse sep rest
+
+@external "./List.ffi.js" "listSort"
+_sort : (a -> a -> Bool) -> List a -> List a
+
+sort : Ord a => List a -> List a
+sort xs = _sort (<) xs
+
+sortBy : (a -> a -> Bool) -> List a -> List a
+sortBy cmp xs = _sort cmp xs

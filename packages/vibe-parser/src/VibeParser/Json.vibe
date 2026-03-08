@@ -1,0 +1,567 @@
+module VibeParser.Json exposing (parseToJson)
+
+import Vibe exposing (..)
+import Vibe.List as List
+import Json.Encode as E
+import VibeParser.Types exposing (..)
+
+
+parseToJson : (Result ParseError Program) -> String
+parseToJson result =
+  case result of
+    Ok prog ->
+      E.encode 0
+        (E.object
+          [ ("ok", E.bool True)
+          , ("program", encodeProgram prog)
+          ])
+    Err err ->
+      E.encode 0
+        (E.object
+          [ ("ok", E.bool False)
+          , ("message", E.string err.message)
+          , ("span", encodeSpan err.span)
+          ])
+
+
+-- =============================================================================
+-- Position / Span
+-- =============================================================================
+
+encodePosition : Position -> E.Value
+encodePosition pos =
+  E.object
+    [ ("offset", E.int pos.offset)
+    , ("line", E.int pos.line)
+    , ("column", E.int pos.column)
+    ]
+
+encodeSpan : Span -> E.Value
+encodeSpan span =
+  E.object
+    [ ("start", encodePosition span.start)
+    , ("end", encodePosition span.end)
+    ]
+
+
+-- =============================================================================
+-- Program
+-- =============================================================================
+
+encodeProgram : Program -> E.Value
+encodeProgram prog =
+  E.object
+    [ ("moduleDecl", encodeModuleDecl prog.moduleDecl)
+    , ("imports", E.list encodeImport prog.imports)
+    , ("declarations", E.list encodeDeclaration prog.declarations)
+    ]
+
+
+-- =============================================================================
+-- Module Declaration
+-- =============================================================================
+
+encodeModuleDecl : ModuleDeclaration -> E.Value
+encodeModuleDecl m =
+  E.object
+    [ ("name", E.string m.name)
+    , ("exposing", encodeExposing m.exposingClause)
+    , ("hasExposing", E.bool m.hasExposing)
+    , ("span", encodeSpan m.span)
+    ]
+
+
+-- =============================================================================
+-- Imports
+-- =============================================================================
+
+encodeImport : ImportDeclaration -> E.Value
+encodeImport imp =
+  E.object
+    [ ("moduleName", E.string imp.moduleName)
+    , ("alias", E.string imp.aliasName)
+    , ("exposing", encodeExposing imp.exposingClause)
+    , ("hasAlias", E.bool imp.hasAlias)
+    , ("hasExposing", E.bool imp.hasExposing)
+    , ("span", encodeSpan imp.span)
+    ]
+
+
+-- =============================================================================
+-- Exposing
+-- =============================================================================
+
+encodeExposing : Exposing -> E.Value
+encodeExposing exp =
+  case exp of
+    ExposeAll span ->
+      E.object
+        [ ("kind", E.string "ExposeAll")
+        , ("span", encodeSpan span)
+        ]
+    ExposeExplicit specs span ->
+      E.object
+        [ ("kind", E.string "ExposeExplicit")
+        , ("specs", E.list encodeExportSpec specs)
+        , ("span", encodeSpan span)
+        ]
+
+encodeExportSpec : ExportSpec -> E.Value
+encodeExportSpec spec =
+  case spec of
+    ExportValue name span ->
+      E.object
+        [ ("kind", E.string "ExportValue")
+        , ("name", E.string name)
+        , ("span", encodeSpan span)
+        ]
+    ExportOperator name span ->
+      E.object
+        [ ("kind", E.string "ExportOperator")
+        , ("name", E.string name)
+        , ("span", encodeSpan span)
+        ]
+    ExportTypeAll name span ->
+      E.object
+        [ ("kind", E.string "ExportTypeAll")
+        , ("name", E.string name)
+        , ("span", encodeSpan span)
+        ]
+    ExportTypeSome name members span ->
+      E.object
+        [ ("kind", E.string "ExportTypeSome")
+        , ("name", E.string name)
+        , ("members", E.list E.string members)
+        , ("span", encodeSpan span)
+        ]
+
+
+-- =============================================================================
+-- Declarations
+-- =============================================================================
+
+encodeDeclaration : Declaration -> E.Value
+encodeDeclaration decl =
+  case decl of
+    DValue vd ->
+      E.object
+        [ ("kind", E.string "DValue")
+        , ("name", E.string vd.name)
+        , ("args", E.list encodePattern vd.args)
+        , ("body", encodeExpr vd.body)
+        , ("span", encodeSpan vd.span)
+        ]
+    DTypeAnnotation ta ->
+      E.object
+        [ ("kind", E.string "DTypeAnnotation")
+        , ("name", E.string ta.name)
+        , ("annotation", encodeTypeExpr ta.annotation)
+        , ("span", encodeSpan ta.span)
+        ]
+    DDecorated decorator args name annotation span ->
+      E.object
+        [ ("kind", E.string "DDecorated")
+        , ("decorator", E.string decorator)
+        , ("args", E.list E.string args)
+        , ("name", E.string name)
+        , ("annotation", encodeTypeExpr annotation)
+        , ("span", encodeSpan span)
+        ]
+    DType name params constraints ctors span ->
+      E.object
+        [ ("kind", E.string "DType")
+        , ("name", E.string name)
+        , ("params", E.list E.string params)
+        , ("constraints", E.list encodeConstraint constraints)
+        , ("constructors", E.list encodeConstructor ctors)
+        , ("span", encodeSpan span)
+        ]
+    DTypeAlias name params value span ->
+      E.object
+        [ ("kind", E.string "DTypeAlias")
+        , ("name", E.string name)
+        , ("params", E.list E.string params)
+        , ("value", encodeTypeExpr value)
+        , ("span", encodeSpan span)
+        ]
+    DOpaqueType name params span ->
+      E.object
+        [ ("kind", E.string "DOpaqueType")
+        , ("name", E.string name)
+        , ("params", E.list E.string params)
+        , ("span", encodeSpan span)
+        ]
+    DRecordType name params constraints fields span ->
+      E.object
+        [ ("kind", E.string "DRecordType")
+        , ("name", E.string name)
+        , ("params", E.list E.string params)
+        , ("constraints", E.list encodeConstraint constraints)
+        , ("fields", E.list encodeRecordFieldType fields)
+        , ("span", encodeSpan span)
+        ]
+    DProtocol name params constraints methods span ->
+      E.object
+        [ ("kind", E.string "DProtocol")
+        , ("name", E.string name)
+        , ("params", E.list E.string params)
+        , ("constraints", E.list encodeConstraint constraints)
+        , ("methods", E.list encodeProtocolMethod methods)
+        , ("span", encodeSpan span)
+        ]
+    DImplementation constraints protoName typeArgs methods span ->
+      E.object
+        [ ("kind", E.string "DImplementation")
+        , ("constraints", E.list encodeConstraint constraints)
+        , ("protocol", E.string protoName)
+        , ("typeArgs", E.list encodeTypeExpr typeArgs)
+        , ("methods", E.list encodeMethodImpl methods)
+        , ("span", encodeSpan span)
+        ]
+    DInfix assoc prec name span ->
+      E.object
+        [ ("kind", E.string "DInfix")
+        , ("associativity", E.string assoc)
+        , ("precedence", E.int prec)
+        , ("name", E.string name)
+        , ("span", encodeSpan span)
+        ]
+
+
+-- =============================================================================
+-- Type Expressions
+-- =============================================================================
+
+encodeTypeExpr : TypeExpr -> E.Value
+encodeTypeExpr te =
+  case te of
+    TRef name args span ->
+      E.object
+        [ ("kind", E.string "TRef")
+        , ("name", E.string name)
+        , ("args", E.list encodeTypeExpr args)
+        , ("span", encodeSpan span)
+        ]
+    TFunction from to span ->
+      E.object
+        [ ("kind", E.string "TFunction")
+        , ("from", encodeTypeExpr from)
+        , ("to", encodeTypeExpr to)
+        , ("span", encodeSpan span)
+        ]
+    TTuple elems span ->
+      E.object
+        [ ("kind", E.string "TTuple")
+        , ("elems", E.list encodeTypeExpr elems)
+        , ("span", encodeSpan span)
+        ]
+    TRecord fields span ->
+      E.object
+        [ ("kind", E.string "TRecord")
+        , ("fields", E.list encodeRecordFieldType fields)
+        , ("span", encodeSpan span)
+        ]
+    TQualified constraints typ span ->
+      E.object
+        [ ("kind", E.string "TQualified")
+        , ("constraints", E.list encodeConstraint constraints)
+        , ("type", encodeTypeExpr typ)
+        , ("span", encodeSpan span)
+        ]
+
+
+-- =============================================================================
+-- Patterns
+-- =============================================================================
+
+encodePattern : Pattern -> E.Value
+encodePattern pat =
+  case pat of
+    PVar name span ->
+      E.object
+        [ ("kind", E.string "PVar")
+        , ("name", E.string name)
+        , ("span", encodeSpan span)
+        ]
+    PWildcard span ->
+      E.object
+        [ ("kind", E.string "PWildcard")
+        , ("span", encodeSpan span)
+        ]
+    PConstructor name args span ->
+      E.object
+        [ ("kind", E.string "PConstructor")
+        , ("name", E.string name)
+        , ("args", E.list encodePattern args)
+        , ("span", encodeSpan span)
+        ]
+    PTuple elems span ->
+      E.object
+        [ ("kind", E.string "PTuple")
+        , ("elems", E.list encodePattern elems)
+        , ("span", encodeSpan span)
+        ]
+    PList elems span ->
+      E.object
+        [ ("kind", E.string "PList")
+        , ("elems", E.list encodePattern elems)
+        , ("span", encodeSpan span)
+        ]
+    PCons head tail span ->
+      E.object
+        [ ("kind", E.string "PCons")
+        , ("head", encodePattern head)
+        , ("tail", encodePattern tail)
+        , ("span", encodeSpan span)
+        ]
+    PRecord fields span ->
+      E.object
+        [ ("kind", E.string "PRecord")
+        , ("fields", E.list encodeRecordFieldPattern fields)
+        , ("span", encodeSpan span)
+        ]
+    PInt value span ->
+      E.object
+        [ ("kind", E.string "PInt")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+    PFloat value span ->
+      E.object
+        [ ("kind", E.string "PFloat")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+    PString value span ->
+      E.object
+        [ ("kind", E.string "PString")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+    PChar value span ->
+      E.object
+        [ ("kind", E.string "PChar")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+
+encodeRecordFieldPattern : RecordFieldPattern -> E.Value
+encodeRecordFieldPattern rfp =
+  E.object
+    [ ("name", E.string rfp.name)
+    , ("pattern", encodePattern rfp.pattern)
+    ]
+
+
+-- =============================================================================
+-- Expressions
+-- =============================================================================
+
+encodeExpr : Expr -> E.Value
+encodeExpr expr =
+  case expr of
+    EVar name ns span ->
+      E.object
+        [ ("kind", E.string "EVar")
+        , ("name", E.string name)
+        , ("namespace", E.string ns)
+        , ("span", encodeSpan span)
+        ]
+    EInt value span ->
+      E.object
+        [ ("kind", E.string "EInt")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+    EFloat value span ->
+      E.object
+        [ ("kind", E.string "EFloat")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+    EString value span ->
+      E.object
+        [ ("kind", E.string "EString")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+    EChar value span ->
+      E.object
+        [ ("kind", E.string "EChar")
+        , ("value", E.string value)
+        , ("span", encodeSpan span)
+        ]
+    ELambda args body span ->
+      E.object
+        [ ("kind", E.string "ELambda")
+        , ("args", E.list encodePattern args)
+        , ("body", encodeExpr body)
+        , ("span", encodeSpan span)
+        ]
+    EApply callee args span ->
+      E.object
+        [ ("kind", E.string "EApply")
+        , ("callee", encodeExpr callee)
+        , ("args", E.list encodeExpr args)
+        , ("span", encodeSpan span)
+        ]
+    EIf cond then_ else_ span ->
+      E.object
+        [ ("kind", E.string "EIf")
+        , ("condition", encodeExpr cond)
+        , ("then", encodeExpr then_)
+        , ("else", encodeExpr else_)
+        , ("span", encodeSpan span)
+        ]
+    ELetIn bindings body span ->
+      E.object
+        [ ("kind", E.string "ELetIn")
+        , ("bindings", E.list encodeValueDecl bindings)
+        , ("body", encodeExpr body)
+        , ("span", encodeSpan span)
+        ]
+    ECase discriminant branches span ->
+      E.object
+        [ ("kind", E.string "ECase")
+        , ("discriminant", encodeExpr discriminant)
+        , ("branches", E.list encodeCaseBranch branches)
+        , ("span", encodeSpan span)
+        ]
+    EInfix left op right span ->
+      E.object
+        [ ("kind", E.string "EInfix")
+        , ("left", encodeExpr left)
+        , ("operator", E.string op)
+        , ("right", encodeExpr right)
+        , ("span", encodeSpan span)
+        ]
+    EUnary op operand span ->
+      E.object
+        [ ("kind", E.string "EUnary")
+        , ("operator", E.string op)
+        , ("operand", encodeExpr operand)
+        , ("span", encodeSpan span)
+        ]
+    EParen inner span ->
+      E.object
+        [ ("kind", E.string "EParen")
+        , ("expression", encodeExpr inner)
+        , ("span", encodeSpan span)
+        ]
+    ETuple elems span ->
+      E.object
+        [ ("kind", E.string "ETuple")
+        , ("elems", E.list encodeExpr elems)
+        , ("span", encodeSpan span)
+        ]
+    EUnit span ->
+      E.object
+        [ ("kind", E.string "EUnit")
+        , ("span", encodeSpan span)
+        ]
+    EList elems span ->
+      E.object
+        [ ("kind", E.string "EList")
+        , ("elems", E.list encodeExpr elems)
+        , ("span", encodeSpan span)
+        ]
+    EListRange from to span ->
+      E.object
+        [ ("kind", E.string "EListRange")
+        , ("from", encodeExpr from)
+        , ("to", encodeExpr to)
+        , ("span", encodeSpan span)
+        ]
+    ERecord fields span ->
+      E.object
+        [ ("kind", E.string "ERecord")
+        , ("fields", E.list encodeRecordField fields)
+        , ("span", encodeSpan span)
+        ]
+    ERecordUpdate base fields span ->
+      E.object
+        [ ("kind", E.string "ERecordUpdate")
+        , ("base", E.string base)
+        , ("fields", E.list encodeRecordField fields)
+        , ("span", encodeSpan span)
+        ]
+    EFieldAccess expr field span ->
+      E.object
+        [ ("kind", E.string "EFieldAccess")
+        , ("expression", encodeExpr expr)
+        , ("field", E.string field)
+        , ("span", encodeSpan span)
+        ]
+
+
+-- =============================================================================
+-- Helper Encoders
+-- =============================================================================
+
+encodeRecordField : RecordField -> E.Value
+encodeRecordField rf =
+  E.object
+    [ ("name", E.string rf.name)
+    , ("value", encodeExpr rf.value)
+    , ("span", encodeSpan rf.span)
+    ]
+
+encodeCaseBranch : CaseBranch -> E.Value
+encodeCaseBranch cb =
+  E.object
+    [ ("pattern", encodePattern cb.pattern)
+    , ("body", encodeExpr cb.body)
+    , ("span", encodeSpan cb.span)
+    ]
+
+encodeValueDecl : ValueDeclaration -> E.Value
+encodeValueDecl vd =
+  E.object
+    [ ("name", E.string vd.name)
+    , ("args", E.list encodePattern vd.args)
+    , ("body", encodeExpr vd.body)
+    , ("span", encodeSpan vd.span)
+    ]
+
+encodeConstraint : Constraint -> E.Value
+encodeConstraint c =
+  E.object
+    [ ("protocolName", E.string c.protocolName)
+    , ("typeArgs", E.list encodeTypeExpr c.typeArgs)
+    , ("span", encodeSpan c.span)
+    ]
+
+encodeRecordFieldType : RecordFieldType -> E.Value
+encodeRecordFieldType rft =
+  E.object
+    [ ("name", E.string rft.name)
+    , ("fieldType", encodeTypeExpr rft.fieldType)
+    , ("span", encodeSpan rft.span)
+    ]
+
+encodeConstructor : ConstructorVariant -> E.Value
+encodeConstructor cv =
+  E.object
+    [ ("name", E.string cv.name)
+    , ("args", E.list encodeTypeExpr cv.args)
+    , ("span", encodeSpan cv.span)
+    ]
+
+encodeProtocolMethod : ProtocolMethod -> E.Value
+encodeProtocolMethod pm =
+  E.object
+    [ ("name", E.string pm.name)
+    , ("methodType", encodeTypeExpr pm.methodType)
+    , ("hasDefault", E.bool pm.hasDefault)
+    , ("hasType", E.bool pm.hasType)
+    , ("span", encodeSpan pm.span)
+    ]
+
+encodeMethodImpl : MethodImplementation -> E.Value
+encodeMethodImpl mi =
+  E.object
+    [ ("name", E.string mi.name)
+    , ("args", E.list encodePattern mi.implArgs)
+    , ("implementation", encodeExpr mi.implementation)
+    , ("span", encodeSpan mi.span)
+    ]

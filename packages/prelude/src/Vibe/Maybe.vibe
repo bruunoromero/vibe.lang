@@ -1,6 +1,10 @@
 module Vibe.Maybe exposing
     ( Maybe(..)
     , withDefault
+    , map
+    , andThen
+    , or
+    , toList
     , isJust
     , isNothing 
     , fromResult
@@ -57,3 +61,27 @@ _fromNullable : (a -> Maybe a) -> Maybe a -> Nullable a -> Maybe a
 fromNullable : Nullable a -> Maybe a
 fromNullable nullableValue =
     _fromNullable Just Nothing nullableValue
+
+map : (a -> b) -> Maybe a -> Maybe b
+map fn maybeValue =
+    case maybeValue of
+        Just value -> Just (fn value)
+        Nothing -> Nothing
+
+andThen : (a -> Maybe b) -> Maybe a -> Maybe b
+andThen fn maybeValue =
+    case maybeValue of
+        Just value -> fn value
+        Nothing -> Nothing
+
+or : Maybe a -> Maybe a -> Maybe a
+or fallback primary =
+    case primary of
+        Just _ -> primary
+        Nothing -> fallback
+
+toList : Maybe a -> List a
+toList maybeValue =
+    case maybeValue of
+        Just value -> [value]
+        Nothing -> []

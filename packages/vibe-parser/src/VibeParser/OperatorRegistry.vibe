@@ -1,0 +1,45 @@
+module VibeParser.OperatorRegistry exposing
+  ( OperatorRegistry
+  , emptyRegistry
+  , builtinRegistry
+  , getOperatorInfo
+  , mergeRegistries
+  , insertOperator
+  , defaultOperatorInfo
+  )
+
+import Vibe exposing (..)
+import Vibe.Dict as Dict
+import Vibe.Maybe as Maybe
+import VibeParser.Types exposing (..)
+
+
+type alias OperatorRegistry = Dict.Dict String OperatorInfo
+
+emptyRegistry : OperatorRegistry
+emptyRegistry = Dict.empty
+
+defaultOperatorInfo : OperatorInfo
+defaultOperatorInfo =
+  { precedence = 9
+  , associativity = AssocLeft
+  }
+
+builtinRegistry : OperatorRegistry
+builtinRegistry =
+  Dict.empty
+    |> Dict.insert "&&" { precedence = 3, associativity = AssocRight }
+    |> Dict.insert "||" { precedence = 2, associativity = AssocRight }
+
+getOperatorInfo : String -> OperatorRegistry -> OperatorInfo
+getOperatorInfo op registry =
+  case Dict.get op registry of
+    Just info -> info
+    Nothing -> defaultOperatorInfo
+
+insertOperator : String -> OperatorInfo -> OperatorRegistry -> OperatorRegistry
+insertOperator = Dict.insert
+
+mergeRegistries : OperatorRegistry -> OperatorRegistry -> OperatorRegistry
+mergeRegistries base override =
+  Dict.union override base

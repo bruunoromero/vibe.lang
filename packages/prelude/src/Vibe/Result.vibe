@@ -1,6 +1,9 @@
 module Vibe.Result exposing
     ( Result(..)
     , map
+    , andThen
+    , mapError
+    , withDefault
     , isOk
     , isErr
     )
@@ -39,3 +42,21 @@ map f result =
     case result of
         Ok value -> Ok (f value)
         Err error -> Err error
+
+andThen : (a -> Result x b) -> Result x a -> Result x b
+andThen fn result =
+    case result of
+        Ok value -> fn value
+        Err error -> Err error
+
+mapError : (x -> y) -> Result x a -> Result y a
+mapError fn result =
+    case result of
+        Ok value -> Ok value
+        Err error -> Err (fn error)
+
+withDefault : a -> Result x a -> a
+withDefault fallback result =
+    case result of
+        Ok value -> value
+        Err _ -> fallback

@@ -88,7 +88,9 @@ export type IRExpr =
   | IRRecordUpdate
   | IRFieldAccess
   | IRConstructor
-  | IRUnary;
+  | IRUnary
+  | IRSelfLoop
+  | IRLoopContinue;
 
 /** Variable reference */
 export type IRVar = {
@@ -254,6 +256,29 @@ export type IRUnary = {
   kind: "IRUnary";
   operator: string;
   operand: IRExpr;
+  span: Span;
+};
+
+/**
+ * Self-tail-call loop. Wraps the body of a function whose self-calls in
+ * tail position have been replaced with IRLoopContinue.
+ * Codegen emits this as a `while (true) { ... }` block.
+ */
+export type IRSelfLoop = {
+  kind: "IRSelfLoop";
+  paramNames: string[];
+  body: IRExpr;
+  span: Span;
+};
+
+/**
+ * Tail-call continuation inside an IRSelfLoop.
+ * Rebinds the loop parameters and jumps back to the top.
+ * Only valid inside an IRSelfLoop body.
+ */
+export type IRLoopContinue = {
+  kind: "IRLoopContinue";
+  args: IRExpr[];
   span: Span;
 };
 

@@ -1,0 +1,2504 @@
+module VibeParser.Parser exposing
+  ( parseTokens
+  )
+
+import Vibe exposing (..)
+import Vibe.List as List
+import Vibe.String as String
+import Vibe.Maybe as Maybe
+import Vibe.Int as Int
+import Vibe.Dict as Dict
+import VibeLexer.Types as T
+import VibeParser.Types exposing (..)
+import VibeParser.OperatorRegistry as OpReg
+
+
+-- =============================================================================
+-- Parser State
+-- =============================================================================
+
+type ParserState =
+  { tokens : List T.Token
+  , index : Int
+  , registry : OpReg.OperatorRegistry
+  }
+
+
+initState : List T.Token -> OpReg.OperatorRegistry -> ParserState
+initState tokens registry =
+  { tokens = tokens, index = 0, registry = registry }
+
+
+-- =============================================================================
+-- Result Helpers
+-- =============================================================================
+
+type alias ParseResult a = Result ParseError (a, ParserState)
+
+makeError : String -> Span -> ParseError
+makeError msg sp = { message = msg, span = sp }
+
+
+-- =============================================================================
+-- Token Stream Accessors
+-- =============================================================================
+
+eofToken : T.Token
+eofToken =
+  { kind = T.Eof
+  , lexeme = ""
+  , span = { start = { offset = 0, line = 0, column = 0 }
+           , end = { offset = 0, line = 0, column = 0 }
+           }
+  }
+
+nthToken : Int -> List T.Token -> T.Token
+nthToken n tokens =
+  case List.nth n tokens of
+    Just tok -> tok
+    Nothing ->
+      case List.last tokens of
+        Just tok -> tok
+        Nothing -> eofToken
+
+current : ParserState -> T.Token
+current state = nthToken state.index state.tokens
+
+previous : ParserState -> T.Token
+previous state = nthToken (state.index - 1) state.tokens
+
+advance : ParserState -> ParserState
+advance state = { state | index = state.index + 1 }
+
+peekAhead : Int -> ParserState -> Maybe T.Token
+peekAhead offset state = List.nth (state.index + offset) state.tokens
+
+isAtEnd : ParserState -> Bool
+isAtEnd state = (current state).kind == T.Eof
+
+
+-- =============================================================================
+-- Token Matching (return Maybe ParserState)
+-- =============================================================================
+
+peekKind : T.TokenKind -> ParserState -> Bool
+peekKind kind state = (current state).kind == kind
+
+peekKeyword : String -> ParserState -> Bool
+peekKeyword kw state =
+  let tok = current state
+  in tok.kind == T.Keyword && tok.lexeme == kw
+
+peekOperator : String -> ParserState -> Bool
+peekOperator op state =
+  let tok = current state
+  in tok.kind == T.Operator && tok.lexeme == op
+
+matchKind : T.TokenKind -> ParserState -> Maybe ParserState
+matchKind kind state =
+  case (current state).kind == kind of
+    True -> Just (advance state)
+    False -> Nothing
+
+matchKeyword : String -> ParserState -> Maybe ParserState
+matchKeyword kw state =
+  let tok = current state
+  in case tok.kind == T.Keyword && tok.lexeme == kw of
+    True -> Just (advance state)
+    False -> Nothing
+
+matchOperator : String -> ParserState -> Maybe ParserState
+matchOperator op state =
+  let tok = current state
+  in case tok.kind == T.Operator && tok.lexeme == op of
+    True -> Just (advance state)
+    False -> Nothing
+
+matchBlockSep : ParserState -> Maybe ParserState
+matchBlockSep state = matchKind T.BlockSep state
+
+
+-- =============================================================================
+-- Expect Helpers
+-- =============================================================================
+
+expect : T.TokenKind -> String -> ParserState -> ParseResult T.Token
+expect kind label state =
+  let tok = current state
+  in case tok.kind == kind of
+    True -> Ok (tok, advance state)
+    False ->
+      Err (makeError ("Expected " ++ label ++ " but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+
+expectKeyword : String -> ParserState -> ParseResult T.Token
+expectKeyword kw state =
+  let tok = current state
+  in case tok.kind == T.Keyword && tok.lexeme == kw of
+    True -> Ok (tok, advance state)
+    False ->
+      Err (makeError ("Expected keyword '" ++ kw ++ "' but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+
+expectOperator : String -> ParserState -> ParseResult T.Token
+expectOperator op state =
+  let tok = current state
+  in case tok.kind == T.Operator && tok.lexeme == op of
+    True -> Ok (tok, advance state)
+    False ->
+      Err (makeError ("Expected operator '" ++ op ++ "' but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+
+expectBlockStart : ParserState -> ParseResult T.Token
+expectBlockStart state = expect T.BlockStart "indented block" state
+
+expectBlockEnd : ParserState -> ParseResult T.Token
+expectBlockEnd state = expect T.BlockEnd "end of indented block" state
+
+tokenKindStr : T.TokenKind -> String
+tokenKindStr kind =
+  case kind of
+    T.LowerIdentifier -> "LowerIdentifier"
+    T.UpperIdentifier -> "UpperIdentifier"
+    T.Keyword -> "Keyword"
+    T.NumberToken -> "Number"
+    T.StringToken -> "String"
+    T.CharToken -> "Char"
+    T.Operator -> "Operator"
+    T.Range -> "Range"
+    T.Backslash -> "Backslash"
+    T.LParen -> "LParen"
+    T.RParen -> "RParen"
+    T.LBrace -> "LBrace"
+    T.RBrace -> "RBrace"
+    T.LBracket -> "LBracket"
+    T.RBracket -> "RBracket"
+    T.Comma -> "Comma"
+    T.Dot -> "Dot"
+    T.Colon -> "Colon"
+    T.Equals -> "Equals"
+    T.Pipe -> "Pipe"
+    T.Newline -> "Newline"
+    T.BlockStart -> "BlockStart"
+    T.BlockSep -> "BlockSep"
+    T.BlockEnd -> "BlockEnd"
+    T.Eof -> "Eof"
+
+
+-- =============================================================================
+-- Layout Helpers
+-- =============================================================================
+
+onSameLine : Span -> T.Token -> Bool
+onSameLine span tok =
+  span.end.line == tok.span.start.line
+
+continuesLayout : Int -> Position -> T.Token -> Bool
+continuesLayout baseIndent lastEnd next =
+  case next.span.start.line == lastEnd.line of
+    True -> True
+    False -> next.span.start.column >= baseIndent
+
+isBlockToken : T.TokenKind -> Bool
+isBlockToken kind =
+  case kind of
+    T.BlockStart -> True
+    T.BlockSep -> True
+    T.BlockEnd -> True
+    _ -> False
+
+exposingSpan : Exposing -> Span
+exposingSpan exp =
+  case exp of
+    ExposeAll span -> span
+    ExposeExplicit _ span -> span
+
+typeSpan : TypeExpr -> Span
+typeSpan t =
+  case t of
+    TRef _ _ sp -> sp
+    TFunction _ _ sp -> sp
+    TTuple _ sp -> sp
+    TRecord _ sp -> sp
+    TQualified _ _ sp -> sp
+
+exprSpan : Expr -> Span
+exprSpan e =
+  case e of
+    EVar _ _ sp -> sp
+    EInt _ sp -> sp
+    EFloat _ sp -> sp
+    EString _ sp -> sp
+    EChar _ sp -> sp
+    ELambda _ _ sp -> sp
+    EApply _ _ sp -> sp
+    EIf _ _ _ sp -> sp
+    ELetIn _ _ sp -> sp
+    ECase _ _ sp -> sp
+    EInfix _ _ _ sp -> sp
+    EUnary _ _ sp -> sp
+    EParen _ sp -> sp
+    ETuple _ sp -> sp
+    EUnit sp -> sp
+    EList _ sp -> sp
+    EListRange _ _ sp -> sp
+    ERecord _ sp -> sp
+    ERecordUpdate _ _ sp -> sp
+    EFieldAccess _ _ sp -> sp
+
+patSpan : Pattern -> Span
+patSpan p =
+  case p of
+    PVar _ sp -> sp
+    PWildcard sp -> sp
+    PConstructor _ _ sp -> sp
+    PTuple _ sp -> sp
+    PList _ sp -> sp
+    PCons _ _ sp -> sp
+    PRecord _ sp -> sp
+    PInt _ sp -> sp
+    PFloat _ sp -> sp
+    PString _ sp -> sp
+    PChar _ sp -> sp
+
+
+-- =============================================================================
+-- Predicate Helpers
+-- =============================================================================
+
+isExpressionStart : T.Token -> Bool
+isExpressionStart tok =
+  case isBlockToken tok.kind of
+    True -> False
+    False ->
+      case tok.kind of
+        T.LowerIdentifier -> True
+        T.UpperIdentifier -> True
+        T.NumberToken -> True
+        T.StringToken -> True
+        T.CharToken -> True
+        T.LParen -> True
+        T.LBracket -> True
+        T.LBrace -> True
+        T.Backslash -> True
+        T.Keyword ->
+          case tok.lexeme of
+            "if" -> True
+            "let" -> True
+            "case" -> True
+            _ -> False
+        _ -> False
+
+isTypeStart : T.Token -> Bool
+isTypeStart tok =
+  case isBlockToken tok.kind of
+    True -> False
+    False ->
+      case tok.kind of
+        T.LowerIdentifier -> True
+        T.UpperIdentifier -> True
+        T.LParen -> True
+        T.LBrace -> True
+        _ -> False
+
+isPatternStart : T.Token -> Bool
+isPatternStart tok =
+  case isBlockToken tok.kind of
+    True -> False
+    False ->
+      case tok.kind of
+        T.LowerIdentifier -> True
+        T.UpperIdentifier -> True
+        T.LParen -> True
+        T.LBracket -> True
+        T.NumberToken -> True
+        T.StringToken -> True
+        T.CharToken -> True
+        _ -> False
+
+isFunctionParamPatternStart : T.Token -> Bool
+isFunctionParamPatternStart tok =
+  case isBlockToken tok.kind of
+    True -> False
+    False ->
+      case tok.kind of
+        T.LowerIdentifier -> True
+        T.UpperIdentifier -> True
+        T.LParen -> True
+        T.LBrace -> True
+        _ -> False
+
+
+-- =============================================================================
+-- Lookahead Helpers
+-- =============================================================================
+
+peekAheadSkipLayout : Int -> ParserState -> Maybe T.Token
+peekAheadSkipLayout offset state =
+  peekAheadSkipLayoutLoop state.index offset state.tokens
+
+peekAheadSkipLayoutLoop : Int -> Int -> List T.Token -> Maybe T.Token
+peekAheadSkipLayoutLoop j remaining tokens =
+  case List.nth j tokens of
+    Nothing -> Nothing
+    Just tok ->
+      case isBlockToken tok.kind of
+        True -> peekAheadSkipLayoutLoop (j + 1) remaining tokens
+        False ->
+          case remaining == 0 of
+            True -> Just tok
+            False -> peekAheadSkipLayoutLoop (j + 1) (remaining - 1) tokens
+
+peekConstraintContext : ParserState -> Bool
+peekConstraintContext state =
+  peekConstraintContextLoop 0 0 state
+
+peekConstraintContextLoop : Int -> Int -> ParserState -> Bool
+peekConstraintContextLoop i limit state =
+  case limit > 20 of
+    True -> False
+    False ->
+      case peekAheadSkipLayout i state of
+        Nothing -> False
+        Just tok ->
+          case tok.kind == T.Operator && tok.lexeme == "=>" of
+            True -> True
+            False ->
+              case tok.kind == T.Keyword && tok.lexeme == "where" of
+                True -> False
+                False -> peekConstraintContextLoop (i + 1) (limit + 1) state
+
+peekConstraintContextInProtocol : ParserState -> Bool
+peekConstraintContextInProtocol state =
+  peekConstraintCtxProtoLoop 0 0 0 state
+
+peekConstraintCtxProtoLoop : Int -> Int -> Int -> ParserState -> Bool
+peekConstraintCtxProtoLoop i parenDepth limit state =
+  case limit > 30 of
+    True -> False
+    False ->
+      case peekAheadSkipLayout i state of
+        Nothing -> False
+        Just tok ->
+          let
+            newDepth =
+              case tok.kind of
+                T.LParen -> parenDepth + 1
+                T.RParen -> parenDepth - 1
+                _ -> parenDepth
+          in
+          case newDepth == 0 && tok.kind == T.Operator && tok.lexeme == "=>" of
+            True -> True
+            False ->
+              case tok.kind == T.Keyword && tok.lexeme == "where" of
+                True -> False
+                False -> peekConstraintCtxProtoLoop (i + 1) newDepth (limit + 1) state
+
+peekConstraintContextInType : ParserState -> Bool
+peekConstraintContextInType state =
+  let startLine = (current state).span.start.line
+  in peekConstraintCtxTypeLoop 0 0 0 startLine state
+
+peekConstraintCtxTypeLoop : Int -> Int -> Int -> Int -> ParserState -> Bool
+peekConstraintCtxTypeLoop i parenDepth limit startLine state =
+  case limit > 30 of
+    True -> False
+    False ->
+      case peekAheadSkipLayout i state of
+        Nothing -> False
+        Just tok ->
+          case tok.span.start.line /= startLine of
+            True -> False
+            False ->
+              let
+                newDepth =
+                  case tok.kind of
+                    T.LParen -> parenDepth + 1
+                    T.RParen -> parenDepth - 1
+                    _ -> parenDepth
+              in
+              case newDepth == 0 && tok.kind == T.Operator && tok.lexeme == "=>" of
+                True -> True
+                False ->
+                  case newDepth == 0 && (tok.kind == T.Equals || tok.kind == T.Keyword) of
+                    True -> False
+                    False -> peekConstraintCtxTypeLoop (i + 1) newDepth (limit + 1) startLine state
+
+peekConstraintContextInTypeDecl : ParserState -> Bool
+peekConstraintContextInTypeDecl state =
+  peekConstraintCtxTypeDeclLoop 0 0 0 state
+
+peekConstraintCtxTypeDeclLoop : Int -> Int -> Int -> ParserState -> Bool
+peekConstraintCtxTypeDeclLoop i parenDepth limit state =
+  case limit > 50 of
+    True -> False
+    False ->
+      case peekAheadSkipLayout i state of
+        Nothing -> False
+        Just tok ->
+          let
+            newDepth =
+              case tok.kind of
+                T.LParen -> parenDepth + 1
+                T.RParen -> parenDepth - 1
+                _ -> parenDepth
+          in
+          case newDepth == 0 && tok.kind == T.Operator && tok.lexeme == "=>" of
+            True -> True
+            False ->
+              case tok.kind == T.Equals && newDepth == 0 of
+                True -> False
+                False ->
+                  case tok.kind == T.Keyword && newDepth == 0 of
+                    True ->
+                      case tok.lexeme of
+                        "implement" -> False
+                        "protocol" -> False
+                        "type" -> False
+                        "module" -> False
+                        "import" -> False
+                        "infix" -> False
+                        "infixl" -> False
+                        "infixr" -> False
+                        _ -> peekConstraintCtxTypeDeclLoop (i + 1) newDepth (limit + 1) state
+                    False -> peekConstraintCtxTypeDeclLoop (i + 1) newDepth (limit + 1) state
+
+peekDecorator : ParserState -> Bool
+peekDecorator state =
+  let cur = current state
+  in case cur.kind == T.Operator && cur.lexeme == "@" of
+    True ->
+      case peekAhead 1 state of
+        Nothing -> False
+        Just next -> next.kind == T.LowerIdentifier || next.kind == T.Keyword
+    False -> False
+
+intToStr : Int -> String
+intToStr n = toString n
+
+stringToInt : String -> Int
+stringToInt s =
+  case String.toInt s of
+    Just n -> n
+    Nothing -> 0
+
+
+-- =============================================================================
+-- Entry Point
+-- =============================================================================
+
+parseTokens : List T.Token -> OpReg.OperatorRegistry -> Result ParseError Program
+parseTokens tokens registry =
+  let state = initState tokens registry
+  in case parseProgram state of
+    Err e -> Err e
+    Ok (prog, _) -> Ok prog
+
+
+-- =============================================================================
+-- Program
+-- =============================================================================
+
+parseProgram : ParserState -> ParseResult Program
+parseProgram state =
+  let tok = current state
+  in case tok.span.start.column == 1 of
+    False -> Err (makeError "module declaration must start at column 1" tok.span)
+    True ->
+      case parseModuleDeclaration state of
+        Err e -> Err e
+        Ok (modDecl, s1) ->
+          case parseImports s1 of
+            Err e -> Err e
+            Ok (imports, s2) ->
+              case parseDeclarations s2 of
+                Err e -> Err e
+                Ok (decls, s3) ->
+                  Ok ({ moduleDecl = modDecl, imports = imports, declarations = decls }, s3)
+
+
+-- =============================================================================
+-- Module Declaration
+-- =============================================================================
+
+parseModuleDeclaration : ParserState -> ParseResult ModuleDeclaration
+parseModuleDeclaration state =
+  case expectKeyword "module" state of
+    Err e -> Err e
+    Ok (modTok, s1) ->
+      case parseModuleName s1 of
+        Err e -> Err e
+        Ok (nameInfo, s2) ->
+          case peekKeyword "exposing" s2 of
+            True ->
+              case expectKeyword "exposing" s2 of
+                Err e -> Err e
+                Ok (_, s3) ->
+                  case parseExposing s3 of
+                    Err e -> Err e
+                    Ok (exp, s4) ->
+                      Ok ({ name = nameInfo.name
+                          , exposingClause = exp
+                          , hasExposing = True
+                          , span = { start = modTok.span.start, end = (exposingSpan exp).end }
+                          }, s4)
+            False ->
+              Ok ({ name = nameInfo.name
+                  , exposingClause = ExposeAll { start = nameInfo.nameEnd, end = nameInfo.nameEnd }
+                  , hasExposing = False
+                  , span = { start = modTok.span.start, end = nameInfo.nameEnd }
+                  }, s2)
+
+type ModuleNameResult = { name : String, nameEnd : Position }
+
+parseModuleName : ParserState -> ParseResult ModuleNameResult
+parseModuleName state =
+  case expect T.UpperIdentifier "module name" state of
+    Err e -> Err e
+    Ok (first, s1) -> parseModuleNameParts first.lexeme first.span.end s1
+
+parseModuleNameParts : String -> Position -> ParserState -> ParseResult ModuleNameResult
+parseModuleNameParts name end state =
+  case peekKind T.Dot state of
+    False -> Ok ({ name = name, nameEnd = end }, state)
+    True ->
+      let s1 = advance state
+      in case expect T.UpperIdentifier "module name segment" s1 of
+        Err e -> Err e
+        Ok (next, s2) -> parseModuleNameParts (name ++ "." ++ next.lexeme) next.span.end s2
+
+
+-- =============================================================================
+-- Imports
+-- =============================================================================
+
+parseImports : ParserState -> ParseResult (List ImportDeclaration)
+parseImports state =
+  case peekKeyword "import" state of
+    False -> Ok ([], state)
+    True ->
+      let tok = current state
+      in case tok.span.start.column == 1 of
+        False -> Err (makeError "import declaration must start at column 1" tok.span)
+        True ->
+          case parseImport state of
+            Err e -> Err e
+            Ok (imp, s1) ->
+              case parseImports s1 of
+                Err e -> Err e
+                Ok (rest, s2) -> Ok (imp :: rest, s2)
+
+parseImport : ParserState -> ParseResult ImportDeclaration
+parseImport state =
+  case expectKeyword "import" state of
+    Err e -> Err e
+    Ok (importTok, s1) ->
+      case parseModuleName s1 of
+        Err e -> Err e
+        Ok (nameInfo, s2) ->
+          case parseImportAlias s2 of
+            Err e -> Err e
+            Ok (aliasResult, s3) ->
+              case parseImportExposing s3 of
+                Err e -> Err e
+                Ok (expResult, s4) ->
+                  let
+                    endPos =
+                      case expResult.hasExp of
+                        True -> (exposingSpan expResult.expClause).end
+                        False ->
+                          case aliasResult.hasAlias of
+                            True -> (previous s3).span.end
+                            False -> nameInfo.nameEnd
+                  in
+                  Ok ({ moduleName = nameInfo.name
+                      , aliasName = aliasResult.aliasName
+                      , exposingClause = expResult.expClause
+                      , hasAlias = aliasResult.hasAlias
+                      , hasExposing = expResult.hasExp
+                      , span = { start = importTok.span.start, end = endPos }
+                      }, s4)
+
+type AliasResult = { aliasName : String, hasAlias : Bool }
+
+parseImportAlias : ParserState -> ParseResult AliasResult
+parseImportAlias state =
+  case peekKeyword "as" state of
+    False -> Ok ({ aliasName = "", hasAlias = False }, state)
+    True ->
+      case expectKeyword "as" state of
+        Err e -> Err e
+        Ok (_, s1) ->
+          case expect T.UpperIdentifier "import alias" s1 of
+            Err e -> Err e
+            Ok (aliasTok, s2) -> Ok ({ aliasName = aliasTok.lexeme, hasAlias = True }, s2)
+
+type ExpResult = { expClause : Exposing, hasExp : Bool }
+
+parseImportExposing : ParserState -> ParseResult ExpResult
+parseImportExposing state =
+  let dummySpan = { start = { offset = 0, line = 0, column = 0 }, end = { offset = 0, line = 0, column = 0 } }
+  in case peekKeyword "exposing" state of
+    False -> Ok ({ expClause = ExposeAll dummySpan, hasExp = False }, state)
+    True ->
+      case expectKeyword "exposing" state of
+        Err e -> Err e
+        Ok (_, s1) ->
+          case parseExposing s1 of
+            Err e -> Err e
+            Ok (exp, s2) -> Ok ({ expClause = exp, hasExp = True }, s2)
+
+
+-- =============================================================================
+-- Exposing
+-- =============================================================================
+
+parseExposing : ParserState -> ParseResult Exposing
+parseExposing state =
+  case expect T.LParen "exposing list start" state of
+    Err e -> Err e
+    Ok (openParen, s1) ->
+      let start = openParen.span.start
+      in case peekKind T.Range s1 of
+        True ->
+          let s2 = advance s1
+          in case expect T.RParen "close exposing (..)" s2 of
+            Err e -> Err e
+            Ok (closeParen, s3) -> Ok (ExposeAll { start = start, end = closeParen.span.end }, s3)
+        False ->
+          case parseExportSpecList s1 of
+            Err e -> Err e
+            Ok (specs, s2) ->
+              case expect T.RParen "close exposing list" s2 of
+                Err e -> Err e
+                Ok (closeParen, s3) -> Ok (ExposeExplicit specs { start = start, end = closeParen.span.end }, s3)
+
+parseExportSpecList : ParserState -> ParseResult (List ExportSpec)
+parseExportSpecList state =
+  case parseExportSpec state of
+    Err e -> Err e
+    Ok (spec, s1) ->
+      case peekKind T.Comma s1 of
+        False -> Ok ([spec], s1)
+        True ->
+          let s2 = advance s1
+          in case parseExportSpecList s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (spec :: rest, s3)
+
+parseExportSpec : ParserState -> ParseResult ExportSpec
+parseExportSpec state =
+  let tok = current state
+  in case tok.kind of
+    T.LParen ->
+      let s1 = advance state
+      in case expect T.Operator "operator in export" s1 of
+        Err e -> Err e
+        Ok (opTok, s2) ->
+          case expect T.RParen "closing paren for operator export" s2 of
+            Err e -> Err e
+            Ok (cp, s3) -> Ok (ExportOperator opTok.lexeme { start = tok.span.start, end = cp.span.end }, s3)
+    T.LowerIdentifier ->
+      let s1 = advance state
+      in Ok (ExportValue tok.lexeme tok.span, s1)
+    T.UpperIdentifier ->
+      let
+        nameTok = tok
+        s1 = advance state
+      in case peekKind T.LParen s1 of
+        False -> Ok (ExportValue nameTok.lexeme nameTok.span, s1)
+        True ->
+          let s2 = advance s1
+          in case peekKind T.Range s2 of
+            True ->
+              let s3 = advance s2
+              in case expect T.RParen "closing paren for type export" s3 of
+                Err e -> Err e
+                Ok (cp, s4) -> Ok (ExportTypeAll nameTok.lexeme { start = nameTok.span.start, end = cp.span.end }, s4)
+            False ->
+              case parseExportMembers s2 of
+                Err e -> Err e
+                Ok (members, s3) ->
+                  case expect T.RParen "closing paren for type export" s3 of
+                    Err e -> Err e
+                    Ok (cp, s4) -> Ok (ExportTypeSome nameTok.lexeme members { start = nameTok.span.start, end = cp.span.end }, s4)
+    _ -> Err (makeError ("Expected export specification, got " ++ tokenKindStr tok.kind) tok.span)
+
+parseExportMembers : ParserState -> ParseResult (List String)
+parseExportMembers state =
+  case parseExportMember state of
+    Err e -> Err e
+    Ok (name, s1) ->
+      case peekKind T.Comma s1 of
+        False -> Ok ([name], s1)
+        True ->
+          let s2 = advance s1
+          in case parseExportMembers s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (name :: rest, s3)
+
+parseExportMember : ParserState -> ParseResult String
+parseExportMember state =
+  let tok = current state
+  in case tok.kind of
+    T.LParen ->
+      let s1 = advance state
+      in case expect T.Operator "operator in member list" s1 of
+        Err e -> Err e
+        Ok (opTok, s2) ->
+          case expect T.RParen "closing paren for operator member" s2 of
+            Err e -> Err e
+            Ok (_, s3) -> Ok (opTok.lexeme, s3)
+    T.UpperIdentifier ->
+      let s1 = advance state
+      in Ok (tok.lexeme, s1)
+    T.LowerIdentifier ->
+      let s1 = advance state
+      in Ok (tok.lexeme, s1)
+    _ -> Err (makeError ("Expected member name in export list, got " ++ tokenKindStr tok.kind) tok.span)
+
+
+-- =============================================================================
+-- Declarations
+-- =============================================================================
+
+parseDeclarations : ParserState -> ParseResult (List Declaration)
+parseDeclarations state =
+  case isAtEnd state of
+    True -> Ok ([], state)
+    False ->
+      let tok = current state
+      in case tok.span.start.column == 1 of
+        False -> Err (makeError "top-level declaration must start at column 1" tok.span)
+        True ->
+          case parseDeclaration state of
+            Err e -> Err e
+            Ok (decl, s1) ->
+              case parseDeclarations s1 of
+                Err e -> Err e
+                Ok (rest, s2) -> Ok (decl :: rest, s2)
+
+parseDeclaration : ParserState -> ParseResult Declaration
+parseDeclaration state =
+  case peekDecorator state of
+    True -> parseDecoratedDeclaration state
+    False ->
+      case peekKeyword "type" state of
+        True -> parseTypeOrAliasDeclaration state
+        False ->
+          case peekKeyword "protocol" state of
+            True -> parseProtocolDeclaration state
+            False ->
+              case peekKeyword "implement" state of
+                True -> parseImplementationDeclaration state
+                False ->
+                  case peekKeyword "infix" state || peekKeyword "infixl" state || peekKeyword "infixr" state of
+                    True -> parseInfixDeclaration state
+                    False -> parseAnnotationOrValue state
+
+parseAnnotationOrValue : ParserState -> ParseResult Declaration
+parseAnnotationOrValue state =
+  case parseDeclarationName state of
+    Err e -> Err e
+    Ok (nameResult, s1) ->
+      case peekKind T.Colon s1 of
+        True ->
+          let s2 = advance s1
+          in case parseTypeExpression s2 of
+            Err e -> Err e
+            Ok (annotation, s3) ->
+              Ok (DTypeAnnotation { name = nameResult.declName
+                                  , annotation = annotation
+                                  , span = { start = nameResult.declSpan.start, end = (typeSpan annotation).end }
+                                  }, s3)
+        False ->
+          case parseMethodBody (Just nameResult.declSpan.start.column) s1 of
+            Err e -> Err e
+            Ok (result, s2) ->
+              Ok (DValue { name = nameResult.declName
+                         , args = result.mArgs
+                         , body = result.mBody
+                         , span = { start = nameResult.declSpan.start, end = (exprSpan result.mBody).end }
+                         }, s2)
+
+type DeclNameResult = { declName : String, declSpan : Span }
+
+parseDeclarationName : ParserState -> ParseResult DeclNameResult
+parseDeclarationName state =
+  let tok = current state
+  in case tok.kind of
+    T.LowerIdentifier ->
+      let s1 = advance state
+      in Ok ({ declName = tok.lexeme, declSpan = tok.span }, s1)
+    T.LParen ->
+      let s1 = advance state
+      in case expect T.Operator "operator name" s1 of
+        Err e -> Err e
+        Ok (opTok, s2) ->
+          case expect T.RParen "close operator name" s2 of
+            Err e -> Err e
+            Ok (cp, s3) -> Ok ({ declName = opTok.lexeme, declSpan = { start = tok.span.start, end = cp.span.end } }, s3)
+    _ -> Err (makeError ("Expected declaration name but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+
+type MethodBodyResult = { mArgs : List Pattern, mBody : Expr }
+
+parseMethodBody : Maybe Int -> ParserState -> ParseResult MethodBodyResult
+parseMethodBody declColumn state =
+  case parseFunctionParams state of
+    Err e -> Err e
+    Ok (args, s1) ->
+      case expect T.Equals "'=' after parameters" s1 of
+        Err e -> Err e
+        Ok (eqTok, s2) ->
+          case declColumn of
+            Nothing ->
+              case parseExpression Nothing s2 of
+                Err e -> Err e
+                Ok (body, s3) -> Ok ({ mArgs = args, mBody = body }, s3)
+            Just col ->
+              let bodyTok = current s2
+              in case bodyTok.span.start.line /= eqTok.span.start.line && bodyTok.span.start.column <= col of
+                True -> Err (makeError ("Function body must be indented past column " ++ intToStr col) bodyTok.span)
+                False ->
+                  case parseExpression Nothing s2 of
+                    Err e -> Err e
+                    Ok (body, s3) -> Ok ({ mArgs = args, mBody = body }, s3)
+
+parseFunctionParams : ParserState -> ParseResult (List Pattern)
+parseFunctionParams state =
+  case isFunctionParamPatternStart (current state) of
+    False -> Ok ([], state)
+    True ->
+      case parseFunctionParamPattern state of
+        Err e -> Err e
+        Ok (pat, s1) ->
+          case parseFunctionParams s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (pat :: rest, s2)
+
+
+-- =============================================================================
+-- Decorated Declarations (@external, @get, @call, etc.)
+-- =============================================================================
+
+parseDecoratedDeclaration : ParserState -> ParseResult Declaration
+parseDecoratedDeclaration state =
+  case expectOperator "@" state of
+    Err e -> Err e
+    Ok (atTok, s1) ->
+      let decoratorTok = current s1
+      in case decoratorTok.kind == T.LowerIdentifier || decoratorTok.kind == T.Keyword of
+        False -> Err (makeError ("Expected decorator name but found " ++ tokenKindStr decoratorTok.kind) decoratorTok.span)
+        True ->
+          let
+            decorator = decoratorTok.lexeme
+            s2 = advance s1
+          in
+          case parseDecoratorArgs s2 of
+            Err e -> Err e
+            Ok (args, s3) ->
+              let s4 = skipNewlines s3
+              in case parseDeclarationName s4 of
+                Err e -> Err e
+                Ok (nameResult, s5) ->
+                  case expect T.Colon "type annotation" s5 of
+                    Err e -> Err e
+                    Ok (_, s6) ->
+                      case parseTypeExpression s6 of
+                        Err e -> Err e
+                        Ok (annotation, s7) ->
+                          Ok (DDecorated decorator args nameResult.declName annotation
+                                { start = atTok.span.start, end = (typeSpan annotation).end }, s7)
+
+parseDecoratorArgs : ParserState -> ParseResult (List String)
+parseDecoratorArgs state =
+  case (current state).kind == T.StringToken of
+    False -> Ok ([], state)
+    True ->
+      let
+        tok = current state
+        s1 = advance state
+        unquoted = unquote tok.lexeme
+      in
+      case parseDecoratorArgs s1 of
+        Err e -> Err e
+        Ok (rest, s2) -> Ok (unquoted :: rest, s2)
+
+unquote : String -> String
+unquote lexeme =
+  case String.length lexeme >= 2 && String.startsWith "\"" lexeme && String.endsWith "\"" lexeme of
+    True -> String.slice 1 (String.length lexeme - 1) lexeme
+    False -> lexeme
+
+skipNewlines : ParserState -> ParserState
+skipNewlines state =
+  case (current state).kind == T.Newline of
+    True -> skipNewlines (advance state)
+    False -> state
+
+
+-- =============================================================================
+-- Type / Alias / Opaque Declarations
+-- =============================================================================
+
+parseTypeOrAliasDeclaration : ParserState -> ParseResult Declaration
+parseTypeOrAliasDeclaration state =
+  case expectKeyword "type" state of
+    Err e -> Err e
+    Ok (typeTok, s1) ->
+      case peekKeyword "alias" s1 of
+        True -> parseTypeAliasDecl typeTok s1
+        False -> parseTypeOrOpaqueDecl typeTok s1
+
+parseTypeAliasDecl : T.Token -> ParserState -> ParseResult Declaration
+parseTypeAliasDecl typeTok state =
+  case expectKeyword "alias" state of
+    Err e -> Err e
+    Ok (_, s1) ->
+      case expect T.UpperIdentifier "type alias name" s1 of
+        Err e -> Err e
+        Ok (nameTok, s2) ->
+          case parseTypeParams s2 of
+            Err e -> Err e
+            Ok (params, s3) ->
+              case expect T.Equals "type alias definition" s3 of
+                Err e -> Err e
+                Ok (_, s4) ->
+                  case parseTypeExpression s4 of
+                    Err e -> Err e
+                    Ok (value, s5) ->
+                      Ok (DTypeAlias nameTok.lexeme params value
+                            { start = typeTok.span.start, end = (typeSpan value).end }, s5)
+
+parseTypeOrOpaqueDecl : T.Token -> ParserState -> ParseResult Declaration
+parseTypeOrOpaqueDecl typeTok state =
+  let
+    typeColumn = typeTok.span.start.column
+    typeLine = typeTok.span.start.line
+  in
+  case parseOptionalConstraintsForTypeDecl state of
+    Err e -> Err e
+    Ok (constraints, s1) ->
+      case expect T.UpperIdentifier "type name" s1 of
+        Err e -> Err e
+        Ok (nameTok, s2) ->
+          case parseTypeParamsWithLayout typeLine typeColumn s2 of
+            Err e -> Err e
+            Ok (params, s3) ->
+              case peekKind T.Equals s3 of
+                False ->
+                  case List.isEmpty constraints of
+                    False -> Err (makeError "Opaque types cannot have constraints" { start = typeTok.span.start, end = (previous s3).span.end })
+                    True ->
+                      let
+                        endPos =
+                          case List.isEmpty params of
+                            True -> nameTok.span.end
+                            False -> (previous s3).span.end
+                      in Ok (DOpaqueType nameTok.lexeme params { start = typeTok.span.start, end = endPos }, s3)
+                True ->
+                  let
+                    eqTok = current s3
+                    s4 = advance s3
+                    equalsCol = eqTok.span.start.column
+                    equalsLine = eqTok.span.start.line
+                  in
+                  case peekKind T.LBrace s4 of
+                    True ->
+                      case parseRecordTypeFields s4 of
+                        Err e -> Err e
+                        Ok (fields, s5) ->
+                          Ok (DRecordType nameTok.lexeme params constraints fields
+                                { start = typeTok.span.start, end = (previous s5).span.end }, s5)
+                    False ->
+                      case parseConstructorVariants equalsCol equalsLine s4 of
+                        Err e -> Err e
+                        Ok (ctors, s5) ->
+                          let
+                            endPos =
+                              case List.last ctors of
+                                Just c -> c.span.end
+                                Nothing -> eqTok.span.end
+                          in
+                          Ok (DType nameTok.lexeme params constraints ctors
+                                { start = typeTok.span.start, end = endPos }, s5)
+
+parseOptionalConstraintsForTypeDecl : ParserState -> ParseResult (List Constraint)
+parseOptionalConstraintsForTypeDecl state =
+  case peekConstraintContextInTypeDecl state of
+    False -> Ok ([], state)
+    True -> parseConstraints state
+
+parseConstraints : ParserState -> ParseResult (List Constraint)
+parseConstraints state =
+  case peekKind T.LParen state of
+    True ->
+      let s1 = advance state
+      in case parseConstraintList s1 of
+        Err e -> Err e
+        Ok (constraints, s2) ->
+          case expect T.RParen "close constraint list" s2 of
+            Err e -> Err e
+            Ok (_, s3) ->
+              case expectOperator "=>" s3 of
+                Err e -> Err e
+                Ok (_, s4) -> Ok (constraints, s4)
+    False ->
+      case parseConstraint state of
+        Err e -> Err e
+        Ok (c, s1) ->
+          case expectOperator "=>" s1 of
+            Err e -> Err e
+            Ok (_, s2) -> Ok ([c], s2)
+
+parseConstraintList : ParserState -> ParseResult (List Constraint)
+parseConstraintList state =
+  case parseConstraint state of
+    Err e -> Err e
+    Ok (c, s1) ->
+      case peekKind T.Comma s1 of
+        False -> Ok ([c], s1)
+        True ->
+          let s2 = advance s1
+          in case parseConstraintList s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (c :: rest, s3)
+
+parseConstraint : ParserState -> ParseResult Constraint
+parseConstraint state =
+  let start = (current state).span.start
+  in case expect T.UpperIdentifier "protocol name in constraint" state of
+    Err e -> Err e
+    Ok (protocolTok, s1) ->
+      case parseConstraintTypeArgs s1 of
+        Err e -> Err e
+        Ok (typeArgs, s2) ->
+          case List.isEmpty typeArgs of
+            True -> Err (makeError "Expected at least one type argument in constraint" (current s2).span)
+            False ->
+              let
+                endPos =
+                  case List.last typeArgs of
+                    Just t -> (typeSpan t).end
+                    Nothing -> protocolTok.span.end
+              in Ok ({ protocolName = protocolTok.lexeme, typeArgs = typeArgs, span = { start = start, end = endPos } }, s2)
+
+parseConstraintTypeArgs : ParserState -> ParseResult (List TypeExpr)
+parseConstraintTypeArgs state =
+  case isTypeStart (current state) of
+    False -> Ok ([], state)
+    True ->
+      case parseTypeTerm state of
+        Err e -> Err e
+        Ok (t, s1) ->
+          case parseConstraintTypeArgs s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (t :: rest, s2)
+
+parseTypeParams : ParserState -> ParseResult (List String)
+parseTypeParams state =
+  case peekKind T.LowerIdentifier state of
+    False -> Ok ([], state)
+    True ->
+      let
+        tok = current state
+        s1 = advance state
+      in case parseTypeParams s1 of
+        Err e -> Err e
+        Ok (rest, s2) -> Ok (tok.lexeme :: rest, s2)
+
+parseTypeParamsWithLayout : Int -> Int -> ParserState -> ParseResult (List String)
+parseTypeParamsWithLayout typeLine typeCol state =
+  case peekKind T.LowerIdentifier state of
+    False -> Ok ([], state)
+    True ->
+      let tok = current state
+      in case tok.span.start.line /= typeLine && tok.span.start.column <= typeCol of
+        True -> Ok ([], state)
+        False ->
+          let s1 = advance state
+          in case parseTypeParamsWithLayout typeLine typeCol s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (tok.lexeme :: rest, s2)
+
+
+-- =============================================================================
+-- Constructor Variants
+-- =============================================================================
+
+parseConstructorVariants : Int -> Int -> ParserState -> ParseResult (List ConstructorVariant)
+parseConstructorVariants equalsCol equalsLine state =
+  case parseConstructorVariant state of
+    Err e -> Err e
+    Ok (first, s1) ->
+      case parseMoreConstructors equalsCol equalsLine s1 of
+        Err e -> Err e
+        Ok (rest, s2) -> Ok (first :: rest, s2)
+
+parseMoreConstructors : Int -> Int -> ParserState -> ParseResult (List ConstructorVariant)
+parseMoreConstructors equalsCol equalsLine state =
+  case peekKind T.Pipe state of
+    False -> Ok ([], state)
+    True ->
+      let pipeTok = current state
+      in case pipeTok.span.start.line /= equalsLine && pipeTok.span.start.column /= equalsCol of
+        True -> Err (makeError "Constructor variant '|' must align with '='" pipeTok.span)
+        False ->
+          let s1 = advance state
+          in case parseConstructorVariant s1 of
+            Err e -> Err e
+            Ok (ctor, s2) ->
+              case parseMoreConstructors equalsCol equalsLine s2 of
+                Err e -> Err e
+                Ok (rest, s3) -> Ok (ctor :: rest, s3)
+
+parseConstructorVariant : ParserState -> ParseResult ConstructorVariant
+parseConstructorVariant state =
+  case expect T.UpperIdentifier "constructor name" state of
+    Err e -> Err e
+    Ok (nameTok, s1) ->
+      case parseConstructorArgs nameTok.span s1 of
+        Err e -> Err e
+        Ok (args, s2) ->
+          let
+            endPos =
+              case List.last args of
+                Just a -> (typeSpan a).end
+                Nothing -> nameTok.span.end
+          in Ok ({ name = nameTok.lexeme, args = args, span = { start = nameTok.span.start, end = endPos } }, s2)
+
+parseConstructorArgs : Span -> ParserState -> ParseResult (List TypeExpr)
+parseConstructorArgs lastSpan state =
+  case isTypeStart (current state) && onSameLine lastSpan (current state) && not (peekKind T.Pipe state) of
+    False -> Ok ([], state)
+    True ->
+      case parseTypeAtom state of
+        Err e -> Err e
+        Ok (arg, s1) ->
+          case parseConstructorArgs (typeSpan arg) s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (arg :: rest, s2)
+
+
+-- =============================================================================
+-- Protocol Declaration
+-- =============================================================================
+
+parseProtocolDeclaration : ParserState -> ParseResult Declaration
+parseProtocolDeclaration state =
+  case expectKeyword "protocol" state of
+    Err e -> Err e
+    Ok (protocolTok, s1) ->
+      let hasConstraints = peekConstraintContextInProtocol s1
+      in case parseOptionalConstraints hasConstraints s1 of
+        Err e -> Err e
+        Ok (constraints, s2) ->
+          case expect T.UpperIdentifier "protocol name" s2 of
+            Err e -> Err e
+            Ok (nameTok, s3) ->
+              case parseTypeParams s3 of
+                Err e -> Err e
+                Ok (params, s4) ->
+                  case expectKeyword "where" s4 of
+                    Err e -> Err e
+                    Ok (_, s5) ->
+                      case expectBlockStart s5 of
+                        Err e -> Err e
+                        Ok (_, s6) ->
+                          case parseProtocolItems s6 of
+                            Err e -> Err e
+                            Ok (items, s7) ->
+                              case expectBlockEnd s7 of
+                                Err e -> Err e
+                                Ok (_, s8) ->
+                                  let
+                                    methods = mergeProtocolItems items
+                                    endPos =
+                                      case List.last methods of
+                                        Just m -> m.span.end
+                                        Nothing -> nameTok.span.end
+                                  in Ok (DProtocol nameTok.lexeme params constraints methods
+                                           { start = protocolTok.span.start, end = endPos }, s8)
+
+parseOptionalConstraints : Bool -> ParserState -> ParseResult (List Constraint)
+parseOptionalConstraints hasConstraints state =
+  case hasConstraints of
+    False -> Ok ([], state)
+    True -> parseConstraints state
+
+type ProtocolItem
+  = PIAnnotation String TypeExpr Span
+  | PIImpl String (List Pattern) Expr Span
+
+parseProtocolItems : ParserState -> ParseResult (List ProtocolItem)
+parseProtocolItems state =
+  case parseProtocolItem state of
+    Err e -> Err e
+    Ok (item, s1) ->
+      case matchBlockSep s1 of
+        Nothing -> Ok ([item], s1)
+        Just s2 ->
+          case parseProtocolItems s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (item :: rest, s3)
+
+parseProtocolItem : ParserState -> ParseResult ProtocolItem
+parseProtocolItem state =
+  let start = (current state).span.start
+  in case parseProtocolMethodName state of
+    Err e -> Err e
+    Ok (methodName, s1) ->
+      case peekKind T.Colon s1 of
+        True ->
+          let s2 = advance s1
+          in case parseTypeExpression s2 of
+            Err e -> Err e
+            Ok (methodType, s3) -> Ok (PIAnnotation methodName methodType { start = start, end = (typeSpan methodType).end }, s3)
+        False ->
+          case parseFunctionParams s1 of
+            Err e -> Err e
+            Ok (args, s2) ->
+              case expect T.Equals "'=' after parameters" s2 of
+                Err e -> Err e
+                Ok (_, s3) ->
+                  case parseExpression Nothing s3 of
+                    Err e -> Err e
+                    Ok (body, s4) -> Ok (PIImpl methodName args body { start = start, end = (exprSpan body).end }, s4)
+
+parseProtocolMethodName : ParserState -> ParseResult String
+parseProtocolMethodName state =
+  let tok = current state
+  in case tok.kind of
+    T.LParen ->
+      let s1 = advance state
+      in case expect T.Operator "operator in protocol method" s1 of
+        Err e -> Err e
+        Ok (opTok, s2) ->
+          case expect T.RParen "close paren after operator" s2 of
+            Err e -> Err e
+            Ok (_, s3) -> Ok (opTok.lexeme, s3)
+    T.LowerIdentifier ->
+      let s1 = advance state
+      in Ok (tok.lexeme, s1)
+    _ -> Err (makeError ("Expected method name but found " ++ tokenKindStr tok.kind) tok.span)
+
+mergeProtocolItems : List ProtocolItem -> List ProtocolMethod
+mergeProtocolItems items =
+  case items of
+    [] -> []
+    (PIAnnotation name typeExpr span) :: rest ->
+      case rest of
+        (PIImpl implName args body implSpan) :: rest2 ->
+          case name == implName of
+            True ->
+              { name = name
+              , methodType = typeExpr
+              , defaultArgs = args
+              , defaultBody = body
+              , hasDefault = True
+              , hasType = True
+              , span = { start = span.start, end = implSpan.end }
+              } :: mergeProtocolItems rest2
+            False -> noDefaultMethod name typeExpr span :: mergeProtocolItems rest
+        _ -> noDefaultMethod name typeExpr span :: mergeProtocolItems rest
+    (PIImpl name args body span) :: rest ->
+      let dummyType = TRef "Unknown" [] span
+      in { name = name
+         , methodType = dummyType
+         , defaultArgs = args
+         , defaultBody = body
+         , hasDefault = True
+         , hasType = False
+         , span = span
+         } :: mergeProtocolItems rest
+
+noDefaultMethod : String -> TypeExpr -> Span -> ProtocolMethod
+noDefaultMethod name typeExpr span =
+  { name = name
+  , methodType = typeExpr
+  , defaultArgs = []
+  , defaultBody = EUnit span
+  , hasDefault = False
+  , hasType = True
+  , span = span
+  }
+
+
+-- =============================================================================
+-- Implementation Declaration
+-- =============================================================================
+
+parseImplementationDeclaration : ParserState -> ParseResult Declaration
+parseImplementationDeclaration state =
+  case expectKeyword "implement" state of
+    Err e -> Err e
+    Ok (implTok, s1) ->
+      let hasConstraints = peekConstraintContext s1
+      in case parseOptionalConstraints hasConstraints s1 of
+        Err e -> Err e
+        Ok (constraints, s2) ->
+          case expect T.UpperIdentifier "protocol name" s2 of
+            Err e -> Err e
+            Ok (protocolTok, s3) ->
+              case parseImplementationTypeArgs s3 of
+                Err e -> Err e
+                Ok (typeArgs, s4) ->
+                  case parseImplementationMethods s4 of
+                    Err e -> Err e
+                    Ok (methods, s5) ->
+                      let
+                        endPos =
+                          case List.last methods of
+                            Just m -> m.span.end
+                            Nothing ->
+                              case List.last typeArgs of
+                                Just t -> (typeSpan t).end
+                                Nothing -> protocolTok.span.end
+                      in Ok (DImplementation constraints protocolTok.lexeme typeArgs methods
+                               { start = implTok.span.start, end = endPos }, s5)
+
+parseImplementationTypeArgs : ParserState -> ParseResult (List TypeExpr)
+parseImplementationTypeArgs state =
+  case isTypeStart (current state) of
+    False -> Ok ([], state)
+    True ->
+      case parseTypeAtom state of
+        Err e -> Err e
+        Ok (t, s1) ->
+          case parseImplementationTypeArgs s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (t :: rest, s2)
+
+parseImplementationMethods : ParserState -> ParseResult (List MethodImplementation)
+parseImplementationMethods state =
+  case peekKeyword "where" state of
+    False -> Ok ([], state)
+    True ->
+      case expectKeyword "where" state of
+        Err e -> Err e
+        Ok (_, s1) ->
+          case expectBlockStart s1 of
+            Err e -> Err e
+            Ok (_, s2) ->
+              case parseImplMethodList s2 of
+                Err e -> Err e
+                Ok (methods, s3) ->
+                  case expectBlockEnd s3 of
+                    Err e -> Err e
+                    Ok (_, s4) -> Ok (methods, s4)
+
+parseImplMethodList : ParserState -> ParseResult (List MethodImplementation)
+parseImplMethodList state =
+  case parseImplMethod state of
+    Err e -> Err e
+    Ok (method, s1) ->
+      case matchBlockSep s1 of
+        Nothing -> Ok ([method], s1)
+        Just s2 ->
+          case parseImplMethodList s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (method :: rest, s3)
+
+parseImplMethod : ParserState -> ParseResult MethodImplementation
+parseImplMethod state =
+  case parseDeclarationName state of
+    Err e -> Err e
+    Ok (nameResult, s1) ->
+      case parseMethodBody Nothing s1 of
+        Err e -> Err e
+        Ok (result, s2) ->
+          Ok ({ name = nameResult.declName
+              , implArgs = result.mArgs
+              , implementation = result.mBody
+              , span = { start = nameResult.declSpan.start, end = (exprSpan result.mBody).end }
+              }, s2)
+
+
+-- =============================================================================
+-- Infix Declaration
+-- =============================================================================
+
+parseInfixDeclaration : ParserState -> ParseResult Declaration
+parseInfixDeclaration state =
+  let
+    fixityTok = current state
+    start = fixityTok.span.start
+    s1 = advance state
+  in
+  case expect T.NumberToken "precedence number" s1 of
+    Err e -> Err e
+    Ok (precTok, s2) ->
+      case parseInfixOperator s2 of
+        Err e -> Err e
+        Ok (opResult, s3) ->
+          let
+            assocStr =
+              case fixityTok.lexeme of
+                "infixl" -> "left"
+                "infixr" -> "right"
+                _ -> "none"
+          in Ok (DInfix assocStr (stringToInt precTok.lexeme) opResult.opName { start = start, end = opResult.opEnd }, s3)
+
+type InfixOpResult = { opName : String, opEnd : Position }
+
+parseInfixOperator : ParserState -> ParseResult InfixOpResult
+parseInfixOperator state =
+  case peekKind T.LParen state of
+    True ->
+      let s1 = advance state
+      in case expect T.Operator "operator" s1 of
+        Err e -> Err e
+        Ok (opTok, s2) ->
+          case expect T.RParen "close paren" s2 of
+            Err e -> Err e
+            Ok (cp, s3) -> Ok ({ opName = opTok.lexeme, opEnd = cp.span.end }, s3)
+    False ->
+      case expect T.Operator "operator" state of
+        Err e -> Err e
+        Ok (opTok, s1) -> Ok ({ opName = opTok.lexeme, opEnd = opTok.span.end }, s1)
+
+
+-- =============================================================================
+-- Type Expressions
+-- =============================================================================
+
+parseTypeExpression : ParserState -> ParseResult TypeExpr
+parseTypeExpression state =
+  let start = (current state).span.start
+  in case peekConstraintContextInType state of
+    True ->
+      case parseConstraints state of
+        Err e -> Err e
+        Ok (constraints, s1) ->
+          case parseTypeArrow s1 of
+            Err e -> Err e
+            Ok (typ, s2) -> Ok (TQualified constraints typ { start = start, end = (typeSpan typ).end }, s2)
+    False -> parseTypeArrow state
+
+parseTypeArrow : ParserState -> ParseResult TypeExpr
+parseTypeArrow state =
+  case parseTypeTerm state of
+    Err e -> Err e
+    Ok (left, s1) ->
+      case matchOperator "->" s1 of
+        Nothing -> Ok (left, s1)
+        Just s2 ->
+          case parseTypeArrow s2 of
+            Err e -> Err e
+            Ok (right, s3) -> Ok (TFunction left right { start = (typeSpan left).start, end = (typeSpan right).end }, s3)
+
+parseTypeTerm : ParserState -> ParseResult TypeExpr
+parseTypeTerm state =
+  let tok = current state
+  in case tok.kind of
+    T.LBrace -> parseRecordType state
+    T.LParen -> parseParenOrTupleType state
+    _ -> parseTypeRef state
+
+parseRecordType : ParserState -> ParseResult TypeExpr
+parseRecordType state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RBrace s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (TRecord [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case parseRecordTypeFieldList s1 of
+        Err e -> Err e
+        Ok (fields, s2) ->
+          case expect T.RBrace "close record type" s2 of
+            Err e -> Err e
+            Ok (_, s3) -> Ok (TRecord fields { start = start, end = (previous s3).span.end }, s3)
+
+parseRecordTypeFieldList : ParserState -> ParseResult (List RecordFieldType)
+parseRecordTypeFieldList state =
+  case parseRecordTypeField state of
+    Err e -> Err e
+    Ok (firstField, s1) ->
+      case parseMoreRecordTypeFields firstField s1 of
+        Err e -> Err e
+        Ok (rest, s2) -> Ok (firstField :: rest, s2)
+
+parseMoreRecordTypeFields : RecordFieldType -> ParserState -> ParseResult (List RecordFieldType)
+parseMoreRecordTypeFields lastField state =
+  case peekKind T.Comma state of
+    False -> Ok ([], state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ([], state)
+        Just next ->
+          case continuesLayout lastField.span.start.column lastField.span.end next of
+            False -> Ok ([], state)
+            True ->
+              let s1 = advance state
+              in case parseRecordTypeField s1 of
+                Err e -> Err e
+                Ok (field, s2) ->
+                  case parseMoreRecordTypeFields field s2 of
+                    Err e -> Err e
+                    Ok (rest, s3) -> Ok (field :: rest, s3)
+
+parseRecordTypeField : ParserState -> ParseResult RecordFieldType
+parseRecordTypeField state =
+  case expect T.LowerIdentifier "record field name" state of
+    Err e -> Err e
+    Ok (nameTok, s1) ->
+      case expect T.Colon "':' after field name" s1 of
+        Err e -> Err e
+        Ok (_, s2) ->
+          case parseTypeExpression s2 of
+            Err e -> Err e
+            Ok (fieldType, s3) ->
+              Ok ({ name = nameTok.lexeme, fieldType = fieldType, span = { start = nameTok.span.start, end = (typeSpan fieldType).end } }, s3)
+
+parseParenOrTupleType : ParserState -> ParseResult TypeExpr
+parseParenOrTupleType state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RParen s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (TRef "Unit" [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case parseTypeExpression s1 of
+        Err e -> Err e
+        Ok (first, s2) ->
+          case parseMoreTupleTypes first s2 of
+            Err e -> Err e
+            Ok (moreTypes, s3) ->
+              case expect T.RParen "close type group" s3 of
+                Err e -> Err e
+                Ok (cp, s4) ->
+                  case List.isEmpty moreTypes of
+                    True -> Ok (setTypeSpan first { start = start, end = cp.span.end }, s4)
+                    False -> Ok (TTuple (first :: moreTypes) { start = start, end = cp.span.end }, s4)
+
+setTypeSpan : TypeExpr -> Span -> TypeExpr
+setTypeSpan typeExpr span =
+  case typeExpr of
+    TRef name args _ -> TRef name args span
+    TFunction from to _ -> TFunction from to span
+    TTuple elems _ -> TTuple elems span
+    TRecord fields _ -> TRecord fields span
+    TQualified constraints typ _ -> TQualified constraints typ span
+
+parseMoreTupleTypes : TypeExpr -> ParserState -> ParseResult (List TypeExpr)
+parseMoreTupleTypes lastType state =
+  case peekKind T.Comma state of
+    False -> Ok ([], state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ([], state)
+        Just next ->
+          case continuesLayout (typeSpan lastType).start.column (typeSpan lastType).end next of
+            False -> Ok ([], state)
+            True ->
+              let s1 = advance state
+              in case parseTypeExpression s1 of
+                Err e -> Err e
+                Ok (t, s2) ->
+                  case parseMoreTupleTypes t s2 of
+                    Err e -> Err e
+                    Ok (rest, s3) -> Ok (t :: rest, s3)
+
+parseTypeRef : ParserState -> ParseResult TypeExpr
+parseTypeRef state =
+  let tok = current state
+  in case tok.kind == T.LowerIdentifier || tok.kind == T.UpperIdentifier of
+    False -> Err (makeError ("Expected type but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+    True ->
+      let
+        ident = tok
+        s1 = advance state
+      in case parseQualifiedName ident.lexeme ident.span.end s1 of
+        Err e -> Err e
+        Ok (nameResult, s2) ->
+          let isTypeCtor = ident.kind == T.UpperIdentifier || String.contains "." nameResult.name
+          in case isTypeCtor of
+            False -> Ok (TRef nameResult.name [] { start = ident.span.start, end = nameResult.nameEnd }, s2)
+            True ->
+              case parseTypeApplicationArgs { start = ident.span.start, end = nameResult.nameEnd } s2 of
+                Err e -> Err e
+                Ok (args, s3) ->
+                  let
+                    endPos =
+                      case List.last args of
+                        Just a -> (typeSpan a).end
+                        Nothing -> nameResult.nameEnd
+                  in Ok (TRef nameResult.name args { start = ident.span.start, end = endPos }, s3)
+
+parseQualifiedName : String -> Position -> ParserState -> ParseResult ModuleNameResult
+parseQualifiedName name end state =
+  case peekKind T.Dot state of
+    False -> Ok ({ name = name, nameEnd = end }, state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ({ name = name, nameEnd = end }, state)
+        Just next ->
+          case next.kind == T.UpperIdentifier of
+            False -> Ok ({ name = name, nameEnd = end }, state)
+            True ->
+              let s1 = advance state
+              in case expect T.UpperIdentifier "type name part" s1 of
+                Err e -> Err e
+                Ok (nextTok, s2) -> parseQualifiedName (name ++ "." ++ nextTok.lexeme) nextTok.span.end s2
+
+parseTypeApplicationArgs : Span -> ParserState -> ParseResult (List TypeExpr)
+parseTypeApplicationArgs lastSpan state =
+  case isTypeStart (current state) && onSameLine lastSpan (current state) of
+    False -> Ok ([], state)
+    True ->
+      case parseTypeAtom state of
+        Err e -> Err e
+        Ok (arg, s1) ->
+          case parseTypeApplicationArgs (typeSpan arg) s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (arg :: rest, s2)
+
+parseTypeAtom : ParserState -> ParseResult TypeExpr
+parseTypeAtom state =
+  let tok = current state
+  in case tok.kind of
+    T.LBrace -> parseRecordType state
+    T.LParen -> parseParenOrTupleType state
+    _ ->
+      case tok.kind == T.LowerIdentifier || tok.kind == T.UpperIdentifier of
+        False -> Err (makeError ("Expected type but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+        True ->
+          let
+            ident = tok
+            s1 = advance state
+          in case parseQualifiedName ident.lexeme ident.span.end s1 of
+            Err e -> Err e
+            Ok (nameResult, s2) -> Ok (TRef nameResult.name [] { start = ident.span.start, end = nameResult.nameEnd }, s2)
+
+parseRecordTypeFields : ParserState -> ParseResult (List RecordFieldType)
+parseRecordTypeFields state =
+  case expect T.LBrace "record type start '{'" state of
+    Err e -> Err e
+    Ok (_, s1) ->
+      case peekKind T.RBrace s1 of
+        True ->
+          let s2 = advance s1
+          in Ok ([], s2)
+        False ->
+          case parseRecordTypeFieldList s1 of
+            Err e -> Err e
+            Ok (fields, s2) ->
+              case expect T.RBrace "close record type '}'" s2 of
+                Err e -> Err e
+                Ok (_, s3) -> Ok (fields, s3)
+
+
+-- =============================================================================
+-- Patterns
+-- =============================================================================
+
+parsePattern : ParserState -> ParseResult Pattern
+parsePattern state =
+  case parsePrimaryPattern state of
+    Err e -> Err e
+    Ok (primary, s1) ->
+      case peekOperator "::" s1 of
+        True ->
+          let s2 = advance s1
+          in case parsePattern s2 of
+            Err e -> Err e
+            Ok (tail, s3) -> Ok (PCons primary tail { start = (patSpan primary).start, end = (patSpan tail).end }, s3)
+        False -> Ok (primary, s1)
+
+parsePrimaryPattern : ParserState -> ParseResult Pattern
+parsePrimaryPattern state =
+  let tok = current state
+  in case tok.kind of
+    T.LowerIdentifier ->
+      let s1 = advance state
+      in case tok.lexeme == "_" of
+        True -> Ok (PWildcard tok.span, s1)
+        False -> Ok (PVar tok.lexeme tok.span, s1)
+    T.NumberToken ->
+      let s1 = advance state
+      in case String.contains "." tok.lexeme of
+        True -> Ok (PFloat tok.lexeme tok.span, s1)
+        False -> Ok (PInt tok.lexeme tok.span, s1)
+    T.StringToken ->
+      let s1 = advance state
+      in Ok (PString tok.lexeme tok.span, s1)
+    T.CharToken ->
+      let s1 = advance state
+      in Ok (PChar tok.lexeme tok.span, s1)
+    T.UpperIdentifier -> parseConstructorPattern state
+    T.LBracket -> parseListPattern state
+    T.LParen -> parseParenOrTuplePattern state
+    _ -> Err (makeError ("Expected pattern but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+
+parseConstructorPattern : ParserState -> ParseResult Pattern
+parseConstructorPattern state =
+  let
+    ctor = current state
+    s1 = advance state
+  in case parseQualifiedCtorName ctor.lexeme ctor.span.end s1 of
+    Err e -> Err e
+    Ok (nameResult, s2) ->
+      case parseConstructorPatternArgs s2 of
+        Err e -> Err e
+        Ok (args, s3) ->
+          let
+            endPos =
+              case List.last args of
+                Just a -> (patSpan a).end
+                Nothing -> nameResult.nameEnd
+          in Ok (PConstructor nameResult.name args { start = ctor.span.start, end = endPos }, s3)
+
+parseQualifiedCtorName : String -> Position -> ParserState -> ParseResult ModuleNameResult
+parseQualifiedCtorName name end state =
+  case peekKind T.Dot state of
+    False -> Ok ({ name = name, nameEnd = end }, state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ({ name = name, nameEnd = end }, state)
+        Just next ->
+          case next.kind == T.UpperIdentifier of
+            False -> Ok ({ name = name, nameEnd = end }, state)
+            True ->
+              let s1 = advance state
+              in case expect T.UpperIdentifier "constructor name part" s1 of
+                Err e -> Err e
+                Ok (nextTok, s2) -> parseQualifiedCtorName (name ++ "." ++ nextTok.lexeme) nextTok.span.end s2
+
+parseConstructorPatternArgs : ParserState -> ParseResult (List Pattern)
+parseConstructorPatternArgs state =
+  case isPatternStart (current state) of
+    False -> Ok ([], state)
+    True ->
+      case parsePrimaryPattern state of
+        Err e -> Err e
+        Ok (pat, s1) ->
+          case parseConstructorPatternArgs s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (pat :: rest, s2)
+
+parseListPattern : ParserState -> ParseResult Pattern
+parseListPattern state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RBracket s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (PList [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case parsePatternList s1 of
+        Err e -> Err e
+        Ok (elements, s2) ->
+          case expect T.RBracket "close list pattern" s2 of
+            Err e -> Err e
+            Ok (_, s3) -> Ok (PList elements { start = start, end = (previous s3).span.end }, s3)
+
+parsePatternList : ParserState -> ParseResult (List Pattern)
+parsePatternList state =
+  case parsePattern state of
+    Err e -> Err e
+    Ok (pat, s1) ->
+      case peekKind T.Comma s1 of
+        False -> Ok ([pat], s1)
+        True ->
+          let s2 = advance s1
+          in case parsePatternList s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (pat :: rest, s3)
+
+parseParenOrTuplePattern : ParserState -> ParseResult Pattern
+parseParenOrTuplePattern state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RParen s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (PTuple [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case parsePattern s1 of
+        Err e -> Err e
+        Ok (first, s2) ->
+          case parseTuplePatternRest first s2 of
+            Err e -> Err e
+            Ok (more, s3) ->
+              case expect T.RParen "close pattern group" s3 of
+                Err e -> Err e
+                Ok (cp, s4) ->
+                  case List.isEmpty more of
+                    True -> Ok (setPatSpan first { start = start, end = cp.span.end }, s4)
+                    False -> Ok (PTuple (first :: more) { start = start, end = cp.span.end }, s4)
+
+setPatSpan : Pattern -> Span -> Pattern
+setPatSpan pat span =
+  case pat of
+    PVar n _ -> PVar n span
+    PWildcard _ -> PWildcard span
+    PConstructor n a _ -> PConstructor n a span
+    PTuple e _ -> PTuple e span
+    PList e _ -> PList e span
+    PCons h t _ -> PCons h t span
+    PRecord f _ -> PRecord f span
+    PInt v _ -> PInt v span
+    PFloat v _ -> PFloat v span
+    PString v _ -> PString v span
+    PChar v _ -> PChar v span
+
+parseTuplePatternRest : Pattern -> ParserState -> ParseResult (List Pattern)
+parseTuplePatternRest lastPat state =
+  case peekKind T.Comma state of
+    False -> Ok ([], state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ([], state)
+        Just next ->
+          case continuesLayout (patSpan lastPat).start.column (patSpan lastPat).end next of
+            False -> Ok ([], state)
+            True ->
+              let s1 = advance state
+              in case parsePattern s1 of
+                Err e -> Err e
+                Ok (pat, s2) ->
+                  case parseTuplePatternRest pat s2 of
+                    Err e -> Err e
+                    Ok (rest, s3) -> Ok (pat :: rest, s3)
+
+parseFunctionParamPattern : ParserState -> ParseResult Pattern
+parseFunctionParamPattern state =
+  let tok = current state
+  in case tok.kind of
+    T.LowerIdentifier ->
+      let s1 = advance state
+      in case tok.lexeme == "_" of
+        True -> Ok (PWildcard tok.span, s1)
+        False -> Ok (PVar tok.lexeme tok.span, s1)
+    T.UpperIdentifier -> parseFPCtorPattern state
+    T.LParen -> parseFPTuplePattern state
+    T.LBrace -> parseFPRecordPattern state
+    T.LBracket -> Err (makeError "List patterns are not allowed in function parameters" tok.span)
+    _ -> Err (makeError ("Expected function parameter pattern but found " ++ tokenKindStr tok.kind) tok.span)
+
+parseFPCtorPattern : ParserState -> ParseResult Pattern
+parseFPCtorPattern state =
+  let
+    ctor = current state
+    s1 = advance state
+  in case parseFPCtorArgs s1 of
+    Err e -> Err e
+    Ok (args, s2) ->
+      let
+        endPos =
+          case List.last args of
+            Just a -> (patSpan a).end
+            Nothing -> ctor.span.end
+      in Ok (PConstructor ctor.lexeme args { start = ctor.span.start, end = endPos }, s2)
+
+parseFPCtorArgs : ParserState -> ParseResult (List Pattern)
+parseFPCtorArgs state =
+  case isFunctionParamPatternStart (current state) of
+    False -> Ok ([], state)
+    True ->
+      case parseFunctionParamPattern state of
+        Err e -> Err e
+        Ok (pat, s1) ->
+          case parseFPCtorArgs s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (pat :: rest, s2)
+
+parseFPTuplePattern : ParserState -> ParseResult Pattern
+parseFPTuplePattern state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RParen s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (PTuple [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case parseFunctionParamPattern s1 of
+        Err e -> Err e
+        Ok (first, s2) ->
+          case parseFPTupleRest first s2 of
+            Err e -> Err e
+            Ok (more, s3) ->
+              case expect T.RParen "close pattern group" s3 of
+                Err e -> Err e
+                Ok (cp, s4) ->
+                  case List.isEmpty more of
+                    True -> Ok (setPatSpan first { start = start, end = cp.span.end }, s4)
+                    False -> Ok (PTuple (first :: more) { start = start, end = cp.span.end }, s4)
+
+parseFPTupleRest : Pattern -> ParserState -> ParseResult (List Pattern)
+parseFPTupleRest lastPat state =
+  case peekKind T.Comma state of
+    False -> Ok ([], state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ([], state)
+        Just next ->
+          case continuesLayout (patSpan lastPat).start.column (patSpan lastPat).end next of
+            False -> Ok ([], state)
+            True ->
+              let s1 = advance state
+              in case parseFunctionParamPattern s1 of
+                Err e -> Err e
+                Ok (pat, s2) ->
+                  case parseFPTupleRest pat s2 of
+                    Err e -> Err e
+                    Ok (rest, s3) -> Ok (pat :: rest, s3)
+
+parseFPRecordPattern : ParserState -> ParseResult Pattern
+parseFPRecordPattern state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RBrace s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (PRecord [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case parseRecordFieldPatterns s1 of
+        Err e -> Err e
+        Ok (fields, s2) ->
+          case expect T.RBrace "close record pattern" s2 of
+            Err e -> Err e
+            Ok (_, s3) -> Ok (PRecord fields { start = start, end = (previous s3).span.end }, s3)
+
+parseRecordFieldPatterns : ParserState -> ParseResult (List RecordFieldPattern)
+parseRecordFieldPatterns state =
+  case parseRecordFieldPattern state of
+    Err e -> Err e
+    Ok (field, s1) ->
+      case peekKind T.Comma s1 of
+        False -> Ok ([field], s1)
+        True ->
+          let s2 = advance s1
+          in case parseRecordFieldPatterns s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (field :: rest, s3)
+
+parseRecordFieldPattern : ParserState -> ParseResult RecordFieldPattern
+parseRecordFieldPattern state =
+  case expect T.LowerIdentifier "record field name" state of
+    Err e -> Err e
+    Ok (nameTok, s1) ->
+      case peekKind T.Equals s1 of
+        True ->
+          let s2 = advance s1
+          in case parseFunctionParamPattern s2 of
+            Err e -> Err e
+            Ok (pat, s3) -> Ok ({ name = nameTok.lexeme, pattern = pat }, s3)
+        False ->
+          Ok ({ name = nameTok.lexeme, pattern = PVar nameTok.lexeme nameTok.span }, s1)
+
+
+-- =============================================================================
+-- Expressions
+-- =============================================================================
+
+parseExpression : Maybe Int -> ParserState -> ParseResult Expr
+parseExpression baseIndentFloor state =
+  parseBinaryExpression 0 baseIndentFloor state
+
+parseBinaryExpression : Int -> Maybe Int -> ParserState -> ParseResult Expr
+parseBinaryExpression minPrec baseIndentFloor state =
+  case parseUnary baseIndentFloor state of
+    Err e -> Err e
+    Ok (left, s1) -> parseBinExprLoop left minPrec baseIndentFloor s1
+
+parseBinExprLoop : Expr -> Int -> Maybe Int -> ParserState -> ParseResult Expr
+parseBinExprLoop left minPrec baseIndentFloor state =
+  let opTok = current state
+  in case opTok.kind == T.Operator of
+    False -> Ok (left, state)
+    True ->
+      case opTok.lexeme == "@" of
+        True -> Ok (left, state)
+        False ->
+          let
+            info = OpReg.getOperatorInfo opTok.lexeme state.registry
+            prec = info.precedence
+          in
+          case prec < minPrec of
+            True -> Ok (left, state)
+            False ->
+              let
+                s1 = advance state
+                nextMin =
+                  case info.associativity of
+                    AssocRight -> prec
+                    _ -> prec + 1
+              in
+              case parseBinaryExpression nextMin baseIndentFloor s1 of
+                Err e -> Err e
+                Ok (right, s2) ->
+                  let node = EInfix left opTok.lexeme right { start = (exprSpan left).start, end = (exprSpan right).end }
+                  in parseBinExprLoop node minPrec baseIndentFloor s2
+
+parseUnary : Maybe Int -> ParserState -> ParseResult Expr
+parseUnary baseIndentFloor state =
+  let tok = current state
+  in case tok.kind == T.Operator && tok.lexeme == "-" of
+    True ->
+      case peekAhead 1 state of
+        Nothing -> parseApplication baseIndentFloor state
+        Just nextTok ->
+          case nextTok.kind == T.LowerIdentifier || nextTok.kind == T.UpperIdentifier || nextTok.kind == T.NumberToken || nextTok.kind == T.LParen of
+            True ->
+              let s1 = advance state
+              in case parseUnary baseIndentFloor s1 of
+                Err e -> Err e
+                Ok (operand, s2) -> Ok (EUnary "-" operand { start = tok.span.start, end = (exprSpan operand).end }, s2)
+            False -> parseApplication baseIndentFloor state
+    False -> parseApplication baseIndentFloor state
+
+parseApplication : Maybe Int -> ParserState -> ParseResult Expr
+parseApplication baseIndentFloor state =
+  case parsePrimaryWithAccess state of
+    Err e -> Err e
+    Ok (callee, s1) ->
+      let
+        baseIndent = (exprSpan callee).start.column
+        effectiveIndent =
+          case baseIndentFloor of
+            Nothing -> baseIndent
+            Just floor -> Int.min baseIndent floor
+      in
+      case parseApplicationArgs effectiveIndent (exprSpan callee).end s1 of
+        Err e -> Err e
+        Ok (args, s2) ->
+          case List.isEmpty args of
+            True -> Ok (callee, s2)
+            False ->
+              let
+                endPos =
+                  case List.last args of
+                    Just a -> (exprSpan a).end
+                    Nothing -> (exprSpan callee).end
+              in Ok (EApply callee args { start = (exprSpan callee).start, end = endPos }, s2)
+
+parseApplicationArgs : Int -> Position -> ParserState -> ParseResult (List Expr)
+parseApplicationArgs effectiveIndent lastEnd state =
+  case isExpressionStart (current state) of
+    False -> Ok ([], state)
+    True ->
+      case continuesLayout effectiveIndent lastEnd (current state) of
+        False -> Ok ([], state)
+        True ->
+          case parsePrimaryWithAccess state of
+            Err e -> Err e
+            Ok (arg, s1) ->
+              case parseApplicationArgs effectiveIndent (exprSpan arg).end s1 of
+                Err e -> Err e
+                Ok (rest, s2) -> Ok (arg :: rest, s2)
+
+parsePrimaryWithAccess : ParserState -> ParseResult Expr
+parsePrimaryWithAccess state =
+  case parsePrimary state of
+    Err e -> Err e
+    Ok (expr, s1) -> parseFieldAccesses expr s1
+
+parseFieldAccesses : Expr -> ParserState -> ParseResult Expr
+parseFieldAccesses expr state =
+  case matchKind T.Dot state of
+    Nothing -> Ok (expr, state)
+    Just s1 ->
+      let tok = current s1
+      in case tok.kind == T.LowerIdentifier || tok.kind == T.UpperIdentifier of
+        False -> Err (makeError ("Expected field name but found " ++ tokenKindStr tok.kind) tok.span)
+        True ->
+          let
+            field = tok
+            s2 = advance s1
+          in parseFieldAccesses (EFieldAccess expr field.lexeme { start = (exprSpan expr).start, end = field.span.end }) s2
+
+parsePrimary : ParserState -> ParseResult Expr
+parsePrimary state =
+  let tok = current state
+  in case peekKeyword "if" state of
+    True -> parseIf state
+    False ->
+      case peekKeyword "let" state of
+        True -> parseLetIn state
+        False ->
+          case peekKeyword "case" state of
+            True -> parseCase state
+            False ->
+              case tok.kind of
+                T.Backslash -> parseLambda state
+                T.LowerIdentifier ->
+                  let s1 = advance state
+                  in Ok (EVar tok.lexeme "lower" tok.span, s1)
+                T.UpperIdentifier ->
+                  let s1 = advance state
+                  in Ok (EVar tok.lexeme "upper" tok.span, s1)
+                T.NumberToken ->
+                  let s1 = advance state
+                  in case String.contains "." tok.lexeme of
+                    True -> Ok (EFloat tok.lexeme tok.span, s1)
+                    False -> Ok (EInt tok.lexeme tok.span, s1)
+                T.StringToken ->
+                  let s1 = advance state
+                  in Ok (EString tok.lexeme tok.span, s1)
+                T.CharToken ->
+                  let s1 = advance state
+                  in Ok (EChar tok.lexeme tok.span, s1)
+                T.LParen -> parseParenExpr state
+                T.LBracket -> parseListExpr state
+                T.LBrace -> parseRecordExpr state
+                _ -> Err (makeError ("Expected expression but found " ++ tokenKindStr tok.kind ++ " '" ++ tok.lexeme ++ "'") tok.span)
+
+parseLambda : ParserState -> ParseResult Expr
+parseLambda state =
+  let
+    start = (current state).span.start
+    lambdaCol = start.column
+    s1 = advance state
+  in
+  case parseLambdaArgs s1 of
+    Err e -> Err e
+    Ok (args, s2) ->
+      let bodyTok = current s2
+      in case bodyTok.span.start.line /= (previous s2).span.start.line && bodyTok.span.start.column <= lambdaCol of
+        True -> Err (makeError ("Lambda body must be indented past column " ++ intToStr lambdaCol) bodyTok.span)
+        False ->
+          case parseExpression Nothing s2 of
+            Err e -> Err e
+            Ok (body, s3) -> Ok (ELambda args body { start = start, end = (exprSpan body).end }, s3)
+
+parseLambdaArgs : ParserState -> ParseResult (List Pattern)
+parseLambdaArgs state =
+  case matchOperator "->" state of
+    Just s1 -> Ok ([], s1)
+    Nothing ->
+      case isPatternStart (current state) of
+        False -> Err (makeError "Expected lambda argument" (current state).span)
+        True ->
+          case parsePattern state of
+            Err e -> Err e
+            Ok (pat, s2) ->
+              case parseLambdaArgs s2 of
+                Err e -> Err e
+                Ok (rest, s3) -> Ok (pat :: rest, s3)
+
+parseIf : ParserState -> ParseResult Expr
+parseIf state =
+  case expectKeyword "if" state of
+    Err e -> Err e
+    Ok (ifTok, s1) ->
+      case parseExpression Nothing s1 of
+        Err e -> Err e
+        Ok (condition, s2) ->
+          case expectKeyword "then" s2 of
+            Err e -> Err e
+            Ok (_, s3) ->
+              case parseExpression Nothing s3 of
+                Err e -> Err e
+                Ok (thenBranch, s4) ->
+                  case expectKeyword "else" s4 of
+                    Err e -> Err e
+                    Ok (_, s5) ->
+                      case parseExpression Nothing s5 of
+                        Err e -> Err e
+                        Ok (elseBranch, s6) ->
+                          Ok (EIf condition thenBranch elseBranch { start = ifTok.span.start, end = (exprSpan elseBranch).end }, s6)
+
+parseLetIn : ParserState -> ParseResult Expr
+parseLetIn state =
+  case expectKeyword "let" state of
+    Err e -> Err e
+    Ok (letTok, s1) ->
+      case expectBlockStart s1 of
+        Err e -> Err e
+        Ok (_, s2) ->
+          case parseLetBindings s2 of
+            Err e -> Err e
+            Ok (bindings, s3) ->
+              case expectBlockEnd s3 of
+                Err e -> Err e
+                Ok (_, s4) ->
+                  case expectKeyword "in" s4 of
+                    Err e -> Err e
+                    Ok (_, s5) ->
+                      case parseExpression Nothing s5 of
+                        Err e -> Err e
+                        Ok (body, s6) -> Ok (ELetIn bindings body { start = letTok.span.start, end = (exprSpan body).end }, s6)
+
+parseLetBindings : ParserState -> ParseResult (List ValueDeclaration)
+parseLetBindings state =
+  case parseLetBinding state of
+    Err e -> Err e
+    Ok (binding, s1) ->
+      case matchBlockSep s1 of
+        Nothing -> Ok ([binding], s1)
+        Just s2 ->
+          case parseLetBindings s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (binding :: rest, s3)
+
+parseLetBinding : ParserState -> ParseResult ValueDeclaration
+parseLetBinding state =
+  case parseDeclaration state of
+    Err e -> Err e
+    Ok (decl, s1) -> Ok (declToValueDecl decl, s1)
+
+declToValueDecl : Declaration -> ValueDeclaration
+declToValueDecl decl =
+  case decl of
+    DValue vd -> vd
+    DTypeAnnotation ta ->
+      { name = ta.name, args = [], body = EUnit ta.span, span = ta.span }
+    _ ->
+      { name = "", args = [], body = EUnit eofToken.span, span = eofToken.span }
+
+parseCase : ParserState -> ParseResult Expr
+parseCase state =
+  case expectKeyword "case" state of
+    Err e -> Err e
+    Ok (caseTok, s1) ->
+      case parseExpression Nothing s1 of
+        Err e -> Err e
+        Ok (discriminant, s2) ->
+          case expectKeyword "of" s2 of
+            Err e -> Err e
+            Ok (_, s3) ->
+              case expectBlockStart s3 of
+                Err e -> Err e
+                Ok (_, s4) ->
+                  case parseCaseBranches s4 of
+                    Err e -> Err e
+                    Ok (branches, s5) ->
+                      case expectBlockEnd s5 of
+                        Err e -> Err e
+                        Ok (_, s6) ->
+                          let
+                            endPos =
+                              case List.last branches of
+                                Just b -> b.span.end
+                                Nothing -> (exprSpan discriminant).end
+                          in Ok (ECase discriminant branches { start = caseTok.span.start, end = endPos }, s6)
+
+parseCaseBranches : ParserState -> ParseResult (List CaseBranch)
+parseCaseBranches state =
+  case parseCaseBranch state of
+    Err e -> Err e
+    Ok (branch, s1) ->
+      case matchBlockSep s1 of
+        Nothing -> Ok ([branch], s1)
+        Just s2 ->
+          case parseCaseBranches s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (branch :: rest, s3)
+
+parseCaseBranch : ParserState -> ParseResult CaseBranch
+parseCaseBranch state =
+  case parsePattern state of
+    Err e -> Err e
+    Ok (pat, s1) ->
+      case expectOperator "->" s1 of
+        Err e -> Err e
+        Ok (_, s2) ->
+          let branchIndent = (patSpan pat).start.column + 1
+          in case parseExpression (Just branchIndent) s2 of
+            Err e -> Err e
+            Ok (body, s3) -> Ok ({ pattern = pat, body = body, span = { start = (patSpan pat).start, end = (exprSpan body).end } }, s3)
+
+parseParenExpr : ParserState -> ParseResult Expr
+parseParenExpr state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RParen s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (EUnit { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case peekKind T.Operator s1 of
+        True ->
+          case peekAhead 1 s1 of
+            Just next ->
+              case next.kind == T.RParen of
+                True ->
+                  let
+                    opTok = current s1
+                    s2 = advance s1
+                    s3 = advance s2
+                  in Ok (EVar opTok.lexeme "operator" { start = start, end = (previous s3).span.end }, s3)
+                False -> parseParenExprContents start s1
+            Nothing -> parseParenExprContents start s1
+        False -> parseParenExprContents start s1
+
+parseParenExprContents : Position -> ParserState -> ParseResult Expr
+parseParenExprContents start state =
+  case parseExpression Nothing state of
+    Err e -> Err e
+    Ok (first, s1) ->
+      case parseMoreTupleExprs first s1 of
+        Err e -> Err e
+        Ok (more, s2) ->
+          case expect T.RParen "close group" s2 of
+            Err e -> Err e
+            Ok (cp, s3) ->
+              case List.isEmpty more of
+                True -> Ok (EParen first { start = start, end = cp.span.end }, s3)
+                False -> Ok (ETuple (first :: more) { start = start, end = cp.span.end }, s3)
+
+parseMoreTupleExprs : Expr -> ParserState -> ParseResult (List Expr)
+parseMoreTupleExprs lastExpr state =
+  case peekKind T.Comma state of
+    False -> Ok ([], state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ([], state)
+        Just next ->
+          case continuesLayout (exprSpan lastExpr).start.column (exprSpan lastExpr).end next of
+            False -> Ok ([], state)
+            True ->
+              let s1 = advance state
+              in case parseExpression Nothing s1 of
+                Err e -> Err e
+                Ok (expr, s2) ->
+                  case parseMoreTupleExprs expr s2 of
+                    Err e2 -> Err e2
+                    Ok (rest, s3) -> Ok (expr :: rest, s3)
+
+parseListExpr : ParserState -> ParseResult Expr
+parseListExpr state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RBracket s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (EList [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case parseExpression Nothing s1 of
+        Err e -> Err e
+        Ok (first, s2) ->
+          case matchKind T.Range s2 of
+            Just s3 ->
+              case parseExpression Nothing s3 of
+                Err e -> Err e
+                Ok (endExpr, s4) ->
+                  case expect T.RBracket "close list range" s4 of
+                    Err e -> Err e
+                    Ok (_, s5) -> Ok (EListRange first endExpr { start = start, end = (previous s5).span.end }, s5)
+            Nothing ->
+              case parseMoreListExprs first s2 of
+                Err e -> Err e
+                Ok (more, s4) ->
+                  case expect T.RBracket "close list" s4 of
+                    Err e -> Err e
+                    Ok (_, s5) -> Ok (EList (first :: more) { start = start, end = (previous s5).span.end }, s5)
+
+parseMoreListExprs : Expr -> ParserState -> ParseResult (List Expr)
+parseMoreListExprs lastExpr state =
+  case peekKind T.Comma state of
+    False -> Ok ([], state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ([], state)
+        Just next ->
+          case continuesLayout (exprSpan lastExpr).start.column (exprSpan lastExpr).end next of
+            False -> Ok ([], state)
+            True ->
+              let s1 = advance state
+              in case parseExpression Nothing s1 of
+                Err e -> Err e
+                Ok (expr, s2) ->
+                  case parseMoreListExprs expr s2 of
+                    Err e2 -> Err e2
+                    Ok (rest, s3) -> Ok (expr :: rest, s3)
+
+parseRecordExpr : ParserState -> ParseResult Expr
+parseRecordExpr state =
+  let
+    start = (current state).span.start
+    s1 = advance state
+  in
+  case peekKind T.RBrace s1 of
+    True ->
+      let s2 = advance s1
+      in Ok (ERecord [] { start = start, end = (previous s2).span.end }, s2)
+    False ->
+      case expect T.LowerIdentifier "record field or base" s1 of
+        Err e -> Err e
+        Ok (head, s2) ->
+          case matchKind T.Pipe s2 of
+            Just s3 ->
+              case parseRecordFieldList Nothing head.span.start.column s3 of
+                Err e -> Err e
+                Ok (fields, s4) ->
+                  case expect T.RBrace "close record update" s4 of
+                    Err e -> Err e
+                    Ok (_, s5) -> Ok (ERecordUpdate head.lexeme fields { start = start, end = (previous s5).span.end }, s5)
+            Nothing ->
+              case parseRecordFieldList (Just head) head.span.start.column s2 of
+                Err e -> Err e
+                Ok (fields, s4) ->
+                  case expect T.RBrace "close record" s4 of
+                    Err e -> Err e
+                    Ok (_, s5) -> Ok (ERecord fields { start = start, end = (previous s5).span.end }, s5)
+
+parseRecordFieldList : Maybe T.Token -> Int -> ParserState -> ParseResult (List RecordField)
+parseRecordFieldList firstFieldToken baseIndent state =
+  case firstFieldToken of
+    Just tok ->
+      case parseRecordFieldValue tok baseIndent state of
+        Err e -> Err e
+        Ok (firstField, s1) ->
+          case parseMoreRecordFields baseIndent firstField s1 of
+            Err e -> Err e
+            Ok (rest, s2) -> Ok (firstField :: rest, s2)
+    Nothing ->
+      case expect T.LowerIdentifier "record field name" state of
+        Err e -> Err e
+        Ok (tok, s1) ->
+          case parseRecordFieldValue tok baseIndent s1 of
+            Err e -> Err e
+            Ok (firstField, s2) ->
+              case parseMoreRecordFields baseIndent firstField s2 of
+                Err e -> Err e
+                Ok (rest, s3) -> Ok (firstField :: rest, s3)
+
+parseRecordFieldValue : T.Token -> Int -> ParserState -> ParseResult RecordField
+parseRecordFieldValue fieldTok baseIndent state =
+  case expect T.Equals "record field assignment" state of
+    Err e -> Err e
+    Ok (_, s1) ->
+      case parseExpression (Just baseIndent) s1 of
+        Err e -> Err e
+        Ok (value, s2) ->
+          Ok ({ name = fieldTok.lexeme, value = value, span = { start = fieldTok.span.start, end = (exprSpan value).end } }, s2)
+
+parseMoreRecordFields : Int -> RecordField -> ParserState -> ParseResult (List RecordField)
+parseMoreRecordFields baseIndent lastField state =
+  case peekKind T.Comma state of
+    False -> Ok ([], state)
+    True ->
+      case peekAhead 1 state of
+        Nothing -> Ok ([], state)
+        Just next ->
+          case continuesLayout baseIndent lastField.span.end next of
+            False -> Ok ([], state)
+            True ->
+              let s1 = advance state
+              in case expect T.LowerIdentifier "record field name" s1 of
+                Err e -> Err e
+                Ok (fieldTok, s2) ->
+                  case parseRecordFieldValue fieldTok baseIndent s2 of
+                    Err e -> Err e
+                    Ok (field, s3) ->
+                      case parseMoreRecordFields baseIndent field s3 of
+                        Err e -> Err e
+                        Ok (rest, s4) -> Ok (field :: rest, s4)

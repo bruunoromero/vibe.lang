@@ -545,687 +545,714 @@ class SemanticAnalyzer {
    * @param ctx - Type inference context with scope, substitution, and optional expected type
    * @returns The inferred type of the expression
    */
-  analyzeExpr(
-    expr: Expr,
-    { scope, substitution, expectedType = null }: TypeInferenceContext,
-  ): Type {
+  analyzeExpr(exprArg: Expr, contextArg: TypeInferenceContext): Type {
     // Access registry properties from analyzer
     const { constructors, adts, typeAliases, opaqueTypes, records } = this;
     const { imports, dependencies } = this;
 
-    switch (expr.kind) {
-      case "Var": {
-        // Look up the symbol and collect any protocol constraints
-        const { type: resolved, constraints } =
-          this.lookupSymbolWithConstraints(
-            scope,
-            expr.name,
-            expr.span,
-            substitution,
-          );
-        // Add any constraints from the symbol to the current context
-        for (const constraint of constraints) {
-          addConstraint(this.getConstraintContext(), constraint);
-          this._pendingProtocolUsages.push({ node: expr, constraint });
+    // Mutable loop variables for tail-call optimised cases (LetIn, Paren).
+    // All other cases return immediately inside the switch.
+    let expr: Expr = exprArg;
+    let scope: Scope = contextArg.scope;
+    let substitution: Substitution = contextArg.substitution;
+    let expectedType: Type | null = contextArg.expectedType ?? null;
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      switch (expr.kind) {
+        case "Var": {
+          // Look up the symbol and collect any protocol constraints
+          const { type: resolved, constraints } =
+            this.lookupSymbolWithConstraints(
+              scope,
+              expr.name,
+              expr.span,
+              substitution,
+            );
+          // Add any constraints from the symbol to the current context
+          for (const constraint of constraints) {
+            addConstraint(this.getConstraintContext(), constraint);
+            this._pendingProtocolUsages.push({ node: expr, constraint });
+          }
+          return applySubstitution(resolved, substitution);
         }
-        return applySubstitution(resolved, substitution);
-      }
-      case "Number": {
-        // Number literals are treated as Int or Float based on decimal point
-        const hasDecimal = expr.value.includes(".");
-        const typeName = hasDecimal ? "Float" : "Int";
-        const opaque = opaqueTypes[typeName];
-        if (!opaque && !adts[typeName]) {
-          throw new SemanticError(
-            `Type '${typeName}' not found. Make sure the prelude is imported.`,
-            expr.span,
-            this.getFilePath(),
-          );
-        }
-        return { kind: "con", name: typeName, args: [] };
-      }
-      case "String": {
-        const opaque = opaqueTypes["String"];
-        if (!opaque && !adts["String"]) {
-          throw new SemanticError(
-            "Type 'String' not found. Make sure the prelude is imported.",
-            expr.span,
-            this.getFilePath(),
-          );
-        }
-        return { kind: "con", name: "String", args: [] };
-      }
-      case "Char": {
-        const opaque = opaqueTypes["Char"];
-        if (!opaque && !adts["Char"]) {
-          throw new SemanticError(
-            "Type 'Char' not found. Make sure the prelude is imported.",
-            expr.span,
-            this.getFilePath(),
-          );
-        }
-        return { kind: "con", name: "Char", args: [] };
-      }
-      case "Unit": {
-        // () is syntax sugar for the Unit constructor from the prelude
-        const opaque = opaqueTypes["Unit"];
-        if (!opaque && !adts["Unit"]) {
-          throw new SemanticError(
-            "Type 'Unit' not found. Make sure the prelude is imported.",
-            expr.span,
-            this.getFilePath(),
-          );
-        }
-        return { kind: "con", name: "Unit", args: [] };
-      }
-      case "Tuple": {
-        const elements = expr.elements.map((el) =>
-          this.analyzeExpr(el, { scope, substitution }),
-        );
-        return { kind: "tuple", elements };
-      }
-      case "List": {
-        if (expr.elements.length === 0) {
-          return listType(freshType());
-        }
-        const first = this.analyzeExpr(expr.elements[0]!, {
-          scope,
-          substitution,
-          expectedType: null,
-        });
-        for (const el of expr.elements.slice(1)) {
-          const elType = this.analyzeExpr(el, { scope, substitution });
-          this.unify(first, elType, el.span, substitution);
-        }
-        return listType(applySubstitution(first, substitution));
-      }
-      case "ListRange": {
-        const startType = this.analyzeExpr(expr.start, { scope, substitution });
-        const endType = this.analyzeExpr(expr.end, { scope, substitution });
-        this.unify(startType, endType, expr.span, substitution);
-        return listType(applySubstitution(startType, substitution));
-      }
-      case "Record": {
-        const fields: Record<string, Type> = {};
-        for (const field of expr.fields) {
-          if (Object.hasOwn(fields, field.name)) {
+        case "Number": {
+          // Number literals are treated as Int or Float based on decimal point
+          const hasDecimal = expr.value.includes(".");
+          const typeName = hasDecimal ? "Float" : "Int";
+          const opaque = opaqueTypes[typeName];
+          if (!opaque && !adts[typeName]) {
             throw new SemanticError(
-              `Duplicate record field '${field.name}'`,
-              field.span,
+              `Type '${typeName}' not found. Make sure the prelude is imported.`,
+              expr.span,
               this.getFilePath(),
             );
           }
-          fields[field.name] = this.analyzeExpr(field.value, {
+          return { kind: "con", name: typeName, args: [] };
+        }
+        case "String": {
+          const opaque = opaqueTypes["String"];
+          if (!opaque && !adts["String"]) {
+            throw new SemanticError(
+              "Type 'String' not found. Make sure the prelude is imported.",
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          return { kind: "con", name: "String", args: [] };
+        }
+        case "Char": {
+          const opaque = opaqueTypes["Char"];
+          if (!opaque && !adts["Char"]) {
+            throw new SemanticError(
+              "Type 'Char' not found. Make sure the prelude is imported.",
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          return { kind: "con", name: "Char", args: [] };
+        }
+        case "Unit": {
+          // () is syntax sugar for the Unit constructor from the prelude
+          const opaque = opaqueTypes["Unit"];
+          if (!opaque && !adts["Unit"]) {
+            throw new SemanticError(
+              "Type 'Unit' not found. Make sure the prelude is imported.",
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+          return { kind: "con", name: "Unit", args: [] };
+        }
+        case "Tuple": {
+          const elements = expr.elements.map((el) =>
+            this.analyzeExpr(el, { scope, substitution }),
+          );
+          return { kind: "tuple", elements };
+        }
+        case "List": {
+          if (expr.elements.length === 0) {
+            return listType(freshType());
+          }
+          const first = this.analyzeExpr(expr.elements[0]!, {
+            scope,
+            substitution,
+            expectedType: null,
+          });
+          for (const el of expr.elements.slice(1)) {
+            const elType = this.analyzeExpr(el, { scope, substitution });
+            this.unify(first, elType, el.span, substitution);
+          }
+          return listType(applySubstitution(first, substitution));
+        }
+        case "ListRange": {
+          const startType = this.analyzeExpr(expr.start, {
             scope,
             substitution,
           });
+          const endType = this.analyzeExpr(expr.end, { scope, substitution });
+          this.unify(startType, endType, expr.span, substitution);
+          return listType(applySubstitution(startType, substitution));
         }
-
-        const literalFieldNames = new Set(Object.keys(fields));
-
-        // Try to resolve the record literal to a named record type.
-        // 1. If expectedType is a TypeCon for a known record, use it directly.
-        // 2. Otherwise, search all records in scope for a unique field-name match.
-        let targetRecord: RecordInfo | undefined;
-
-        if (expectedType) {
-          const expected = applySubstitution(expectedType, substitution);
-          if (expected.kind === "con") {
-            const rec = this.resolveRecordInfo(expected.name);
-            if (rec) {
-              targetRecord = rec;
-            }
-          }
-        }
-
-        if (!targetRecord) {
-          const candidates = this.findRecordsByFieldNames(literalFieldNames);
-          if (candidates.length === 0) {
-            const shape = Object.entries(fields)
-              .map(([k, v]) => `${k} : ${formatType(v)}`)
-              .join(", ");
-            throw new SemanticError(
-              `No record type in scope has shape { ${shape} }. ` +
-                `Define a named record type with these fields.`,
-              expr.span,
-              this.getFilePath(),
-            );
-          }
-          if (candidates.length > 1) {
-            const names = candidates.map((r) => r.name).join(", ");
-            throw new SemanticError(
-              `Ambiguous record literal \u2014 multiple types in scope match this shape: ${names}. ` +
-                `Add a type annotation to disambiguate.`,
-              expr.span,
-              this.getFilePath(),
-            );
-          }
-          targetRecord = candidates[0]!;
-        }
-
-        // Validate: literal fields must match record type fields exactly
-        const recordFieldNames = new Set(
-          targetRecord.fields.map((f) => f.name),
-        );
-        for (const fname of literalFieldNames) {
-          if (!recordFieldNames.has(fname)) {
-            throw new SemanticError(
-              `Field '${fname}' is not a field of record type '${targetRecord.name}'`,
-              expr.fields.find((f) => f.name === fname)!.span,
-              this.getFilePath(),
-            );
-          }
-        }
-        for (const fname of recordFieldNames) {
-          if (!literalFieldNames.has(fname)) {
-            throw new SemanticError(
-              `Missing field '${fname}' for record type '${targetRecord.name}'`,
-              expr.span,
-              this.getFilePath(),
-            );
-          }
-        }
-
-        // Create fresh type vars for record params and unify field types
-        const paramVars: TypeVar[] = targetRecord.params.map(() => freshType());
-        const resolveCtx = new Map<string, TypeVar>();
-        targetRecord.params.forEach((p, i) => {
-          resolveCtx.set(p, paramVars[i]!);
-        });
-
-        for (const fieldInfo of targetRecord.fields) {
-          const declaredFieldType = this.typeFromAnnotation(
-            fieldInfo.typeExpr,
-            resolveCtx,
-          );
-          this.unify(
-            fields[fieldInfo.name]!,
-            declaredFieldType,
-            expr.fields.find((f) => f.name === fieldInfo.name)!.span,
-            substitution,
-          );
-        }
-
-        const resolvedArgs = paramVars.map((v) =>
-          applySubstitution(v, substitution),
-        );
-        return { kind: "con", name: targetRecord.name, args: resolvedArgs };
-      }
-      case "RecordUpdate": {
-        const baseType = this.lookupSymbol(
-          scope,
-          expr.base,
-          expr.span,
-          substitution,
-        );
-        const concreteBase = applySubstitution(baseType, substitution);
-
-        if (concreteBase.kind === "con") {
-          const recordInfo = this.resolveRecordInfo(concreteBase.name);
-          if (recordInfo) {
-            // Named record update — resolve fields via RecordInfo
-            const paramVars: TypeVar[] = recordInfo.params.map(() =>
-              freshType(),
-            );
-            const resolveCtx = new Map<string, TypeVar>();
-            recordInfo.params.forEach((p, i) => {
-              resolveCtx.set(p, paramVars[i]!);
-            });
-            // Unify param vars with the concrete type args
-            paramVars.forEach((v, i) => {
-              if (concreteBase.args[i]) {
-                this.unify(v, concreteBase.args[i]!, expr.span, substitution);
-              }
-            });
-
-            const recordFieldNames = new Set(
-              recordInfo.fields.map((f) => f.name),
-            );
-            for (const field of expr.fields) {
-              if (!recordFieldNames.has(field.name)) {
-                throw new SemanticError(
-                  `Record '${concreteBase.name}' has no field '${field.name}'`,
-                  field.span,
-                  this.getFilePath(),
-                );
-              }
-              const fieldInfo = recordInfo.fields.find(
-                (f) => f.name === field.name,
-              )!;
-              const declaredFieldType = this.typeFromAnnotation(
-                fieldInfo.typeExpr,
-                resolveCtx,
-              );
-              const fieldType = this.analyzeExpr(field.value, {
-                scope,
-                substitution,
-              });
-              this.unify(
-                fieldType,
-                declaredFieldType,
-                field.span,
-                substitution,
-              );
-            }
-
-            const resolvedArgs = paramVars.map((v) =>
-              applySubstitution(v, substitution),
-            );
-            return { kind: "con", name: concreteBase.name, args: resolvedArgs };
-          }
-        }
-
-        if (concreteBase.kind !== "record") {
-          throw new SemanticError(
-            `Cannot update non-record '${expr.base}'`,
-            expr.span,
-            this.getFilePath(),
-          );
-        }
-        const updatedFields: Record<string, Type> = { ...concreteBase.fields };
-        for (const field of expr.fields) {
-          if (!updatedFields[field.name]) {
-            throw new SemanticError(
-              `Record '${expr.base}' has no field '${field.name}'`,
-              field.span,
-              this.getFilePath(),
-            );
-          }
-          const fieldType = this.analyzeExpr(field.value, {
-            scope,
-            substitution,
-          });
-          this.unify(
-            updatedFields[field.name]!,
-            fieldType,
-            field.span,
-            substitution,
-          );
-          updatedFields[field.name] = applySubstitution(
-            updatedFields[field.name]!,
-            substitution,
-          );
-        }
-        return { kind: "record", fields: updatedFields };
-      }
-      case "FieldAccess": {
-        // First, try to resolve module-qualified access (e.g., Vibe.JS.null)
-        const moduleAccess = tryResolveModuleFieldAccess(
-          expr,
-          imports,
-          dependencies,
-          substitution,
-        );
-        if (moduleAccess) {
-          return moduleAccess;
-        }
-
-        // Otherwise, handle as record field access
-        const targetType = this.analyzeExpr(expr.target, {
-          scope,
-          substitution,
-        });
-        const concrete = applySubstitution(targetType, substitution);
-
-        // If target is error type, propagate without additional errors (prevent cascading)
-        if (concrete.kind === "error") {
-          return ERROR_TYPE;
-        }
-
-        let fieldType: Type | undefined;
-
-        if (concrete.kind === "record") {
-          fieldType = concrete.fields[expr.field];
-        } else if (concrete.kind === "con") {
-          const recordInfo = records[concrete.name];
-          if (recordInfo) {
-            const fieldInfo = recordInfo.fields.find(
-              (f) => f.name === expr.field,
-            );
-            if (fieldInfo) {
-              const resolveCtx = new Map<string, TypeVar>();
-              const freshVars: TypeVar[] = [];
-              recordInfo.params.forEach((p) => {
-                const v: TypeVar = { kind: "var", id: freshType().id };
-                resolveCtx.set(p, v);
-                freshVars.push(v);
-              });
-
-              const genericFieldType = this.typeFromAnnotation(
-                fieldInfo.typeExpr,
-                resolveCtx,
-              );
-
-              const instSub = new Map<number, Type>();
-              freshVars.forEach((v, i) => {
-                instSub.set(v.id, concrete.args[i]!);
-              });
-
-              fieldType = applySubstitution(genericFieldType, instSub);
-            }
-          }
-        }
-
-        if (!fieldType) {
-          if (
-            concrete.kind !== "record" &&
-            (concrete.kind !== "con" || !records[concrete.name])
-          ) {
-            throw new SemanticError(
-              `Cannot access field '${expr.field}' on non-record value '${formatType(concrete)}'`,
-              expr.span,
-              this.getFilePath(),
-            );
-          }
-          throw new SemanticError(
-            `Record has no field '${expr.field}'`,
-            expr.span,
-            this.getFilePath(),
-          );
-        }
-        return applySubstitution(fieldType, substitution);
-      }
-      case "Lambda": {
-        const paramTypes = expr.args.map(() => freshType());
-        const fnScope = scope.child();
-        this.bindPatterns(fnScope, expr.args, paramTypes, substitution);
-        const bodyType = this.analyzeExpr(expr.body, {
-          scope: fnScope,
-          substitution,
-        });
-        return fnChain(paramTypes, bodyType);
-      }
-      case "Apply": {
-        let calleeType = this.analyzeExpr(expr.callee, { scope, substitution });
-        for (const arg of expr.args) {
-          const argType = this.analyzeExpr(arg, { scope, substitution });
-          const resultType = freshType();
-          this.unify(
-            calleeType,
-            fn(argType, resultType),
-            expr.span,
-            substitution,
-          );
-          // Eagerly validate constraints after unification to catch type mismatches
-          // where a protocol method's return type gets unified with a function type
-          // due to over-application
-          this.validateConstraintsEagerly(substitution, arg.span);
-          calleeType = applySubstitution(resultType, substitution);
-        }
-        return applySubstitution(calleeType, substitution);
-      }
-      case "If": {
-        const condType = this.analyzeExpr(expr.condition, {
-          scope,
-          substitution,
-        });
-        // Bool type must be defined in the prelude
-        const boolAdt = adts["Bool"];
-        if (!boolAdt) {
-          throw new SemanticError(
-            "Type 'Bool' not found. Make sure the prelude is imported.",
-            expr.condition.span,
-            this.getFilePath(),
-          );
-        }
-        const tBool: Type = { kind: "con", name: "Bool", args: [] };
-        this.unify(condType, tBool, expr.condition.span, substitution);
-        const thenType = this.analyzeExpr(expr.thenBranch, {
-          scope,
-          substitution,
-        });
-        const elseType = this.analyzeExpr(expr.elseBranch, {
-          scope,
-          substitution,
-        });
-        this.unify(thenType, elseType, expr.span, substitution);
-        return applySubstitution(thenType, substitution);
-      }
-      case "LetIn": {
-        const letScope = scope.child();
-
-        // First pass: seed the scope with monomorphic schemes to enable recursion
-        for (const binding of expr.bindings) {
-          if (letScope.symbols.has(binding.name)) {
-            throw new SemanticError(
-              `Duplicate let-binding '${binding.name}'`,
-              binding.span,
-              this.getFilePath(),
-            );
-          }
-          const seeded = this.seedValueType(binding);
-          // Seed with monomorphic scheme (empty quantifier set)
-          this.declareSymbol(
-            letScope,
-            binding.name,
-            { vars: new Set(), constraints: [], type: seeded },
-            binding.span,
-          );
-        }
-
-        // Second pass: analyze each binding and generalize its type
-        // This is where let-polymorphism happens for local bindings
-        for (const binding of expr.bindings) {
-          const declared = this.lookupSymbol(
-            letScope,
-            binding.name,
-            binding.span,
-            substitution,
-          );
-          const inferred = this.analyzeValueDeclaration(
-            binding,
-            letScope,
-            substitution,
-            declared,
-          );
-          // Generalize the inferred type for polymorphic let-bindings
-          // Note: We generalize with respect to the parent scope, not letScope,
-          // to allow quantifying over variables not bound in the parent
-          const generalizedScheme = this.generalize(
-            inferred,
-            scope,
-            substitution,
-          );
-          letScope.symbols.set(binding.name, generalizedScheme);
-        }
-
-        return this.analyzeExpr(expr.body, {
-          scope: letScope,
-          substitution,
-          expectedType,
-        });
-      }
-      case "Case": {
-        const discriminantType = this.analyzeExpr(expr.discriminant, {
-          scope,
-          substitution,
-        });
-        const branchTypes: Type[] = [];
-
-        expr.branches.forEach((branch, index) => {
-          const branchScope = new Scope(scope);
-          const patternType = this.bindPattern(
-            branch.pattern,
-            branchScope,
-            new Set(),
-            freshType(),
-            substitution,
-          );
-          this.unify(
-            discriminantType,
-            patternType,
-            branch.pattern.span,
-            substitution,
-          );
-          const bodyType = this.analyzeExpr(branch.body, {
-            scope: branchScope,
-            substitution,
-            expectedType,
-          });
-          branchTypes.push(bodyType);
-
-          if (branch.pattern.kind === "WildcardPattern") {
-            if (index !== expr.branches.length - 1) {
+        case "Record": {
+          const fields: Record<string, Type> = {};
+          for (const field of expr.fields) {
+            if (Object.hasOwn(fields, field.name)) {
               throw new SemanticError(
-                "Wildcard pattern makes following branches unreachable",
-                branch.pattern.span,
+                `Duplicate record field '${field.name}'`,
+                field.span,
+                this.getFilePath(),
+              );
+            }
+            fields[field.name] = this.analyzeExpr(field.value, {
+              scope,
+              substitution,
+            });
+          }
+
+          const literalFieldNames = new Set(Object.keys(fields));
+
+          // Try to resolve the record literal to a named record type.
+          // 1. If expectedType is a TypeCon for a known record, use it directly.
+          // 2. Otherwise, search all records in scope for a unique field-name match.
+          let targetRecord: RecordInfo | undefined;
+
+          if (expectedType) {
+            const expected = applySubstitution(expectedType, substitution);
+            if (expected.kind === "con") {
+              const rec = this.resolveRecordInfo(expected.name);
+              if (rec) {
+                targetRecord = rec;
+              }
+            }
+          }
+
+          if (!targetRecord) {
+            const candidates = this.findRecordsByFieldNames(literalFieldNames);
+            if (candidates.length === 0) {
+              const shape = Object.entries(fields)
+                .map(([k, v]) => `${k} : ${formatType(v)}`)
+                .join(", ");
+              throw new SemanticError(
+                `No record type in scope has shape { ${shape} }. ` +
+                  `Define a named record type with these fields.`,
+                expr.span,
+                this.getFilePath(),
+              );
+            }
+            if (candidates.length > 1) {
+              const names = candidates.map((r) => r.name).join(", ");
+              throw new SemanticError(
+                `Ambiguous record literal \u2014 multiple types in scope match this shape: ${names}. ` +
+                  `Add a type annotation to disambiguate.`,
+                expr.span,
+                this.getFilePath(),
+              );
+            }
+            targetRecord = candidates[0]!;
+          }
+
+          // Validate: literal fields must match record type fields exactly
+          const recordFieldNames = new Set(
+            targetRecord.fields.map((f) => f.name),
+          );
+          for (const fname of literalFieldNames) {
+            if (!recordFieldNames.has(fname)) {
+              throw new SemanticError(
+                `Field '${fname}' is not a field of record type '${targetRecord.name}'`,
+                expr.fields.find((f) => f.name === fname)!.span,
                 this.getFilePath(),
               );
             }
           }
-          if (branch.pattern.kind === "ConstructorPattern") {
-            this.validateConstructorArity(branch.pattern);
+          for (const fname of recordFieldNames) {
+            if (!literalFieldNames.has(fname)) {
+              throw new SemanticError(
+                `Missing field '${fname}' for record type '${targetRecord.name}'`,
+                expr.span,
+                this.getFilePath(),
+              );
+            }
           }
-        });
 
-        if (branchTypes.length === 0) {
-          throw new SemanticError(
-            "Case expression has no branches",
-            expr.span,
-            this.getFilePath(),
+          // Create fresh type vars for record params and unify field types
+          const paramVars: TypeVar[] = targetRecord.params.map(() =>
+            freshType(),
           );
-        }
-
-        const firstType = branchTypes[0]!;
-        for (const bt of branchTypes.slice(1)) {
-          this.unify(firstType, bt, expr.span, substitution);
-        }
-
-        // Exhaustiveness checking
-        const patterns = expr.branches.map((b) => b.pattern);
-        const result = checkExhaustiveness(
-          patterns,
-          discriminantType,
-          adts,
-          constructors,
-          (name) =>
-            resolveQualifiedConstructor(
-              name,
-              constructors,
-              adts,
-              imports,
-              dependencies,
-            ) || undefined,
-        );
-
-        if (!result.exhaustive) {
-          throw new SemanticError(
-            `Non-exhaustive case expression (missing: ${result.missing})`,
-            expr.span,
-            this.getFilePath(),
-          );
-        }
-
-        return applySubstitution(firstType, substitution);
-      }
-      case "Infix": {
-        // Check if this is a builtin operator with known type
-        const opType = INFIX_TYPES[expr.operator];
-
-        if (opType) {
-          // Builtin operator: analyze operands and unify with known operator type
-          const leftType = this.analyzeExpr(expr.left, { scope, substitution });
-          const rightType = this.analyzeExpr(expr.right, {
-            scope,
-            substitution,
+          const resolveCtx = new Map<string, TypeVar>();
+          targetRecord.params.forEach((p, i) => {
+            resolveCtx.set(p, paramVars[i]!);
           });
-          const expected = applySubstitution(opType, substitution);
-          const params = flattenFunctionParams(expected);
-          if (params.length < 2) {
+
+          for (const fieldInfo of targetRecord.fields) {
+            const declaredFieldType = this.typeFromAnnotation(
+              fieldInfo.typeExpr,
+              resolveCtx,
+            );
+            this.unify(
+              fields[fieldInfo.name]!,
+              declaredFieldType,
+              expr.fields.find((f) => f.name === fieldInfo.name)!.span,
+              substitution,
+            );
+          }
+
+          const resolvedArgs = paramVars.map((v) =>
+            applySubstitution(v, substitution),
+          );
+          return { kind: "con", name: targetRecord.name, args: resolvedArgs };
+        }
+        case "RecordUpdate": {
+          const baseType = this.lookupSymbol(
+            scope,
+            expr.base,
+            expr.span,
+            substitution,
+          );
+          const concreteBase = applySubstitution(baseType, substitution);
+
+          if (concreteBase.kind === "con") {
+            const recordInfo = this.resolveRecordInfo(concreteBase.name);
+            if (recordInfo) {
+              // Named record update — resolve fields via RecordInfo
+              const paramVars: TypeVar[] = recordInfo.params.map(() =>
+                freshType(),
+              );
+              const resolveCtx = new Map<string, TypeVar>();
+              recordInfo.params.forEach((p, i) => {
+                resolveCtx.set(p, paramVars[i]!);
+              });
+              // Unify param vars with the concrete type args
+              paramVars.forEach((v, i) => {
+                if (concreteBase.args[i]) {
+                  this.unify(v, concreteBase.args[i]!, expr.span, substitution);
+                }
+              });
+
+              const recordFieldNames = new Set(
+                recordInfo.fields.map((f) => f.name),
+              );
+              for (const field of expr.fields) {
+                if (!recordFieldNames.has(field.name)) {
+                  throw new SemanticError(
+                    `Record '${concreteBase.name}' has no field '${field.name}'`,
+                    field.span,
+                    this.getFilePath(),
+                  );
+                }
+                const fieldInfo = recordInfo.fields.find(
+                  (f) => f.name === field.name,
+                )!;
+                const declaredFieldType = this.typeFromAnnotation(
+                  fieldInfo.typeExpr,
+                  resolveCtx,
+                );
+                const fieldType = this.analyzeExpr(field.value, {
+                  scope,
+                  substitution,
+                });
+                this.unify(
+                  fieldType,
+                  declaredFieldType,
+                  field.span,
+                  substitution,
+                );
+              }
+
+              const resolvedArgs = paramVars.map((v) =>
+                applySubstitution(v, substitution),
+              );
+              return {
+                kind: "con",
+                name: concreteBase.name,
+                args: resolvedArgs,
+              };
+            }
+          }
+
+          if (concreteBase.kind !== "record") {
             throw new SemanticError(
-              "Invalid operator type",
+              `Cannot update non-record '${expr.base}'`,
               expr.span,
               this.getFilePath(),
             );
           }
-          this.unify(params[0]!, leftType, expr.left.span, substitution);
-          this.unify(params[1]!, rightType, expr.right.span, substitution);
-          return applySubstitution(
-            extractAnnotationReturn(expected, 2),
+          const updatedFields: Record<string, Type> = {
+            ...concreteBase.fields,
+          };
+          for (const field of expr.fields) {
+            if (!updatedFields[field.name]) {
+              throw new SemanticError(
+                `Record '${expr.base}' has no field '${field.name}'`,
+                field.span,
+                this.getFilePath(),
+              );
+            }
+            const fieldType = this.analyzeExpr(field.value, {
+              scope,
+              substitution,
+            });
+            this.unify(
+              updatedFields[field.name]!,
+              fieldType,
+              field.span,
+              substitution,
+            );
+            updatedFields[field.name] = applySubstitution(
+              updatedFields[field.name]!,
+              substitution,
+            );
+          }
+          return { kind: "record", fields: updatedFields };
+        }
+        case "FieldAccess": {
+          // Explicit alias because TypeScript won't narrow a reassigned `let` variable.
+          const fieldExpr = expr as Extract<Expr, { kind: "FieldAccess" }>;
+          // First, try to resolve module-qualified access (e.g., Vibe.JS.null)
+          const moduleAccess = tryResolveModuleFieldAccess(
+            fieldExpr,
+            imports,
+            dependencies,
             substitution,
           );
-        }
-
-        // User-defined operator: convert to function application
-        // IMPORTANT: Don't analyze operands here - let the Apply handling do it
-        // to ensure proper constraint collection and unification
-        const callee: Expr = {
-          kind: "Var",
-          name: expr.operator,
-          namespace: "lower",
-          span: expr.span,
-        };
-        const applyExpr: Expr = {
-          kind: "Apply",
-          callee,
-          args: [expr.left, expr.right],
-          span: expr.span,
-        };
-
-        // Track pending usages before recursive call so we can re-key
-        // any constraint recorded against the synthetic Var callee to the
-        // original Infix node (which is what IR lowering will see).
-        const beforeLen = this._pendingProtocolUsages.length;
-        const result = this.analyzeExpr(applyExpr, {
-          scope,
-          substitution,
-          expectedType,
-        });
-        for (let i = beforeLen; i < this._pendingProtocolUsages.length; i++) {
-          if (this._pendingProtocolUsages[i]!.node === callee) {
-            this._pendingProtocolUsages[i]!.node = expr;
+          if (moduleAccess) {
+            return moduleAccess;
           }
-        }
-        return result;
-      }
-      case "Paren":
-        return this.analyzeExpr(expr.expression, {
-          scope,
-          substitution,
-          expectedType,
-        });
-      case "Unary": {
-        // Unary negation: only allowed for Int and Float
-        const operandType = this.analyzeExpr(expr.operand, {
-          scope,
-          substitution,
-        });
-        const concreteType = applySubstitution(operandType, substitution);
 
-        // Check if the operand is Int or Float
-        if (concreteType.kind === "con") {
-          if (concreteType.name === "Int" || concreteType.name === "Float") {
-            return concreteType;
+          // Otherwise, handle as record field access
+          const targetType = this.analyzeExpr(fieldExpr.target, {
+            scope,
+            substitution,
+          });
+          const concrete = applySubstitution(targetType, substitution);
+
+          // If target is error type, propagate without additional errors (prevent cascading)
+          if (concrete.kind === "error") {
+            return ERROR_TYPE;
           }
-        }
 
-        // For type variables, we need to defer the check or constrain the type
-        // For now, we require the type to be known as Int or Float
-        if (concreteType.kind === "var") {
+          let fieldType: Type | undefined;
+
+          if (concrete.kind === "record") {
+            fieldType = concrete.fields[fieldExpr.field];
+          } else if (concrete.kind === "con") {
+            const recordInfo = this.resolveRecordInfo(concrete.name);
+            if (recordInfo) {
+              const fieldInfo = recordInfo.fields.find(
+                (f) => f.name === fieldExpr.field,
+              );
+              if (fieldInfo) {
+                const resolveCtx = new Map<string, TypeVar>();
+                const freshVars: TypeVar[] = [];
+                recordInfo.params.forEach((p) => {
+                  const v: TypeVar = { kind: "var", id: freshType().id };
+                  resolveCtx.set(p, v);
+                  freshVars.push(v);
+                });
+
+                const genericFieldType = this.typeFromAnnotation(
+                  fieldInfo.typeExpr,
+                  resolveCtx,
+                );
+
+                const instSub = new Map<number, Type>();
+                freshVars.forEach((v, i) => {
+                  instSub.set(v.id, concrete.args[i]!);
+                });
+
+                fieldType = applySubstitution(genericFieldType, instSub);
+              }
+            }
+          }
+
+          if (!fieldType) {
+            if (
+              concrete.kind !== "record" &&
+              (concrete.kind !== "con" ||
+                !this.resolveRecordInfo(concrete.name))
+            ) {
+              throw new SemanticError(
+                `Cannot access field '${fieldExpr.field}' on non-record value '${formatType(concrete)}'`,
+                fieldExpr.span,
+                this.getFilePath(),
+              );
+            }
+            throw new SemanticError(
+              `Record has no field '${fieldExpr.field}'`,
+              fieldExpr.span,
+              this.getFilePath(),
+            );
+          }
+          return applySubstitution(fieldType, substitution);
+        }
+        case "Lambda": {
+          const paramTypes = expr.args.map(() => freshType());
+          const fnScope = scope.child();
+          this.bindPatterns(fnScope, expr.args, paramTypes, substitution);
+          const bodyType = this.analyzeExpr(expr.body, {
+            scope: fnScope,
+            substitution,
+          });
+          return fnChain(paramTypes, bodyType);
+        }
+        case "Apply": {
+          let calleeType = this.analyzeExpr(expr.callee, {
+            scope,
+            substitution,
+          });
+          for (const arg of expr.args) {
+            const argType = this.analyzeExpr(arg, { scope, substitution });
+            const resultType = freshType();
+            this.unify(
+              calleeType,
+              fn(argType, resultType),
+              expr.span,
+              substitution,
+            );
+            // Eagerly validate constraints after unification to catch type mismatches
+            // where a protocol method's return type gets unified with a function type
+            // due to over-application
+            this.validateConstraintsEagerly(substitution, arg.span);
+            calleeType = applySubstitution(resultType, substitution);
+          }
+          return applySubstitution(calleeType, substitution);
+        }
+        case "If": {
+          const condType = this.analyzeExpr(expr.condition, {
+            scope,
+            substitution,
+          });
+          // Bool type must be defined in the prelude
+          const boolAdt = adts["Bool"];
+          if (!boolAdt) {
+            throw new SemanticError(
+              "Type 'Bool' not found. Make sure the prelude is imported.",
+              expr.condition.span,
+              this.getFilePath(),
+            );
+          }
+          const tBool: Type = { kind: "con", name: "Bool", args: [] };
+          this.unify(condType, tBool, expr.condition.span, substitution);
+          const thenType = this.analyzeExpr(expr.thenBranch, {
+            scope,
+            substitution,
+          });
+          const elseType = this.analyzeExpr(expr.elseBranch, {
+            scope,
+            substitution,
+          });
+          this.unify(thenType, elseType, expr.span, substitution);
+          return applySubstitution(thenType, substitution);
+        }
+        case "LetIn": {
+          const letScope = scope.child();
+
+          // First pass: seed the scope with monomorphic schemes to enable recursion
+          for (const binding of expr.bindings) {
+            if (letScope.symbols.has(binding.name)) {
+              throw new SemanticError(
+                `Duplicate let-binding '${binding.name}'`,
+                binding.span,
+                this.getFilePath(),
+              );
+            }
+            const seeded = this.seedValueType(binding);
+            // Seed with monomorphic scheme (empty quantifier set)
+            this.declareSymbol(
+              letScope,
+              binding.name,
+              { vars: new Set(), constraints: [], type: seeded },
+              binding.span,
+            );
+          }
+
+          // Second pass: analyze each binding and generalize its type
+          // This is where let-polymorphism happens for local bindings
+          for (const binding of expr.bindings) {
+            const declared = this.lookupSymbol(
+              letScope,
+              binding.name,
+              binding.span,
+              substitution,
+            );
+            const inferred = this.analyzeValueDeclaration(
+              binding,
+              letScope,
+              substitution,
+              declared,
+            );
+            // Generalize the inferred type for polymorphic let-bindings
+            // Note: We generalize with respect to the parent scope, not letScope,
+            // to allow quantifying over variables not bound in the parent
+            const generalizedScheme = this.generalize(
+              inferred,
+              scope,
+              substitution,
+            );
+            letScope.symbols.set(binding.name, generalizedScheme);
+          }
+
+          // Tail-call: loop back into the while with the body expression
+          expr = expr.body;
+          scope = letScope;
+          // expectedType intentionally carried through unchanged
+          continue;
+        }
+        case "Case": {
+          // Explicit alias because TypeScript won't narrow a reassigned `let` variable.
+          const caseExpr = expr as Extract<Expr, { kind: "Case" }>;
+          const discriminantType = this.analyzeExpr(caseExpr.discriminant, {
+            scope,
+            substitution,
+          });
+          const branchTypes: Type[] = [];
+
+          caseExpr.branches.forEach((branch, index) => {
+            const branchScope = new Scope(scope);
+            const patternType = this.bindPattern(
+              branch.pattern,
+              branchScope,
+              new Set(),
+              freshType(),
+              substitution,
+            );
+            this.unify(
+              discriminantType,
+              patternType,
+              branch.pattern.span,
+              substitution,
+            );
+            const bodyType = this.analyzeExpr(branch.body, {
+              scope: branchScope,
+              substitution,
+              expectedType,
+            });
+            branchTypes.push(bodyType);
+
+            if (branch.pattern.kind === "WildcardPattern") {
+              if (index !== caseExpr.branches.length - 1) {
+                throw new SemanticError(
+                  "Wildcard pattern makes following branches unreachable",
+                  branch.pattern.span,
+                  this.getFilePath(),
+                );
+              }
+            }
+            if (branch.pattern.kind === "ConstructorPattern") {
+              this.validateConstructorArity(branch.pattern);
+            }
+          });
+
+          if (branchTypes.length === 0) {
+            throw new SemanticError(
+              "Case expression has no branches",
+              caseExpr.span,
+              this.getFilePath(),
+            );
+          }
+
+          const firstType = branchTypes[0]!;
+          for (const bt of branchTypes.slice(1)) {
+            this.unify(firstType, bt, caseExpr.span, substitution);
+          }
+
+          // Exhaustiveness checking
+          const patterns = caseExpr.branches.map((b) => b.pattern);
+          const result = checkExhaustiveness(
+            patterns,
+            discriminantType,
+            adts,
+            constructors,
+            (name) =>
+              resolveQualifiedConstructor(
+                name,
+                constructors,
+                adts,
+                imports,
+                dependencies,
+              ) || undefined,
+          );
+
+          if (!result.exhaustive) {
+            throw new SemanticError(
+              `Non-exhaustive case expression (missing: ${result.missing})`,
+              caseExpr.span,
+              this.getFilePath(),
+            );
+          }
+
+          return applySubstitution(firstType, substitution);
+        }
+        case "Infix": {
+          // Check if this is a builtin operator with known type
+          const opType = INFIX_TYPES[expr.operator];
+
+          if (opType) {
+            // Builtin operator: analyze operands and unify with known operator type
+            const leftType = this.analyzeExpr(expr.left, {
+              scope,
+              substitution,
+            });
+            const rightType = this.analyzeExpr(expr.right, {
+              scope,
+              substitution,
+            });
+            const expected = applySubstitution(opType, substitution);
+            const params = flattenFunctionParams(expected);
+            if (params.length < 2) {
+              throw new SemanticError(
+                "Invalid operator type",
+                expr.span,
+                this.getFilePath(),
+              );
+            }
+            this.unify(params[0]!, leftType, expr.left.span, substitution);
+            this.unify(params[1]!, rightType, expr.right.span, substitution);
+            return applySubstitution(
+              extractAnnotationReturn(expected, 2),
+              substitution,
+            );
+          }
+
+          // User-defined operator: convert to function application
+          // IMPORTANT: Don't analyze operands here - let the Apply handling do it
+          // to ensure proper constraint collection and unification
+          const callee: Expr = {
+            kind: "Var",
+            name: expr.operator,
+            namespace: "lower",
+            span: expr.span,
+          };
+          const applyExpr: Expr = {
+            kind: "Apply",
+            callee,
+            args: [expr.left, expr.right],
+            span: expr.span,
+          };
+
+          // Track pending usages before recursive call so we can re-key
+          // any constraint recorded against the synthetic Var callee to the
+          // original Infix node (which is what IR lowering will see).
+          const beforeLen = this._pendingProtocolUsages.length;
+          const result = this.analyzeExpr(applyExpr, {
+            scope,
+            substitution,
+            expectedType,
+          });
+          for (let i = beforeLen; i < this._pendingProtocolUsages.length; i++) {
+            if (this._pendingProtocolUsages[i]!.node === callee) {
+              this._pendingProtocolUsages[i]!.node = expr;
+            }
+          }
+          return result;
+        }
+        case "Paren":
+          expr = expr.expression;
+          // expectedType and scope are unchanged — loop continues
+          continue;
+        case "Unary": {
+          // Unary negation: only allowed for Int and Float
+          const operandType = this.analyzeExpr(expr.operand, {
+            scope,
+            substitution,
+          });
+          const concreteType = applySubstitution(operandType, substitution);
+
+          // Check if the operand is Int or Float
+          if (concreteType.kind === "con") {
+            if (concreteType.name === "Int" || concreteType.name === "Float") {
+              return concreteType;
+            }
+          }
+
+          // For type variables, we need to defer the check or constrain the type
+          // For now, we require the type to be known as Int or Float
+          if (concreteType.kind === "var") {
+            throw new SemanticError(
+              `Unary negation requires a concrete numeric type (Int or Float), but got an unknown type. Add a type annotation to disambiguate.`,
+              expr.span,
+              this.getFilePath(),
+            );
+          }
+
           throw new SemanticError(
-            `Unary negation requires a concrete numeric type (Int or Float), but got an unknown type. Add a type annotation to disambiguate.`,
+            `Unary negation is only allowed for Int and Float, but got '${formatType(
+              concreteType,
+            )}'`,
             expr.span,
             this.getFilePath(),
           );
         }
-
-        throw new SemanticError(
-          `Unary negation is only allowed for Int and Float, but got '${formatType(
-            concreteType,
-          )}'`,
-          expr.span,
-          this.getFilePath(),
-        );
+        default: {
+          const _exhaustive: never = expr;
+          throw new SemanticError(
+            "Unsupported expression",
+            (expr as { span: Span }).span,
+            this.getFilePath(),
+          );
+        }
       }
-      default: {
-        const _exhaustive: never = expr;
-        throw new SemanticError(
-          "Unsupported expression",
-          (expr as { span: Span }).span,
-          this.getFilePath(),
-        );
-      }
-    }
+    } // end while (true)
   }
 
   seedValueType(decl: ValueDeclaration | DecoratedDeclaration): Type {
@@ -1861,11 +1888,6 @@ class SemanticAnalyzer {
 
     for (const rec of Object.values(this.records)) {
       check(rec);
-    }
-    for (const [, dep] of this.dependencies) {
-      for (const rec of Object.values(dep.records)) {
-        check(rec);
-      }
     }
 
     return results;
@@ -6653,14 +6675,20 @@ class SemanticAnalyzer {
 /**
  * Collect all free variable references in an expression.
  * These are variables that are not bound within the expression itself.
+ *
+ * Implemented iteratively using an explicit worklist to avoid stack overflow
+ * on deeply nested expressions.
  */
 function collectFreeVars(
   expr: Expr,
   bound: Set<string> = new Set(),
 ): Set<string> {
   const free = new Set<string>();
+  // Each work item is [expression, bound-variable-set-at-that-point]
+  const worklist: Array<[Expr, Set<string>]> = [[expr, bound]];
 
-  function visit(e: Expr, localBound: Set<string>): void {
+  while (worklist.length > 0) {
+    const [e, localBound] = worklist.pop()!;
     switch (e.kind) {
       case "Var":
         if (!localBound.has(e.name)) {
@@ -6673,79 +6701,81 @@ function collectFreeVars(
       case "Unit":
         break;
       case "Paren":
-        visit(e.expression, localBound);
+        worklist.push([e.expression, localBound]);
         break;
       case "Tuple":
-        e.elements.forEach((el) => visit(el, localBound));
+        for (const el of e.elements) worklist.push([el, localBound]);
         break;
       case "List":
-        e.elements.forEach((el) => visit(el, localBound));
+        for (const el of e.elements) worklist.push([el, localBound]);
         break;
       case "ListRange":
-        visit(e.start, localBound);
-        visit(e.end, localBound);
+        worklist.push([e.start, localBound]);
+        worklist.push([e.end, localBound]);
         break;
       case "Record":
-        e.fields.forEach((f) => visit(f.value, localBound));
+        for (const f of e.fields) worklist.push([f.value, localBound]);
         break;
       case "RecordUpdate":
         if (!localBound.has(e.base)) {
           free.add(e.base);
         }
-        e.fields.forEach((f) => visit(f.value, localBound));
+        for (const f of e.fields) worklist.push([f.value, localBound]);
         break;
       case "FieldAccess":
-        visit(e.target, localBound);
+        worklist.push([e.target, localBound]);
         break;
       case "Apply":
-        visit(e.callee, localBound);
-        e.args.forEach((arg) => visit(arg, localBound));
+        worklist.push([e.callee, localBound]);
+        for (const arg of e.args) worklist.push([arg, localBound]);
         break;
       case "Infix":
-        visit(e.left, localBound);
-        visit(e.right, localBound);
+        worklist.push([e.left, localBound]);
+        worklist.push([e.right, localBound]);
         if (!localBound.has(e.operator)) {
           free.add(e.operator);
         }
         break;
       case "Unary":
-        visit(e.operand, localBound);
+        worklist.push([e.operand, localBound]);
         break;
       case "Lambda": {
         const lambdaBound = new Set(localBound);
-        e.args.forEach((p) => collectPatternVars(p, lambdaBound));
-        visit(e.body, lambdaBound);
+        for (const p of e.args) collectPatternVars(p, lambdaBound);
+        worklist.push([e.body, lambdaBound]);
         break;
       }
       case "LetIn": {
+        // Build the scoped bound set: all binding names are added upfront.
+        // Let-binding names are always local (never module-level), so this
+        // over-approximation is safe for the purpose of dependency analysis.
         const letBound = new Set(localBound);
         for (const binding of e.bindings) {
-          // Collect from binding body with current scope
-          visit(binding.body, letBound);
-          // Add binding name to scope for subsequent bindings and main body
           letBound.add(binding.name);
-          binding.args.forEach((p) => collectPatternVars(p, letBound));
+          for (const p of binding.args) collectPatternVars(p, letBound);
         }
-        visit(e.body, letBound);
+        for (const binding of e.bindings) {
+          worklist.push([binding.body, letBound]);
+        }
+        worklist.push([e.body, letBound]);
         break;
       }
       case "If":
-        visit(e.condition, localBound);
-        visit(e.thenBranch, localBound);
-        visit(e.elseBranch, localBound);
+        worklist.push([e.condition, localBound]);
+        worklist.push([e.thenBranch, localBound]);
+        worklist.push([e.elseBranch, localBound]);
         break;
       case "Case":
-        visit(e.discriminant, localBound);
+        worklist.push([e.discriminant, localBound]);
         for (const branch of e.branches) {
           const branchBound = new Set(localBound);
           collectPatternVars(branch.pattern, branchBound);
-          visit(branch.body, branchBound);
+          worklist.push([branch.body, branchBound]);
         }
         break;
     }
   }
 
-  visit(expr, bound);
   return free;
 }
 
@@ -8750,21 +8780,22 @@ function resolveModuleField(
   substitution: Substitution,
 ): Type | null {
   // Prefer type schemes (with quantified vars) for proper instantiation
-  const scheme = depModule.typeSchemes[field];
-  if (scheme) {
+  // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
+  if (Object.hasOwn(depModule.typeSchemes, field)) {
+    const scheme = depModule.typeSchemes[field]!;
     return instantiate(scheme, substitution);
   }
   // Fall back to raw type on ValueInfo (already monomorphic or no scheme available)
-  const valueInfo = depModule.values[field];
-  if (valueInfo) {
+  if (Object.hasOwn(depModule.values, field)) {
+    const valueInfo = depModule.values[field]!;
     const valueType = valueInfo.type || depModule.types[field];
     if (valueType) {
       return valueType;
     }
   }
   // Check if it's a constructor
-  const ctorScheme = depModule.constructorTypes[field];
-  if (ctorScheme) {
+  if (Object.hasOwn(depModule.constructorTypes, field)) {
+    const ctorScheme = depModule.constructorTypes[field]!;
     return instantiate(ctorScheme, substitution);
   }
   return null;

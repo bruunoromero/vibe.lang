@@ -330,6 +330,17 @@ export function printExpr(
     case "IRUnary":
       return `-${printExpr(expr.operand, indent, 0)}`;
 
+    case "IRSelfLoop": {
+      const params = expr.paramNames.join(", ");
+      const body = printExpr(expr.body, indent, depth + 1);
+      return `loop (${params}) {\n${ind1}${body}\n${ind}}`;
+    }
+
+    case "IRLoopContinue": {
+      const args = expr.args.map((a) => printExpr(a, indent, 0));
+      return `continue (${args.join(", ")})`;
+    }
+
     default:
       return `<unknown: ${(expr as any).kind}>`;
   }
@@ -493,6 +504,10 @@ export function printExprCompact(expr: IRExpr): string {
       return expr.args.length > 0 ? `${expr.name} ...` : expr.name;
     case "IRUnary":
       return `-${printExprCompact(expr.operand)}`;
+    case "IRSelfLoop":
+      return `(loop ...)`;
+    case "IRLoopContinue":
+      return `(continue ...)`;
     default:
       return "?";
   }

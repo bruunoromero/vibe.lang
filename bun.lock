@@ -169,6 +169,15 @@
         "@vibe/vibe-json": "workspace:*",
       },
     },
+    "packages/vibe-parser": {
+      "name": "@vibe/vibe-parser",
+      "version": "0.0.0",
+      "dependencies": {
+        "@vibe/prelude": "workspace:*",
+        "@vibe/vibe-json": "workspace:*",
+        "@vibe/vibe-lexer": "workspace:*",
+      },
+    },
     "packages/vscode-extension": {
       "name": "vibe-vscode",
       "version": "0.1.0",
@@ -246,6 +255,8 @@
     "@vibe/vibe-json": ["@vibe/vibe-json@workspace:packages/vibe-json"],
 
     "@vibe/vibe-lexer": ["@vibe/vibe-lexer@workspace:packages/vibe-lexer"],
+
+    "@vibe/vibe-parser": ["@vibe/vibe-parser@workspace:packages/vibe-parser"],
 
     "@vscode/vsce": ["@vscode/vsce@2.32.0", "", { "dependencies": { "@azure/identity": "^4.1.0", "@vscode/vsce-sign": "^2.0.0", "azure-devops-node-api": "^12.5.0", "chalk": "^2.4.2", "cheerio": "^1.0.0-rc.9", "cockatiel": "^3.1.2", "commander": "^6.2.1", "form-data": "^4.0.0", "glob": "^7.0.6", "hosted-git-info": "^4.0.2", "jsonc-parser": "^3.2.0", "leven": "^3.1.0", "markdown-it": "^12.3.2", "mime": "^1.3.4", "minimatch": "^3.0.3", "parse-semver": "^1.1.1", "read": "^1.0.7", "semver": "^7.5.2", "tmp": "^0.2.1", "typed-rest-client": "^1.8.4", "url-join": "^4.0.1", "xml2js": "^0.5.0", "yauzl": "^2.3.1", "yazl": "^2.2.2" }, "optionalDependencies": { "keytar": "^7.7.0" }, "bin": { "vsce": "vsce" } }, "sha512-3EFJfsgrSftIqt3EtdRcAygy/OJ3hstyI1cDmIgkU9CFZW5C+3djr6mfosndCUqcVYuyjmxOK1xmFp/Bq7+NIg=="],
 

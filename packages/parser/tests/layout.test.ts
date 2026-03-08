@@ -130,6 +130,28 @@ describe("Layout Pass", () => {
     expect(kinds).toContain("BlockStart");
     expect(kinds).toContain("BlockEnd");
   });
+
+  test("nested let-in inside case arm of outer let-in", () => {
+    // Regression: inner `in` was incorrectly consuming the outer `let` context
+    const tokens = layoutTokens(
+      `module T exposing (..)\nfoo x =\n  let go xs acc =\n        case xs of\n          [] -> acc\n          x :: rest ->\n            let pad = 1\n            in go rest (acc + pad)\n  in go x 0`,
+    );
+    const kinds = tokens.map(([k]) => k);
+    // Should have 3 BlockStarts: outer let, case of, inner let
+    expect(kinds.filter((k) => k === "BlockStart").length).toBe(3);
+    expect(kinds.filter((k) => k === "BlockEnd").length).toBe(3);
+  });
+
+  test("nested let-in inside case arm parses correctly", () => {
+    // Full parse test for nested let-in
+    const ast = parseTest(
+      `\nfoo x =\n  let go xs acc =\n        case xs of\n          [] -> acc\n          x :: rest ->\n            let pad = 1\n            in go rest (acc + pad)\n  in go x 0`,
+    );
+    expect(ast.declarations.length).toBe(1);
+    const decl = ast.declarations[0]! as ValueDeclaration;
+    expect(decl.name).toBe("foo");
+    expect(decl.body.kind).toBe("LetIn");
+  });
 });
 
 // ===== Indentation Enforcement Tests =====

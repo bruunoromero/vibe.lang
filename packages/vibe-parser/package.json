@@ -1,0 +1,18 @@
+{
+  "name": "@vibe/vibe-parser",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "bun ../cli/src/index.ts build",
+    "test": "bun test"
+  },
+  "module": "./dist/VibeParser/VibeParser.js",
+  "exports": {
+    ".": "./dist/VibeParser/VibeParser.js"
+  },
+  "dependencies": {
+    "@vibe/prelude": "workspace:*",
+    "@vibe/vibe-lexer": "workspace:*",
+    "@vibe/vibe-json": "workspace:*"
+  }
+}

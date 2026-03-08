@@ -20,3 +20,6 @@ export { lowerPattern } from "./patterns";
 
 // Re-export type conversion
 export { convertType, convertConstraints } from "./types";
+
+// Re-export tail call optimization
+export { rewriteSelfTailCalls } from "./tco";

@@ -103,6 +103,10 @@ function stringifyExpr(expr: IRExpr): string {
       return `{ ${stringifyExpr(expr.base)} | ... }`;
     case "IRUnary":
       return `(${expr.operator}${stringifyExpr(expr.operand)})`;
+    case "IRSelfLoop":
+      return `(loop [${expr.paramNames.join(", ")}] ${stringifyExpr(expr.body)})`;
+    case "IRLoopContinue":
+      return `(continue ${expr.args.map(stringifyExpr).join(" ")})`;
   }
 }
 
@@ -1116,5 +1120,82 @@ x = helper 42`,
     expect(depImport).toBeDefined();
     expect(depImport!.namedImports).toContain("helper");
     expect(depImport!.namedImports).not.toContain("Result");
+  });
+});
+
+// ============================================================================
+// Tail Call Optimization Tests
+// ============================================================================
+
+describe("Tail Call Optimization", () => {
+  test("self-tail-call in case branches rewrites to IRSelfLoop", () => {
+    const source = `
+len xs =
+  case xs of
+    [] -> 0
+    _ :: rest -> len rest
+`;
+    const value = getValueIR(source, "len");
+    expect(value.body.kind).toBe("IRSelfLoop");
+    const loop = value.body as Extract<IRExpr, { kind: "IRSelfLoop" }>;
+    expect(loop.paramNames).toEqual(["xs"]);
+  });
+
+  test("non-tail-call is not rewritten", () => {
+    const source = `
+sumList xs =
+  case xs of
+    [] -> 0
+    x :: rest -> x
+`;
+    const value = getValueIR(source, "sumList");
+    // No self-call at all, so no TCO
+    expect(value.body.kind).not.toBe("IRSelfLoop");
+  });
+
+  test("multi-param tail call produces IRSelfLoop with all params", () => {
+    const source = `
+go acc xs =
+  case xs of
+    [] -> acc
+    x :: rest -> go x rest
+`;
+    const value = getValueIR(source, "go");
+    expect(value.body.kind).toBe("IRSelfLoop");
+    const loop = value.body as Extract<IRExpr, { kind: "IRSelfLoop" }>;
+    expect(loop.paramNames).toEqual(["acc", "xs"]);
+  });
+
+  test("local let-binding with function args gets TCO", () => {
+    const source = `
+myFunc items =
+  let go xs acc =
+        case xs of
+          [] -> acc
+          x :: rest -> go rest acc
+  in go items 0
+`;
+    const value = getValueIR(source, "myFunc");
+    // The outer structure is an IIFE: (\go -> go items 0)(IRLambda[xs,acc] -> IRSelfLoop)
+    expect(value.body.kind).toBe("IRApply");
+    const apply = value.body as Extract<IRExpr, { kind: "IRApply" }>;
+    // The value being bound to 'go' is a lambda with IRSelfLoop body
+    const goLambda = apply.args[0]!;
+    expect(goLambda.kind).toBe("IRLambda");
+    const lambda = goLambda as Extract<IRExpr, { kind: "IRLambda" }>;
+    expect(lambda.body.kind).toBe("IRSelfLoop");
+  });
+
+  test("tail call through IIFE (let-in) is detected", () => {
+    const source = `
+processItems xs acc =
+  case xs of
+    [] -> acc
+    x :: rest ->
+      let val = x
+      in processItems rest val
+`;
+    const value = getValueIR(source, "processItems");
+    expect(value.body.kind).toBe("IRSelfLoop");
   });
 });

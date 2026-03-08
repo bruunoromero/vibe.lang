@@ -1,0 +1,275 @@
+module VibeParser.Layout exposing (insertLayoutTokens)
+
+import Vibe exposing (..)
+import Vibe.List as List
+import VibeLexer.Types as T
+
+
+-- =============================================================================
+-- Layout Context
+-- =============================================================================
+
+type LayoutContext =
+  { column : Int
+  , keyword : String
+  , bracketDepth : Int
+  }
+
+type LayoutState =
+  { output : List T.Token
+  , stack : List LayoutContext
+  , bracketDepth : Int
+  }
+
+initState : LayoutState
+initState =
+  { output = []
+  , stack = []
+  , bracketDepth = 0
+  }
+
+
+-- =============================================================================
+-- Helpers
+-- =============================================================================
+
+makeVirtual : T.TokenKind -> T.Span -> T.Token
+makeVirtual kind span =
+  { kind = kind, lexeme = "", span = span }
+
+isLayoutKeyword : String -> Bool
+isLayoutKeyword lexeme =
+  case lexeme of
+    "let" -> True
+    "of" -> True
+    "where" -> True
+    _ -> False
+
+stackTop : List LayoutContext -> Maybe LayoutContext
+stackTop stack =
+  List.head stack
+
+stackPop : List LayoutContext -> List LayoutContext
+stackPop stack =
+  case stack of
+    _ :: rest -> rest
+    [] -> []
+
+isLetContext : LayoutContext -> Bool
+isLetContext ctx = ctx.keyword == "let"
+
+hasLetContext : List LayoutContext -> Bool
+hasLetContext stack =
+  List.any isLetContext stack
+
+
+-- =============================================================================
+-- Skip Newlines
+-- =============================================================================
+
+skipNewlines : List T.Token -> List T.Token
+skipNewlines tokens =
+  case tokens of
+    [] -> []
+    tok :: rest ->
+      case tok.kind of
+        T.Newline -> skipNewlines rest
+        _ -> tokens
+
+nextReal : List T.Token -> Maybe T.Token
+nextReal tokens =
+  case tokens of
+    [] -> Nothing
+    tok :: rest ->
+      case tok.kind of
+        T.Newline -> nextReal rest
+        _ -> Just tok
+
+
+-- =============================================================================
+-- Close Contexts
+-- =============================================================================
+
+closeContextsBelow : Int -> T.Span -> LayoutState -> LayoutState
+closeContextsBelow col span state =
+  case stackTop state.stack of
+    Nothing -> state
+    Just ctx ->
+      case col < ctx.column of
+        True ->
+          closeContextsBelow col span
+            { state
+                | output = makeVirtual T.BlockEnd span :: state.output
+                , stack = stackPop state.stack
+            }
+        False -> state
+
+closeContextsForBracket : LayoutState -> T.Span -> LayoutState
+closeContextsForBracket state span =
+  case stackTop state.stack of
+    Nothing -> state
+    Just ctx ->
+      case ctx.bracketDepth >= state.bracketDepth of
+        True ->
+          closeContextsForBracket
+            { state
+                | output = makeVirtual T.BlockEnd span :: state.output
+                , stack = stackPop state.stack
+            }
+            span
+        False -> state
+
+closeForIn : LayoutState -> T.Span -> LayoutState
+closeForIn state span =
+  case stackTop state.stack of
+    Nothing -> state
+    Just ctx ->
+      let
+        newState =
+          { state
+              | output = makeVirtual T.BlockEnd span :: state.output
+              , stack = stackPop state.stack
+          }
+      in
+      case ctx.keyword == "let" of
+        True -> newState
+        False -> closeForIn newState span
+
+
+-- =============================================================================
+-- Main Loop
+-- =============================================================================
+
+insertLayoutTokens : List T.Token -> List T.Token
+insertLayoutTokens tokens =
+  let
+    finalState = processTokens tokens initState
+  in
+  List.reverse finalState.output
+
+processTokens : List T.Token -> LayoutState -> LayoutState
+processTokens tokens state =
+  case tokens of
+    [] -> state
+    tok :: rest ->
+      case tok.kind of
+        T.Eof -> handleEof tok state
+        T.Newline -> handleNewline rest state
+        T.LParen -> handleOpenBracket tok rest state
+        T.LBracket -> handleOpenBracket tok rest state
+        T.LBrace -> handleOpenBracket tok rest state
+        T.RParen -> handleCloseBracket tok rest state
+        T.RBracket -> handleCloseBracket tok rest state
+        T.RBrace -> handleCloseBracket tok rest state
+        T.Keyword -> handleKeyword tok rest state
+        _ -> processTokens rest { state | output = tok :: state.output }
+
+handleEof : T.Token -> LayoutState -> LayoutState
+handleEof tok state =
+  let
+    closed = closeAllContexts tok.span state
+  in
+  { closed | output = tok :: closed.output }
+
+closeAllContexts : T.Span -> LayoutState -> LayoutState
+closeAllContexts span state =
+  case stackTop state.stack of
+    Nothing -> state
+    Just _ ->
+      closeAllContexts span
+        { state
+            | output = makeVirtual T.BlockEnd span :: state.output
+            , stack = stackPop state.stack
+        }
+
+handleNewline : List T.Token -> LayoutState -> LayoutState
+handleNewline rest state =
+  case nextReal rest of
+    Nothing -> processTokens rest state
+    Just nextTok ->
+      case nextTok.kind of
+        T.Eof -> processTokens rest state
+        _ ->
+          let
+            col = nextTok.span.start.column
+            closed = closeContextsBelow col nextTok.span state
+            withSep =
+              case stackTop closed.stack of
+                Nothing -> closed
+                Just ctx ->
+                  case col == ctx.column of
+                    True ->
+                      { closed
+                          | output = makeVirtual T.BlockSep nextTok.span :: closed.output
+                      }
+                    False -> closed
+          in
+          processTokens rest withSep
+
+handleOpenBracket : T.Token -> List T.Token -> LayoutState -> LayoutState
+handleOpenBracket tok rest state =
+  processTokens rest
+    { state
+        | output = tok :: state.output
+        , bracketDepth = state.bracketDepth + 1
+    }
+
+handleCloseBracket : T.Token -> List T.Token -> LayoutState -> LayoutState
+handleCloseBracket tok rest state =
+  let
+    closed = closeContextsForBracket state tok.span
+    newDepth =
+      case closed.bracketDepth > 0 of
+        True -> closed.bracketDepth - 1
+        False -> 0
+  in
+  processTokens rest
+    { closed
+        | output = tok :: closed.output
+        , bracketDepth = newDepth
+    }
+
+handleKeyword : T.Token -> List T.Token -> LayoutState -> LayoutState
+handleKeyword tok rest state =
+  case tok.lexeme == "in" of
+    True -> handleIn tok rest state
+    False ->
+      case isLayoutKeyword tok.lexeme of
+        True -> handleLayoutKeyword tok rest state
+        False -> processTokens rest { state | output = tok :: state.output }
+
+handleIn : T.Token -> List T.Token -> LayoutState -> LayoutState
+handleIn tok rest state =
+  let
+    closed =
+      case hasLetContext state.stack of
+        True -> closeForIn state tok.span
+        False -> state
+  in
+  processTokens rest { closed | output = tok :: closed.output }
+
+handleLayoutKeyword : T.Token -> List T.Token -> LayoutState -> LayoutState
+handleLayoutKeyword tok rest state =
+  let
+    stateWithTok = { state | output = tok :: state.output }
+    remaining = skipNewlines rest
+  in
+  case remaining of
+    [] -> processTokens remaining stateWithTok
+    nextTok :: _ ->
+      case nextTok.kind of
+        T.Eof -> processTokens remaining stateWithTok
+        _ ->
+          let
+            ctx =
+              { column = nextTok.span.start.column
+              , keyword = tok.lexeme
+              , bracketDepth = stateWithTok.bracketDepth
+              }
+            newState =
+              { stateWithTok
+                  | stack = ctx :: stateWithTok.stack
+                  , output = makeVirtual T.BlockStart nextTok.span :: stateWithTok.output
+              }
+          in
+          processTokens remaining newState

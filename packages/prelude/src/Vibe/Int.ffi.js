@@ -15,3 +15,5 @@ export const numLt = (a, b) => a < b;
 export const numGt = (a, b) => a > b;
 
 export const numToString = (n) => n.toString();
+
+export const intToFloat = (n) => n;

@@ -68,6 +68,7 @@ export function insertLayoutTokens(tokens: Token[]): Token[] {
   const output: Token[] = [];
   const layoutStack: LayoutContext[] = [];
   let bracketDepth = 0;
+  let pendingLetCloses = 0;
   let i = 0;
 
   function layoutTop(): LayoutContext | undefined {
@@ -104,6 +105,7 @@ export function insertLayoutTokens(tokens: Token[]): Token[] {
         while (layoutStack.length > 0) {
           const current = layoutTop()!;
           if (col < current.column) {
+            if (current.keyword === "let") pendingLetCloses++;
             layoutStack.pop();
             output.push(makeVirtual(TokenKind.BlockEnd, next.token.span));
           } else {
@@ -154,15 +156,19 @@ export function insertLayoutTokens(tokens: Token[]): Token[] {
 
     // ── `in` keyword closes nearest `let` layout ─────────────────────
     if (token.kind === TokenKind.Keyword && token.lexeme === "in") {
-      // Only close layouts up to 'let' if there's actually a 'let' context.
-      // The NL handler may have already closed it via column comparison.
-      const hasLetContext = layoutStack.some((ctx) => ctx.keyword === "let");
-      if (hasLetContext) {
-        while (layoutStack.length > 0) {
-          const top = layoutTop()!;
-          layoutStack.pop();
-          output.push(makeVirtual(TokenKind.BlockEnd, token.span));
-          if (top.keyword === "let") break;
+      if (pendingLetCloses > 0) {
+        // The NL handler already closed this `let` context via dedent.
+        pendingLetCloses--;
+      } else {
+        // Close layouts up to the nearest `let` context still on the stack.
+        const hasLetContext = layoutStack.some((ctx) => ctx.keyword === "let");
+        if (hasLetContext) {
+          while (layoutStack.length > 0) {
+            const top = layoutTop()!;
+            layoutStack.pop();
+            output.push(makeVirtual(TokenKind.BlockEnd, token.span));
+            if (top.keyword === "let") break;
+          }
         }
       }
       output.push(token);

@@ -7,6 +7,8 @@ module VibeLexer.Types exposing
   , LexError
   )
 
+import Vibe exposing (..)
+
 -- Token kinds matching the TypeScript lexer's TokenKind enum
 type TokenKind
   = LowerIdentifier

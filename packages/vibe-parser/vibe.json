@@ -1,0 +1,6 @@
+{
+  "name": "VibeParser",
+  "src": "src",
+  "dist": "dist",
+  "packages": ["@vibe/prelude", "@vibe/vibe-lexer", "@vibe/vibe-json"]
+}

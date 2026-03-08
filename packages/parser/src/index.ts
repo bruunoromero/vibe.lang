@@ -2783,14 +2783,6 @@ class Parser {
   }
 
   /**
-   * Check if a token can start a simple pattern (variable or wildcard only).
-   * Used for function parameters where complex patterns are not allowed.
-   */
-  private isSimplePatternStart(token: Token): boolean {
-    return token.kind === TokenKind.LowerIdentifier;
-  }
-
-  /**
    * Check if a token can start a function parameter pattern.
    * Allowed patterns: variables, wildcards, tuples, records, and constructor patterns.
    * Note: Constructor patterns are validated in semantics to ensure single-constructor ADTs.
@@ -3173,17 +3165,6 @@ class Parser {
   // These handle virtual layout tokens from the layout preprocessing pass
 
   /**
-   * Match and consume a BlockStart token
-   */
-  private matchBlockStart(): boolean {
-    if (this.current().kind === TokenKind.BlockStart) {
-      this.advance();
-      return true;
-    }
-    return false;
-  }
-
-  /**
    * Expect and consume a BlockStart token
    */
   private expectBlockStart(): Token {
@@ -3195,17 +3176,6 @@ class Parser {
    */
   private matchBlockSep(): boolean {
     if (this.current().kind === TokenKind.BlockSep) {
-      this.advance();
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Match and consume a BlockEnd token
-   */
-  private matchBlockEnd(): boolean {
-    if (this.current().kind === TokenKind.BlockEnd) {
       this.advance();
       return true;
     }

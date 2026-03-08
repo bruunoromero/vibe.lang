@@ -1,0 +1,139 @@
+module VibeParser exposing
+  ( parse
+  , parseToJson
+  , parseWithInfix
+  , Program
+  , ParseError
+  , Declaration(..)
+  , Expr(..)
+  , Pattern(..)
+  , TypeExpr(..)
+  , ExportSpec(..)
+  , Exposing(..)
+  , Associativity(..)
+  , Position
+  , Span
+  , RecordField
+  , RecordFieldPattern
+  , RecordFieldType
+  , Constraint
+  , CaseBranch
+  , ValueDeclaration
+  , TypeAnnotationDeclaration
+  , ProtocolMethod
+  , MethodImplementation
+  , ConstructorVariant
+  , ImportDeclaration
+  , ModuleDeclaration
+  , OperatorInfo
+  )
+
+import Vibe exposing (..)
+import Vibe.List as List
+import Vibe.Dict as Dict
+import Vibe.String as String
+import VibeLexer as Lexer
+import VibeLexer.Types as LT
+import VibeParser.Types exposing (..)
+import VibeParser.Layout as Layout
+import VibeParser.OperatorRegistry as OpReg
+import VibeParser.Parser as Parser
+import VibeParser.Json as Json
+
+
+parse : String -> Result ParseError Program
+parse source =
+  let
+    rawTokens = Lexer.lex source
+  in
+  case rawTokens of
+    Err lexErr ->
+      Err { message = lexErr.message
+          , span = { start = lexErr.span.start, end = lexErr.span.end }
+          }
+    Ok tokens ->
+      let layoutTokens = Layout.insertLayoutTokens tokens
+      in Parser.parseTokens layoutTokens OpReg.builtinRegistry
+
+
+parseWithInfix : String -> Result ParseError Program
+parseWithInfix source =
+  let
+    rawTokens = Lexer.lex source
+  in
+  case rawTokens of
+    Err lexErr ->
+      Err { message = lexErr.message
+          , span = { start = lexErr.span.start, end = lexErr.span.end }
+          }
+    Ok tokens ->
+      let
+        registry = collectInfixFromTokens tokens OpReg.builtinRegistry
+        layoutTokens = Layout.insertLayoutTokens tokens
+      in
+      Parser.parseTokens layoutTokens registry
+
+
+collectInfixFromTokens : List LT.Token -> OpReg.OperatorRegistry -> OpReg.OperatorRegistry
+collectInfixFromTokens tokens registry =
+  collectInfixLoop tokens registry
+
+collectInfixLoop : List LT.Token -> OpReg.OperatorRegistry -> OpReg.OperatorRegistry
+collectInfixLoop tokens registry =
+  case tokens of
+    [] -> registry
+    tok :: rest ->
+      case tok.kind == LT.Keyword && (tok.lexeme == "infix" || tok.lexeme == "infixl" || tok.lexeme == "infixr") of
+        True ->
+          case rest of
+            precTok :: opRest ->
+              case precTok.kind == LT.NumberToken of
+                True ->
+                  case findOperator opRest of
+                    Just (opName, remaining) ->
+                      let
+                        assoc = case tok.lexeme of
+                          "infixl" -> AssocLeft
+                          "infixr" -> AssocRight
+                          _ -> AssocNone
+                        prec = stringToIntSafe precTok.lexeme
+                        newRegistry = OpReg.insertOperator opName { precedence = prec, associativity = assoc } registry
+                      in collectInfixLoop remaining newRegistry
+                    Nothing -> collectInfixLoop opRest registry
+                False -> collectInfixLoop rest registry
+            _ -> collectInfixLoop rest registry
+        False -> collectInfixLoop rest registry
+
+findOperator : List LT.Token -> Maybe (String, List LT.Token)
+findOperator tokens =
+  case tokens of
+    [] -> Nothing
+    tok :: rest ->
+      case tok.kind == LT.Operator of
+        True -> Just (tok.lexeme, rest)
+        False ->
+          case tok.kind == LT.LParen of
+            True ->
+              case rest of
+                opTok :: rest2 ->
+                  case opTok.kind == LT.Operator of
+                    True ->
+                      case rest2 of
+                        closeParen :: rest3 ->
+                          case closeParen.kind == LT.RParen of
+                            True -> Just (opTok.lexeme, rest3)
+                            False -> Nothing
+                        _ -> Nothing
+                    False -> Nothing
+                _ -> Nothing
+            False -> Nothing
+
+stringToIntSafe : String -> Int
+stringToIntSafe s =
+  case String.toInt s of
+    Just n -> n
+    Nothing -> 9
+
+parseToJson : String -> String
+parseToJson source =
+  Json.parseToJson (parse source)

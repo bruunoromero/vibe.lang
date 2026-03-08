@@ -1,4 +1,9 @@
-module Vibe.Int
+module Vibe.Int exposing
+  ( max
+  , min
+  , abs
+  , toFloat
+  )
 
 import Vibe.Basics exposing (Num, Integral, Eq, Ord(..), Show)
 
@@ -51,3 +56,24 @@ _toString: Int -> String
 
 _negate: Int -> Int
 _negate x = -x
+
+max : Int -> Int -> Int
+max a b =
+    case a > b of
+        True -> a
+        False -> b
+
+min : Int -> Int -> Int
+min a b =
+    case a < b of
+        True -> a
+        False -> b
+
+abs : Int -> Int
+abs x =
+    case x < 0 of
+        True -> -x
+        False -> x
+
+@external "./Int.ffi.js" "intToFloat"
+toFloat : Int -> Float

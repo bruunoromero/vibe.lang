@@ -22,8 +22,6 @@ export const parseFloat = (just, nothing, s) => {
   return just(n);
 };
 
-export const stringLength = (s) => s.length;
-
 export const stringCharAt = (just, nothing, i, s) => {
   if (i >= 0 && i < s.length) {
     return just(s[i]);
@@ -33,18 +31,6 @@ export const stringCharAt = (just, nothing, i, s) => {
 
 export const unsafeCharAt = (i, s) => s[i];
 
-export const stringSlice = (start, end, s) => s.slice(start, end);
-
-export const stringStartsWith = (prefix, s) => s.startsWith(prefix);
-
-export const stringEndsWith = (suffix, s) => s.endsWith(suffix);
-
-export const stringContains = (sub, s) => s.includes(sub);
-
 export const stringToList = (s) => [...s];
 
-export const stringFromList = (cs) => cs.join("");
-
-export const stringTrim = (s) => s.trim();
-
-export const stringSplit = (sep, s) => s.split(sep);
+export const stringFromChar = (c) => c;

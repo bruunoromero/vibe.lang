@@ -92,10 +92,11 @@ renderString s =
 
 escapeChars : List Char -> String
 escapeChars chars =
-  case chars of
-    [] -> ""
-    c :: rest ->
-      escapeChar c ++ escapeChars rest
+  let go cs acc =
+        case cs of
+          [] -> acc
+          c :: rest -> go rest (acc ++ escapeChar c)
+  in go chars ""
 
 escapeChar : Char -> String
 escapeChar c =
@@ -174,42 +175,46 @@ renderObject indent depth pairs =
 
 joinValues : Int -> Int -> List Value -> String
 joinValues indent depth items =
-  case items of
-    [] -> ""
-    [x] -> renderValue indent depth x
-    x :: rest ->
-      renderValue indent depth x ++ "," ++ joinValues indent depth rest
+  let go xs acc =
+        case xs of
+          [] -> acc
+          [x] -> acc ++ renderValue indent depth x
+          x :: rest -> go rest (acc ++ renderValue indent depth x ++ ",")
+  in go items ""
 
 
 joinValuesIndented : Int -> Int -> List Value -> String
 joinValuesIndented indent depth items =
-  case items of
-    [] -> ""
-    [x] -> renderValue indent depth x
-    x :: rest ->
-      let pad = makeIndent indent depth
-      in renderValue indent depth x ++ ",\n" ++ pad ++ joinValuesIndented indent depth rest
+  let go xs acc =
+        case xs of
+          [] -> acc
+          [x] -> acc ++ renderValue indent depth x
+          x :: rest ->
+            let pad = makeIndent indent depth
+            in go rest (acc ++ renderValue indent depth x ++ ",\n" ++ pad)
+  in go items ""
 
 
 joinPairs : Int -> Int -> List (String, Value) -> String
 joinPairs indent depth pairs =
-  case pairs of
-    [] -> ""
-    [(k, v)] ->
-      renderString k ++ ":" ++ renderValue indent depth v
-    (k, v) :: rest ->
-      renderString k ++ ":" ++ renderValue indent depth v ++ "," ++ joinPairs indent depth rest
+  let go ps acc =
+        case ps of
+          [] -> acc
+          [(k, v)] -> acc ++ renderString k ++ ":" ++ renderValue indent depth v
+          (k, v) :: rest -> go rest (acc ++ renderString k ++ ":" ++ renderValue indent depth v ++ ",")
+  in go pairs ""
 
 
 joinPairsIndented : Int -> Int -> List (String, Value) -> String
 joinPairsIndented indent depth pairs =
-  case pairs of
-    [] -> ""
-    [(k, v)] ->
-      renderString k ++ ": " ++ renderValue indent depth v
-    (k, v) :: rest ->
-      let pad = makeIndent indent depth
-      in renderString k ++ ": " ++ renderValue indent depth v ++ ",\n" ++ pad ++ joinPairsIndented indent depth rest
+  let go ps acc =
+        case ps of
+          [] -> acc
+          [(k, v)] -> acc ++ renderString k ++ ": " ++ renderValue indent depth v
+          (k, v) :: rest ->
+            let pad = makeIndent indent depth
+            in go rest (acc ++ renderString k ++ ": " ++ renderValue indent depth v ++ ",\n" ++ pad)
+  in go pairs ""
 
 
 makeIndent : Int -> Int -> String

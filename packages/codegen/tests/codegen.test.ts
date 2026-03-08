@@ -1908,3 +1908,84 @@ type Value
     expect(code).not.toMatch(/\(\$dict_Show\)/);
   });
 });
+
+// ============================================================================
+// Tail Call Optimization Codegen Tests
+// ============================================================================
+
+describe("TCO Codegen", () => {
+  test("self-tail-recursive function emits while(true) loop", () => {
+    const source = `
+module Test exposing (..)
+
+walk xs =
+  case xs of
+    [] -> 0
+    _ :: rest -> walk rest
+`;
+    const { code } = compileToJS(source);
+    expect(code).toContain("while (true)");
+    expect(code).toContain("continue;");
+  });
+
+  test("multi-param tail call emits destructuring rebind", () => {
+    const source = `
+module Test exposing (..)
+
+go acc xs =
+  case xs of
+    [] -> acc
+    x :: rest -> go x rest
+`;
+    const { code } = compileToJS(source);
+    expect(code).toContain("while (true)");
+    // Multi-param uses array destructuring to avoid aliasing
+    expect(code).toContain("[acc, xs] =");
+  });
+
+  test("non-tail-recursive function does NOT emit while loop", () => {
+    const source = `
+module Test exposing (..)
+
+head xs =
+  case xs of
+    [] -> 0
+    x :: rest -> x
+`;
+    const { code } = compileToJS(source);
+    expect(code).not.toContain("while (true)");
+  });
+
+  test("local let-binding TCO emits while loop in inner function", () => {
+    const source = `
+module Test exposing (..)
+
+myLen items =
+  let go xs acc =
+        case xs of
+          [] -> acc
+          x :: rest -> go rest acc
+  in go items 0
+`;
+    const { code } = compileToJS(source);
+    expect(code).toContain("while (true)");
+    expect(code).toContain("continue;");
+  });
+
+  test("tail call through let-in (IIFE) emits const + continue", () => {
+    const source = `
+module Test exposing (..)
+
+process xs acc =
+  case xs of
+    [] -> acc
+    x :: rest ->
+      let val = x
+      in process rest val
+`;
+    const { code } = compileToJS(source);
+    expect(code).toContain("while (true)");
+    // The let val = ... should appear as a const inside the loop
+    expect(code).toContain("const val =");
+  });
+});

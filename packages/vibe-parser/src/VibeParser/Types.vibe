@@ -1,0 +1,249 @@
+module VibeParser.Types exposing
+  ( Position
+  , Span
+  , ExportSpec(..)
+  , Exposing(..)
+  , Pattern(..)
+  , RecordFieldPattern
+  , RecordField
+  , Constraint
+  , TypeExpr(..)
+  , RecordFieldType
+  , ConstructorVariant
+  , Expr(..)
+  , ValueDeclaration
+  , TypeAnnotationDeclaration
+  , ProtocolMethod
+  , MethodImplementation
+  , Declaration(..)
+  , ImportDeclaration
+  , ModuleDeclaration
+  , Program
+  , CaseBranch
+  , ParseError
+  , Associativity(..)
+  , OperatorInfo
+  )
+
+
+type Position =
+  { offset : Int
+  , line : Int
+  , column : Int
+  }
+
+type Span =
+  { start : Position
+  , end : Position
+  }
+
+
+-- =============================================================================
+-- Export Specifications
+-- =============================================================================
+
+type ExportSpec
+  = ExportValue String Span
+  | ExportOperator String Span
+  | ExportTypeAll String Span
+  | ExportTypeSome String (List String) Span
+
+
+-- =============================================================================
+-- Exposing
+-- =============================================================================
+
+type Exposing
+  = ExposeAll Span
+  | ExposeExplicit (List ExportSpec) Span
+
+
+-- =============================================================================
+-- Patterns
+-- =============================================================================
+
+type RecordFieldPattern =
+  { name : String
+  , pattern : Pattern
+  }
+
+type Pattern
+  = PVar String Span
+  | PWildcard Span
+  | PConstructor String (List Pattern) Span
+  | PTuple (List Pattern) Span
+  | PList (List Pattern) Span
+  | PCons Pattern Pattern Span
+  | PRecord (List RecordFieldPattern) Span
+  | PInt String Span
+  | PFloat String Span
+  | PString String Span
+  | PChar String Span
+
+
+-- =============================================================================
+-- Types
+-- =============================================================================
+
+type RecordFieldType =
+  { name : String
+  , fieldType : TypeExpr
+  , span : Span
+  }
+
+type Constraint =
+  { protocolName : String
+  , typeArgs : List TypeExpr
+  , span : Span
+  }
+
+type TypeExpr
+  = TRef String (List TypeExpr) Span
+  | TFunction TypeExpr TypeExpr Span
+  | TTuple (List TypeExpr) Span
+  | TRecord (List RecordFieldType) Span
+  | TQualified (List Constraint) TypeExpr Span
+
+
+-- =============================================================================
+-- Expressions
+-- =============================================================================
+
+type RecordField =
+  { name : String
+  , value : Expr
+  , span : Span
+  }
+
+type CaseBranch =
+  { pattern : Pattern
+  , body : Expr
+  , span : Span
+  }
+
+type Expr
+  = EVar String String Span
+  | EInt String Span
+  | EFloat String Span
+  | EString String Span
+  | EChar String Span
+  | ELambda (List Pattern) Expr Span
+  | EApply Expr (List Expr) Span
+  | EIf Expr Expr Expr Span
+  | ELetIn (List ValueDeclaration) Expr Span
+  | ECase Expr (List CaseBranch) Span
+  | EInfix Expr String Expr Span
+  | EUnary String Expr Span
+  | EParen Expr Span
+  | ETuple (List Expr) Span
+  | EUnit Span
+  | EList (List Expr) Span
+  | EListRange Expr Expr Span
+  | ERecord (List RecordField) Span
+  | ERecordUpdate String (List RecordField) Span
+  | EFieldAccess Expr String Span
+
+
+-- =============================================================================
+-- Declarations
+-- =============================================================================
+
+type ValueDeclaration =
+  { name : String
+  , args : List Pattern
+  , body : Expr
+  , span : Span
+  }
+
+type TypeAnnotationDeclaration =
+  { name : String
+  , annotation : TypeExpr
+  , span : Span
+  }
+
+type ProtocolMethod =
+  { name : String
+  , methodType : TypeExpr
+  , defaultArgs : List Pattern
+  , defaultBody : Expr
+  , hasDefault : Bool
+  , hasType : Bool
+  , span : Span
+  }
+
+type MethodImplementation =
+  { name : String
+  , implArgs : List Pattern
+  , implementation : Expr
+  , span : Span
+  }
+
+type ConstructorVariant =
+  { name : String
+  , args : List TypeExpr
+  , span : Span
+  }
+
+type Declaration
+  = DValue ValueDeclaration
+  | DTypeAnnotation TypeAnnotationDeclaration
+  | DDecorated String (List String) String TypeExpr Span
+  | DType String (List String) (List Constraint) (List ConstructorVariant) Span
+  | DTypeAlias String (List String) TypeExpr Span
+  | DOpaqueType String (List String) Span
+  | DRecordType String (List String) (List Constraint) (List RecordFieldType) Span
+  | DProtocol String (List String) (List Constraint) (List ProtocolMethod) Span
+  | DImplementation (List Constraint) String (List TypeExpr) (List MethodImplementation) Span
+  | DInfix String Int String Span
+
+
+-- =============================================================================
+-- Import & Module
+-- =============================================================================
+
+type ImportDeclaration =
+  { moduleName : String
+  , aliasName : String
+  , exposingClause : Exposing
+  , hasAlias : Bool
+  , hasExposing : Bool
+  , span : Span
+  }
+
+type ModuleDeclaration =
+  { name : String
+  , exposingClause : Exposing
+  , hasExposing : Bool
+  , span : Span
+  }
+
+type Program =
+  { moduleDecl : ModuleDeclaration
+  , imports : List ImportDeclaration
+  , declarations : List Declaration
+  }
+
+
+-- =============================================================================
+-- Errors
+-- =============================================================================
+
+type ParseError =
+  { message : String
+  , span : Span
+  }
+
+
+-- =============================================================================
+-- Operator Info
+-- =============================================================================
+
+type Associativity
+  = AssocLeft
+  | AssocRight
+  | AssocNone
+
+type OperatorInfo =
+  { precedence : Int
+  , associativity : Associativity
+  }

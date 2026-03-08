@@ -1,4 +1,9 @@
-module Vibe.Float
+module Vibe.Float exposing
+  ( floor
+  , ceiling
+  , round
+  , truncate
+  )
 
 import Vibe.Basics exposing (Num, Fractional, Eq, Ord, Show)
 
@@ -47,3 +52,15 @@ _gt: Float -> Float -> Bool
 
 _negate: Float -> Float
 _negate x = -x
+
+@external "./Float.ffi.js" "floatFloor"
+floor : Float -> Int
+
+@external "./Float.ffi.js" "floatCeiling"
+ceiling : Float -> Int
+
+@external "./Float.ffi.js" "floatRound"
+round : Float -> Int
+
+@external "./Float.ffi.js" "floatTruncate"
+truncate : Float -> Int

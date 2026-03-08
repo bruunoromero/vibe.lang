@@ -184,6 +184,12 @@ export interface CodegenContext {
    * key is the full name including $dict prefix.
    */
   instanceMap: Map<string, IRInstance>;
+
+  /**
+   * When inside an IRSelfLoop, holds the loop parameter names.
+   * Used by generateExprAsStmt for IRLoopContinue to emit rebinding.
+   */
+  tcoLoopParams: string[] | null;
 }
 
 /**
@@ -211,6 +217,7 @@ export function createCodegenContext(program: IRProgram): CodegenContext {
     expectedReturnType: undefined,
     usedShortCircuitOps: new Set(),
     instanceMap: new Map(),
+    tcoLoopParams: null,
   };
 
   // Build protocol method map from protocol definitions
@@ -1087,6 +1094,12 @@ function generateExpr(expr: IRExpr, ctx: CodegenContext): string {
       // Emit native JavaScript unary negation
       return `-${generateExpr(expr.operand, ctx)}`;
 
+    case "IRSelfLoop":
+      return generateSelfLoop(expr, ctx);
+
+    case "IRLoopContinue":
+      throw new Error("IRLoopContinue found outside IRSelfLoop — compiler bug");
+
     default:
       const _exhaustive: never = expr;
       throw new Error(`Unknown expression kind: ${(expr as any).kind}`);
@@ -1794,6 +1807,111 @@ function inferExprType(expr: IRExpr, ctx: CodegenContext): IRType | null {
   return null;
 }
 
+// ============================================================================
+// Tail Call Optimization (TCO) Generation
+// ============================================================================
+
+/**
+ * Generate a self-tail-call loop.
+ * The outer function's params are already wrapped by generateValue/generateLambda,
+ * so this emits the body as: { while (true) { <stmts> } }
+ */
+function generateSelfLoop(
+  expr: Extract<IRExpr, { kind: "IRSelfLoop" }>,
+  ctx: CodegenContext,
+): string {
+  const prevParams = ctx.tcoLoopParams;
+  ctx.tcoLoopParams = expr.paramNames.map((n) => sanitizeIdentifier(n));
+  const stmts = generateExprAsStmt(expr.body, ctx);
+  ctx.tcoLoopParams = prevParams;
+  return `{ while (true) { ${stmts} } }`;
+}
+
+/**
+ * Generate an expression in statement mode (used inside TCO loops).
+ *
+ * - IRLoopContinue → rebind params + continue
+ * - IRIf → if/else with statement-mode branches
+ * - IRCase → IIFE-free pattern matching with statement-mode branches
+ * - everything else → return <expr>;
+ */
+function generateExprAsStmt(expr: IRExpr, ctx: CodegenContext): string {
+  switch (expr.kind) {
+    case "IRLoopContinue": {
+      const paramNames = ctx.tcoLoopParams!;
+      const argExprs = expr.args.map((a) => generateExpr(a, ctx));
+
+      if (paramNames.length === 1) {
+        return `${paramNames[0]} = ${argExprs[0]}; continue;`;
+      }
+      // Use destructuring to avoid aliasing issues when params reference each other
+      return `[${paramNames.join(", ")}] = [${argExprs.join(", ")}]; continue;`;
+    }
+
+    case "IRIf": {
+      const cond = generateExpr(expr.condition, ctx);
+      const thenStmt = generateExprAsStmt(expr.thenBranch, ctx);
+      const elseStmt = generateExprAsStmt(expr.elseBranch, ctx);
+      return `if (${cond}) { ${thenStmt} } else { ${elseStmt} }`;
+    }
+
+    case "IRCase": {
+      const matchName = freshName(ctx, "match");
+      const discriminant = generateExpr(expr.discriminant, ctx);
+
+      const branches: string[] = [];
+      for (const branch of expr.branches) {
+        const { condition, bindings } = generatePatternMatchCode(
+          branch.pattern,
+          matchName,
+          ctx,
+        );
+        const bodyStmt = generateExprAsStmt(branch.body, ctx);
+
+        let code = "";
+        if (condition) {
+          code = `if (${condition}) { `;
+        } else {
+          code = "{ ";
+        }
+
+        if (bindings.length > 0) {
+          code += bindings.join(" ");
+          code += " ";
+        }
+
+        code += `${bodyStmt} }`;
+        branches.push(code);
+      }
+
+      branches.push(`throw new Error("Pattern match failed");`);
+      return `{ const ${matchName} = ${discriminant}; ${branches.join(" ")} }`;
+    }
+
+    case "IRSelfLoop":
+      return generateSelfLoop(expr, ctx);
+
+    // IIFE from let-binding: (\x -> body)(value)
+    // Emit as: const x = value; <body as stmt>
+    case "IRApply": {
+      if (
+        expr.callee.kind === "IRLambda" &&
+        expr.callee.params.length === 1 &&
+        expr.args.length === 1
+      ) {
+        const paramCode = generatePattern(expr.callee.params[0]!, ctx);
+        const valueCode = generateExpr(expr.args[0]!, ctx);
+        const bodyStmt = generateExprAsStmt(expr.callee.body, ctx);
+        return `{ const ${paramCode} = ${valueCode}; ${bodyStmt} }`;
+      }
+      return `return ${generateExpr(expr, ctx)};`;
+    }
+
+    default:
+      return `return ${generateExpr(expr, ctx)};`;
+  }
+}
+
 /**
  * Generate an if expression.
  */
@@ -2020,6 +2138,28 @@ function generateBranchCode(
   const bodyCode = generateExpr(body, ctx);
 
   return { condition, bindings, body: bodyCode };
+}
+
+/**
+ * Extract just the pattern condition and variable bindings (no body generation).
+ * Used by statement-mode generation where the body is handled separately.
+ */
+function generatePatternMatchCode(
+  pattern: IRPattern,
+  matchName: string,
+  ctx: CodegenContext,
+): { condition: string | null; bindings: string[] } {
+  const dummySpan = {
+    start: { offset: 0, line: 0, column: 0 },
+    end: { offset: 0, line: 0, column: 0 },
+  };
+  const result = generateBranchCode(
+    pattern,
+    matchName,
+    { kind: "IRUnit", span: dummySpan },
+    ctx,
+  );
+  return { condition: result.condition, bindings: result.bindings };
 }
 
 /**

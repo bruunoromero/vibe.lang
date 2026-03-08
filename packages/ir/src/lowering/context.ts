@@ -169,11 +169,20 @@ function buildNamespaceImportedNames(ctx: LoweringContext): void {
     if (!dep) continue;
 
     for (const ctorName of Object.keys(ctx.semantics.constructors)) {
-      if (dep.constructors[ctorName]) {
+      if (dep.constructors[ctorName] && isConstructorExported(dep, ctorName)) {
         ctx.namespaceImportedNames.set(ctorName, imp.moduleName);
       }
     }
   }
+}
+
+function isConstructorExported(dep: SemanticModule, ctorName: string): boolean {
+  const exports = dep.exports;
+  if (exports.exportsAll) return true;
+  for (const [, typeExport] of exports.types) {
+    if (typeExport.constructors?.has(ctorName)) return true;
+  }
+  return false;
 }
 
 /**

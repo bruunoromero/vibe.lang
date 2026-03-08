@@ -1,0 +1,94 @@
+module Vibe.Dict exposing
+  ( Dict
+  , empty
+  , singleton
+  , insert
+  , remove
+  , get
+  , member
+  , update
+  , isEmpty
+  , size
+  , keys
+  , values
+  , toList
+  , fromList
+  , foldl
+  , map
+  , filter
+  , union
+  )
+
+import Vibe.Maybe exposing (Maybe(..))
+import Vibe.Basics exposing (Eq(..), identity)
+
+type Dict k v
+
+@external "./Dict.ffi.js" "dictEmpty"
+empty : Dict k v
+
+singleton : k -> v -> Dict k v
+singleton k v = insert k v empty
+
+@external "./Dict.ffi.js" "dictInsert"
+insert : k -> v -> Dict k v -> Dict k v
+
+@external "./Dict.ffi.js" "dictRemove"
+remove : k -> Dict k v -> Dict k v
+
+@call "has"
+_has : Dict k v -> k -> Bool
+
+@call "get"
+_unsafeGet : Dict k v -> k -> v
+
+get : k -> Dict k v -> Maybe v
+get k d =
+  case _has d k of
+    True -> Just (_unsafeGet d k)
+    False -> Nothing
+
+member : k -> Dict k v -> Bool
+member k d = _has d k
+
+@get "size"
+size : Dict k v -> Int
+
+isEmpty : Dict k v -> Bool
+isEmpty d = size d == 0
+
+@external "./Dict.ffi.js" "dictFoldl"
+foldl : (k -> v -> b -> b) -> b -> Dict k v -> b
+
+@external "./Dict.ffi.js" "dictKeys"
+keys : Dict k v -> List k
+
+@external "./Dict.ffi.js" "dictValues"
+values : Dict k v -> List v
+
+@external "./Dict.ffi.js" "dictToList"
+_toList : (k -> v -> (k, v)) -> Dict k v -> List (k, v)
+
+toList : Dict k v -> List (k, v)
+toList = _toList (\k v -> (k, v))
+
+@external "./Dict.ffi.js" "dictFromList"
+_fromList : ((k, v) -> k) -> ((k, v) -> v) -> List (k, v) -> Dict k v
+
+fromList : List (k, v) -> Dict k v
+fromList = _fromList (\pair -> case pair of (k, _) -> k) (\pair -> case pair of (_, v) -> v)
+
+@external "./Dict.ffi.js" "dictMap"
+map : (k -> a -> b) -> Dict k a -> Dict k b
+
+@external "./Dict.ffi.js" "dictFilter"
+filter : (k -> v -> Bool) -> Dict k v -> Dict k v
+
+@external "./Dict.ffi.js" "dictUnion"
+union : Dict k v -> Dict k v -> Dict k v
+
+update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
+update key fn dict =
+  case fn (get key dict) of
+    Just value -> insert key value dict
+    Nothing -> remove key dict

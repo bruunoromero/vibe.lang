@@ -28,156 +28,162 @@ import { IRError } from "../types";
 import type { LoweringContext } from "./context";
 import { lowerPattern } from "./patterns";
 import { convertType } from "./types";
+import { rewriteSelfTailCalls } from "./tco";
 
 /**
  * Lower an AST expression to IR form.
  * This is the main entry point for expression lowering.
  */
-export function lowerExpr(expr: Expr, ctx: LoweringContext): IRExpr {
-  switch (expr.kind) {
-    case "Var":
-      return lowerVar(expr, ctx);
+export function lowerExpr(exprArg: Expr, ctx: LoweringContext): IRExpr {
+  let expr: Expr = exprArg;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    switch (expr.kind) {
+      case "Var":
+        return lowerVar(expr, ctx);
 
-    case "Number":
-      return lowerNumber(expr);
+      case "Number":
+        return lowerNumber(expr);
 
-    case "String":
-      return {
-        kind: "IRLiteral",
-        value: expr.value,
-        literalType: "string",
-        span: expr.span,
-      };
+      case "String":
+        return {
+          kind: "IRLiteral",
+          value: expr.value,
+          literalType: "string",
+          span: expr.span,
+        };
 
-    case "Char":
-      return {
-        kind: "IRLiteral",
-        value: expr.value,
-        literalType: "char",
-        span: expr.span,
-      };
+      case "Char":
+        return {
+          kind: "IRLiteral",
+          value: expr.value,
+          literalType: "char",
+          span: expr.span,
+        };
 
-    case "Lambda":
-      return {
-        kind: "IRLambda",
-        params: expr.args.map((p) => lowerPattern(p, ctx)),
-        body: lowerExpr(expr.body, ctx),
-        span: expr.span,
-      };
+      case "Lambda":
+        return {
+          kind: "IRLambda",
+          params: expr.args.map((p) => lowerPattern(p, ctx)),
+          body: lowerExpr(expr.body, ctx),
+          span: expr.span,
+        };
 
-    case "Apply":
-      return {
-        kind: "IRApply",
-        callee: lowerExpr(expr.callee, ctx),
-        args: expr.args.map((a) => lowerExpr(a, ctx)),
-        span: expr.span,
-      };
+      case "Apply":
+        return {
+          kind: "IRApply",
+          callee: lowerExpr(expr.callee, ctx),
+          args: expr.args.map((a) => lowerExpr(a, ctx)),
+          span: expr.span,
+        };
 
-    case "If":
-      return {
-        kind: "IRIf",
-        condition: lowerExpr(expr.condition, ctx),
-        thenBranch: lowerExpr(expr.thenBranch, ctx),
-        elseBranch: lowerExpr(expr.elseBranch, ctx),
-        span: expr.span,
-      };
+      case "If":
+        return {
+          kind: "IRIf",
+          condition: lowerExpr(expr.condition, ctx),
+          thenBranch: lowerExpr(expr.thenBranch, ctx),
+          elseBranch: lowerExpr(expr.elseBranch, ctx),
+          span: expr.span,
+        };
 
-    case "LetIn":
-      return lowerLetIn(expr, ctx);
+      case "LetIn":
+        return lowerLetIn(expr, ctx);
 
-    case "Case":
-      return lowerCase(expr, ctx);
+      case "Case":
+        return lowerCase(expr, ctx);
 
-    case "Infix":
-      return lowerInfix(expr, ctx);
+      case "Infix":
+        return lowerInfix(expr, ctx);
 
-    case "Unary":
-      return {
-        kind: "IRUnary",
-        operator: expr.operator,
-        operand: lowerExpr(expr.operand, ctx),
-        span: expr.span,
-      };
+      case "Unary":
+        return {
+          kind: "IRUnary",
+          operator: expr.operator,
+          operand: lowerExpr(expr.operand, ctx),
+          span: expr.span,
+        };
 
-    case "Paren":
-      // Parentheses are just for grouping, lower the inner expression
-      return lowerExpr(expr.expression, ctx);
+      case "Paren":
+        // Tail-call: loop back without growing the JS stack
+        expr = expr.expression;
+        continue;
 
-    case "Tuple":
-      return {
-        kind: "IRTuple",
-        elements: expr.elements.map((e) => lowerExpr(e, ctx)),
-        span: expr.span,
-      };
+      case "Tuple":
+        return {
+          kind: "IRTuple",
+          elements: expr.elements.map((e) => lowerExpr(e, ctx)),
+          span: expr.span,
+        };
 
-    case "Unit":
-      return {
-        kind: "IRUnit",
-        span: expr.span,
-      };
+      case "Unit":
+        return {
+          kind: "IRUnit",
+          span: expr.span,
+        };
 
-    case "List":
-      return {
-        kind: "IRList",
-        elements: expr.elements.map((e) => lowerExpr(e, ctx)),
-        span: expr.span,
-      };
+      case "List":
+        return {
+          kind: "IRList",
+          elements: expr.elements.map((e) => lowerExpr(e, ctx)),
+          span: expr.span,
+        };
 
-    case "ListRange":
-      // Desugar [a..b] to range a b (requires runtime function)
-      return {
-        kind: "IRApply",
-        callee: {
+      case "ListRange":
+        // Desugar [a..b] to range a b (requires runtime function)
+        return {
           kind: "IRApply",
           callee: {
-            kind: "IRVar",
-            name: "range",
-            namespace: "value",
+            kind: "IRApply",
+            callee: {
+              kind: "IRVar",
+              name: "range",
+              namespace: "value",
+              span: expr.span,
+            },
+            args: [lowerExpr(expr.start, ctx)],
             span: expr.span,
           },
-          args: [lowerExpr(expr.start, ctx)],
+          args: [lowerExpr(expr.end, ctx)],
           span: expr.span,
-        },
-        args: [lowerExpr(expr.end, ctx)],
-        span: expr.span,
-      };
+        };
 
-    case "Record":
-      return {
-        kind: "IRRecord",
-        fields: expr.fields.map((f) => ({
-          name: f.name,
-          value: lowerExpr(f.value, ctx),
-          span: f.span,
-        })),
-        span: expr.span,
-      };
+      case "Record":
+        return {
+          kind: "IRRecord",
+          fields: expr.fields.map((f) => ({
+            name: f.name,
+            value: lowerExpr(f.value, ctx),
+            span: f.span,
+          })),
+          span: expr.span,
+        };
 
-    case "RecordUpdate":
-      return lowerRecordUpdate(expr, ctx);
+      case "RecordUpdate":
+        return lowerRecordUpdate(expr, ctx);
 
-    case "FieldAccess": {
-      // First, try to resolve as a module-qualified access (e.g., JS.null or Vibe.JS.null)
-      const moduleAccess = tryResolveModuleAccess(expr, ctx);
-      if (moduleAccess) {
-        return moduleAccess;
+      case "FieldAccess": {
+        // First, try to resolve as a module-qualified access (e.g., JS.null or Vibe.JS.null)
+        const moduleAccess = tryResolveModuleAccess(expr, ctx);
+        if (moduleAccess) {
+          return moduleAccess;
+        }
+        // Otherwise, it's a regular record field access
+        return {
+          kind: "IRFieldAccess",
+          target: lowerExpr(expr.target, ctx),
+          field: expr.field,
+          span: expr.span,
+        };
       }
-      // Otherwise, it's a regular record field access
-      return {
-        kind: "IRFieldAccess",
-        target: lowerExpr(expr.target, ctx),
-        field: expr.field,
-        span: expr.span,
-      };
-    }
 
-    default:
-      const _exhaustive: never = expr;
-      throw new IRError(
-        `Unknown expression kind: ${(expr as any).kind}`,
-        (expr as any).span,
-      );
-  }
+      default:
+        const _exhaustive: never = expr;
+        throw new IRError(
+          `Unknown expression kind: ${(expr as any).kind}`,
+          (expr as any).span,
+        );
+    }
+  } // end while (true)
 }
 
 /**
@@ -411,75 +417,75 @@ function lowerNumber(expr: Extract<Expr, { kind: "Number" }>): IRExpr {
 /**
  * Lower a let...in expression.
  *
- * Strategy: Lift all bindings to the module level with unique names,
- * then return the body with references updated.
+ * Strategy: convert to nested lambdas applied immediately.
+ *   let x = e1 in e2  =>  (\x -> e2) e1
  *
- * Example:
- *   let x = 1
- *       y = x + 1
- *   in x + y
- *
- * Becomes (conceptually):
- *   $x_0 = 1
- *   $y_1 = $x_0 + 1
- *   body: $x_0 + $y_1
- *
- * For now, we use a simpler approach: convert to nested lambdas applied immediately.
- * This preserves semantics and is easier to implement.
- *
- * let x = e1 in e2  =>  (\x -> e2) e1
+ * Nested let-in chains are flattened iteratively to avoid stack overflow:
+ *   let x = e1 in (let y = e2 in body)
+ * is treated as a flat sequence of bindings rather than two recursive calls.
  */
 function lowerLetIn(
-  expr: Extract<Expr, { kind: "LetIn" }>,
+  exprArg: Extract<Expr, { kind: "LetIn" }>,
   ctx: LoweringContext,
 ): IRExpr {
-  // For multiple bindings, we chain them
-  // let x = e1; y = e2 in body => (\x -> (\y -> body) e2) e1
-  // But we need to be careful about ordering - bindings can reference earlier ones
+  // Flatten all nested LetIn levels without recursion into lowerExpr("LetIn").
+  // Each element is one level's bindings and its span.
+  const levels: Array<{ bindings: ValueDeclaration[]; span: Span }> = [];
+  let current: Expr = exprArg;
+  while (current.kind === "LetIn") {
+    levels.push({ bindings: current.bindings, span: current.span });
+    current = current.body;
+  }
 
-  let result = lowerExpr(expr.body, ctx);
+  // Lower only the innermost non-LetIn body — one lowerExpr call, no LetIn recursion.
+  let result = lowerExpr(current, ctx);
 
-  // Process bindings in reverse order to build up the chain
-  for (let i = expr.bindings.length - 1; i >= 0; i--) {
-    const binding = expr.bindings[i];
-    if (!binding) continue;
+  // Wrap from innermost level outward, building (\binding -> result)(value) chains.
+  for (let level = levels.length - 1; level >= 0; level--) {
+    const { bindings, span } = levels[level]!;
+    for (let i = bindings.length - 1; i >= 0; i--) {
+      const binding = bindings[i]!;
+      const bindingValue = lowerValueBody(binding, ctx);
 
-    // Lower the binding's body
-    const bindingValue = lowerValueBody(binding, ctx);
-
-    // Create pattern from binding name and args
-    const pattern: IRPattern =
-      binding.args.length === 0
-        ? { kind: "IRVarPattern", name: binding.name, span: binding.span }
-        : { kind: "IRVarPattern", name: binding.name, span: binding.span };
-
-    // Wrap result in a lambda and apply the binding value
-    const lambda: IRExpr = {
-      kind: "IRLambda",
-      params: [pattern],
-      body: result,
-      span: expr.span,
-    };
-
-    // If binding has args, it's a function - wrap value in lambda
-    let valueExpr: IRExpr;
-    if (binding.args.length > 0) {
-      valueExpr = {
-        kind: "IRLambda",
-        params: binding.args.map((p) => lowerPattern(p, ctx)),
-        body: bindingValue,
+      const pattern: IRPattern = {
+        kind: "IRVarPattern",
+        name: binding.name,
         span: binding.span,
       };
-    } else {
-      valueExpr = bindingValue;
-    }
 
-    result = {
-      kind: "IRApply",
-      callee: lambda,
-      args: [valueExpr],
-      span: expr.span,
-    };
+      const lambda: IRExpr = {
+        kind: "IRLambda",
+        params: [pattern],
+        body: result,
+        span,
+      };
+
+      let valueExpr: IRExpr;
+      if (binding.args.length > 0) {
+        const bindingParams = binding.args.map((p) => lowerPattern(p, ctx));
+        const tcoBody = rewriteSelfTailCalls(
+          binding.name,
+          bindingParams,
+          bindingValue,
+          0,
+        );
+        valueExpr = {
+          kind: "IRLambda",
+          params: bindingParams,
+          body: tcoBody,
+          span: binding.span,
+        };
+      } else {
+        valueExpr = bindingValue;
+      }
+
+      result = {
+        kind: "IRApply",
+        callee: lambda,
+        args: [valueExpr],
+        span,
+      };
+    }
   }
 
   return result;

@@ -25,6 +25,7 @@ import {
   lowerPattern,
   convertType,
   convertConstraints,
+  rewriteSelfTailCalls,
 } from "../lowering";
 import {
   buildDependencyGraph,
@@ -239,6 +240,20 @@ export function lower(
         exportName: decl.args[1]!,
         callArity: argCount,
       };
+    }
+
+    // Apply TCO: rewrite self-tail-calls into IRSelfLoop/IRLoopContinue
+    if (params.length > 0 && !isExternal) {
+      const seenProtos = new Set<string>();
+      let dictParamCount = 0;
+      for (const c of constraints) {
+        const ta = c.typeArgs[0];
+        if (ta && ta.kind === "var" && !seenProtos.has(c.protocolName)) {
+          seenProtos.add(c.protocolName);
+          dictParamCount++;
+        }
+      }
+      body = rewriteSelfTailCalls(name, params, body, dictParamCount);
     }
 
     const irValue: IRValue = {

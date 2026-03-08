@@ -365,6 +365,9 @@ function executeCommand(
 
     return 0;
   } catch (error) {
+    if (error instanceof Error && error.message.includes("call stack")) {
+      stderr.write(`${error.stack}\n`);
+    }
     formatAndWriteError(error, "", "", stderr);
     return 1;
   }
