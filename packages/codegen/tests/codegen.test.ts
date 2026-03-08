@@ -1828,3 +1828,83 @@ path : Path
     expect(code).toContain('import path from "node:path";');
   });
 });
+
+// ============================================================================
+// Tuple Dictionary Resolution Tests
+// ============================================================================
+
+describe("Tuple Dictionary Resolution in Auto-Derive", () => {
+  test("auto-derived Eq for ADT with tuple-containing List arg generates correct tuple dict", () => {
+    // Regression test: When an ADT has a constructor arg like `List (String, Value)`,
+    // the auto-derived Eq must synthesize an Eq instance for the `(String, Value)` tuple
+    // and generate code that references `$dict_Eq_tuple_String_Value`, not bare `$dict_Eq`.
+    const preludeSource = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+@external "runtime" "stringAppend"
+stringAppend : String -> String -> String
+
+infix 4 ==
+infix 4 /=
+infixr 5 ++
+
+protocol Appendable a where
+  (++) : a -> a -> a
+
+implement Appendable String where
+  (++) = stringAppend
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+  (/=) : a -> a -> Bool
+  (/=) x y = not (x == y)
+
+protocol Show a where
+  toString : a -> String
+
+implement Eq String where
+  (==) a b = True
+
+implement Eq Int where
+  (==) a b = True
+
+implement Show String where
+  toString a = a
+
+implement Show Int where
+  toString a = "int"
+
+implement Eq a => Eq (List a) where
+  (==) xs ys =
+    case (xs, ys) of
+      ([], []) -> True
+      _ -> False
+
+implement Show a => Show (List a) where
+  toString xs = "list"
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Vibe exposing (..)
+
+type Value
+  = JsonString String
+  | JsonInt Int
+  | JsonArray (List Value)
+  | JsonObject (List (String, Value))
+`;
+    const { code } = compileToJS(source, preludeSource);
+
+    // Should reference a properly qualified tuple dict, not bare $dict_Eq
+    expect(code).toContain("$dict_Eq_tuple_String_Value");
+    expect(code).toContain("$dict_Show_tuple_String_Value");
+    // Must NOT contain bare $dict_Eq or $dict_Show (undefined references)
+    expect(code).not.toMatch(/\(\$dict_Eq\)/);
+    expect(code).not.toMatch(/\(\$dict_Show\)/);
+  });
+});

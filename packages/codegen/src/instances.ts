@@ -493,17 +493,12 @@ export function resolveDictReference(
         // a type parameter that isn't determined by the call's operands.
         // In this case, we should use the polymorphic path.
 
-        if (resolvedType && resolvedType.kind === "con") {
-          // We have a concrete type - resolve the constraint dictionary for it
-          constraintDicts.push(
-            resolveDictionaryForType(
-              constraint.protocolName,
-              resolvedType,
-              ctx,
-            ),
-          );
-        } else if (resolvedType && resolvedType.kind === "list") {
-          // Handle list type - resolve Appendable for List
+        if (
+          resolvedType &&
+          (resolvedType.kind === "con" ||
+            resolvedType.kind === "list" ||
+            resolvedType.kind === "tuple")
+        ) {
           constraintDicts.push(
             resolveDictionaryForType(
               constraint.protocolName,
@@ -558,6 +553,12 @@ export function resolveDictionaryForType(
     };
     const typeKey = formatTypeKey(listAsCon);
     return resolveDictReference(protocolName, typeKey, ctx, listAsCon);
+  }
+
+  // Handle tuple type - look up the concrete tuple instance dictionary
+  if (type.kind === "tuple") {
+    const typeKey = formatTypeKey(type);
+    return resolveDictReference(protocolName, typeKey, ctx, type);
   }
 
   // Type variable - pass through the polymorphic dictionary.

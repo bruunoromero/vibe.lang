@@ -159,6 +159,16 @@
         "@types/bun": "latest",
       },
     },
+    "packages/vibe-json": {
+      "name": "@vibe/vibe-json",
+      "version": "0.0.0",
+      "dependencies": {
+        "@vibe/prelude": "workspace:*",
+      },
+      "devDependencies": {
+        "@vibe/cli": "workspace:*",
+      },
+    },
     "packages/vibe-lexer": {
       "name": "@vibe/vibe-lexer",
       "version": "0.0.0",
@@ -242,6 +252,8 @@
     "@vibe/semantics": ["@vibe/semantics@workspace:packages/semantics"],
 
     "@vibe/syntax": ["@vibe/syntax@workspace:packages/syntax"],
+
+    "@vibe/vibe-json": ["@vibe/vibe-json@workspace:packages/vibe-json"],
 
     "@vibe/vibe-lexer": ["@vibe/vibe-lexer@workspace:packages/vibe-lexer"],
 

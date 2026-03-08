@@ -1166,7 +1166,13 @@ function generateVar(
     // operator should resolve to the field-type-specific dictionary.
     if (expr.constraint) {
       const typeArg = expr.constraint.typeArgs[0];
-      if (typeArg && typeArg.kind === "con" && isFullyConcrete(typeArg)) {
+      if (
+        typeArg &&
+        (typeArg.kind === "con" ||
+          typeArg.kind === "tuple" ||
+          typeArg.kind === "list") &&
+        isFullyConcrete(typeArg)
+      ) {
         const typeKey = formatTypeKey(typeArg);
         const dictRef = resolveDictReferenceCtx(
           protocolName,
@@ -1188,9 +1194,13 @@ function generateVar(
     // or from the constraint field if available
     if (expr.constraint) {
       const typeArg = expr.constraint.typeArgs[0];
-      if (typeArg && typeArg.kind === "con") {
+      if (
+        typeArg &&
+        (typeArg.kind === "con" ||
+          typeArg.kind === "tuple" ||
+          typeArg.kind === "list")
+      ) {
         const typeKey = formatTypeKey(typeArg);
-        // Pass all constraint type args for multi-parameter protocols
         const dictRef = resolveDictReferenceCtx(
           protocolName,
           typeKey,

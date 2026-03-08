@@ -1,0 +1,124 @@
+module Json exposing
+  ( Value(..)
+  , Decoder
+  , JSON
+  , Error(..)
+  , encode
+  , decodeString
+  , errorToString
+  , string
+  , int
+  , float
+  , bool
+  , null
+  , nullable
+  , maybe
+  , list
+  , keyValuePairs
+  , field
+  , at
+  , index
+  , map
+  , map2
+  , map3
+  , map4
+  , map5
+  , andThen
+  , succeed
+  , fail
+  , oneOf
+  , lazy
+  , value
+  , object
+  )
+
+import Vibe exposing (..)
+import Json.Encode as Encode exposing (Value(..))
+import Json.Decode as Decode exposing (JSON, Decoder, Error(..))
+
+
+-- Encoding
+
+encode : Int -> Value -> String
+encode = Encode.encode
+
+object : List (String, Value) -> Value
+object = Encode.object
+
+
+-- Decoding
+
+decodeString : Decoder a -> String -> Result String a
+decodeString = Decode.decodeString
+
+errorToString : Error -> String
+errorToString = Decode.errorToString
+
+string : Decoder String
+string = Decode.string
+
+int : Decoder Int
+int = Decode.int
+
+float : Decoder Float
+float = Decode.float
+
+bool : Decoder Bool
+bool = Decode.bool
+
+null : a -> Decoder a
+null = Decode.null
+
+nullable : Decoder a -> Decoder (Maybe a)
+nullable = Decode.nullable
+
+maybe : Decoder a -> Decoder (Maybe a)
+maybe = Decode.maybe
+
+list : Decoder a -> Decoder (List a)
+list = Decode.list
+
+keyValuePairs : Decoder a -> Decoder (List (String, a))
+keyValuePairs = Decode.keyValuePairs
+
+field : String -> Decoder a -> Decoder a
+field = Decode.field
+
+at : List String -> Decoder a -> Decoder a
+at = Decode.at
+
+index : Int -> Decoder a -> Decoder a
+index = Decode.index
+
+map : (a -> b) -> Decoder a -> Decoder b
+map = Decode.map
+
+map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
+map2 = Decode.map2
+
+map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
+map3 = Decode.map3
+
+map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e
+map4 = Decode.map4
+
+map5 : (a -> b -> c -> d -> e -> f) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f
+map5 = Decode.map5
+
+andThen : (a -> Decoder b) -> Decoder a -> Decoder b
+andThen = Decode.andThen
+
+succeed : a -> Decoder a
+succeed = Decode.succeed
+
+fail : String -> Decoder a
+fail = Decode.fail
+
+oneOf : List (Decoder a) -> Decoder a
+oneOf = Decode.oneOf
+
+lazy : (() -> Decoder a) -> Decoder a
+lazy = Decode.lazy
+
+value : Decoder Value
+value = Decode.value

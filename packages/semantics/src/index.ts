@@ -313,6 +313,7 @@ class SemanticAnalyzer {
     // Set the module-level record registry for synthesis functions
     _recordRegistry = this.records;
     _protocolMethodUsages = this._resolvedProtocolUsages;
+    _currentModuleName = this.getModuleName();
 
     // ===== PASS 1.6: Auto-implement Eq for all type declarations =====
     // After explicit implementations are registered, auto-generate Eq for types that:
@@ -3881,6 +3882,7 @@ class SemanticAnalyzer {
           span,
         };
         const fieldType = this.typeFromAnnotation(field.type, paramMap);
+        this.ensureNestedTupleInstances("Show", fieldType);
         expr = append(expr, toStringWithUsage(fieldAccess, fieldType));
       });
 
@@ -3904,6 +3906,7 @@ class SemanticAnalyzer {
           args.forEach((a, i) => {
             if (i > 0) expr = append(expr, str(", "));
             const argType = this.typeFromAnnotation(ctor.args[i]!, paramMap);
+            this.ensureNestedTupleInstances("Show", argType);
             expr = append(
               expr,
               toStringWithUsage(
@@ -3947,6 +3950,34 @@ class SemanticAnalyzer {
     };
   }
 
+  /**
+   * Walk a type and synthesize Eq/Show instances for any nested tuple types.
+   * This is needed during auto-derive because the generated method bodies
+   * reference inner Eq/Show constraints that require concrete tuple instances.
+   */
+  private ensureNestedTupleInstances(protocolName: string, type: Type): void {
+    if (type.kind === "tuple") {
+      for (const elem of type.elements) {
+        this.ensureNestedTupleInstances(protocolName, elem);
+      }
+      if (!findInstanceForTypeInternal(protocolName, type, this.instances)) {
+        // Directly generate the synthetic instance instead of using trySynthesizeInstance,
+        // because during auto-derive the parent type's instance hasn't been pushed yet,
+        // so element validation would fail for self-referential types.
+        const instance = generateSyntheticInstance(
+          protocolName,
+          type,
+          this._resolvedProtocolUsages,
+        );
+        this.instances.push(instance);
+      }
+    } else if (type.kind === "con") {
+      for (const arg of (type as TypeCon).args) {
+        this.ensureNestedTupleInstances(protocolName, arg);
+      }
+    }
+  }
+
   generateEqImplementation(
     decl: TypeDeclaration,
     protocol: ProtocolInfo,
@@ -3961,6 +3992,7 @@ class SemanticAnalyzer {
           decl.span,
           typeParams,
           new Set(),
+          decl.name,
         );
       }
     }
@@ -3968,7 +4000,13 @@ class SemanticAnalyzer {
     if (decl.constructors) {
       for (const ctor of decl.constructors) {
         for (const arg of ctor.args) {
-          this.validateTypeImplementsEq(arg, decl.span, typeParams, new Set());
+          this.validateTypeImplementsEq(
+            arg,
+            decl.span,
+            typeParams,
+            new Set(),
+            decl.name,
+          );
         }
       }
     }
@@ -4034,6 +4072,7 @@ class SemanticAnalyzer {
           span,
         };
         const fieldType = this.typeFromAnnotation(field.type, paramMap);
+        this.ensureNestedTupleInstances("Eq", fieldType);
         this._resolvedProtocolUsages.set(node, {
           protocolName: "Eq",
           typeArgs: [fieldType],
@@ -4096,6 +4135,7 @@ class SemanticAnalyzer {
             span,
           };
           const argType = this.typeFromAnnotation(arg, paramMap);
+          this.ensureNestedTupleInstances("Eq", argType);
           this._resolvedProtocolUsages.set(node, {
             protocolName: "Eq",
             typeArgs: [argType],
@@ -4179,6 +4219,7 @@ class SemanticAnalyzer {
     declSpan: Span,
     typeParams: Set<string>,
     checkedTypes: Set<string>,
+    derivingTypeName?: string,
   ): void {
     const typeKey = JSON.stringify(type);
     if (checkedTypes.has(typeKey)) return;
@@ -4199,6 +4240,9 @@ class SemanticAnalyzer {
 
         if (isTypeVariable && typeParams.has(type.name)) return;
 
+        // Self-reference: the type we're currently deriving Eq for
+        if (derivingTypeName && type.name === derivingTypeName) return;
+
         // Convert TypeRef to Type for instance lookup
         const typeForLookup: Type = {
           kind: "con",
@@ -4215,6 +4259,7 @@ class SemanticAnalyzer {
             declSpan,
             typeParams,
             checkedTypes,
+            derivingTypeName,
           );
           return;
         }
@@ -4254,6 +4299,7 @@ class SemanticAnalyzer {
             declSpan,
             typeParams,
             checkedTypes,
+            derivingTypeName,
           ),
         );
         return;
@@ -4266,6 +4312,7 @@ class SemanticAnalyzer {
             declSpan,
             typeParams,
             checkedTypes,
+            derivingTypeName,
           ),
         );
         return;
@@ -4276,6 +4323,7 @@ class SemanticAnalyzer {
             declSpan,
             typeParams,
             checkedTypes,
+            derivingTypeName,
           ),
         );
         return;
@@ -4285,6 +4333,7 @@ class SemanticAnalyzer {
           declSpan,
           typeParams,
           checkedTypes,
+          derivingTypeName,
         );
         return;
       default:
@@ -8021,6 +8070,7 @@ const syntheticSpan: Span = {
  */
 let _recordRegistry: Record<string, RecordInfo> = {};
 let _protocolMethodUsages: Map<Expr, ProtocolMethodUsage> | undefined;
+let _currentModuleName: string | undefined;
 
 function getRecordFieldNames(type: Type): string[] | undefined {
   if (type.kind === "record") {
@@ -8154,12 +8204,9 @@ function generateSyntheticInstance(
 
   return {
     protocolName,
-    moduleName: "Synthetic",
+    moduleName: _currentModuleName ?? "Synthetic",
     typeArgs: [type],
-    constraints: [], // Constraints checked at synthesis time, effectively monomorphic instance?
-    // Wait, if we use type variables?
-    // findInstanceForTypeInternal takes CONCRETE type. So we generate CONCRETE instance.
-    // e.g. Instance Eq (Int, Int)
+    constraints: [],
     methods,
     explicitMethods: new Set(methods.keys()),
     span,

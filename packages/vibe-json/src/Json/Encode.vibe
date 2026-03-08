@@ -1,0 +1,223 @@
+module Json.Encode exposing
+  ( Value(..)
+  , string
+  , int
+  , float
+  , bool
+  , null
+  , list
+  , object
+  , encode
+  )
+
+import Vibe exposing (..)
+import Vibe.String as String
+import Vibe.Char as Char
+import Vibe.List as List
+
+
+type Value
+  = JsonString String
+  | JsonInt Int
+  | JsonFloat Float
+  | JsonBool Bool
+  | JsonNull
+  | JsonArray (List Value)
+  | JsonObject (List (String, Value))
+
+
+string : String -> Value
+string s = JsonString s
+
+int : Int -> Value
+int n = JsonInt n
+
+float : Float -> Value
+float n = JsonFloat n
+
+bool : Bool -> Value
+bool b = JsonBool b
+
+null : Value
+null = JsonNull
+
+list : (a -> Value) -> List a -> Value
+list encode items = JsonArray (List.map encode items)
+
+object : List (String, Value) -> Value
+object pairs = JsonObject pairs
+
+
+-- Encoding to String
+
+encode : Int -> Value -> String
+encode indent val =
+  renderValue indent 0 val
+
+
+renderValue : Int -> Int -> Value -> String
+renderValue indent depth val =
+  case val of
+    JsonString s ->
+      renderString s
+    JsonInt n ->
+      toString n
+    JsonFloat n ->
+      renderFloat n
+    JsonBool b ->
+      case b of
+        True -> "true"
+        False -> "false"
+    JsonNull ->
+      "null"
+    JsonArray items ->
+      renderArray indent depth items
+    JsonObject pairs ->
+      renderObject indent depth pairs
+
+
+renderFloat : Float -> String
+renderFloat n =
+  let s = toString n
+  in case s of
+    "NaN" -> "null"
+    "Infinity" -> "null"
+    "-Infinity" -> "null"
+    _ -> s
+
+
+renderString : String -> String
+renderString s =
+  "\"" ++ escapeChars (String.toList s) ++ "\""
+
+escapeChars : List Char -> String
+escapeChars chars =
+  case chars of
+    [] -> ""
+    c :: rest ->
+      escapeChar c ++ escapeChars rest
+
+escapeChar : Char -> String
+escapeChar c =
+  case c of
+    '"' -> "\\\""
+    '\\' -> "\\\\"
+    '\n' -> "\\n"
+    '\r' -> "\\r"
+    '\t' -> "\\t"
+    _ ->
+      let code = Char.toCode c
+      in case code < 32 of
+        True -> escapeControl code
+        False -> toString c
+
+escapeControl : Int -> String
+escapeControl code =
+  "\\u00" ++ hexByte code
+
+hexByte : Int -> String
+hexByte n =
+  let hi = n // 16
+      lo = n % 16
+  in hexDigit hi ++ hexDigit lo
+
+hexDigit : Int -> String
+hexDigit n =
+  case n of
+    0  -> "0"
+    1  -> "1"
+    2  -> "2"
+    3  -> "3"
+    4  -> "4"
+    5  -> "5"
+    6  -> "6"
+    7  -> "7"
+    8  -> "8"
+    9  -> "9"
+    10 -> "a"
+    11 -> "b"
+    12 -> "c"
+    13 -> "d"
+    14 -> "e"
+    _  -> "f"
+
+
+renderArray : Int -> Int -> List Value -> String
+renderArray indent depth items =
+  case items of
+    [] -> "[]"
+    _ ->
+      case indent == 0 of
+        True ->
+          "[" ++ joinValues indent depth items ++ "]"
+        False ->
+          let newDepth = depth + 1
+              pad = makeIndent indent newDepth
+              innerPad = makeIndent indent depth
+          in "[\n" ++ pad ++ joinValuesIndented indent newDepth items ++ "\n" ++ innerPad ++ "]"
+
+
+renderObject : Int -> Int -> List (String, Value) -> String
+renderObject indent depth pairs =
+  case pairs of
+    [] -> "{}"
+    _ ->
+      case indent == 0 of
+        True ->
+          "{" ++ joinPairs indent depth pairs ++ "}"
+        False ->
+          let newDepth = depth + 1
+              pad = makeIndent indent newDepth
+              innerPad = makeIndent indent depth
+          in "{\n" ++ pad ++ joinPairsIndented indent newDepth pairs ++ "\n" ++ innerPad ++ "}"
+
+
+joinValues : Int -> Int -> List Value -> String
+joinValues indent depth items =
+  case items of
+    [] -> ""
+    [x] -> renderValue indent depth x
+    x :: rest ->
+      renderValue indent depth x ++ "," ++ joinValues indent depth rest
+
+
+joinValuesIndented : Int -> Int -> List Value -> String
+joinValuesIndented indent depth items =
+  case items of
+    [] -> ""
+    [x] -> renderValue indent depth x
+    x :: rest ->
+      let pad = makeIndent indent depth
+      in renderValue indent depth x ++ ",\n" ++ pad ++ joinValuesIndented indent depth rest
+
+
+joinPairs : Int -> Int -> List (String, Value) -> String
+joinPairs indent depth pairs =
+  case pairs of
+    [] -> ""
+    [(k, v)] ->
+      renderString k ++ ":" ++ renderValue indent depth v
+    (k, v) :: rest ->
+      renderString k ++ ":" ++ renderValue indent depth v ++ "," ++ joinPairs indent depth rest
+
+
+joinPairsIndented : Int -> Int -> List (String, Value) -> String
+joinPairsIndented indent depth pairs =
+  case pairs of
+    [] -> ""
+    [(k, v)] ->
+      renderString k ++ ": " ++ renderValue indent depth v
+    (k, v) :: rest ->
+      let pad = makeIndent indent depth
+      in renderString k ++ ": " ++ renderValue indent depth v ++ ",\n" ++ pad ++ joinPairsIndented indent depth rest
+
+
+makeIndent : Int -> Int -> String
+makeIndent indent depth =
+  repeatSpaces (indent * depth)
+
+repeatSpaces : Int -> String
+repeatSpaces n =
+  case n <= 0 of
+    True -> ""
+    False -> " " ++ repeatSpaces (n - 1)

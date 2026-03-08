@@ -1,0 +1,6 @@
+{
+  "name": "Json",
+  "src": "src",
+  "dist": "dist",
+  "packages": ["@vibe/prelude"]
+}

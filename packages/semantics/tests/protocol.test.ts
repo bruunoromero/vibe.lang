@@ -2028,4 +2028,134 @@ type Color = Red | Green | Blue
       ),
     ).toBe(false);
   });
+
+  test("auto-implements Eq for recursive ADT", () => {
+    const source = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+infix 4 ==
+infix 4 /=
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+  (/=) : a -> a -> Bool
+  (/=) x y = not (x == y)
+
+implement Eq Int where
+  (==) a b = True
+
+implement Eq a => Eq (List a) where
+  (==) xs ys =
+    case (xs, ys) of
+      ([], []) -> True
+      _ -> False
+
+type Expr
+  = Lit Int
+  | Add Expr Expr
+  | Neg Expr
+  | Group (List Expr)
+`;
+    const program = parseTest(source);
+    const result = analyze(program, {
+      fileContext: { filePath: "Vibe.vibe", srcDir: "" },
+    });
+
+    // Should auto-generate Eq instance for recursive type
+    expect(
+      result.instances.some(
+        (i) =>
+          i.protocolName === "Eq" &&
+          i.typeArgs[0]?.kind === "con" &&
+          (i.typeArgs[0] as any).name === "Expr",
+      ),
+    ).toBe(true);
+  });
+
+  test("auto-derives Eq/Show for ADT with tuple-containing constructor args", () => {
+    const source = `
+module Vibe exposing (..)
+
+@external "runtime" "not"
+not : Bool -> Bool
+
+@external "runtime" "stringAppend"
+stringAppend : String -> String -> String
+
+infix 4 ==
+infix 4 /=
+infixr 5 ++
+
+protocol Appendable a where
+  (++) : a -> a -> a
+
+implement Appendable String where
+  (++) = stringAppend
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+  (/=) : a -> a -> Bool
+  (/=) x y = not (x == y)
+
+protocol Show a where
+  toString : a -> String
+
+implement Eq String where
+  (==) a b = True
+
+implement Eq Int where
+  (==) a b = True
+
+implement Show String where
+  toString a = a
+
+implement Show Int where
+  toString a = "int"
+
+implement Eq a => Eq (List a) where
+  (==) xs ys =
+    case (xs, ys) of
+      ([], []) -> True
+      _ -> False
+
+implement Show a => Show (List a) where
+  toString xs = "list"
+
+type Value
+  = JsonString String
+  | JsonInt Int
+  | JsonObject (List (String, Value))
+`;
+    const program = parseTest(source);
+    const result = analyze(program, {
+      fileContext: { filePath: "Vibe.vibe", srcDir: "" },
+    });
+
+    // Should auto-generate Eq instance for Value
+    expect(
+      result.instances.some(
+        (i) =>
+          i.protocolName === "Eq" &&
+          i.typeArgs[0]?.kind === "con" &&
+          (i.typeArgs[0] as any).name === "Value",
+      ),
+    ).toBe(true);
+
+    // Should synthesize Eq instance for (String, Value) tuple
+    expect(
+      result.instances.some(
+        (i) => i.protocolName === "Eq" && i.typeArgs[0]?.kind === "tuple",
+      ),
+    ).toBe(true);
+
+    // Should synthesize Show instance for (String, Value) tuple
+    expect(
+      result.instances.some(
+        (i) => i.protocolName === "Show" && i.typeArgs[0]?.kind === "tuple",
+      ),
+    ).toBe(true);
+  });
 });

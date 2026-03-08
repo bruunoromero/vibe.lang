@@ -1,0 +1,533 @@
+module Json.Decode exposing
+  ( JSON
+  , Decoder
+  , Error(..)
+  , string
+  , int
+  , float
+  , bool
+  , null
+  , nullable
+  , maybe
+  , list
+  , keyValuePairs
+  , field
+  , at
+  , index
+  , map
+  , map2
+  , map3
+  , map4
+  , map5
+  , andThen
+  , succeed
+  , fail
+  , oneOf
+  , lazy
+  , value
+  , decodeString
+  , errorToString
+  )
+
+import Vibe exposing (..)
+import Vibe.String as String
+import Vibe.List as List
+import Json.Encode as Encode
+
+
+-- The opaque JSON type representing a raw parsed JSON value.
+type JSON
+
+
+type Decoder a = Decoder (JSON -> Result Error a)
+
+
+type Error
+  = Field String Error
+  | Index Int Error
+  | OneOf (List Error)
+  | Failure String
+
+
+-- ============================================================================
+-- FFI Bindings
+-- ============================================================================
+
+@external "./Decode.ffi.js" "jsonParse"
+_jsonParse : (JSON -> Result String JSON) -> (String -> Result String JSON) -> String -> Result String JSON
+
+@external "./Decode.ffi.js" "jsonIsNull"
+_isNull : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonIsBool"
+_isBool : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonIsInt"
+_isInt : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonIsNumber"
+_isNumber : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonIsString"
+_isString : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonIsArray"
+_isArray : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonIsObject"
+_isObject : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonToBool"
+_toBool : JSON -> Bool
+
+@external "./Decode.ffi.js" "jsonToInt"
+_toInt : JSON -> Int
+
+@external "./Decode.ffi.js" "jsonToFloat"
+_toFloat : JSON -> Float
+
+@external "./Decode.ffi.js" "jsonToString"
+_jsonToString : JSON -> String
+
+@external "./Decode.ffi.js" "jsonArrayLength"
+_arrayLength : JSON -> Int
+
+@external "./Decode.ffi.js" "jsonArrayGet"
+_arrayGet : (JSON -> Maybe JSON) -> Maybe JSON -> Int -> JSON -> Maybe JSON
+
+@external "./Decode.ffi.js" "jsonObjectKeys"
+_objectKeys : JSON -> List String
+
+@external "./Decode.ffi.js" "jsonObjectGet"
+_objectGet : (JSON -> Maybe JSON) -> Maybe JSON -> String -> JSON -> Maybe JSON
+
+
+-- ============================================================================
+-- Internal Helpers
+-- ============================================================================
+
+runDecoder : Decoder a -> JSON -> Result Error a
+runDecoder decoder json =
+  case decoder of
+    Decoder f -> f json
+
+arrayGet : Int -> JSON -> Maybe JSON
+arrayGet = _arrayGet Just Nothing
+
+objectGet : String -> JSON -> Maybe JSON
+objectGet = _objectGet Just Nothing
+
+jsonParse : String -> Result String JSON
+jsonParse = _jsonParse Ok Err
+
+
+-- ============================================================================
+-- Primitives
+-- ============================================================================
+
+decodeString_ : JSON -> Result Error String
+decodeString_ json =
+  case _isString json of
+    True -> Ok (_jsonToString json)
+    False -> Err (Failure "Expecting a STRING")
+
+string : Decoder String
+string = Decoder decodeString_
+
+
+decodeInt_ : JSON -> Result Error Int
+decodeInt_ json =
+  case _isInt json of
+    True -> Ok (_toInt json)
+    False -> Err (Failure "Expecting an INT")
+
+int : Decoder Int
+int = Decoder decodeInt_
+
+
+decodeFloat_ : JSON -> Result Error Float
+decodeFloat_ json =
+  case _isNumber json of
+    True -> Ok (_toFloat json)
+    False -> Err (Failure "Expecting a FLOAT")
+
+float : Decoder Float
+float = Decoder decodeFloat_
+
+
+decodeBool_ : JSON -> Result Error Bool
+decodeBool_ json =
+  case _isBool json of
+    True -> Ok (_toBool json)
+    False -> Err (Failure "Expecting a BOOL")
+
+bool : Decoder Bool
+bool = Decoder decodeBool_
+
+
+-- ============================================================================
+-- Null & Maybe
+-- ============================================================================
+
+decodeNull_ : a -> JSON -> Result Error a
+decodeNull_ fallback json =
+  case _isNull json of
+    True -> Ok fallback
+    False -> Err (Failure "Expecting null")
+
+null : a -> Decoder a
+null fallback = Decoder (decodeNull_ fallback)
+
+
+nullable : Decoder a -> Decoder (Maybe a)
+nullable decoder =
+  oneOf
+    [ map Just decoder
+    , null Nothing
+    ]
+
+decodeMaybe_ : Decoder a -> JSON -> Result Error (Maybe a)
+decodeMaybe_ decoder json =
+  case runDecoder decoder json of
+    Ok a -> Ok (Just a)
+    Err _ -> Ok Nothing
+
+maybe : Decoder a -> Decoder (Maybe a)
+maybe decoder = Decoder (decodeMaybe_ decoder)
+
+
+-- ============================================================================
+-- Data Structures
+-- ============================================================================
+
+decodeList_ : Decoder a -> JSON -> Result Error (List a)
+decodeList_ decoder json =
+  case _isArray json of
+    True -> decodeListItems decoder json 0 (_arrayLength json)
+    False -> Err (Failure "Expecting an ARRAY")
+
+list : Decoder a -> Decoder (List a)
+list decoder = Decoder (decodeList_ decoder)
+
+decodeListItems : Decoder a -> JSON -> Int -> Int -> Result Error (List a)
+decodeListItems decoder json idx len =
+  case idx >= len of
+    True -> Ok []
+    False ->
+      case arrayGet idx json of
+        Nothing -> Err (Index idx (Failure "Index out of bounds"))
+        Just item ->
+          case runDecoder decoder item of
+            Err e -> Err (Index idx e)
+            Ok val ->
+              case decodeListItems decoder json (idx + 1) len of
+                Err e -> Err e
+                Ok rest -> Ok (val :: rest)
+
+
+decodeKeyValuePairs_ : Decoder a -> JSON -> Result Error (List (String, a))
+decodeKeyValuePairs_ decoder json =
+  case _isObject json of
+    True -> decodeKeyValues decoder json (_objectKeys json)
+    False -> Err (Failure "Expecting an OBJECT")
+
+keyValuePairs : Decoder a -> Decoder (List (String, a))
+keyValuePairs decoder = Decoder (decodeKeyValuePairs_ decoder)
+
+decodeKeyValues : Decoder a -> JSON -> List String -> Result Error (List (String, a))
+decodeKeyValues decoder json keys =
+  case keys of
+    [] -> Ok []
+    k :: rest ->
+      case objectGet k json of
+        Nothing -> Err (Field k (Failure "Key missing"))
+        Just item ->
+          case runDecoder decoder item of
+            Err e -> Err (Field k e)
+            Ok val ->
+              case decodeKeyValues decoder json rest of
+                Err e -> Err e
+                Ok pairs -> Ok ((k, val) :: pairs)
+
+
+-- ============================================================================
+-- Object Primitives
+-- ============================================================================
+
+decodeField_ : String -> Decoder a -> JSON -> Result Error a
+decodeField_ key decoder json =
+  case _isObject json of
+    False -> Err (Failure "Expecting an OBJECT")
+    True ->
+      case objectGet key json of
+        Nothing -> Err (Field key (Failure "Missing field"))
+        Just sub ->
+          case runDecoder decoder sub of
+            Err e -> Err (Field key e)
+            Ok val -> Ok val
+
+field : String -> Decoder a -> Decoder a
+field key decoder = Decoder (decodeField_ key decoder)
+
+at : List String -> Decoder a -> Decoder a
+at path decoder =
+  case path of
+    [] -> decoder
+    k :: rest -> field k (at rest decoder)
+
+decodeIndex_ : Int -> Decoder a -> JSON -> Result Error a
+decodeIndex_ idx decoder json =
+  case _isArray json of
+    False -> Err (Failure "Expecting an ARRAY")
+    True ->
+      case arrayGet idx json of
+        Nothing -> Err (Index idx (Failure "Index out of bounds"))
+        Just sub ->
+          case runDecoder decoder sub of
+            Err e -> Err (Index idx e)
+            Ok val -> Ok val
+
+index : Int -> Decoder a -> Decoder a
+index idx decoder = Decoder (decodeIndex_ idx decoder)
+
+
+-- ============================================================================
+-- Mapping & Combining
+-- ============================================================================
+
+decodeMap_ : (a -> b) -> Decoder a -> JSON -> Result Error b
+decodeMap_ f decoder json =
+  case runDecoder decoder json of
+    Ok a -> Ok (f a)
+    Err e -> Err e
+
+map : (a -> b) -> Decoder a -> Decoder b
+map f decoder = Decoder (decodeMap_ f decoder)
+
+
+decodeMap2_ : (a -> b -> c) -> Decoder a -> Decoder b -> JSON -> Result Error c
+decodeMap2_ f da db json =
+  case runDecoder da json of
+    Err e -> Err e
+    Ok a ->
+      case runDecoder db json of
+        Err e -> Err e
+        Ok b -> Ok (f a b)
+
+map2 : (a -> b -> c) -> Decoder a -> Decoder b -> Decoder c
+map2 f da db = Decoder (decodeMap2_ f da db)
+
+
+decodeMap3_ : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> JSON -> Result Error d
+decodeMap3_ f da db dc json =
+  case runDecoder da json of
+    Err e -> Err e
+    Ok a ->
+      case runDecoder db json of
+        Err e -> Err e
+        Ok b ->
+          case runDecoder dc json of
+            Err e -> Err e
+            Ok c -> Ok (f a b c)
+
+map3 : (a -> b -> c -> d) -> Decoder a -> Decoder b -> Decoder c -> Decoder d
+map3 f da db dc = Decoder (decodeMap3_ f da db dc)
+
+
+decodeMap4_ : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> JSON -> Result Error e
+decodeMap4_ f da db dc dd json =
+  case runDecoder da json of
+    Err e -> Err e
+    Ok a ->
+      case runDecoder db json of
+        Err e -> Err e
+        Ok b ->
+          case runDecoder dc json of
+            Err e -> Err e
+            Ok c ->
+              case runDecoder dd json of
+                Err e -> Err e
+                Ok d -> Ok (f a b c d)
+
+map4 : (a -> b -> c -> d -> e) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e
+map4 f da db dc dd = Decoder (decodeMap4_ f da db dc dd)
+
+
+decodeMap5_ : (a -> b -> c -> d -> e -> f) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> JSON -> Result Error f
+decodeMap5_ fn da db dc dd de json =
+  case runDecoder da json of
+    Err e -> Err e
+    Ok a ->
+      case runDecoder db json of
+        Err e -> Err e
+        Ok b ->
+          case runDecoder dc json of
+            Err e -> Err e
+            Ok c ->
+              case runDecoder dd json of
+                Err e -> Err e
+                Ok d ->
+                  case runDecoder de json of
+                    Err e -> Err e
+                    Ok ee -> Ok (fn a b c d ee)
+
+map5 : (a -> b -> c -> d -> e -> f) -> Decoder a -> Decoder b -> Decoder c -> Decoder d -> Decoder e -> Decoder f
+map5 fn da db dc dd de = Decoder (decodeMap5_ fn da db dc dd de)
+
+
+-- ============================================================================
+-- Fancy Decoding
+-- ============================================================================
+
+decodeSucceed_ : a -> JSON -> Result Error a
+decodeSucceed_ val _ = Ok val
+
+succeed : a -> Decoder a
+succeed val = Decoder (decodeSucceed_ val)
+
+decodeFail_ : String -> JSON -> Result Error a
+decodeFail_ msg _ = Err (Failure msg)
+
+fail : String -> Decoder a
+fail msg = Decoder (decodeFail_ msg)
+
+decodeAndThen_ : (a -> Decoder b) -> Decoder a -> JSON -> Result Error b
+decodeAndThen_ callback decoder json =
+  case runDecoder decoder json of
+    Err e -> Err e
+    Ok a -> runDecoder (callback a) json
+
+andThen : (a -> Decoder b) -> Decoder a -> Decoder b
+andThen callback decoder = Decoder (decodeAndThen_ callback decoder)
+
+decodeOneOf_ : List (Decoder a) -> JSON -> Result Error a
+decodeOneOf_ decoders json =
+  tryDecoders decoders json []
+
+oneOf : List (Decoder a) -> Decoder a
+oneOf decoders = Decoder (decodeOneOf_ decoders)
+
+tryDecoders : List (Decoder a) -> JSON -> List Error -> Result Error a
+tryDecoders decoders json errors =
+  case decoders of
+    [] -> Err (OneOf errors)
+    d :: rest ->
+      case runDecoder d json of
+        Ok val -> Ok val
+        Err e -> tryDecoders rest json (errors ++ [e])
+
+decodeLazy_ : (() -> Decoder a) -> JSON -> Result Error a
+decodeLazy_ thunk json =
+  runDecoder (thunk ()) json
+
+lazy : (() -> Decoder a) -> Decoder a
+lazy thunk = Decoder (decodeLazy_ thunk)
+
+
+-- ============================================================================
+-- Value decoder — converts JSON back into Encode.Value
+-- ============================================================================
+
+decodeValue_ : JSON -> Result Error Encode.Value
+decodeValue_ json = Ok (jsonToValue json)
+
+value : Decoder Encode.Value
+value = Decoder decodeValue_
+
+jsonToValue : JSON -> Encode.Value
+jsonToValue json =
+  case _isNull json of
+    True -> Encode.JsonNull
+    False ->
+      case _isBool json of
+        True -> Encode.JsonBool (_toBool json)
+        False ->
+          case _isInt json of
+            True -> Encode.JsonInt (_toInt json)
+            False ->
+              case _isNumber json of
+                True -> Encode.JsonFloat (_toFloat json)
+                False ->
+                  case _isString json of
+                    True -> Encode.JsonString (_jsonToString json)
+                    False ->
+                      case _isArray json of
+                        True -> Encode.JsonArray (convertArray json 0 (_arrayLength json))
+                        False ->
+                          case _isObject json of
+                            True -> Encode.JsonObject (convertObject json (_objectKeys json))
+                            False -> Encode.JsonNull
+
+convertArray : JSON -> Int -> Int -> List Encode.Value
+convertArray json idx len =
+  case idx >= len of
+    True -> []
+    False ->
+      case arrayGet idx json of
+        Nothing -> []
+        Just item -> jsonToValue item :: convertArray json (idx + 1) len
+
+convertObject : JSON -> List String -> List (String, Encode.Value)
+convertObject json keys =
+  case keys of
+    [] -> []
+    k :: rest ->
+      case objectGet k json of
+        Nothing -> convertObject json rest
+        Just item -> (k, jsonToValue item) :: convertObject json rest
+
+
+-- ============================================================================
+-- Run Decoders
+-- ============================================================================
+
+decodeString : Decoder a -> String -> Result String a
+decodeString decoder str =
+  case jsonParse str of
+    Err msg -> Err ("Invalid JSON: " ++ msg)
+    Ok json ->
+      case runDecoder decoder json of
+        Ok val -> Ok val
+        Err err -> Err (errorToString err)
+
+
+-- ============================================================================
+-- Error Formatting
+-- ============================================================================
+
+errorToString : Error -> String
+errorToString err =
+  errorToStringHelp "" err
+
+errorToStringHelp : String -> Error -> String
+errorToStringHelp context err =
+  case err of
+    Failure msg ->
+      case String.isEmpty context of
+        True -> msg
+        False -> "At " ++ context ++ ": " ++ msg
+    Field key inner ->
+      let newContext =
+            case String.isEmpty context of
+              True -> "." ++ key
+              False -> context ++ "." ++ key
+      in errorToStringHelp newContext inner
+    Index idx inner ->
+      let newContext =
+            case String.isEmpty context of
+              True -> "[" ++ toString idx ++ "]"
+              False -> context ++ "[" ++ toString idx ++ "]"
+      in errorToStringHelp newContext inner
+    OneOf errors ->
+      let prefix =
+            case String.isEmpty context of
+              True -> "One of the following failed:\n"
+              False -> "At " ++ context ++ ", one of the following failed:\n"
+      in prefix ++ formatOneOf errors 1
+
+formatOneOf : List Error -> Int -> String
+formatOneOf errors n =
+  case errors of
+    [] -> ""
+    e :: rest ->
+      "  (" ++ toString n ++ ") " ++ errorToString e ++ "\n" ++ formatOneOf rest (n + 1)
