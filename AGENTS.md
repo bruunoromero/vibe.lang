@@ -84,27 +84,55 @@ Install dependencies for all workspaces:
 bun install
 ```
 
-### Running Tests
+### Building & Validating Changes
 
-Run tests across all packages:
+Because the language is partially bootstrapped (the Vibe lexer and parser are compiled from Vibe source), validating a change requires **two build passes**:
 
-```bash
-bun test
+```
+Pass 1 — Regenerate bootstrapped artifacts
+  bunx turbo run build
+
+Pass 2 — Run the test suite against the newly generated compiler
+  bun test
+
+Pass 3 — Rebuild once more to verify the new compiler compiles itself cleanly
+  bunx turbo run build
 ```
 
-### Building
-
-After making changes, rebuild all packages using one of the following commands from the root:
+Run this full three-step sequence after **any** code change:
 
 ```bash
-# Build all packages with Turbo (verifies dependency graph)
+# 1. Build — generates new lexer/parser from the bootstrapped Vibe source
 bunx turbo run build
 
-# Alternatively: use the root build script
-bun run build
+# 2. Test — exercises the freshly generated compiler
+bun test
+
+# 3. Build again — confirms the new compiler can compile itself
+bunx turbo run build
 ```
 
-Always run a rebuild after completing code changes to validate the workspace dependency graph and ensure all packages compile successfully.
+A change is only valid when all three steps complete without errors.
+
+### Recovering from a Broken Compiler
+
+If pass 1 (`bunx turbo run build`) succeeds but pass 2 (`bun test`) or pass 3 (the second build) fails, the newly generated `dist/` artifacts are broken. Revert them to restore the last known-good compiler before attempting any fixes:
+
+```bash
+git checkout -- packages/vibe-lexer/dist packages/vibe-parser/dist
+```
+
+Then fix the source issue and run the three-step sequence again from the top.
+
+### Committing & Pushing
+
+Once all three steps pass, commit and push directly to `main`. Use a single emoji as the commit message that best represents the nature of the change:
+
+```bash
+git add -A
+git commit -m "🐛"   # any emoji works
+git push origin main
+```
 
 ### Running the Example App
 
@@ -243,9 +271,10 @@ This applies to **all** compiler code: lexer, parser, semantics, IR, codegen. Ne
    - Constrained instances (e.g., `Show a => Show (Ref a)`) require resolving both the outer dictionary AND the inner constraint dictionary
 
 4. **Final verification checklist for codegen changes**:
-   - [ ] `bun test` passes (all packages)
+   - [ ] `bunx turbo run build` succeeds (pass 1 — regenerates bootstrapped lexer/parser)
+   - [ ] `bun test` passes (pass 2 — exercises the freshly generated compiler)
+   - [ ] `bunx turbo run build` succeeds again (pass 3 — new compiler compiles itself cleanly)
    - [ ] `bun run typecheck` passes
-   - [ ] `bunx turbo run build` succeeds
    - [ ] `cd packages/example-app && bun start` runs and produces correct output
    - [ ] Generated JS files contain correct dictionary references (spot-check `dist/` files)
    - [ ] No hacky workarounds (span serialization, string encoding, context lookups) — information flows architecturally through the pipeline
