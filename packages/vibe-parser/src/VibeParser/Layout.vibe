@@ -45,6 +45,16 @@ isLayoutKeyword lexeme =
     "where" -> True
     _ -> False
 
+isContinuationKeyword : T.Token -> Bool
+isContinuationKeyword tok =
+  case tok.kind of
+    T.Keyword ->
+      case tok.lexeme of
+        "then" -> True
+        "else" -> True
+        _ -> False
+    _ -> False
+
 stackTop : List LayoutContext -> Maybe LayoutContext
 stackTop stack =
   List.head stack
@@ -190,21 +200,24 @@ handleNewline rest state =
       case nextTok.kind of
         T.Eof -> processTokens rest state
         _ ->
-          let
-            col = nextTok.span.start.column
-            closed = closeContextsBelow col nextTok.span state
-            withSep =
-              case stackTop closed.stack of
-                Nothing -> closed
-                Just ctx ->
-                  case col == ctx.column of
-                    True ->
-                      { closed
-                          | output = makeVirtual T.BlockSep nextTok.span :: closed.output
-                      }
-                    False -> closed
-          in
-          processTokens rest withSep
+          case isContinuationKeyword nextTok of
+            True -> processTokens rest state
+            False ->
+              let
+                col = nextTok.span.start.column
+                closed = closeContextsBelow col nextTok.span state
+                withSep =
+                  case stackTop closed.stack of
+                    Nothing -> closed
+                    Just ctx ->
+                      case col == ctx.column of
+                        True ->
+                          { closed
+                              | output = makeVirtual T.BlockSep nextTok.span :: closed.output
+                          }
+                        False -> closed
+              in
+              processTokens rest withSep
 
 handleOpenBracket : T.Token -> List T.Token -> LayoutState -> LayoutState
 handleOpenBracket tok rest state =

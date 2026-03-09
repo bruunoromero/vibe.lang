@@ -1560,4 +1560,86 @@ describe("prefix operator syntax", () => {
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Tuple");
   });
+
+  // ---------------------------------------------------------------------------
+  // Layout relaxation: if/then/else continuation keywords
+  // ---------------------------------------------------------------------------
+
+  test("if-else-if chain with else aligned to else-if", () => {
+    const program = parseTest(`result =
+    if True then
+        1
+    else if True then
+        2
+    else
+        3`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("If");
+    if (decl.body.kind === "If") {
+      // else branch is another if-else
+      expect(decl.body.elseBranch.kind).toBe("If");
+    }
+  });
+
+  test("if-else inside case branch with else at branch column", () => {
+    const program = parseTest(`result =
+    case x of
+        A ->
+            if True then
+                1
+        else
+                0`);
+    // else at col 9 = next case branch's column area; should parse as part of the if
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Case");
+    if (decl.body.kind === "Case") {
+      const branch = decl.body.branches[0];
+      expect(branch!.body.kind).toBe("If");
+    }
+  });
+
+  test("if-else-if chain inside let binding", () => {
+    const program = parseTest(`result =
+    let
+        x =
+            if True then
+                1
+            else if True then
+                2
+            else
+                3
+    in
+        x`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("LetIn");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Layout relaxation: lambda body indentation
+  // ---------------------------------------------------------------------------
+
+  test("lambda body on next line with less indentation than backslash", () => {
+    // The \ is deep in a sub-expression; the body wraps to a new line
+    const program = parseTest(`result = (\\x ->
+    x)`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Paren");
+    if (decl.body.kind === "Paren") {
+      expect(decl.body.expression.kind).toBe("Lambda");
+    }
+  });
+
+  test("lambda body at same column as backslash", () => {
+    const program = parseTest(`result =
+    \\x ->
+    x`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Lambda");
+  });
+
+  test("lambda body on same line (unchanged behaviour)", () => {
+    const program = parseTest(`result = \\x -> x`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Lambda");
+  });
 });

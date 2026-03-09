@@ -20,12 +20,12 @@ export function activate(context: vscode.ExtensionContext): void {
   const config = vscode.workspace.getConfiguration("vibe");
   const languageServerEnabled = config.get<boolean>(
     "languageServer.enabled",
-    true
+    true,
   );
 
   if (!languageServerEnabled) {
     vscode.window.showInformationMessage(
-      "Vibe language server is disabled. Enable it in settings to get full language support."
+      "Vibe language server is disabled. Enable it in settings to get full language support.",
     );
     return;
   }
@@ -35,7 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   if (!serverModule) {
     vscode.window.showWarningMessage(
-      "Could not find Vibe language server. Some features may not be available."
+      "Could not find Vibe language server. Some features may not be available.",
     );
     return;
   }
@@ -45,6 +45,9 @@ export function activate(context: vscode.ExtensionContext): void {
     run: {
       module: serverModule,
       transport: TransportKind.ipc,
+      options: {
+        execArgv: ["--stack-size=65536"],
+      },
     },
     debug: {
       module: serverModule,
@@ -76,7 +79,7 @@ export function activate(context: vscode.ExtensionContext): void {
     "vibeLanguageServer",
     "Vibe Language Server",
     serverOptions,
-    clientOptions
+    clientOptions,
   );
 
   // Start the client (also starts the server)
@@ -101,7 +104,7 @@ export async function deactivate(): Promise<void> {
  * Resolve the server module path.
  */
 function resolveServerModule(
-  context: vscode.ExtensionContext
+  context: vscode.ExtensionContext,
 ): string | undefined {
   // Try several possible locations
 
@@ -112,7 +115,7 @@ function resolveServerModule(
     "@vibe",
     "language-server",
     "dist",
-    "server.js"
+    "server.js",
   );
 
   // 2. Workspace development mode
@@ -145,7 +148,7 @@ function findWorkspaceServerPath(): string | undefined {
       "packages",
       "language-server",
       "dist",
-      "server.js"
+      "server.js",
     );
 
     if (pathExists(serverPath)) {
@@ -158,7 +161,7 @@ function findWorkspaceServerPath(): string | undefined {
       "packages",
       "language-server",
       "src",
-      "server.ts"
+      "server.ts",
     );
 
     if (pathExists(srcPath)) {
@@ -203,7 +206,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
         await client.start();
         vscode.window.showInformationMessage("Vibe language server restarted");
       }
-    }
+    },
   );
 
   context.subscriptions.push(restartCommand);
@@ -215,7 +218,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
       if (client) {
         client.outputChannel.show();
       }
-    }
+    },
   );
 
   context.subscriptions.push(showOutputCommand);

@@ -295,34 +295,37 @@ function typesEqual(t1, t2) {
   }
 }
 function applySubstitution(type, substitution) {
-  if (type.kind === "var") {
-    const replacement = substitution.get(type.id);
-    return replacement ? applySubstitution(replacement, substitution) : type;
+  let current = type;
+  while (current.kind === "var") {
+    const replacement = substitution.get(current.id);
+    if (!replacement)
+      return current;
+    current = replacement;
   }
-  if (type.kind === "fun") {
-    return fn(applySubstitution(type.from, substitution), applySubstitution(type.to, substitution));
+  if (current.kind === "fun") {
+    return fn(applySubstitution(current.from, substitution), applySubstitution(current.to, substitution));
   }
-  if (type.kind === "tuple") {
+  if (current.kind === "tuple") {
     return {
       kind: "tuple",
-      elements: type.elements.map((t) => applySubstitution(t, substitution))
+      elements: current.elements.map((t) => applySubstitution(t, substitution))
     };
   }
-  if (type.kind === "record") {
+  if (current.kind === "record") {
     const fields = {};
-    for (const [k, v] of Object.entries(type.fields)) {
+    for (const [k, v] of Object.entries(current.fields)) {
       fields[k] = applySubstitution(v, substitution);
     }
     return { kind: "record", fields };
   }
-  if (type.kind === "con") {
+  if (current.kind === "con") {
     return {
       kind: "con",
-      name: type.name,
-      args: type.args.map((t) => applySubstitution(t, substitution))
+      name: current.name,
+      args: current.args.map((t) => applySubstitution(t, substitution))
     };
   }
-  return type;
+  return current;
 }
 function applySubstitutionToConstraints(constraints, substitution) {
   return constraints.map((c) => ({

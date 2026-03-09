@@ -2160,19 +2160,14 @@ parseLambda : ParserState -> ParseResult Expr
 parseLambda state =
   let
     start = (current state).span.start
-    lambdaCol = start.column
     s1 = advance state
   in
   case parseLambdaArgs s1 of
     Err e -> Err e
     Ok (args, s2) ->
-      let bodyTok = current s2
-      in case bodyTok.span.start.line /= (previous s2).span.start.line && bodyTok.span.start.column <= lambdaCol of
-        True -> Err (makeError ("Lambda body must be indented past column " ++ intToStr lambdaCol) bodyTok.span)
-        False ->
-          case parseExpression Nothing s2 of
-            Err e -> Err e
-            Ok (body, s3) -> Ok (ELambda args body { start = start, end = (exprSpan body).end }, s3)
+      case parseExpression Nothing s2 of
+        Err e -> Err e
+        Ok (body, s3) -> Ok (ELambda args body { start = start, end = (exprSpan body).end }, s3)
 
 parseLambdaArgs : ParserState -> ParseResult (List Pattern)
 parseLambdaArgs state =

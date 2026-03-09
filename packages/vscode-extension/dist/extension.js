@@ -86,7 +86,10 @@ function activate(context) {
   const serverOptions = {
     run: {
       module: serverModule,
-      transport: import_node.TransportKind.ipc
+      transport: import_node.TransportKind.ipc,
+      options: {
+        execArgv: ["--stack-size=65536"]
+      }
     },
     debug: {
       module: serverModule,

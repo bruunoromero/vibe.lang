@@ -3946,7 +3946,7 @@ parsePrimary = (state) => ((tok) => peekKeyword("if")(state) ? parseIf(state) : 
   }
   throw new Error("Pattern match failed");
 })(tok.kind))(current(state));
-parseLambda = (state) => ((start) => ((lambdaCol) => ((s1) => (($match_248) => {
+parseLambda = (state) => ((start) => ((s1) => (($match_248) => {
   if ($match_248.$tag === 1) {
     const e = $match_248.$0;
     return Err(e);
@@ -3954,7 +3954,7 @@ parseLambda = (state) => ((start) => ((lambdaCol) => ((s1) => (($match_248) => {
   if ($match_248.$tag === 0) {
     const args = $match_248.$0[0];
     const s2 = $match_248.$0[1];
-    return ((bodyTok) => _AMP_AMP3($dict_Eq_Int._SLASH_EQ(bodyTok.span.start.line)(previous(s2).span.start.line))(() => $dict_Ord_Int._LT_EQ(bodyTok.span.start.column)(lambdaCol)) ? Err(makeError($dict_Appendable_String._PLUS_PLUS("Lambda body must be indented past column ")(intToStr(lambdaCol)))(bodyTok.span)) : (($match_249) => {
+    return (($match_249) => {
       if ($match_249.$tag === 1) {
         const e = $match_249.$0;
         return Err(e);
@@ -3965,10 +3965,10 @@ parseLambda = (state) => ((start) => ((lambdaCol) => ((s1) => (($match_248) => {
         return Ok([ELambda(args)(body)({ start, end: exprSpan(body).end }), s3]);
       }
       throw new Error("Pattern match failed");
-    })(parseExpression(Nothing)(s2)))(current(s2));
+    })(parseExpression(Nothing)(s2));
   }
   throw new Error("Pattern match failed");
-})(parseLambdaArgs(s1)))(advance(state)))(start.column))(current(state).span.start);
+})(parseLambdaArgs(s1)))(advance(state)))(current(state).span.start);
 parseIf = (state) => (($match_250) => {
   if ($match_250.$tag === 1) {
     const e = $match_250.$0;
@@ -4731,13 +4731,33 @@ var isLayoutKeyword = (lexeme) => (($match_0) => {
   }
   throw new Error("Pattern match failed");
 })(lexeme);
+var isContinuationKeyword = (tok) => (($match_1) => {
+  if ($match_1.$tag === 2) {
+    return (($match_2) => {
+      if ($match_2 === "then") {
+        return true;
+      }
+      if ($match_2 === "else") {
+        return true;
+      }
+      {
+        return false;
+      }
+      throw new Error("Pattern match failed");
+    })(tok.lexeme);
+  }
+  {
+    return false;
+  }
+  throw new Error("Pattern match failed");
+})(tok.kind);
 var stackTop = (stack) => head(stack);
-var stackPop = (stack) => (($match_1) => {
-  if (Array.isArray($match_1) && $match_1.length >= 1) {
-    const rest = $match_1.slice(1);
+var stackPop = (stack) => (($match_3) => {
+  if (Array.isArray($match_3) && $match_3.length >= 1) {
+    const rest = $match_3.slice(1);
     return rest;
   }
-  if (Array.isArray($match_1) && $match_1.length === 0) {
+  if (Array.isArray($match_3) && $match_3.length === 0) {
     return [];
   }
   throw new Error("Pattern match failed");
@@ -4747,16 +4767,16 @@ var hasLetContext = (stack) => any(isLetContext)(stack);
 var skipNewlines2 = (tokens) => {
   while (true) {
     {
-      const $match_2 = tokens;
-      if (Array.isArray($match_2) && $match_2.length === 0) {
+      const $match_4 = tokens;
+      if (Array.isArray($match_4) && $match_4.length === 0) {
         return [];
       }
-      if (Array.isArray($match_2) && $match_2.length >= 1) {
-        const tok = $match_2[0];
-        const rest = $match_2.slice(1);
+      if (Array.isArray($match_4) && $match_4.length >= 1) {
+        const tok = $match_4[0];
+        const rest = $match_4.slice(1);
         {
-          const $match_3 = tok.kind;
-          if ($match_3.$tag === 20) {
+          const $match_5 = tok.kind;
+          if ($match_5.$tag === 20) {
             tokens = rest;
             continue;
           }
@@ -4773,16 +4793,16 @@ var skipNewlines2 = (tokens) => {
 var nextReal = (tokens) => {
   while (true) {
     {
-      const $match_4 = tokens;
-      if (Array.isArray($match_4) && $match_4.length === 0) {
+      const $match_6 = tokens;
+      if (Array.isArray($match_6) && $match_6.length === 0) {
         return Nothing;
       }
-      if (Array.isArray($match_4) && $match_4.length >= 1) {
-        const tok = $match_4[0];
-        const rest = $match_4.slice(1);
+      if (Array.isArray($match_6) && $match_6.length >= 1) {
+        const tok = $match_6[0];
+        const rest = $match_6.slice(1);
         {
-          const $match_5 = tok.kind;
-          if ($match_5.$tag === 20) {
+          const $match_7 = tok.kind;
+          if ($match_7.$tag === 20) {
             tokens = rest;
             continue;
           }
@@ -4799,12 +4819,12 @@ var nextReal = (tokens) => {
 var closeContextsBelow = (col) => (span) => (state) => {
   while (true) {
     {
-      const $match_6 = stackTop(state.stack);
-      if ($match_6.$tag === 1) {
+      const $match_8 = stackTop(state.stack);
+      if ($match_8.$tag === 1) {
         return state;
       }
-      if ($match_6.$tag === 0) {
-        const ctx = $match_6.$0;
+      if ($match_8.$tag === 0) {
+        const ctx = $match_8.$0;
         if ($dict_Ord_Int._LT(col)(ctx.column)) {
           [col, span, state] = [col, span, { ...state, output: _COLON_COLON(makeVirtual(BlockEnd)(span))(state.output), stack: stackPop(state.stack) }];
           continue;
@@ -4819,12 +4839,12 @@ var closeContextsBelow = (col) => (span) => (state) => {
 var closeContextsForBracket = (state) => (span) => {
   while (true) {
     {
-      const $match_7 = stackTop(state.stack);
-      if ($match_7.$tag === 1) {
+      const $match_9 = stackTop(state.stack);
+      if ($match_9.$tag === 1) {
         return state;
       }
-      if ($match_7.$tag === 0) {
-        const ctx = $match_7.$0;
+      if ($match_9.$tag === 0) {
+        const ctx = $match_9.$0;
         if ($dict_Ord_Int._GT_EQ(ctx.bracketDepth)(state.bracketDepth)) {
           [state, span] = [{ ...state, output: _COLON_COLON(makeVirtual(BlockEnd)(span))(state.output), stack: stackPop(state.stack) }, span];
           continue;
@@ -4839,12 +4859,12 @@ var closeContextsForBracket = (state) => (span) => {
 var closeForIn = (state) => (span) => {
   while (true) {
     {
-      const $match_8 = stackTop(state.stack);
-      if ($match_8.$tag === 1) {
+      const $match_10 = stackTop(state.stack);
+      if ($match_10.$tag === 1) {
         return state;
       }
-      if ($match_8.$tag === 0) {
-        const ctx = $match_8.$0;
+      if ($match_10.$tag === 0) {
+        const ctx = $match_10.$0;
         {
           const newState = { ...state, output: _COLON_COLON(makeVirtual(BlockEnd)(span))(state.output), stack: stackPop(state.stack) };
           if ($dict_Eq_String._EQ_EQ(ctx.keyword)("let")) {
@@ -4862,11 +4882,11 @@ var closeForIn = (state) => (span) => {
 var closeAllContexts = (span) => (state) => {
   while (true) {
     {
-      const $match_9 = stackTop(state.stack);
-      if ($match_9.$tag === 1) {
+      const $match_11 = stackTop(state.stack);
+      if ($match_11.$tag === 1) {
         return state;
       }
-      if ($match_9.$tag === 0) {
+      if ($match_11.$tag === 0) {
         [span, state] = [span, { ...state, output: _COLON_COLON(makeVirtual(BlockEnd)(span))(state.output), stack: stackPop(state.stack) }];
         continue;
       }
@@ -4885,40 +4905,40 @@ var handleLayoutKeyword;
 processTokens = (tokens) => (state) => {
   while (true) {
     {
-      const $match_10 = tokens;
-      if (Array.isArray($match_10) && $match_10.length === 0) {
+      const $match_12 = tokens;
+      if (Array.isArray($match_12) && $match_12.length === 0) {
         return state;
       }
-      if (Array.isArray($match_10) && $match_10.length >= 1) {
-        const tok = $match_10[0];
-        const rest = $match_10.slice(1);
+      if (Array.isArray($match_12) && $match_12.length >= 1) {
+        const tok = $match_12[0];
+        const rest = $match_12.slice(1);
         {
-          const $match_11 = tok.kind;
-          if ($match_11.$tag === 24) {
+          const $match_13 = tok.kind;
+          if ($match_13.$tag === 24) {
             return handleEof(tok)(state);
           }
-          if ($match_11.$tag === 20) {
+          if ($match_13.$tag === 20) {
             return handleNewline(rest)(state);
           }
-          if ($match_11.$tag === 9) {
+          if ($match_13.$tag === 9) {
             return handleOpenBracket(tok)(rest)(state);
           }
-          if ($match_11.$tag === 13) {
+          if ($match_13.$tag === 13) {
             return handleOpenBracket(tok)(rest)(state);
           }
-          if ($match_11.$tag === 11) {
+          if ($match_13.$tag === 11) {
             return handleOpenBracket(tok)(rest)(state);
           }
-          if ($match_11.$tag === 10) {
+          if ($match_13.$tag === 10) {
             return handleCloseBracket(tok)(rest)(state);
           }
-          if ($match_11.$tag === 14) {
+          if ($match_13.$tag === 14) {
             return handleCloseBracket(tok)(rest)(state);
           }
-          if ($match_11.$tag === 12) {
+          if ($match_13.$tag === 12) {
             return handleCloseBracket(tok)(rest)(state);
           }
-          if ($match_11.$tag === 2) {
+          if ($match_13.$tag === 2) {
             return handleKeyword(tok)(rest)(state);
           }
           {
@@ -4932,23 +4952,23 @@ processTokens = (tokens) => (state) => {
     }
   }
 };
-handleNewline = (rest) => (state) => (($match_12) => {
-  if ($match_12.$tag === 1) {
+handleNewline = (rest) => (state) => (($match_14) => {
+  if ($match_14.$tag === 1) {
     return processTokens(rest)(state);
   }
-  if ($match_12.$tag === 0) {
-    const nextTok = $match_12.$0;
-    return (($match_13) => {
-      if ($match_13.$tag === 24) {
+  if ($match_14.$tag === 0) {
+    const nextTok = $match_14.$0;
+    return (($match_15) => {
+      if ($match_15.$tag === 24) {
         return processTokens(rest)(state);
       }
       {
-        return ((col) => ((closed) => ((withSep) => processTokens(rest)(withSep))((($match_14) => {
-          if ($match_14.$tag === 1) {
+        return isContinuationKeyword(nextTok) ? processTokens(rest)(state) : ((col) => ((closed) => ((withSep) => processTokens(rest)(withSep))((($match_16) => {
+          if ($match_16.$tag === 1) {
             return closed;
           }
-          if ($match_14.$tag === 0) {
-            const ctx = $match_14.$0;
+          if ($match_16.$tag === 0) {
+            const ctx = $match_16.$0;
             return $dict_Eq_Int._EQ_EQ(col)(ctx.column) ? { ...closed, output: _COLON_COLON(makeVirtual(BlockSep)(nextTok.span))(closed.output) } : closed;
           }
           throw new Error("Pattern match failed");
@@ -4963,14 +4983,14 @@ handleOpenBracket = (tok) => (rest) => (state) => processTokens(rest)({ ...state
 handleCloseBracket = (tok) => (rest) => (state) => ((closed) => ((newDepth) => processTokens(rest)({ ...closed, output: _COLON_COLON(tok)(closed.output), bracketDepth: newDepth }))($dict_Ord_Int._GT(closed.bracketDepth)(0) ? $dict_Num_Int._MINUS(closed.bracketDepth)(1) : 0))(closeContextsForBracket(state)(tok.span));
 handleKeyword = (tok) => (rest) => (state) => $dict_Eq_String._EQ_EQ(tok.lexeme)("in") ? handleIn(tok)(rest)(state) : isLayoutKeyword(tok.lexeme) ? handleLayoutKeyword(tok)(rest)(state) : processTokens(rest)({ ...state, output: _COLON_COLON(tok)(state.output) });
 handleIn = (tok) => (rest) => (state) => ((closed) => processTokens(rest)({ ...closed, output: _COLON_COLON(tok)(closed.output) }))(hasLetContext(state.stack) ? closeForIn(state)(tok.span) : state);
-handleLayoutKeyword = (tok) => (rest) => (state) => ((stateWithTok) => ((remaining) => (($match_15) => {
-  if (Array.isArray($match_15) && $match_15.length === 0) {
+handleLayoutKeyword = (tok) => (rest) => (state) => ((stateWithTok) => ((remaining) => (($match_17) => {
+  if (Array.isArray($match_17) && $match_17.length === 0) {
     return processTokens(remaining)(stateWithTok);
   }
-  if (Array.isArray($match_15) && $match_15.length >= 1) {
-    const nextTok = $match_15[0];
-    return (($match_16) => {
-      if ($match_16.$tag === 24) {
+  if (Array.isArray($match_17) && $match_17.length >= 1) {
+    const nextTok = $match_17[0];
+    return (($match_18) => {
+      if ($match_18.$tag === 24) {
         return processTokens(remaining)(stateWithTok);
       }
       {

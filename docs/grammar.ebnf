@@ -291,8 +291,8 @@ Primary = IfExpr
         | "(", Expr, ")" ;                    (* grouped expression *)
 
 IfExpr = "if", Expr, "then", Expr, "else", Expr ;
-(* Indentation rule: when 'then' or 'else' appear on a separate line from 'if',
-   they must be at least as indented as the column of 'if'. *)
+(* 'then' and 'else' are continuation keywords: they bypass layout token
+   injection (no BlockSep / BlockEnd), so they can appear at any column. *)
 
 LetInExpr = "let", BLOCK_START, LetBinding, {BLOCK_SEP, LetBinding}, BLOCK_END, "in", Expr ;
 
@@ -302,9 +302,9 @@ CaseExpr = "case", Expr, "of", BLOCK_START, CaseBranch, {BLOCK_SEP, CaseBranch},
 
 CaseBranch = Pattern, "->", Expr ;
 
-LambdaExpr = "\", {Pattern}, "->", Expr ;
-(* Indentation rule: when the body appears on a separate line from '->',
-   it must be indented past the column of '\'. *)
+LambdaExpr = "\" , {Pattern}, "->", Expr ;
+(* No indentation enforcement on the lambda body — the layout engine's
+   scope boundaries (BlockEnd) govern where the body expression ends. *)
 
 Variable = LowerIdentifier
          | UpperIdentifier ;
@@ -438,20 +438,28 @@ Digit = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
   
   All top-level constructs (module, import, declarations) must start at column 1.
   
-  === If/then/else enforcement ===
+  === If/then/else — continuation keywords ===
   
-  When 'then' or 'else' appear on a separate line from 'if', they must be
-  at least as indented as the column of 'if'.
+  'then' and 'else' bypass layout token injection entirely. When they appear
+  after a newline, the layout engine emits no BlockSep or BlockEnd, regardless
+  of their column. This allows idiomatic else-if chains:
+  
+      if c1 then
+          1
+      else if c2 then
+          2
+      else
+          3
   
   === Function body enforcement ===
   
   When a function body appears on a separate line from '=', it must be
   indented past the column of the declaration name.
   
-  === Lambda body enforcement ===
+  === Lambda body ===
   
-  When a lambda body appears on a separate line from '->', it must be
-  indented past the column of '\'.
+  No column enforcement on the lambda body. The layout engine's scope
+  boundaries determine where the expression ends.
   
   === Multi-line expressions ===
   
