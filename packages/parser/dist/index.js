@@ -698,7 +698,7 @@ var _fromListHelp = ($dict_Ord) => (pairs) => (acc) => (($match_34) => {
 })(pairs);
 var fromList = ($dict_Ord) => (pairs) => _fromListHelp($dict_Ord)(pairs)({ $tag: 0 });
 var union = ($dict_Ord) => (t1) => (t2) => foldl((k) => (v) => (acc) => insert($dict_Ord)(k)(v)(acc))(t2)(t1);
-var $impl_Eq_NColor__EQ_EQ = (x) => (y) => (($match_37) => {
+var $impl_Eq_NColor__EQ_EQ = (x_impl) => (y_impl) => (($match_37) => {
   if ($match_37[0].$tag === 0 && $match_37[1].$tag === 0) {
     return true;
   }
@@ -709,11 +709,9 @@ var $impl_Eq_NColor__EQ_EQ = (x) => (y) => (($match_37) => {
     return false;
   }
   throw new Error("Pattern match failed");
-})([x, y]);
-var $default_Eq_NColor__SLASH_EQ = (x) => (y) => not($dict_Eq_NColor._EQ_EQ(x)(y));
+})([x_impl, y_impl]);
 var $dict_Eq_NColor = {
-  _EQ_EQ: $impl_Eq_NColor__EQ_EQ,
-  _SLASH_EQ: $default_Eq_NColor__SLASH_EQ
+  _EQ_EQ: $impl_Eq_NColor__EQ_EQ
 };
 var $impl_Eq_Dict_v799_v800__EQ_EQ;
 var $dict_Eq_Dict_v799_v800;

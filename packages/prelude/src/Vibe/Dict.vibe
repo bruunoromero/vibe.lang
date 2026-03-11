@@ -139,13 +139,13 @@ _balance color key value left right =
 
 -- Remove
 
-remove : (Ord k, Eq k) => k -> Dict k v -> Dict k v
+remove : Ord k => k -> Dict k v -> Dict k v
 remove key dict =
   case _removeHelp key dict of
     RBNode _ k v l r -> RBNode Black k v l r
     RBEmpty -> RBEmpty
 
-_removeHelp : (Ord k, Eq k) => k -> Dict k v -> Dict k v
+_removeHelp : Ord k => k -> Dict k v -> Dict k v
 _removeHelp targetKey dict =
   case dict of
     RBEmpty -> RBEmpty
@@ -174,7 +174,7 @@ _removeHelpPrepEQGT dict color key value left right =
       RBNode color lK lV lLeft (RBNode Red key value lRight right)
     _ -> dict
 
-_removeHelpEQGT : (Ord k, Eq k) => k -> Dict k v -> Dict k v
+_removeHelpEQGT : Ord k => k -> Dict k v -> Dict k v
 _removeHelpEQGT targetKey dict =
   case dict of
     RBNode color key value left right ->
@@ -260,7 +260,7 @@ _colorRed dict =
 
 -- Update
 
-update : (Ord k, Eq k) => k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
+update : Ord k => k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
 update key fn dict =
   case fn (get key dict) of
     Just value -> insert key value dict
@@ -329,13 +329,3 @@ filter pred dict =
 union : Ord k => Dict k v -> Dict k v -> Dict k v
 union t1 t2 =
   foldl (\k v acc -> insert k v acc) t2 t1
-
-
--- Equality
-
-implement Eq NColor where
-  (==) x y =
-    case (x, y) of
-      (Red, Red) -> True
-      (Black, Black) -> True
-      _ -> False

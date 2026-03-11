@@ -1,29 +1,32 @@
-import { setDiff as $$diff, setEmpty as empty, setFilter as $$filter, setFoldl as $$foldl, setFromList as $$fromList, setInsert as $$insert, setIntersect as $$intersect, setMap as $$map, setMember as $$member, setRemove as $$remove, setToList as $$toList, setUnion as $$union } from "./Set.ffi.js";
-
+import * as Dict from "../Vibe/Dict.js";
+import { _COLON_COLON } from "../Vibe/List.js";
 import { not } from "../Vibe/Basics.js";
-import { Just, Nothing } from "../Vibe/Maybe.js";
 import * as $inst_Unit from "../Vibe/Unit.js";
 import * as $inst_Bool from "../Vibe/Bool.js";
 import * as $inst_Int from "../Vibe/Int.js";
 import * as $inst_Float from "../Vibe/Float.js";
 import * as $inst_String from "../Vibe/String.js";
 import * as $inst_Char from "../Vibe/Char.js";
-import * as $inst_List from "../Vibe/List.js";
+
+// ADT Constructors
+const Set = ($0) => ({ $tag: 0, $0 });
 
 // Values
-const insert = ($a0) => ($a1) => $$insert($a0, $a1);
-const singleton = (v) => insert(v)(empty);
-const fromList = ($a0) => $$fromList($a0);
-const remove = ($a0) => ($a1) => $$remove($a0, $a1);
-const member = ($a0) => ($a1) => $$member($a0, $a1);
-const size = ($recv) => $recv.size;
-const isEmpty = (s) => $inst_Int.$dict_Eq_Int._EQ_EQ(size(s))(0);
-const toList = ($a0) => $$toList($a0);
-const foldl = ($a0) => ($a1) => ($a2) => $$foldl($a0, $a1, $a2);
-const map = ($a0) => ($a1) => $$map($a0, $a1);
-const filter = ($a0) => ($a1) => $$filter($a0, $a1);
-const union = ($a0) => ($a1) => $$union($a0, $a1);
-const intersect = ($a0) => ($a1) => $$intersect($a0, $a1);
-const diff = ($a0) => ($a1) => $$diff($a0, $a1);
+const empty = Set(Dict.empty);
+const insert = ($dict_Ord) => (v) => ({ $0: dict }) => Set(Dict.insert($dict_Ord)(v)(undefined)(dict));
+const singleton = ($dict_Ord) => (v) => insert($dict_Ord)(v)(empty);
+const _fromListHelp = ($dict_Ord) => (items) => (acc) => (($match_0) => { if (Array.isArray($match_0) && $match_0.length === 0) { return acc; } if (Array.isArray($match_0) && $match_0.length >= 1) { const x = $match_0[0]; const rest = $match_0.slice(1); return _fromListHelp($dict_Ord)(rest)(insert($dict_Ord)(x)(acc)); } throw new Error("Pattern match failed"); })(items);
+const fromList = ($dict_Ord) => (items) => _fromListHelp($dict_Ord)(items)(empty);
+const remove = ($dict_Ord) => (v) => ({ $0: dict }) => Set(Dict.remove($dict_Eq)($dict_Ord)(v)(dict));
+const member = ($dict_Ord) => (v) => ({ $0: dict }) => Dict.member($dict_Ord)(v)(dict);
+const size = ({ $0: dict }) => Dict.size(dict);
+const isEmpty = ({ $0: dict }) => Dict.isEmpty(dict);
+const toList = ({ $0: dict }) => Dict.keys(dict);
+const foldl = (fn) => (acc) => ({ $0: dict }) => Dict.foldl((k) => (_) => (b) => fn(k)(b))(acc)(dict);
+const map = ($dict_Ord) => (fn) => (s) => foldl((v) => (acc) => insert($dict_Ord)(fn(v))(acc))(empty)(s);
+const filter = ($dict_Ord) => (pred) => ({ $0: dict }) => Set(Dict.filter($dict_Ord)((k) => (_) => pred(k))(dict));
+const union = ($dict_Ord) => ({ $0: d1 }) => ({ $0: d2 }) => Set(Dict.union($dict_Ord)(d1)(d2));
+const intersect = ($dict_Ord) => (s1) => (s2) => filter($dict_Ord)((v) => member($dict_Ord)(v)(s2))(s1);
+const diff = ($dict_Ord) => (s1) => (s2) => filter($dict_Ord)((v) => not(member($dict_Ord)(v)(s2)))(s1);
 
 export { diff, empty, filter, foldl, fromList, insert, intersect, isEmpty, map, member, remove, singleton, size, toList, union };

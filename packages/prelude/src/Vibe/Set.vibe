@@ -17,53 +17,74 @@ module Vibe.Set exposing
   , diff
   )
 
-import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..), not)
-import Vibe.Maybe exposing (Maybe(..))
+import Vibe.Dict as Dict exposing (Dict)
+import Vibe.List exposing ((::))
+import Vibe.Basics exposing (Ord, not)
 
 
-type Set a
+type Set a = Set (Dict a Unit)
 
-@external "./Set.ffi.js" "setEmpty"
+
 empty : Set a
+empty = Set Dict.empty
 
-singleton : a -> Set a
+singleton : Ord a => a -> Set a
 singleton v = insert v empty
 
-@external "./Set.ffi.js" "setFromList"
-fromList : List a -> Set a
+fromList : Ord a => List a -> Set a
+fromList items =
+  _fromListHelp items empty
 
-@external "./Set.ffi.js" "setInsert"
-insert : a -> Set a -> Set a
+_fromListHelp : Ord a => List a -> Set a -> Set a
+_fromListHelp items acc =
+  case items of
+    [] -> acc
+    x :: rest -> _fromListHelp rest (insert x acc)
 
-@external "./Set.ffi.js" "setRemove"
-remove : a -> Set a -> Set a
+insert : Ord a => a -> Set a -> Set a
+insert v (Set dict) =
+  Set (Dict.insert v () dict)
 
-@external "./Set.ffi.js" "setMember"
-member : a -> Set a -> Bool
+remove : Ord a => a -> Set a -> Set a
+remove v (Set dict) =
+  Set (Dict.remove v dict)
 
-@get "size"
+member : Ord a => a -> Set a -> Bool
+member v (Set dict) =
+  Dict.member v dict
+
 size : Set a -> Int
+size (Set dict) =
+  Dict.size dict
 
 isEmpty : Set a -> Bool
-isEmpty s = size s == 0
+isEmpty (Set dict) =
+  Dict.isEmpty dict
 
-@external "./Set.ffi.js" "setToList"
 toList : Set a -> List a
+toList (Set dict) =
+  Dict.keys dict
 
-@external "./Set.ffi.js" "setFoldl"
 foldl : (a -> b -> b) -> b -> Set a -> b
+foldl fn acc (Set dict) =
+    Dict.foldl (\k _ b -> fn k b) acc dict
 
-@external "./Set.ffi.js" "setMap"
-map : (a -> b) -> Set a -> Set b
+map : Ord b => (a -> b) -> Set a -> Set b
+map fn s =
+  foldl (\v acc -> insert (fn v) acc) empty s
 
-@external "./Set.ffi.js" "setFilter"
-filter : (a -> Bool) -> Set a -> Set a
+filter : Ord a => (a -> Bool) -> Set a -> Set a
+filter pred (Set dict) =
+  Set (Dict.filter (\k _ -> pred k) dict)
 
-@external "./Set.ffi.js" "setUnion"
-union : Set a -> Set a -> Set a
+union : Ord a => Set a -> Set a -> Set a
+union (Set d1) (Set d2) =
+  Set (Dict.union d1 d2)
 
-@external "./Set.ffi.js" "setIntersect"
-intersect : Set a -> Set a -> Set a
+intersect : Ord a => Set a -> Set a -> Set a
+intersect s1 s2 =
+  filter (\v -> member v s2) s1
 
-@external "./Set.ffi.js" "setDiff"
-diff : Set a -> Set a -> Set a
+diff : Ord a => Set a -> Set a -> Set a
+diff s1 s2 =
+  filter (\v -> not (member v s2)) s1
