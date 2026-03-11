@@ -243,6 +243,14 @@ class SemanticAnalyzer {
     Expr,
     { protocolName: string; typeArgs: Type[] }
   > = new Map();
+  private _pendingConstrainedCallUsages: Array<{
+    node: Expr;
+    constraints: Constraint[];
+  }> = [];
+  private _resolvedConstrainedCallUsages: Map<
+    Expr,
+    Array<{ protocolName: string; typeArgs: Type[] }>
+  > = new Map();
 
   /**
    * Registry manager containing all type and value registries.
@@ -529,6 +537,7 @@ class SemanticAnalyzer {
   resetConstraintContext(): void {
     this.currentConstraintContext = createConstraintContext();
     this._pendingProtocolUsages = [];
+    this._pendingConstrainedCallUsages = [];
   }
 
   getConstraintContext(): ConstraintContext {
@@ -876,7 +885,14 @@ class SemanticAnalyzer {
             substitution,
           );
           if (moduleAccess) {
-            return moduleAccess;
+            // Record constrained call usages for dictionary passing in codegen
+            if (moduleAccess.constraints.length > 0) {
+              this._pendingConstrainedCallUsages.push({
+                node: fieldExpr,
+                constraints: moduleAccess.constraints,
+              });
+            }
+            return moduleAccess.type;
           }
 
           // Otherwise, handle as record field access
@@ -5063,6 +5079,17 @@ class SemanticAnalyzer {
             typeArgs: resolvedArgs,
           });
         }
+
+        // Resolve pending constrained call usages (e.g., Dict.insert with Ord k)
+        for (const usage of this._pendingConstrainedCallUsages) {
+          const resolved = usage.constraints.map((c) => ({
+            protocolName: c.protocolName,
+            typeArgs: c.typeArgs.map((t) =>
+              applySubstitution(t, this.substitution),
+            ),
+          }));
+          this._resolvedConstrainedCallUsages.set(usage.node, resolved);
+        }
       }
     }
   }
@@ -6082,6 +6109,7 @@ class SemanticAnalyzer {
       errors: this.getErrors(),
       importedValues: this.importedValues,
       protocolMethodUsages: this._resolvedProtocolUsages,
+      constrainedCallUsages: this._resolvedConstrainedCallUsages,
     };
   }
 
@@ -8778,39 +8806,47 @@ function resolveModuleField(
   depModule: SemanticModule,
   field: string,
   substitution: Substitution,
-): Type | null {
+): { type: Type; constraints: Constraint[] } | null {
   // Prefer type schemes (with quantified vars) for proper instantiation
   // Use Object.hasOwn to avoid prototype pollution (e.g., 'toString' from Object.prototype)
   if (Object.hasOwn(depModule.typeSchemes, field)) {
     const scheme = depModule.typeSchemes[field]!;
-    return instantiate(scheme, substitution);
+    const { type, constraints } = instantiateWithConstraints(
+      scheme,
+      substitution,
+    );
+    return { type, constraints };
   }
   // Fall back to raw type on ValueInfo (already monomorphic or no scheme available)
   if (Object.hasOwn(depModule.values, field)) {
     const valueInfo = depModule.values[field]!;
     const valueType = valueInfo.type || depModule.types[field];
     if (valueType) {
-      return valueType;
+      return { type: valueType, constraints: [] };
     }
   }
   // Check if it's a constructor
   if (Object.hasOwn(depModule.constructorTypes, field)) {
     const ctorScheme = depModule.constructorTypes[field]!;
-    return instantiate(ctorScheme, substitution);
+    const { type, constraints } = instantiateWithConstraints(
+      ctorScheme,
+      substitution,
+    );
+    return { type, constraints };
   }
   return null;
 }
 
 /**
  * Try to resolve a module-qualified field access (e.g., Vibe.JS.null)
- * Returns the type of the accessed symbol if it's a module access, or null if not.
+ * Returns the type and constraints of the accessed symbol if it's a module access, or null if not.
  */
 function tryResolveModuleFieldAccess(
   expr: Extract<Expr, { kind: "FieldAccess" }>,
   imports: ImportDeclaration[],
   dependencies: Map<string, SemanticModule>,
   substitution: Substitution,
-): Type | null {
+): { type: Type; constraints: Constraint[] } | null {
   // Collect the chain of field accesses to reconstruct the module path
   const parts: string[] = [];
   let current: Expr = expr;

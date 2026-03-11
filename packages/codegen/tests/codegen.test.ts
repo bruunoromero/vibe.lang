@@ -1989,3 +1989,195 @@ process xs acc =
     expect(code).toContain("const val =");
   });
 });
+
+// ============================================================================
+// Module-Qualified Constrained Function Dictionary Passing
+// ============================================================================
+
+/**
+ * Compile Vibe source with a named dependency module.
+ * Used for testing module-qualified access to constrained functions.
+ */
+function compileWithDep(
+  source: string,
+  depName: string,
+  depSource: string,
+): { code: string; ir: IRProgram } {
+  const depAst = parse(depSource);
+  const depSemantics = analyze(depAst, {
+    fileContext: { filePath: depName, srcDir: "" },
+  });
+
+  const ast = parse(source);
+  const semantics = analyze(ast, {
+    dependencies: new Map([[depName, depSemantics]]),
+    fileContext: { filePath: "Test", srcDir: "" },
+  });
+  const ir = lower(ast, semantics, {
+    dependencies: new Map([[depName, depSemantics]]),
+  });
+  const result = generate(ir);
+  return { code: result.code, ir };
+}
+
+describe("Module-Qualified Constrained Function Dictionary Passing", () => {
+  test("module-qualified call passes dictionary for constrained function", () => {
+    // Regression: Dict.insert with Ord k => didn't get the Ord dictionary
+    // passed at monomorphic call sites (e.g., String keys).
+    const libSource = `
+module Lib exposing (..)
+
+infix 4 <
+infix 4 >
+infix 4 <=
+infix 4 >=
+infix 4 ==
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+
+protocol Ord a where
+  (<) : a -> a -> Bool
+  (>) : a -> a -> Bool
+  (<=) : a -> a -> Bool
+  (>=) : a -> a -> Bool
+
+implement Eq Int where
+  (==) x y = True
+
+implement Ord Int where
+  (<) x y = True
+  (>) x y = False
+  (<=) x y = True
+  (>=) x y = True
+
+implement Eq String where
+  (==) x y = True
+
+implement Ord String where
+  (<) x y = True
+  (>) x y = False
+  (<=) x y = True
+  (>=) x y = True
+
+lookup : Ord k => k -> List k -> Bool
+lookup target xs =
+  case xs of
+    [] -> False
+    x :: rest ->
+      case x < target of
+        True -> lookup target rest
+        False -> True
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Lib
+
+result = Lib.lookup "hello" ["a", "b", "c"]
+`;
+
+    const { code } = compileWithDep(source, "Lib", libSource);
+
+    // The module-qualified call should pass the Ord String dictionary
+    expect(code).toContain("Lib.lookup(");
+    expect(code).toContain("$dict_Ord_String");
+    // Should NOT be a bare Lib.lookup("hello") without dictionary
+    expect(code).not.toMatch(/Lib\.lookup\("hello"\)/);
+  });
+
+  test("first-class reference to constrained function gets dictionary bound", () => {
+    // Regression: `alias = Dict.insert` should generate `Dict.insert($dict_Ord_String)`
+    // not just `Dict.insert` (bare reference without dictionary).
+    const libSource = `
+module Lib exposing (..)
+
+infix 4 <
+infix 4 >
+infix 4 <=
+infix 4 >=
+infix 4 ==
+
+protocol Eq a where
+  (==) : a -> a -> Bool
+
+protocol Ord a where
+  (<) : a -> a -> Bool
+  (>) : a -> a -> Bool
+  (<=) : a -> a -> Bool
+  (>=) : a -> a -> Bool
+
+implement Eq String where
+  (==) x y = True
+
+implement Ord String where
+  (<) x y = True
+  (>) x y = False
+  (<=) x y = True
+  (>=) x y = True
+
+myLookup : Ord k => k -> List k -> Bool
+myLookup target xs =
+  case xs of
+    [] -> False
+    x :: rest ->
+      case x < target of
+        True -> myLookup target rest
+        False -> True
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Lib
+
+doLookup : String -> List String -> Bool
+doLookup = Lib.myLookup
+`;
+
+    const { code } = compileWithDep(source, "Lib", libSource);
+
+    // The first-class reference should have the Ord String dictionary applied
+    expect(code).toContain("$dict_Ord_String");
+    // Should NOT be a bare `Lib.myLookup;` without dictionary
+    expect(code).not.toMatch(/= Lib\.myLookup;/);
+  });
+
+  test("polymorphic context passes dictionary parameter through", () => {
+    // When calling a constrained module function from a polymorphic context,
+    // the dictionary should be passed through (polymorphic pass-through).
+    const libSource = `
+module Lib exposing (..)
+
+infix 4 <
+infix 4 >
+infix 4 <=
+infix 4 >=
+
+protocol Ord a where
+  (<) : a -> a -> Bool
+  (>) : a -> a -> Bool
+  (<=) : a -> a -> Bool
+  (>=) : a -> a -> Bool
+
+myCompare : Ord a => a -> a -> Bool
+myCompare x y = x < y
+`;
+
+    const source = `
+module Test exposing (..)
+
+import Lib exposing (Ord(..))
+
+wrapper : Ord a => a -> a -> Bool
+wrapper x y = Lib.myCompare x y
+`;
+
+    const { code } = compileWithDep(source, "Lib", libSource);
+
+    // In a polymorphic context, should pass through $dict_Ord (the parameter)
+    expect(code).toContain("$dict_Ord");
+    expect(code).toContain("Lib.myCompare(");
+  });
+});

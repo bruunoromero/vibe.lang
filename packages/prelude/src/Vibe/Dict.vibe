@@ -19,76 +19,323 @@ module Vibe.Dict exposing
   , union
   )
 
+{-| A dictionary mapping unique keys to values. Implemented as a
+    left-leaning red-black tree. Keys must support the Ord protocol
+    so that structural comparison is used instead of JavaScript
+    reference equality.
+
+    import Vibe.Dict as Dict
+
+    dict = Dict.fromList [("alice", 1), ("bob", 2)]
+    Dict.get "alice" dict == Just 1
+-}
+
 import Vibe.Maybe exposing (Maybe(..))
-import Vibe.Basics exposing (Eq(..), identity)
+import Vibe.Basics exposing (Ord(..), Eq(..), Num(..))
+import Vibe.List exposing ((::))
+
+type NColor = Red | Black
 
 type Dict k v
+  = RBEmpty
+  | RBNode NColor k v (Dict k v) (Dict k v)
 
-@external "./Dict.ffi.js" "dictEmpty"
+
+-- Build
+
 empty : Dict k v
+empty = RBEmpty
 
-singleton : k -> v -> Dict k v
-singleton k v = insert k v empty
+singleton : Ord k => k -> v -> Dict k v
+singleton key value =
+  RBNode Black key value RBEmpty RBEmpty
 
-@external "./Dict.ffi.js" "dictInsert"
-insert : k -> v -> Dict k v -> Dict k v
 
-@external "./Dict.ffi.js" "dictRemove"
-remove : k -> Dict k v -> Dict k v
+-- Query
 
-@call "has"
-_has : Dict k v -> k -> Bool
+get : Ord k => k -> Dict k v -> Maybe v
+get targetKey dict =
+  case dict of
+    RBEmpty -> Nothing
+    RBNode _ key value left right ->
+      case targetKey < key of
+        True -> get targetKey left
+        False ->
+          case targetKey > key of
+            True -> get targetKey right
+            False -> Just value
 
-@call "get"
-_unsafeGet : Dict k v -> k -> v
+member : Ord k => k -> Dict k v -> Bool
+member key dict =
+  case get key dict of
+    Just _ -> True
+    Nothing -> False
 
-get : k -> Dict k v -> Maybe v
-get k d =
-  case _has d k of
-    True -> Just (_unsafeGet d k)
-    False -> Nothing
-
-member : k -> Dict k v -> Bool
-member k d = _has d k
-
-@get "size"
 size : Dict k v -> Int
+size dict =
+  case dict of
+    RBEmpty -> 0
+    RBNode _ _ _ left right ->
+      1 + size left + size right
 
 isEmpty : Dict k v -> Bool
-isEmpty d = size d == 0
+isEmpty dict =
+  case dict of
+    RBEmpty -> True
+    _ -> False
 
-@external "./Dict.ffi.js" "dictFoldl"
-foldl : (k -> v -> b -> b) -> b -> Dict k v -> b
 
-@external "./Dict.ffi.js" "dictKeys"
-keys : Dict k v -> List k
+-- Insert
 
-@external "./Dict.ffi.js" "dictValues"
-values : Dict k v -> List v
+insert : Ord k => k -> v -> Dict k v -> Dict k v
+insert key value dict =
+  case _insertHelp key value dict of
+    RBNode _ k v l r -> RBNode Black k v l r
+    RBEmpty -> RBEmpty
 
-@external "./Dict.ffi.js" "dictToList"
-_toList : (k -> v -> (k, v)) -> Dict k v -> List (k, v)
+_insertHelp : Ord k => k -> v -> Dict k v -> Dict k v
+_insertHelp key value dict =
+  case dict of
+    RBEmpty ->
+      RBNode Red key value RBEmpty RBEmpty
+    RBNode nColor nKey nValue nLeft nRight ->
+      case key < nKey of
+        True ->
+          _balance nColor nKey nValue (_insertHelp key value nLeft) nRight
+        False ->
+          case key > nKey of
+            True ->
+              _balance nColor nKey nValue nLeft (_insertHelp key value nRight)
+            False ->
+              RBNode nColor key value nLeft nRight
 
-toList : Dict k v -> List (k, v)
-toList = _toList (\k v -> (k, v))
 
-@external "./Dict.ffi.js" "dictFromList"
-_fromList : ((k, v) -> k) -> ((k, v) -> v) -> List (k, v) -> Dict k v
+-- Balance
 
-fromList : List (k, v) -> Dict k v
-fromList = _fromList (\pair -> case pair of (k, _) -> k) (\pair -> case pair of (_, v) -> v)
+_balance : NColor -> k -> v -> Dict k v -> Dict k v -> Dict k v
+_balance color key value left right =
+  case right of
+    RBNode Red rK rV rLeft rRight ->
+      case left of
+        RBNode Red lK lV lLeft lRight ->
+          RBNode Red key value
+            (RBNode Black lK lV lLeft lRight)
+            (RBNode Black rK rV rLeft rRight)
+        _ ->
+          _balance color rK rV (RBNode Red key value left rLeft) rRight
+    _ ->
+      case left of
+        RBNode Red lK lV lLeft lRight ->
+          case lLeft of
+            RBNode Red llK llV llLeft llRight ->
+              RBNode Red lK lV
+                (RBNode Black llK llV llLeft llRight)
+                (RBNode Black key value lRight right)
+            _ ->
+              RBNode color key value left right
+        _ ->
+          RBNode color key value left right
 
-@external "./Dict.ffi.js" "dictMap"
-map : (k -> a -> b) -> Dict k a -> Dict k b
 
-@external "./Dict.ffi.js" "dictFilter"
-filter : (k -> v -> Bool) -> Dict k v -> Dict k v
+-- Remove
 
-@external "./Dict.ffi.js" "dictUnion"
-union : Dict k v -> Dict k v -> Dict k v
+remove : (Ord k, Eq k) => k -> Dict k v -> Dict k v
+remove key dict =
+  case _removeHelp key dict of
+    RBNode _ k v l r -> RBNode Black k v l r
+    RBEmpty -> RBEmpty
 
-update : k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
+_removeHelp : (Ord k, Eq k) => k -> Dict k v -> Dict k v
+_removeHelp targetKey dict =
+  case dict of
+    RBEmpty -> RBEmpty
+    RBNode color key value left right ->
+      case targetKey < key of
+        True ->
+          case left of
+            RBNode Black _ _ lLeft _ ->
+              case lLeft of
+                RBNode Red _ _ _ _ ->
+                  RBNode color key value (_removeHelp targetKey left) right
+                _ ->
+                  case _moveRedLeft dict of
+                    RBNode nColor nKey nValue nLeft nRight ->
+                      _balance nColor nKey nValue (_removeHelp targetKey nLeft) nRight
+                    RBEmpty -> RBEmpty
+            _ ->
+              RBNode color key value (_removeHelp targetKey left) right
+        False ->
+          _removeHelpEQGT targetKey (_removeHelpPrepEQGT dict color key value left right)
+
+_removeHelpPrepEQGT : Dict k v -> NColor -> k -> v -> Dict k v -> Dict k v -> Dict k v
+_removeHelpPrepEQGT dict color key value left right =
+  case left of
+    RBNode Red lK lV lLeft lRight ->
+      RBNode color lK lV lLeft (RBNode Red key value lRight right)
+    _ -> dict
+
+_removeHelpEQGT : (Ord k, Eq k) => k -> Dict k v -> Dict k v
+_removeHelpEQGT targetKey dict =
+  case dict of
+    RBNode color key value left right ->
+      case targetKey == key of
+        True ->
+          case _getMin right of
+            RBNode _ minKey minValue _ _ ->
+              _balance color minKey minValue left (_removeMin right)
+            RBEmpty -> RBEmpty
+        False ->
+          case right of
+            RBNode Black _ _ rLeft _ ->
+              case rLeft of
+                RBNode Red _ _ _ _ ->
+                  RBNode color key value left (_removeHelp targetKey right)
+                _ ->
+                  case _moveRedRight dict of
+                    RBNode nColor nKey nValue nLeft nRight ->
+                      _balance nColor nKey nValue nLeft (_removeHelp targetKey nRight)
+                    RBEmpty -> RBEmpty
+            _ ->
+              RBNode color key value left (_removeHelp targetKey right)
+    RBEmpty -> RBEmpty
+
+_getMin : Dict k v -> Dict k v
+_getMin dict =
+  case dict of
+    RBNode _ _ _ (RBEmpty) _ -> dict
+    RBNode _ _ _ left _ -> _getMin left
+    RBEmpty -> RBEmpty
+
+_removeMin : Dict k v -> Dict k v
+_removeMin dict =
+  case dict of
+    RBNode color key value left right ->
+      case left of
+        RBEmpty -> RBEmpty
+        RBNode Black _ _ lLeft _ ->
+          case lLeft of
+            RBNode Red _ _ _ _ ->
+              RBNode color key value (_removeMin left) right
+            _ ->
+              case _moveRedLeft dict of
+                RBNode nColor nKey nValue nLeft nRight ->
+                  _balance nColor nKey nValue (_removeMin nLeft) nRight
+                RBEmpty -> RBEmpty
+        _ ->
+          RBNode color key value (_removeMin left) right
+    RBEmpty -> RBEmpty
+
+_moveRedLeft : Dict k v -> Dict k v
+_moveRedLeft dict =
+  case dict of
+    RBNode color key value left right ->
+      case right of
+        RBNode _ rK rV (RBNode Red rlK rlV rlLeft rlRight) rRight ->
+          RBNode Red rlK rlV
+            (RBNode Black key value (_colorRed left) rlLeft)
+            (RBNode Black rK rV rlRight rRight)
+        _ ->
+          RBNode color key value (_colorRed left) (_colorRed right)
+    RBEmpty -> RBEmpty
+
+_moveRedRight : Dict k v -> Dict k v
+_moveRedRight dict =
+  case dict of
+    RBNode color key value left right ->
+      case left of
+        RBNode _ lK lV (RBNode Red llK llV llLeft llRight) lRight ->
+          RBNode Red lK lV
+            (RBNode Black llK llV llLeft llRight)
+            (RBNode Black key value lRight (_colorRed right))
+        _ ->
+          RBNode color key value (_colorRed left) (_colorRed right)
+    RBEmpty -> RBEmpty
+
+_colorRed : Dict k v -> Dict k v
+_colorRed dict =
+  case dict of
+    RBNode _ k v l r -> RBNode Red k v l r
+    RBEmpty -> RBEmpty
+
+
+-- Update
+
+update : (Ord k, Eq k) => k -> (Maybe v -> Maybe v) -> Dict k v -> Dict k v
 update key fn dict =
   case fn (get key dict) of
     Just value -> insert key value dict
     Nothing -> remove key dict
+
+
+-- Fold
+
+foldl : (k -> v -> b -> b) -> b -> Dict k v -> b
+foldl fn acc dict =
+  case dict of
+    RBEmpty -> acc
+    RBNode _ key value left right ->
+      foldl fn (fn key value (foldl fn acc left)) right
+
+_foldr : (k -> v -> b -> b) -> b -> Dict k v -> b
+_foldr fn acc dict =
+  case dict of
+    RBEmpty -> acc
+    RBNode _ key value left right ->
+      _foldr fn (fn key value (_foldr fn acc right)) left
+
+
+-- Lists
+
+keys : Dict k v -> List k
+keys dict =
+  _foldr (\key _ keyList -> key :: keyList) [] dict
+
+values : Dict k v -> List v
+values dict =
+  _foldr (\_ value valueList -> value :: valueList) [] dict
+
+toList : Dict k v -> List (k, v)
+toList dict =
+  _foldr (\key value list -> (key, value) :: list) [] dict
+
+fromList : Ord k => List (k, v) -> Dict k v
+fromList pairs =
+  _fromListHelp pairs RBEmpty
+
+_fromListHelp : Ord k => List (k, v) -> Dict k v -> Dict k v
+_fromListHelp pairs acc =
+  case pairs of
+    [] -> acc
+    pair :: rest ->
+      case pair of
+        (k, v) -> _fromListHelp rest (insert k v acc)
+
+
+-- Transform
+
+map : (k -> a -> b) -> Dict k a -> Dict k b
+map fn dict =
+  case dict of
+    RBEmpty -> RBEmpty
+    RBNode color key value left right ->
+      RBNode color key (fn key value) (map fn left) (map fn right)
+
+filter : Ord k => (k -> v -> Bool) -> Dict k v -> Dict k v
+filter pred dict =
+  foldl (\k v acc -> case pred k v of
+    True -> insert k v acc
+    False -> acc) RBEmpty dict
+
+union : Ord k => Dict k v -> Dict k v -> Dict k v
+union t1 t2 =
+  foldl (\k v acc -> insert k v acc) t2 t1
+
+
+-- Equality
+
+implement Eq NColor where
+  (==) x y =
+    case (x, y) of
+      (Red, Red) -> True
+      (Black, Black) -> True
+      _ -> False

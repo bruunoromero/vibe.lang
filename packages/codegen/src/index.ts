@@ -1241,7 +1241,28 @@ function generateModuleAccess(
 ): string {
   // Use the Vibe-level value name, not the external/runtime name
   const valueName = sanitizeIdentifier(expr.valueName);
-  return `${expr.importAlias}.${valueName}`;
+  let result = `${expr.importAlias}.${valueName}`;
+
+  // If the module access has constraints (from a constrained imported function),
+  // apply dictionary arguments. This handles cases like `insertOperator = Dict.insert`
+  // where the first-class reference needs the Ord dictionary bound.
+  if (expr.constraints && expr.constraints.length > 0) {
+    const seenProtocols = new Set<string>();
+    for (const constraint of expr.constraints) {
+      if (!seenProtocols.has(constraint.protocolName)) {
+        seenProtocols.add(constraint.protocolName);
+        const typeArg = constraint.typeArgs[0];
+        const dictName = resolveDictionaryForTypeCtx(
+          constraint.protocolName,
+          typeArg,
+          ctx,
+        );
+        result = `${result}(${dictName})`;
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -1380,6 +1401,9 @@ function generateApply(
 
   // Check if the callee is a named function with constraints
   // If so, we need to pass dictionaries before regular arguments
+  // Note: IRModuleAccess constraints are handled in generateModuleAccess
+  // (which is called via generateExpr above), so they don't need to be
+  // handled here again.
   let dictPasses: string[] = [];
   if (expr.callee.kind === "IRVar") {
     const calleeValue = ctx.program.values[expr.callee.name];

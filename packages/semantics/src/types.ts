@@ -429,6 +429,16 @@ export type ProtocolMethodUsage = {
   typeArgs: Type[];
 };
 
+/**
+ * Records the resolved constraints at a constrained function call site.
+ * For example, when `Dict.insert "key" 1 dict` is called, the `Ord k` constraint
+ * is resolved to `Ord String` and recorded here keyed by the FieldAccess Expr node.
+ */
+export type ConstrainedCallUsage = {
+  protocolName: string;
+  typeArgs: Type[];
+};
+
 export type SemanticModule = {
   values: Record<string, ValueInfo>;
   annotations: Record<string, import("@vibe/syntax").TypeAnnotationDeclaration>;
@@ -470,6 +480,12 @@ export type SemanticModule = {
    * For Infix operators the key is the Infix node (not the synthetic Var).
    */
   protocolMethodUsages: Map<Expr, ProtocolMethodUsage>;
+  /**
+   * Resolved constrained function call usages with their concrete constraint types.
+   * Keyed by AST Expr node identity. Supports multiple constraints per call site.
+   * Used by IR lowering to attach instantiated constraints to IRModuleAccess nodes.
+   */
+  constrainedCallUsages: Map<Expr, ConstrainedCallUsage[]>;
 };
 
 export interface AnalyzeOptions {

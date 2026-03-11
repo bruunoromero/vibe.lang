@@ -1642,4 +1642,137 @@ describe("prefix operator syntax", () => {
     const decl = program.declarations[0] as ValueDeclaration;
     expect(decl.body.kind).toBe("Lambda");
   });
+
+  test("multi-line list with continuation less indented than last element", () => {
+    const program = parseTest(`main =
+    ['!', '#', '$', '%', '&', '*', '+', '.', '/'
+    , '<', '=', '>', '?', '@', '\\\\', '^', '|', '~', ':', '-'
+    ]`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("List");
+    if (decl.body.kind === "List") {
+      expect(decl.body.elements.length).toBe(20);
+    }
+  });
+
+  test("multi-line tuple with continuation less indented than last element", () => {
+    const program = parseTest(`val =
+    ( 1, 2, 3
+    , 4, 5
+    )`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Tuple");
+    if (decl.body.kind === "Tuple") {
+      expect(decl.body.elements.length).toBe(5);
+    }
+  });
+
+  test("multi-line record with continuation less indented than last field", () => {
+    const program = parseTest(`val =
+    { a = 1, b = 2
+    , c = 3
+    }`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Record");
+    if (decl.body.kind === "Record") {
+      expect(decl.body.fields.length).toBe(3);
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Constructor patterns with constructor arguments (pat vs apat)
+  // ---------------------------------------------------------------------------
+
+  test("constructor pattern with nullary constructor argument", () => {
+    // RBNode Red k v left right -> should parse as RBNode with 5 args
+    // Red is a nullary constructor, not a constructor applied to k v left right
+    const program = parseTest(`fn x =
+    case x of
+        Node Red k v left right -> k`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Case");
+    if (decl.body.kind === "Case") {
+      const branch = decl.body.branches[0]!;
+      expect(branch.pattern.kind).toBe("ConstructorPattern");
+      if (branch.pattern.kind === "ConstructorPattern") {
+        expect(branch.pattern.name).toBe("Node");
+        expect(branch.pattern.args.length).toBe(5);
+        expect(branch.pattern.args[0]!.kind).toBe("ConstructorPattern");
+        if (branch.pattern.args[0]!.kind === "ConstructorPattern") {
+          expect(branch.pattern.args[0]!.name).toBe("Red");
+          expect(branch.pattern.args[0]!.args.length).toBe(0);
+        }
+        expect(branch.pattern.args[1]!.kind).toBe("VarPattern");
+        expect(branch.pattern.args[2]!.kind).toBe("VarPattern");
+        expect(branch.pattern.args[3]!.kind).toBe("VarPattern");
+        expect(branch.pattern.args[4]!.kind).toBe("VarPattern");
+      }
+    }
+  });
+
+  test("nested constructor in pattern requires parentheses", () => {
+    // (Just x) as an argument to Foo should work with parens
+    const program = parseTest(`fn x =
+    case x of
+        Foo (Just y) -> y`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Case");
+    if (decl.body.kind === "Case") {
+      const branch = decl.body.branches[0]!;
+      expect(branch.pattern.kind).toBe("ConstructorPattern");
+      if (branch.pattern.kind === "ConstructorPattern") {
+        expect(branch.pattern.name).toBe("Foo");
+        expect(branch.pattern.args.length).toBe(1);
+        const inner = branch.pattern.args[0]!;
+        expect(inner.kind).toBe("ConstructorPattern");
+        if (inner.kind === "ConstructorPattern") {
+          expect(inner.name).toBe("Just");
+          expect(inner.args.length).toBe(1);
+        }
+      }
+    }
+  });
+
+  test("multiple nullary constructors as pattern arguments", () => {
+    const program = parseTest(`fn x =
+    case x of
+        Triple True False Nothing -> 1`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Case");
+    if (decl.body.kind === "Case") {
+      const branch = decl.body.branches[0]!;
+      expect(branch.pattern.kind).toBe("ConstructorPattern");
+      if (branch.pattern.kind === "ConstructorPattern") {
+        expect(branch.pattern.name).toBe("Triple");
+        expect(branch.pattern.args.length).toBe(3);
+        for (const arg of branch.pattern.args) {
+          expect(arg.kind).toBe("ConstructorPattern");
+          if (arg.kind === "ConstructorPattern") {
+            expect(arg.args.length).toBe(0);
+          }
+        }
+      }
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // if/then/else inside case expressions
+  // ---------------------------------------------------------------------------
+
+  test("if-else inside case with else indented under if", () => {
+    const program = parseTest(`fn x =
+    case x of
+        True ->
+            if x then
+                1
+            else
+                0
+        False -> 2`);
+    const decl = program.declarations[0] as ValueDeclaration;
+    expect(decl.body.kind).toBe("Case");
+    if (decl.body.kind === "Case") {
+      expect(decl.body.branches.length).toBe(2);
+      expect(decl.body.branches[0]!.body.kind).toBe("If");
+    }
+  });
 });

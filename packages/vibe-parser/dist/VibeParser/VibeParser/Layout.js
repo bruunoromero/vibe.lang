@@ -7,6 +7,7 @@ import * as $inst_Int from "../../Vibe/Vibe/Int.js";
 import * as $inst_Float from "../../Vibe/Vibe/Float.js";
 import * as $inst_String from "../../Vibe/Vibe/String.js";
 import * as $inst_Char from "../../Vibe/Vibe/Char.js";
+import * as $inst_Dict from "../../Vibe/Vibe/Dict.js";
 import * as $inst_Parser from "../VibeParser/Parser.js";
 
 // Short-Circuit Operator Helpers

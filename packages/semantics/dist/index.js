@@ -983,6 +983,8 @@ class SemanticAnalyzer {
   currentConstraintContext = createConstraintContext();
   _pendingProtocolUsages = [];
   _resolvedProtocolUsages = new Map;
+  _pendingConstrainedCallUsages = [];
+  _resolvedConstrainedCallUsages = new Map;
   _registry = new RegistryManager;
   _globalScope = new Scope;
   _substitution = new Map;
@@ -1128,6 +1130,7 @@ class SemanticAnalyzer {
   resetConstraintContext() {
     this.currentConstraintContext = createConstraintContext();
     this._pendingProtocolUsages = [];
+    this._pendingConstrainedCallUsages = [];
   }
   getConstraintContext() {
     return this.currentConstraintContext;
@@ -1324,7 +1327,13 @@ class SemanticAnalyzer {
           const fieldExpr = expr;
           const moduleAccess = tryResolveModuleFieldAccess(fieldExpr, imports, dependencies, substitution);
           if (moduleAccess) {
-            return moduleAccess;
+            if (moduleAccess.constraints.length > 0) {
+              this._pendingConstrainedCallUsages.push({
+                node: fieldExpr,
+                constraints: moduleAccess.constraints
+              });
+            }
+            return moduleAccess.type;
           }
           const targetType = this.analyzeExpr(fieldExpr.target, {
             scope,
@@ -3551,6 +3560,13 @@ class SemanticAnalyzer {
             typeArgs: resolvedArgs
           });
         }
+        for (const usage of this._pendingConstrainedCallUsages) {
+          const resolved = usage.constraints.map((c) => ({
+            protocolName: c.protocolName,
+            typeArgs: c.typeArgs.map((t) => applySubstitution(t, this.substitution))
+          }));
+          this._resolvedConstrainedCallUsages.set(usage.node, resolved);
+        }
       }
     }
   }
@@ -4137,7 +4153,8 @@ class SemanticAnalyzer {
       exports,
       errors: this.getErrors(),
       importedValues: this.importedValues,
-      protocolMethodUsages: this._resolvedProtocolUsages
+      protocolMethodUsages: this._resolvedProtocolUsages,
+      constrainedCallUsages: this._resolvedConstrainedCallUsages
     };
   }
   concretizeInstanceTypeArgs() {
@@ -5752,18 +5769,20 @@ function typeOverlaps(type1, type2) {
 function resolveModuleField(depModule, field, substitution) {
   if (Object.hasOwn(depModule.typeSchemes, field)) {
     const scheme = depModule.typeSchemes[field];
-    return instantiate(scheme, substitution);
+    const { type, constraints } = instantiateWithConstraints(scheme, substitution);
+    return { type, constraints };
   }
   if (Object.hasOwn(depModule.values, field)) {
     const valueInfo = depModule.values[field];
     const valueType = valueInfo.type || depModule.types[field];
     if (valueType) {
-      return valueType;
+      return { type: valueType, constraints: [] };
     }
   }
   if (Object.hasOwn(depModule.constructorTypes, field)) {
     const ctorScheme = depModule.constructorTypes[field];
-    return instantiate(ctorScheme, substitution);
+    const { type, constraints } = instantiateWithConstraints(ctorScheme, substitution);
+    return { type, constraints };
   }
   return null;
 }
@@ -5833,9 +5852,6 @@ function instantiateWithConstraints(scheme, substitution) {
     typeArgs: c.typeArgs.map((t) => instantiateType(t, instantiationMap, substitution))
   }));
   return { type: instantiatedType, constraints: instantiatedConstraints };
-}
-function instantiate(scheme, substitution) {
-  return instantiateWithConstraints(scheme, substitution).type;
 }
 function instantiateType(type, instantiationMap, substitution) {
   const concrete = applySubstitution(type, substitution);

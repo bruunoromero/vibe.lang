@@ -992,7 +992,19 @@ function generateVar(expr, ctx) {
 }
 function generateModuleAccess(expr, ctx) {
   const valueName = sanitizeIdentifier(expr.valueName);
-  return `${expr.importAlias}.${valueName}`;
+  let result = `${expr.importAlias}.${valueName}`;
+  if (expr.constraints && expr.constraints.length > 0) {
+    const seenProtocols = new Set;
+    for (const constraint of expr.constraints) {
+      if (!seenProtocols.has(constraint.protocolName)) {
+        seenProtocols.add(constraint.protocolName);
+        const typeArg = constraint.typeArgs[0];
+        const dictName = resolveDictionaryForTypeCtx(constraint.protocolName, typeArg, ctx);
+        result = `${result}(${dictName})`;
+      }
+    }
+  }
+  return result;
 }
 function interpretEscapes(raw) {
   let result = "";

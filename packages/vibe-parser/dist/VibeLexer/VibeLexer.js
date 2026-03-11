@@ -8,6 +8,7 @@ import * as $inst_Unit from "../Vibe/Vibe/Unit.js";
 import * as $inst_Bool from "../Vibe/Vibe/Bool.js";
 import * as $inst_Int from "../Vibe/Vibe/Int.js";
 import * as $inst_Float from "../Vibe/Vibe/Float.js";
+import * as $inst_Dict from "../Vibe/Vibe/Dict.js";
 import * as $inst_Parser from "../VibeParser/VibeParser/Parser.js";
 import * as $inst_Layout from "../VibeParser/VibeParser/Layout.js";
 import * as $inst_Encode from "../Json/Json/Encode.js";

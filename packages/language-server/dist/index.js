@@ -10095,6 +10095,8 @@ var $dict_Show_Float2 = {
 // ../vibe-parser/dist/Vibe/Vibe/String.ffi.js
 var stringAppend2 = (a, b) => a + b;
 var stringEq2 = (a, b) => a === b;
+var stringLt2 = (a, b) => a < b;
+var stringGt2 = (a, b) => a > b;
 var parseInt3 = (just, nothing, s) => {
   const n = Number.parseInt(s, 10);
   if (Number.isNaN(n)) {
@@ -10127,8 +10129,11 @@ var Just2 = ($0) => ({ $tag: 0, $0 });
 var Nothing2 = { $tag: 1 };
 
 // ../vibe-parser/dist/Vibe/Vibe/String.js
+var _PIPE_PIPE5 = (a) => (b) => a || b();
 var _append2 = ($a0) => ($a1) => stringAppend2($a0, $a1);
 var _eq4 = ($a0) => ($a1) => stringEq2($a0, $a1);
+var _lt4 = ($a0) => ($a1) => stringLt2($a0, $a1);
+var _gt4 = ($a0) => ($a1) => stringGt2($a0, $a1);
 var _parseInt2 = ($a0) => ($a1) => ($a2) => parseInt3($a0, $a1, $a2);
 var _parseFloat2 = ($a0) => ($a1) => ($a2) => parseFloat2($a0, $a1, $a2);
 var length2 = ($recv) => $recv.length;
@@ -10150,9 +10155,17 @@ var toInt2 = _parseInt2(Just2)(Nothing2);
 var toFloat2 = _parseFloat2(Just2)(Nothing2);
 var isEmpty = (s) => $dict_Eq_Int2._EQ_EQ(length2(s))(0);
 var $default_Eq_String__SLASH_EQ2 = (x) => (y) => not2(_eq4(x)(y));
+var $default_Ord_String__LT_EQ = (x) => (y) => _PIPE_PIPE5(_lt4(x)(y))(() => $dict_Eq_String2._EQ_EQ(x)(y));
+var $default_Ord_String__GT_EQ = (x) => (y) => _PIPE_PIPE5(_gt4(x)(y))(() => $dict_Eq_String2._EQ_EQ(x)(y));
 var $dict_Eq_String2 = {
   _EQ_EQ: _eq4,
   _SLASH_EQ: $default_Eq_String__SLASH_EQ2
+};
+var $dict_Ord_String2 = {
+  _LT: _lt4,
+  _GT: _gt4,
+  _LT_EQ: $default_Ord_String__LT_EQ,
+  _GT_EQ: $default_Ord_String__GT_EQ
 };
 var $dict_Show_String2 = {
   toString: identity2
@@ -10168,23 +10181,23 @@ var charOrd2 = (a, b) => a < b;
 var charOrdGt2 = (a, b) => a > b;
 
 // ../vibe-parser/dist/Vibe/Vibe/Char.js
-var _PIPE_PIPE5 = (a) => (b) => a || b();
+var _PIPE_PIPE6 = (a) => (b) => a || b();
 var _AMP_AMP3 = (a) => (b) => a && b();
 var _toString6 = ($a0) => charToString2($a0);
-var _lt4 = ($a0) => ($a1) => charOrd2($a0, $a1);
-var _gt4 = ($a0) => ($a1) => charOrdGt2($a0, $a1);
+var _lt5 = ($a0) => ($a1) => charOrd2($a0, $a1);
+var _gt5 = ($a0) => ($a1) => charOrdGt2($a0, $a1);
 var toCode2 = ($a0) => charToCode2($a0);
-var $default_Ord_Char__LT_EQ2 = (x) => (y) => _PIPE_PIPE5(_lt4(x)(y))(() => $dict_Eq_Char2._EQ_EQ(x)(y));
-var $default_Ord_Char__GT_EQ2 = (x) => (y) => _PIPE_PIPE5(_gt4(x)(y))(() => $dict_Eq_Char2._EQ_EQ(x)(y));
+var $default_Ord_Char__LT_EQ2 = (x) => (y) => _PIPE_PIPE6(_lt5(x)(y))(() => $dict_Eq_Char2._EQ_EQ(x)(y));
+var $default_Ord_Char__GT_EQ2 = (x) => (y) => _PIPE_PIPE6(_gt5(x)(y))(() => $dict_Eq_Char2._EQ_EQ(x)(y));
 var $dict_Ord_Char2 = {
-  _LT: _lt4,
-  _GT: _gt4,
+  _LT: _lt5,
+  _GT: _gt5,
   _LT_EQ: $default_Ord_Char__LT_EQ2,
   _GT_EQ: $default_Ord_Char__GT_EQ2
 };
 var isUpper2 = (c) => _AMP_AMP3($dict_Ord_Char2._GT_EQ(c)("A"))(() => $dict_Ord_Char2._LT_EQ(c)("Z"));
 var isLower2 = (c) => _AMP_AMP3($dict_Ord_Char2._GT_EQ(c)("a"))(() => $dict_Ord_Char2._LT_EQ(c)("z"));
-var isAlpha2 = (c) => _PIPE_PIPE5(isUpper2(c))(() => isLower2(c));
+var isAlpha2 = (c) => _PIPE_PIPE6(isUpper2(c))(() => isLower2(c));
 var isDigit2 = (c) => _AMP_AMP3($dict_Ord_Char2._GT_EQ(c)("0"))(() => $dict_Ord_Char2._LT_EQ(c)("9"));
 var $impl_Eq_Char__EQ_EQ2 = (x) => (y) => $dict_Eq_String2._EQ_EQ($dict_Show_Char2.toString(x))($dict_Show_Char2.toString(y));
 var $default_Eq_Char__SLASH_EQ2 = (x) => (y) => not2($dict_Eq_Char2._EQ_EQ(x)(y));
@@ -10301,49 +10314,422 @@ var $dict_Eq_List_v3562 = ($dict_Eq) => ({
 var $dict_Show_List_v3572 = ($dict_Show) => ({
   toString: $impl_Show_List_v357_toString($dict_Show)
 });
-// ../vibe-parser/dist/Vibe/Vibe/Dict.ffi.js
-var dictEmpty = new Map;
-var dictInsert = (k, v, d) => {
-  const m = new Map(d);
-  m.set(k, v);
-  return m;
-};
-var dictToList = (toPair, d) => {
-  const result = [];
-  d.forEach((v, k) => {
-    result.push(toPair(k)(v));
-  });
-  return result;
-};
-var dictFromList = (getKey, getValue, lst) => {
-  const m = new Map;
-  for (const pair of lst) {
-    m.set(getKey(pair), getValue(pair));
-  }
-  return m;
-};
-
 // ../vibe-parser/dist/Vibe/Vibe/Dict.js
-var insert = ($a0) => ($a1) => ($a2) => dictInsert($a0, $a1, $a2);
-var _has = ($recv) => ($a0) => $recv.has($a0);
-var _unsafeGet = ($recv) => ($a0) => $recv.get($a0);
-var get = (k) => (d) => _has(d)(k) ? Just2(_unsafeGet(d)(k)) : Nothing2;
-var _toList = ($a0) => ($a1) => dictToList($a0, $a1);
-var toList3 = _toList((k) => (v) => [k, v]);
-var _fromList = ($a0) => ($a1) => ($a2) => dictFromList($a0, $a1, $a2);
-var fromList = _fromList((pair) => (($match_0) => {
-  {
-    const k = $match_0[0];
-    return k;
+var _AMP_AMP5 = (a) => (b) => a && b();
+var RBNode = ($0) => ($1) => ($2) => ($3) => ($4) => ({ $tag: 1, $0, $1, $2, $3, $4 });
+var empty = { $tag: 0 };
+var get = ($dict_Ord) => (targetKey) => (dict) => (($match_0) => {
+  if ($match_0.$tag === 0) {
+    return Nothing2;
+  }
+  if ($match_0.$tag === 1) {
+    const key = $match_0.$1;
+    const value = $match_0.$2;
+    const left = $match_0.$3;
+    const right = $match_0.$4;
+    return $dict_Ord._LT(targetKey)(key) ? get($dict_Ord)(targetKey)(left) : $dict_Ord._GT(targetKey)(key) ? get($dict_Ord)(targetKey)(right) : Just2(value);
   }
   throw new Error("Pattern match failed");
-})(pair))((pair) => (($match_1) => {
-  {
-    const v = $match_1[1];
-    return v;
+})(dict);
+var _balance = (color) => (key) => (value) => (left) => (right) => {
+  while (true) {
+    {
+      const $match_4 = right;
+      if ($match_4.$tag === 1 && $match_4.$0.$tag === 0) {
+        const rK = $match_4.$1;
+        const rV = $match_4.$2;
+        const rLeft = $match_4.$3;
+        const rRight = $match_4.$4;
+        {
+          const $match_5 = left;
+          if ($match_5.$tag === 1 && $match_5.$0.$tag === 0) {
+            const lK = $match_5.$1;
+            const lV = $match_5.$2;
+            const lLeft = $match_5.$3;
+            const lRight = $match_5.$4;
+            return RBNode({ $tag: 0 })(key)(value)(RBNode({ $tag: 1 })(lK)(lV)(lLeft)(lRight))(RBNode({ $tag: 1 })(rK)(rV)(rLeft)(rRight));
+          }
+          {
+            [color, key, value, left, right] = [color, rK, rV, RBNode({ $tag: 0 })(key)(value)(left)(rLeft), rRight];
+            continue;
+          }
+          throw new Error("Pattern match failed");
+        }
+      }
+      {
+        {
+          const $match_6 = left;
+          if ($match_6.$tag === 1 && $match_6.$0.$tag === 0) {
+            const lK = $match_6.$1;
+            const lV = $match_6.$2;
+            const lLeft = $match_6.$3;
+            const lRight = $match_6.$4;
+            {
+              const $match_7 = lLeft;
+              if ($match_7.$tag === 1 && $match_7.$0.$tag === 0) {
+                const llK = $match_7.$1;
+                const llV = $match_7.$2;
+                const llLeft = $match_7.$3;
+                const llRight = $match_7.$4;
+                return RBNode({ $tag: 0 })(lK)(lV)(RBNode({ $tag: 1 })(llK)(llV)(llLeft)(llRight))(RBNode({ $tag: 1 })(key)(value)(lRight)(right));
+              }
+              {
+                return RBNode(color)(key)(value)(left)(right);
+              }
+              throw new Error("Pattern match failed");
+            }
+          }
+          {
+            return RBNode(color)(key)(value)(left)(right);
+          }
+          throw new Error("Pattern match failed");
+        }
+      }
+      throw new Error("Pattern match failed");
+    }
+  }
+};
+var _insertHelp = ($dict_Ord) => (key) => (value) => (dict) => (($match_8) => {
+  if ($match_8.$tag === 0) {
+    return RBNode({ $tag: 0 })(key)(value)({ $tag: 0 })({ $tag: 0 });
+  }
+  if ($match_8.$tag === 1) {
+    const nColor = $match_8.$0;
+    const nKey = $match_8.$1;
+    const nValue = $match_8.$2;
+    const nLeft = $match_8.$3;
+    const nRight = $match_8.$4;
+    return $dict_Ord._LT(key)(nKey) ? _balance(nColor)(nKey)(nValue)(_insertHelp($dict_Ord)(key)(value)(nLeft))(nRight) : $dict_Ord._GT(key)(nKey) ? _balance(nColor)(nKey)(nValue)(nLeft)(_insertHelp($dict_Ord)(key)(value)(nRight)) : RBNode(nColor)(key)(value)(nLeft)(nRight);
   }
   throw new Error("Pattern match failed");
-})(pair));
+})(dict);
+var insert = ($dict_Ord) => (key) => (value) => (dict) => (($match_9) => {
+  if ($match_9.$tag === 1) {
+    const k = $match_9.$1;
+    const v = $match_9.$2;
+    const l = $match_9.$3;
+    const r = $match_9.$4;
+    return RBNode({ $tag: 1 })(k)(v)(l)(r);
+  }
+  if ($match_9.$tag === 0) {
+    return { $tag: 0 };
+  }
+  throw new Error("Pattern match failed");
+})(_insertHelp($dict_Ord)(key)(value)(dict));
+var _colorRed = (dict) => (($match_10) => {
+  if ($match_10.$tag === 1) {
+    const k = $match_10.$1;
+    const v = $match_10.$2;
+    const l = $match_10.$3;
+    const r = $match_10.$4;
+    return RBNode({ $tag: 0 })(k)(v)(l)(r);
+  }
+  if ($match_10.$tag === 0) {
+    return { $tag: 0 };
+  }
+  throw new Error("Pattern match failed");
+})(dict);
+var _moveRedLeft = (dict) => (($match_11) => {
+  if ($match_11.$tag === 1) {
+    const color = $match_11.$0;
+    const key = $match_11.$1;
+    const value = $match_11.$2;
+    const left = $match_11.$3;
+    const right = $match_11.$4;
+    return (($match_12) => {
+      if ($match_12.$tag === 1 && $match_12.$3.$tag === 1 && $match_12.$3.$0.$tag === 0) {
+        const rK = $match_12.$1;
+        const rV = $match_12.$2;
+        const rlK = $match_12.$3.$1;
+        const rlV = $match_12.$3.$2;
+        const rlLeft = $match_12.$3.$3;
+        const rlRight = $match_12.$3.$4;
+        const rRight = $match_12.$4;
+        return RBNode({ $tag: 0 })(rlK)(rlV)(RBNode({ $tag: 1 })(key)(value)(_colorRed(left))(rlLeft))(RBNode({ $tag: 1 })(rK)(rV)(rlRight)(rRight));
+      }
+      {
+        return RBNode(color)(key)(value)(_colorRed(left))(_colorRed(right));
+      }
+      throw new Error("Pattern match failed");
+    })(right);
+  }
+  if ($match_11.$tag === 0) {
+    return { $tag: 0 };
+  }
+  throw new Error("Pattern match failed");
+})(dict);
+var _getMin = (dict) => {
+  while (true) {
+    {
+      const $match_13 = dict;
+      if ($match_13.$tag === 1 && $match_13.$3.$tag === 0) {
+        return dict;
+      }
+      if ($match_13.$tag === 1) {
+        const left = $match_13.$3;
+        dict = left;
+        continue;
+      }
+      if ($match_13.$tag === 0) {
+        return { $tag: 0 };
+      }
+      throw new Error("Pattern match failed");
+    }
+  }
+};
+var _removeMin = (dict) => (($match_14) => {
+  if ($match_14.$tag === 1) {
+    const color = $match_14.$0;
+    const key = $match_14.$1;
+    const value = $match_14.$2;
+    const left = $match_14.$3;
+    const right = $match_14.$4;
+    return (($match_15) => {
+      if ($match_15.$tag === 0) {
+        return { $tag: 0 };
+      }
+      if ($match_15.$tag === 1 && $match_15.$0.$tag === 1) {
+        const lLeft = $match_15.$3;
+        return (($match_16) => {
+          if ($match_16.$tag === 1 && $match_16.$0.$tag === 0) {
+            return RBNode(color)(key)(value)(_removeMin(left))(right);
+          }
+          {
+            return (($match_17) => {
+              if ($match_17.$tag === 1) {
+                const nColor = $match_17.$0;
+                const nKey = $match_17.$1;
+                const nValue = $match_17.$2;
+                const nLeft = $match_17.$3;
+                const nRight = $match_17.$4;
+                return _balance(nColor)(nKey)(nValue)(_removeMin(nLeft))(nRight);
+              }
+              if ($match_17.$tag === 0) {
+                return { $tag: 0 };
+              }
+              throw new Error("Pattern match failed");
+            })(_moveRedLeft(dict));
+          }
+          throw new Error("Pattern match failed");
+        })(lLeft);
+      }
+      {
+        return RBNode(color)(key)(value)(_removeMin(left))(right);
+      }
+      throw new Error("Pattern match failed");
+    })(left);
+  }
+  if ($match_14.$tag === 0) {
+    return { $tag: 0 };
+  }
+  throw new Error("Pattern match failed");
+})(dict);
+var _moveRedRight = (dict) => (($match_18) => {
+  if ($match_18.$tag === 1) {
+    const color = $match_18.$0;
+    const key = $match_18.$1;
+    const value = $match_18.$2;
+    const left = $match_18.$3;
+    const right = $match_18.$4;
+    return (($match_19) => {
+      if ($match_19.$tag === 1 && $match_19.$3.$tag === 1 && $match_19.$3.$0.$tag === 0) {
+        const lK = $match_19.$1;
+        const lV = $match_19.$2;
+        const llK = $match_19.$3.$1;
+        const llV = $match_19.$3.$2;
+        const llLeft = $match_19.$3.$3;
+        const llRight = $match_19.$3.$4;
+        const lRight = $match_19.$4;
+        return RBNode({ $tag: 0 })(lK)(lV)(RBNode({ $tag: 1 })(llK)(llV)(llLeft)(llRight))(RBNode({ $tag: 1 })(key)(value)(lRight)(_colorRed(right)));
+      }
+      {
+        return RBNode(color)(key)(value)(_colorRed(left))(_colorRed(right));
+      }
+      throw new Error("Pattern match failed");
+    })(left);
+  }
+  if ($match_18.$tag === 0) {
+    return { $tag: 0 };
+  }
+  throw new Error("Pattern match failed");
+})(dict);
+var _removeHelpPrepEQGT = (dict) => (color) => (key) => (value) => (left) => (right) => (($match_20) => {
+  if ($match_20.$tag === 1 && $match_20.$0.$tag === 0) {
+    const lK = $match_20.$1;
+    const lV = $match_20.$2;
+    const lLeft = $match_20.$3;
+    const lRight = $match_20.$4;
+    return RBNode(color)(lK)(lV)(lLeft)(RBNode({ $tag: 0 })(key)(value)(lRight)(right));
+  }
+  {
+    return dict;
+  }
+  throw new Error("Pattern match failed");
+})(left);
+var _removeHelp;
+var _removeHelpEQGT;
+_removeHelp = ($dict_Eq) => ($dict_Ord) => (targetKey) => (dict) => (($match_21) => {
+  if ($match_21.$tag === 0) {
+    return { $tag: 0 };
+  }
+  if ($match_21.$tag === 1) {
+    const color = $match_21.$0;
+    const key = $match_21.$1;
+    const value = $match_21.$2;
+    const left = $match_21.$3;
+    const right = $match_21.$4;
+    return $dict_Ord._LT(targetKey)(key) ? (($match_22) => {
+      if ($match_22.$tag === 1 && $match_22.$0.$tag === 1) {
+        const lLeft = $match_22.$3;
+        return (($match_23) => {
+          if ($match_23.$tag === 1 && $match_23.$0.$tag === 0) {
+            return RBNode(color)(key)(value)(_removeHelp($dict_Eq)($dict_Ord)(targetKey)(left))(right);
+          }
+          {
+            return (($match_24) => {
+              if ($match_24.$tag === 1) {
+                const nColor = $match_24.$0;
+                const nKey = $match_24.$1;
+                const nValue = $match_24.$2;
+                const nLeft = $match_24.$3;
+                const nRight = $match_24.$4;
+                return _balance(nColor)(nKey)(nValue)(_removeHelp($dict_Eq)($dict_Ord)(targetKey)(nLeft))(nRight);
+              }
+              if ($match_24.$tag === 0) {
+                return { $tag: 0 };
+              }
+              throw new Error("Pattern match failed");
+            })(_moveRedLeft(dict));
+          }
+          throw new Error("Pattern match failed");
+        })(lLeft);
+      }
+      {
+        return RBNode(color)(key)(value)(_removeHelp($dict_Eq)($dict_Ord)(targetKey)(left))(right);
+      }
+      throw new Error("Pattern match failed");
+    })(left) : _removeHelpEQGT($dict_Eq)($dict_Ord)(targetKey)(_removeHelpPrepEQGT(dict)(color)(key)(value)(left)(right));
+  }
+  throw new Error("Pattern match failed");
+})(dict);
+_removeHelpEQGT = ($dict_Eq) => ($dict_Ord) => (targetKey) => (dict) => (($match_25) => {
+  if ($match_25.$tag === 1) {
+    const color = $match_25.$0;
+    const key = $match_25.$1;
+    const value = $match_25.$2;
+    const left = $match_25.$3;
+    const right = $match_25.$4;
+    return $dict_Eq._EQ_EQ(targetKey)(key) ? (($match_26) => {
+      if ($match_26.$tag === 1) {
+        const minKey = $match_26.$1;
+        const minValue = $match_26.$2;
+        return _balance(color)(minKey)(minValue)(left)(_removeMin(right));
+      }
+      if ($match_26.$tag === 0) {
+        return { $tag: 0 };
+      }
+      throw new Error("Pattern match failed");
+    })(_getMin(right)) : (($match_27) => {
+      if ($match_27.$tag === 1 && $match_27.$0.$tag === 1) {
+        const rLeft = $match_27.$3;
+        return (($match_28) => {
+          if ($match_28.$tag === 1 && $match_28.$0.$tag === 0) {
+            return RBNode(color)(key)(value)(left)(_removeHelp($dict_Eq)($dict_Ord)(targetKey)(right));
+          }
+          {
+            return (($match_29) => {
+              if ($match_29.$tag === 1) {
+                const nColor = $match_29.$0;
+                const nKey = $match_29.$1;
+                const nValue = $match_29.$2;
+                const nLeft = $match_29.$3;
+                const nRight = $match_29.$4;
+                return _balance(nColor)(nKey)(nValue)(nLeft)(_removeHelp($dict_Eq)($dict_Ord)(targetKey)(nRight));
+              }
+              if ($match_29.$tag === 0) {
+                return { $tag: 0 };
+              }
+              throw new Error("Pattern match failed");
+            })(_moveRedRight(dict));
+          }
+          throw new Error("Pattern match failed");
+        })(rLeft);
+      }
+      {
+        return RBNode(color)(key)(value)(left)(_removeHelp($dict_Eq)($dict_Ord)(targetKey)(right));
+      }
+      throw new Error("Pattern match failed");
+    })(right);
+  }
+  if ($match_25.$tag === 0) {
+    return { $tag: 0 };
+  }
+  throw new Error("Pattern match failed");
+})(dict);
+var _foldr = (fn) => (acc) => (dict) => {
+  while (true) {
+    {
+      const $match_33 = dict;
+      if ($match_33.$tag === 0) {
+        return acc;
+      }
+      if ($match_33.$tag === 1) {
+        const key = $match_33.$1;
+        const value = $match_33.$2;
+        const left = $match_33.$3;
+        const right = $match_33.$4;
+        [fn, acc, dict] = [fn, fn(key)(value)(_foldr(fn)(acc)(right)), left];
+        continue;
+      }
+      throw new Error("Pattern match failed");
+    }
+  }
+};
+var toList3 = (dict) => _foldr((key) => (value) => (list2) => _COLON_COLON2([key, value])(list2))([])(dict);
+var $impl_Eq_NColor__EQ_EQ = (x) => (y) => (($match_37) => {
+  if ($match_37[0].$tag === 0 && $match_37[1].$tag === 0) {
+    return true;
+  }
+  if ($match_37[0].$tag === 1 && $match_37[1].$tag === 1) {
+    return true;
+  }
+  {
+    return false;
+  }
+  throw new Error("Pattern match failed");
+})([x, y]);
+var $default_Eq_NColor__SLASH_EQ = (x) => (y) => not2($dict_Eq_NColor._EQ_EQ(x)(y));
+var $dict_Eq_NColor = {
+  _EQ_EQ: $impl_Eq_NColor__EQ_EQ,
+  _SLASH_EQ: $default_Eq_NColor__SLASH_EQ
+};
+var $impl_Eq_Dict_v799_v800__EQ_EQ;
+var $dict_Eq_Dict_v799_v800;
+$impl_Eq_Dict_v799_v800__EQ_EQ = ($dict_Eq) => (x_impl) => (y_impl) => (($match_38) => {
+  if ($match_38[0].$tag === 0 && $match_38[1].$tag === 0) {
+    return true;
+  }
+  if ($match_38[0].$tag === 1 && $match_38[1].$tag === 1) {
+    const a_0 = $match_38[0].$0;
+    const a_1 = $match_38[0].$1;
+    const a_2 = $match_38[0].$2;
+    const a_3 = $match_38[0].$3;
+    const a_4 = $match_38[0].$4;
+    const b_0 = $match_38[1].$0;
+    const b_1 = $match_38[1].$1;
+    const b_2 = $match_38[1].$2;
+    const b_3 = $match_38[1].$3;
+    const b_4 = $match_38[1].$4;
+    return _AMP_AMP5(_AMP_AMP5(_AMP_AMP5(_AMP_AMP5($dict_Eq_NColor._EQ_EQ(a_0)(b_0))(() => $dict_Eq._EQ_EQ(a_1)(b_1)))(() => $dict_Eq._EQ_EQ(a_2)(b_2)))(() => $dict_Eq._EQ_EQ(a_3)(b_3)))(() => $dict_Eq._EQ_EQ(a_4)(b_4));
+  }
+  {
+    return false;
+  }
+  throw new Error("Pattern match failed");
+})([x_impl, y_impl]);
+$dict_Eq_Dict_v799_v800 = ($dict_Eq) => ({
+  _EQ_EQ: $impl_Eq_Dict_v799_v800__EQ_EQ($dict_Eq)
+});
 
 // ../vibe-parser/dist/VibeLexer/VibeLexer/Types.js
 var LowerIdentifier2 = { $tag: 0 };
@@ -10515,7 +10901,7 @@ var AssocNone = { $tag: 2 };
 
 // ../vibe-parser/dist/VibeParser/VibeParser/OperatorRegistry.js
 var defaultOperatorInfo = { precedence: 9, associativity: AssocLeft };
-var builtinRegistry = _PIPE_GT2(_PIPE_GT2(dictEmpty)(insert("&&")({ precedence: 3, associativity: AssocRight })))(insert("||")({ precedence: 2, associativity: AssocRight }));
+var builtinRegistry = _PIPE_GT2(_PIPE_GT2(empty)(insert($dict_Ord_String2)("&&")({ precedence: 3, associativity: AssocRight })))(insert($dict_Ord_String2)("||")({ precedence: 2, associativity: AssocRight }));
 var getOperatorInfo = (op) => (registry) => (($match_0) => {
   if ($match_0.$tag === 0) {
     const info = $match_0.$0;
@@ -10525,12 +10911,12 @@ var getOperatorInfo = (op) => (registry) => (($match_0) => {
     return defaultOperatorInfo;
   }
   throw new Error("Pattern match failed");
-})(get(op)(registry));
-var insertOperator = insert;
+})(get($dict_Ord_String2)(op)(registry));
+var insertOperator = insert($dict_Ord_String2);
 
 // ../vibe-parser/dist/VibeParser/VibeParser/Parser.js
-var _AMP_AMP5 = (a) => (b) => a && b();
-var _PIPE_PIPE6 = (a) => (b) => a || b();
+var _AMP_AMP6 = (a) => (b) => a && b();
+var _PIPE_PIPE7 = (a) => (b) => a || b();
 var PIAnnotation = ($0) => ($1) => ($2) => ({ $tag: 0, $0, $1, $2 });
 var PIImpl = ($0) => ($1) => ($2) => ($3) => ({ $tag: 1, $0, $1, $2, $3 });
 var initState2 = (tokens) => (registry) => ({ tokens, index: 0, registry });
@@ -10561,10 +10947,10 @@ var advance2 = (state) => ({ ...state, index: $dict_Num_Int2._PLUS(state.index)(
 var peekAhead = (offset) => (state) => nth2($dict_Num_Int2._PLUS(state.index)(offset))(state.tokens);
 var isAtEnd2 = (state) => $dict_Eq_TokenKind._EQ_EQ(current(state).kind)(Eof2);
 var peekKind = (kind) => (state) => $dict_Eq_TokenKind._EQ_EQ(current(state).kind)(kind);
-var peekKeyword = (kw) => (state) => ((tok) => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(kw)))(current(state));
-var peekOperator = (op) => (state) => ((tok) => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(op)))(current(state));
+var peekKeyword = (kw) => (state) => ((tok) => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(kw)))(current(state));
+var peekOperator = (op) => (state) => ((tok) => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(op)))(current(state));
 var matchKind = (kind) => (state) => $dict_Eq_TokenKind._EQ_EQ(current(state).kind)(kind) ? Just2(advance2(state)) : Nothing2;
-var matchOperator = (op) => (state) => ((tok) => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(op)) ? Just2(advance2(state)) : Nothing2)(current(state));
+var matchOperator = (op) => (state) => ((tok) => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(op)) ? Just2(advance2(state)) : Nothing2)(current(state));
 var matchBlockSep = (state) => matchKind(BlockSep2)(state);
 var tokenKindStr = (kind) => (($match_2) => {
   if ($match_2.$tag === 0) {
@@ -10645,8 +11031,8 @@ var tokenKindStr = (kind) => (($match_2) => {
   throw new Error("Pattern match failed");
 })(kind);
 var expect = (kind) => (label) => (state) => ((tok) => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(kind) ? Ok2([tok, advance2(state)]) : Err2(makeError($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS("Expected ")(label))(" but found "))(tokenKindStr(tok.kind)))(" '"))(tok.lexeme))("'"))(tok.span)))(current(state));
-var expectKeyword = (kw) => (state) => ((tok) => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(kw)) ? Ok2([tok, advance2(state)]) : Err2(makeError($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS("Expected keyword '")(kw))("' but found "))(tokenKindStr(tok.kind)))(" '"))(tok.lexeme))("'"))(tok.span)))(current(state));
-var expectOperator = (op) => (state) => ((tok) => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(op)) ? Ok2([tok, advance2(state)]) : Err2(makeError($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS("Expected operator '")(op))("' but found "))(tokenKindStr(tok.kind)))(" '"))(tok.lexeme))("'"))(tok.span)))(current(state));
+var expectKeyword = (kw) => (state) => ((tok) => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(kw)) ? Ok2([tok, advance2(state)]) : Err2(makeError($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS("Expected keyword '")(kw))("' but found "))(tokenKindStr(tok.kind)))(" '"))(tok.lexeme))("'"))(tok.span)))(current(state));
+var expectOperator = (op) => (state) => ((tok) => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)(op)) ? Ok2([tok, advance2(state)]) : Err2(makeError($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS("Expected operator '")(op))("' but found "))(tokenKindStr(tok.kind)))(" '"))(tok.lexeme))("'"))(tok.span)))(current(state));
 var expectBlockStart = (state) => expect(BlockStart2)("indented block")(state);
 var expectBlockEnd = (state) => expect(BlockEnd2)("end of indented block")(state);
 var onSameLine = (span) => (tok) => $dict_Eq_Int2._EQ_EQ(span.end.line)(tok.span.start.line);
@@ -10981,10 +11367,10 @@ var peekConstraintContextLoop = (i) => (limit) => (state) => {
         }
         if ($match_14.$tag === 0) {
           const tok = $match_14.$0;
-          if (_AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>"))) {
+          if (_AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>"))) {
             return true;
           } else {
-            if (_AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("where"))) {
+            if (_AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("where"))) {
               return false;
             } else {
               [i, limit, state] = [$dict_Num_Int2._PLUS(i)(1), $dict_Num_Int2._PLUS(limit)(1), state];
@@ -11023,10 +11409,10 @@ var peekConstraintCtxProtoLoop = (i) => (parenDepth) => (limit) => (state) => {
               }
               throw new Error("Pattern match failed");
             })(tok.kind);
-            if (_AMP_AMP5($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>")))) {
+            if (_AMP_AMP6($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>")))) {
               return true;
             } else {
-              if (_AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("where"))) {
+              if (_AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("where"))) {
                 return false;
               } else {
                 [i, parenDepth, limit, state] = [$dict_Num_Int2._PLUS(i)(1), newDepth, $dict_Num_Int2._PLUS(limit)(1), state];
@@ -11069,10 +11455,10 @@ var peekConstraintCtxTypeLoop = (i) => (parenDepth) => (limit) => (startLine) =>
                 }
                 throw new Error("Pattern match failed");
               })(tok.kind);
-              if (_AMP_AMP5($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>")))) {
+              if (_AMP_AMP6($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>")))) {
                 return true;
               } else {
-                if (_AMP_AMP5($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Equals2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2)))) {
+                if (_AMP_AMP6($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Equals2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2)))) {
                   return false;
                 } else {
                   [i, parenDepth, limit, startLine, state] = [$dict_Num_Int2._PLUS(i)(1), newDepth, $dict_Num_Int2._PLUS(limit)(1), startLine, state];
@@ -11113,13 +11499,13 @@ var peekConstraintCtxTypeDeclLoop = (i) => (parenDepth) => (limit) => (state) =>
               }
               throw new Error("Pattern match failed");
             })(tok.kind);
-            if (_AMP_AMP5($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>")))) {
+            if (_AMP_AMP6($dict_Eq_Int2._EQ_EQ(newDepth)(0))(() => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("=>")))) {
               return true;
             } else {
-              if (_AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Equals2))(() => $dict_Eq_Int2._EQ_EQ(newDepth)(0))) {
+              if (_AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Equals2))(() => $dict_Eq_Int2._EQ_EQ(newDepth)(0))) {
                 return false;
               } else {
-                if (_AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_Int2._EQ_EQ(newDepth)(0))) {
+                if (_AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => $dict_Eq_Int2._EQ_EQ(newDepth)(0))) {
                   {
                     const $match_21 = tok.lexeme;
                     if ($match_21 === "implement") {
@@ -11166,13 +11552,13 @@ var peekConstraintCtxTypeDeclLoop = (i) => (parenDepth) => (limit) => (state) =>
   }
 };
 var peekConstraintContextInTypeDecl = (state) => peekConstraintCtxTypeDeclLoop(0)(0)(0)(state);
-var peekDecorator = (state) => ((cur) => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(cur.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(cur.lexeme)("@")) ? (($match_22) => {
+var peekDecorator = (state) => ((cur) => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(cur.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(cur.lexeme)("@")) ? (($match_22) => {
   if ($match_22.$tag === 1) {
     return false;
   }
   if ($match_22.$tag === 0) {
     const next = $match_22.$0;
-    return _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(next.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(next.kind)(Keyword2));
+    return _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(next.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(next.kind)(Keyword2));
   }
   throw new Error("Pattern match failed");
 })(peekAhead(1)(state)) : false)(current(state));
@@ -11577,7 +11963,7 @@ var parseImports = (state) => peekKeyword("import")(state) ? ((tok) => $dict_Eq_
   }
   throw new Error("Pattern match failed");
 })(parseImport(state)) : Err2(makeError("import declaration must start at column 1")(tok.span)))(current(state)) : Ok2([[], state]);
-var unquote = (lexeme) => _AMP_AMP5($dict_Ord_Int2._GT_EQ(length2(lexeme))(2))(() => _AMP_AMP5(startsWith('"')(lexeme))(() => endsWith('"')(lexeme))) ? slice2(1)($dict_Num_Int2._MINUS(length2(lexeme))(1))(lexeme) : lexeme;
+var unquote = (lexeme) => _AMP_AMP6($dict_Ord_Int2._GT_EQ(length2(lexeme))(2))(() => _AMP_AMP6(startsWith('"')(lexeme))(() => endsWith('"')(lexeme))) ? slice2(1)($dict_Num_Int2._MINUS(length2(lexeme))(1))(lexeme) : lexeme;
 var parseDecoratorArgs = (state) => $dict_Eq_TokenKind._EQ_EQ(current(state).kind)(StringToken2) ? ((tok) => ((s1) => ((unquoted) => (($match_57) => {
   if ($match_57.$tag === 1) {
     const e = $match_57.$0;
@@ -11944,65 +12330,56 @@ parseRecordTypeFieldList = (state) => (($match_84) => {
         return Ok2([_COLON_COLON2(firstField)(rest), s2]);
       }
       throw new Error("Pattern match failed");
-    })(parseMoreRecordTypeFields(firstField)(s1));
+    })(parseMoreRecordTypeFields(s1));
   }
   throw new Error("Pattern match failed");
 })(parseRecordTypeField(state));
-parseMoreRecordTypeFields = (lastField) => (state) => peekKind(Comma2)(state) ? (($match_86) => {
+parseMoreRecordTypeFields = (state) => peekKind(Comma2)(state) ? ((s1) => (($match_86) => {
   if ($match_86.$tag === 1) {
-    return Ok2([[], state]);
+    const e = $match_86.$0;
+    return Err2(e);
   }
   if ($match_86.$tag === 0) {
-    const next = $match_86.$0;
-    return continuesLayout(lastField.span.start.column)(lastField.span.end)(next) ? ((s1) => (($match_87) => {
+    const field = $match_86.$0[0];
+    const s2 = $match_86.$0[1];
+    return (($match_87) => {
       if ($match_87.$tag === 1) {
         const e = $match_87.$0;
         return Err2(e);
       }
       if ($match_87.$tag === 0) {
-        const field = $match_87.$0[0];
-        const s2 = $match_87.$0[1];
-        return (($match_88) => {
-          if ($match_88.$tag === 1) {
-            const e = $match_88.$0;
-            return Err2(e);
-          }
-          if ($match_88.$tag === 0) {
-            const rest = $match_88.$0[0];
-            const s3 = $match_88.$0[1];
-            return Ok2([_COLON_COLON2(field)(rest), s3]);
-          }
-          throw new Error("Pattern match failed");
-        })(parseMoreRecordTypeFields(field)(s2));
+        const rest = $match_87.$0[0];
+        const s3 = $match_87.$0[1];
+        return Ok2([_COLON_COLON2(field)(rest), s3]);
       }
       throw new Error("Pattern match failed");
-    })(parseRecordTypeField(s1)))(advance2(state)) : Ok2([[], state]);
+    })(parseMoreRecordTypeFields(s2));
   }
   throw new Error("Pattern match failed");
-})(peekAhead(1)(state)) : Ok2([[], state]);
-parseRecordTypeField = (state) => (($match_89) => {
-  if ($match_89.$tag === 1) {
-    const e = $match_89.$0;
+})(parseRecordTypeField(s1)))(advance2(state)) : Ok2([[], state]);
+parseRecordTypeField = (state) => (($match_88) => {
+  if ($match_88.$tag === 1) {
+    const e = $match_88.$0;
     return Err2(e);
   }
-  if ($match_89.$tag === 0) {
-    const nameTok = $match_89.$0[0];
-    const s1 = $match_89.$0[1];
-    return (($match_90) => {
-      if ($match_90.$tag === 1) {
-        const e = $match_90.$0;
+  if ($match_88.$tag === 0) {
+    const nameTok = $match_88.$0[0];
+    const s1 = $match_88.$0[1];
+    return (($match_89) => {
+      if ($match_89.$tag === 1) {
+        const e = $match_89.$0;
         return Err2(e);
       }
-      if ($match_90.$tag === 0) {
-        const s2 = $match_90.$0[1];
-        return (($match_91) => {
-          if ($match_91.$tag === 1) {
-            const e = $match_91.$0;
+      if ($match_89.$tag === 0) {
+        const s2 = $match_89.$0[1];
+        return (($match_90) => {
+          if ($match_90.$tag === 1) {
+            const e = $match_90.$0;
             return Err2(e);
           }
-          if ($match_91.$tag === 0) {
-            const fieldType = $match_91.$0[0];
-            const s3 = $match_91.$0[1];
+          if ($match_90.$tag === 0) {
+            const fieldType = $match_90.$0[0];
+            const s3 = $match_90.$0[1];
             return Ok2([{ name: nameTok.lexeme, fieldType, span: { start: nameTok.span.start, end: typeSpan(fieldType).end } }, s3]);
           }
           throw new Error("Pattern match failed");
@@ -12013,120 +12390,111 @@ parseRecordTypeField = (state) => (($match_89) => {
   }
   throw new Error("Pattern match failed");
 })(expect(LowerIdentifier2)("record field name")(state));
-parseParenOrTupleType = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([TRef("Unit")([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_92) => {
-  if ($match_92.$tag === 1) {
-    const e = $match_92.$0;
+parseParenOrTupleType = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([TRef("Unit")([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_91) => {
+  if ($match_91.$tag === 1) {
+    const e = $match_91.$0;
     return Err2(e);
   }
-  if ($match_92.$tag === 0) {
-    const first = $match_92.$0[0];
-    const s2 = $match_92.$0[1];
-    return (($match_93) => {
-      if ($match_93.$tag === 1) {
-        const e = $match_93.$0;
+  if ($match_91.$tag === 0) {
+    const first = $match_91.$0[0];
+    const s2 = $match_91.$0[1];
+    return (($match_92) => {
+      if ($match_92.$tag === 1) {
+        const e = $match_92.$0;
         return Err2(e);
       }
-      if ($match_93.$tag === 0) {
-        const moreTypes = $match_93.$0[0];
-        const s3 = $match_93.$0[1];
-        return (($match_94) => {
-          if ($match_94.$tag === 1) {
-            const e = $match_94.$0;
+      if ($match_92.$tag === 0) {
+        const moreTypes = $match_92.$0[0];
+        const s3 = $match_92.$0[1];
+        return (($match_93) => {
+          if ($match_93.$tag === 1) {
+            const e = $match_93.$0;
             return Err2(e);
           }
-          if ($match_94.$tag === 0) {
-            const cp = $match_94.$0[0];
-            const s4 = $match_94.$0[1];
+          if ($match_93.$tag === 0) {
+            const cp = $match_93.$0[0];
+            const s4 = $match_93.$0[1];
             return isEmpty2(moreTypes) ? Ok2([setTypeSpan(first)({ start, end: cp.span.end }), s4]) : Ok2([TTuple(_COLON_COLON2(first)(moreTypes))({ start, end: cp.span.end }), s4]);
           }
           throw new Error("Pattern match failed");
         })(expect(RParen2)("close type group")(s3));
       }
       throw new Error("Pattern match failed");
-    })(parseMoreTupleTypes(first)(s2));
+    })(parseMoreTupleTypes(s2));
   }
   throw new Error("Pattern match failed");
 })(parseTypeExpression(s1)))(advance2(state)))(current(state).span.start);
-parseMoreTupleTypes = (lastType) => (state) => peekKind(Comma2)(state) ? (($match_95) => {
-  if ($match_95.$tag === 1) {
-    return Ok2([[], state]);
-  }
-  if ($match_95.$tag === 0) {
-    const next = $match_95.$0;
-    return continuesLayout(typeSpan(lastType).start.column)(typeSpan(lastType).end)(next) ? ((s1) => (($match_96) => {
-      if ($match_96.$tag === 1) {
-        const e = $match_96.$0;
-        return Err2(e);
-      }
-      if ($match_96.$tag === 0) {
-        const t = $match_96.$0[0];
-        const s2 = $match_96.$0[1];
-        return (($match_97) => {
-          if ($match_97.$tag === 1) {
-            const e = $match_97.$0;
-            return Err2(e);
-          }
-          if ($match_97.$tag === 0) {
-            const rest = $match_97.$0[0];
-            const s3 = $match_97.$0[1];
-            return Ok2([_COLON_COLON2(t)(rest), s3]);
-          }
-          throw new Error("Pattern match failed");
-        })(parseMoreTupleTypes(t)(s2));
-      }
-      throw new Error("Pattern match failed");
-    })(parseTypeExpression(s1)))(advance2(state)) : Ok2([[], state]);
-  }
-  throw new Error("Pattern match failed");
-})(peekAhead(1)(state)) : Ok2([[], state]);
-parseTypeRef = (state) => ((tok) => _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(UpperIdentifier2)) ? ((ident) => ((s1) => (($match_98) => {
-  if ($match_98.$tag === 1) {
-    const e = $match_98.$0;
+parseMoreTupleTypes = (state) => peekKind(Comma2)(state) ? ((s1) => (($match_94) => {
+  if ($match_94.$tag === 1) {
+    const e = $match_94.$0;
     return Err2(e);
   }
-  if ($match_98.$tag === 0) {
-    const nameResult = $match_98.$0[0];
-    const s2 = $match_98.$0[1];
-    return ((isTypeCtor) => isTypeCtor ? (($match_99) => {
-      if ($match_99.$tag === 1) {
-        const e = $match_99.$0;
+  if ($match_94.$tag === 0) {
+    const t = $match_94.$0[0];
+    const s2 = $match_94.$0[1];
+    return (($match_95) => {
+      if ($match_95.$tag === 1) {
+        const e = $match_95.$0;
         return Err2(e);
       }
-      if ($match_99.$tag === 0) {
-        const args = $match_99.$0[0];
-        const s3 = $match_99.$0[1];
-        return ((endPos) => Ok2([TRef(nameResult.name)(args)({ start: ident.span.start, end: endPos }), s3]))((($match_100) => {
-          if ($match_100.$tag === 0) {
-            const a = $match_100.$0;
+      if ($match_95.$tag === 0) {
+        const rest = $match_95.$0[0];
+        const s3 = $match_95.$0[1];
+        return Ok2([_COLON_COLON2(t)(rest), s3]);
+      }
+      throw new Error("Pattern match failed");
+    })(parseMoreTupleTypes(s2));
+  }
+  throw new Error("Pattern match failed");
+})(parseTypeExpression(s1)))(advance2(state)) : Ok2([[], state]);
+parseTypeRef = (state) => ((tok) => _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(tok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(UpperIdentifier2)) ? ((ident) => ((s1) => (($match_96) => {
+  if ($match_96.$tag === 1) {
+    const e = $match_96.$0;
+    return Err2(e);
+  }
+  if ($match_96.$tag === 0) {
+    const nameResult = $match_96.$0[0];
+    const s2 = $match_96.$0[1];
+    return ((isTypeCtor) => isTypeCtor ? (($match_97) => {
+      if ($match_97.$tag === 1) {
+        const e = $match_97.$0;
+        return Err2(e);
+      }
+      if ($match_97.$tag === 0) {
+        const args = $match_97.$0[0];
+        const s3 = $match_97.$0[1];
+        return ((endPos) => Ok2([TRef(nameResult.name)(args)({ start: ident.span.start, end: endPos }), s3]))((($match_98) => {
+          if ($match_98.$tag === 0) {
+            const a = $match_98.$0;
             return typeSpan(a).end;
           }
-          if ($match_100.$tag === 1) {
+          if ($match_98.$tag === 1) {
             return nameResult.nameEnd;
           }
           throw new Error("Pattern match failed");
         })(last(args)));
       }
       throw new Error("Pattern match failed");
-    })(parseTypeApplicationArgs({ start: ident.span.start, end: nameResult.nameEnd })(s2)) : Ok2([TRef(nameResult.name)([])({ start: ident.span.start, end: nameResult.nameEnd }), s2]))(_PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(ident.kind)(UpperIdentifier2))(() => contains(".")(nameResult.name)));
+    })(parseTypeApplicationArgs({ start: ident.span.start, end: nameResult.nameEnd })(s2)) : Ok2([TRef(nameResult.name)([])({ start: ident.span.start, end: nameResult.nameEnd }), s2]))(_PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(ident.kind)(UpperIdentifier2))(() => contains(".")(nameResult.name)));
   }
   throw new Error("Pattern match failed");
 })(parseQualifiedName(ident.lexeme)(ident.span.end)(s1)))(advance2(state)))(tok) : Err2(makeError($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS("Expected type but found ")(tokenKindStr(tok.kind)))(" '"))(tok.lexeme))("'"))(tok.span)))(current(state));
-parseTypeApplicationArgs = (lastSpan) => (state) => _AMP_AMP5(isTypeStart(current(state)))(() => onSameLine(lastSpan)(current(state))) ? (($match_101) => {
-  if ($match_101.$tag === 1) {
-    const e = $match_101.$0;
+parseTypeApplicationArgs = (lastSpan) => (state) => _AMP_AMP6(isTypeStart(current(state)))(() => onSameLine(lastSpan)(current(state))) ? (($match_99) => {
+  if ($match_99.$tag === 1) {
+    const e = $match_99.$0;
     return Err2(e);
   }
-  if ($match_101.$tag === 0) {
-    const arg = $match_101.$0[0];
-    const s1 = $match_101.$0[1];
-    return (($match_102) => {
-      if ($match_102.$tag === 1) {
-        const e = $match_102.$0;
+  if ($match_99.$tag === 0) {
+    const arg = $match_99.$0[0];
+    const s1 = $match_99.$0[1];
+    return (($match_100) => {
+      if ($match_100.$tag === 1) {
+        const e = $match_100.$0;
         return Err2(e);
       }
-      if ($match_102.$tag === 0) {
-        const rest = $match_102.$0[0];
-        const s2 = $match_102.$0[1];
+      if ($match_100.$tag === 0) {
+        const rest = $match_100.$0[0];
+        const s2 = $match_100.$0[1];
         return Ok2([_COLON_COLON2(arg)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -12134,22 +12502,22 @@ parseTypeApplicationArgs = (lastSpan) => (state) => _AMP_AMP5(isTypeStart(curren
   }
   throw new Error("Pattern match failed");
 })(parseTypeAtom(state)) : Ok2([[], state]);
-parseTypeAtom = (state) => ((tok) => (($match_103) => {
-  if ($match_103.$tag === 11) {
+parseTypeAtom = (state) => ((tok) => (($match_101) => {
+  if ($match_101.$tag === 11) {
     return parseRecordType(state);
   }
-  if ($match_103.$tag === 9) {
+  if ($match_101.$tag === 9) {
     return parseParenOrTupleType(state);
   }
   {
-    return _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(UpperIdentifier2)) ? ((ident) => ((s1) => (($match_104) => {
-      if ($match_104.$tag === 1) {
-        const e = $match_104.$0;
+    return _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(tok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(UpperIdentifier2)) ? ((ident) => ((s1) => (($match_102) => {
+      if ($match_102.$tag === 1) {
+        const e = $match_102.$0;
         return Err2(e);
       }
-      if ($match_104.$tag === 0) {
-        const nameResult = $match_104.$0[0];
-        const s2 = $match_104.$0[1];
+      if ($match_102.$tag === 0) {
+        const nameResult = $match_102.$0[0];
+        const s2 = $match_102.$0[1];
         return Ok2([TRef(nameResult.name)([])({ start: ident.span.start, end: nameResult.nameEnd }), s2]);
       }
       throw new Error("Pattern match failed");
@@ -12167,45 +12535,45 @@ var skipNewlines = (state) => {
     }
   }
 };
-var parseDecoratedDeclaration = (state) => (($match_105) => {
-  if ($match_105.$tag === 1) {
-    const e = $match_105.$0;
+var parseDecoratedDeclaration = (state) => (($match_103) => {
+  if ($match_103.$tag === 1) {
+    const e = $match_103.$0;
     return Err2(e);
   }
-  if ($match_105.$tag === 0) {
-    const atTok = $match_105.$0[0];
-    const s1 = $match_105.$0[1];
-    return ((decoratorTok) => _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(decoratorTok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(decoratorTok.kind)(Keyword2)) ? ((decorator) => ((s2) => (($match_106) => {
-      if ($match_106.$tag === 1) {
-        const e = $match_106.$0;
+  if ($match_103.$tag === 0) {
+    const atTok = $match_103.$0[0];
+    const s1 = $match_103.$0[1];
+    return ((decoratorTok) => _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(decoratorTok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(decoratorTok.kind)(Keyword2)) ? ((decorator) => ((s2) => (($match_104) => {
+      if ($match_104.$tag === 1) {
+        const e = $match_104.$0;
         return Err2(e);
       }
-      if ($match_106.$tag === 0) {
-        const args = $match_106.$0[0];
-        const s3 = $match_106.$0[1];
-        return ((s4) => (($match_107) => {
-          if ($match_107.$tag === 1) {
-            const e = $match_107.$0;
+      if ($match_104.$tag === 0) {
+        const args = $match_104.$0[0];
+        const s3 = $match_104.$0[1];
+        return ((s4) => (($match_105) => {
+          if ($match_105.$tag === 1) {
+            const e = $match_105.$0;
             return Err2(e);
           }
-          if ($match_107.$tag === 0) {
-            const nameResult = $match_107.$0[0];
-            const s5 = $match_107.$0[1];
-            return (($match_108) => {
-              if ($match_108.$tag === 1) {
-                const e = $match_108.$0;
+          if ($match_105.$tag === 0) {
+            const nameResult = $match_105.$0[0];
+            const s5 = $match_105.$0[1];
+            return (($match_106) => {
+              if ($match_106.$tag === 1) {
+                const e = $match_106.$0;
                 return Err2(e);
               }
-              if ($match_108.$tag === 0) {
-                const s6 = $match_108.$0[1];
-                return (($match_109) => {
-                  if ($match_109.$tag === 1) {
-                    const e = $match_109.$0;
+              if ($match_106.$tag === 0) {
+                const s6 = $match_106.$0[1];
+                return (($match_107) => {
+                  if ($match_107.$tag === 1) {
+                    const e = $match_107.$0;
                     return Err2(e);
                   }
-                  if ($match_109.$tag === 0) {
-                    const annotation = $match_109.$0[0];
-                    const s7 = $match_109.$0[1];
+                  if ($match_107.$tag === 0) {
+                    const annotation = $match_107.$0[0];
+                    const s7 = $match_107.$0[1];
                     return Ok2([DDecorated(decorator)(args)(nameResult.declName)(annotation)({ start: atTok.span.start, end: typeSpan(annotation).end }), s7]);
                   }
                   throw new Error("Pattern match failed");
@@ -12222,56 +12590,56 @@ var parseDecoratedDeclaration = (state) => (($match_105) => {
   }
   throw new Error("Pattern match failed");
 })(expectOperator("@")(state));
-var parseTypeParams = (state) => peekKind(LowerIdentifier2)(state) ? ((tok) => ((s1) => (($match_110) => {
-  if ($match_110.$tag === 1) {
-    const e = $match_110.$0;
+var parseTypeParams = (state) => peekKind(LowerIdentifier2)(state) ? ((tok) => ((s1) => (($match_108) => {
+  if ($match_108.$tag === 1) {
+    const e = $match_108.$0;
     return Err2(e);
   }
-  if ($match_110.$tag === 0) {
-    const rest = $match_110.$0[0];
-    const s2 = $match_110.$0[1];
+  if ($match_108.$tag === 0) {
+    const rest = $match_108.$0[0];
+    const s2 = $match_108.$0[1];
     return Ok2([_COLON_COLON2(tok.lexeme)(rest), s2]);
   }
   throw new Error("Pattern match failed");
 })(parseTypeParams(s1)))(advance2(state)))(current(state)) : Ok2([[], state]);
-var parseTypeAliasDecl = (typeTok) => (state) => (($match_111) => {
-  if ($match_111.$tag === 1) {
-    const e = $match_111.$0;
+var parseTypeAliasDecl = (typeTok) => (state) => (($match_109) => {
+  if ($match_109.$tag === 1) {
+    const e = $match_109.$0;
     return Err2(e);
   }
-  if ($match_111.$tag === 0) {
-    const s1 = $match_111.$0[1];
-    return (($match_112) => {
-      if ($match_112.$tag === 1) {
-        const e = $match_112.$0;
+  if ($match_109.$tag === 0) {
+    const s1 = $match_109.$0[1];
+    return (($match_110) => {
+      if ($match_110.$tag === 1) {
+        const e = $match_110.$0;
         return Err2(e);
       }
-      if ($match_112.$tag === 0) {
-        const nameTok = $match_112.$0[0];
-        const s2 = $match_112.$0[1];
-        return (($match_113) => {
-          if ($match_113.$tag === 1) {
-            const e = $match_113.$0;
+      if ($match_110.$tag === 0) {
+        const nameTok = $match_110.$0[0];
+        const s2 = $match_110.$0[1];
+        return (($match_111) => {
+          if ($match_111.$tag === 1) {
+            const e = $match_111.$0;
             return Err2(e);
           }
-          if ($match_113.$tag === 0) {
-            const params = $match_113.$0[0];
-            const s3 = $match_113.$0[1];
-            return (($match_114) => {
-              if ($match_114.$tag === 1) {
-                const e = $match_114.$0;
+          if ($match_111.$tag === 0) {
+            const params = $match_111.$0[0];
+            const s3 = $match_111.$0[1];
+            return (($match_112) => {
+              if ($match_112.$tag === 1) {
+                const e = $match_112.$0;
                 return Err2(e);
               }
-              if ($match_114.$tag === 0) {
-                const s4 = $match_114.$0[1];
-                return (($match_115) => {
-                  if ($match_115.$tag === 1) {
-                    const e = $match_115.$0;
+              if ($match_112.$tag === 0) {
+                const s4 = $match_112.$0[1];
+                return (($match_113) => {
+                  if ($match_113.$tag === 1) {
+                    const e = $match_113.$0;
                     return Err2(e);
                   }
-                  if ($match_115.$tag === 0) {
-                    const value = $match_115.$0[0];
-                    const s5 = $match_115.$0[1];
+                  if ($match_113.$tag === 0) {
+                    const value = $match_113.$0[0];
+                    const s5 = $match_113.$0[1];
                     return Ok2([DTypeAlias(nameTok.lexeme)(params)(value)({ start: typeTok.span.start, end: typeSpan(value).end }), s5]);
                   }
                   throw new Error("Pattern match failed");
@@ -12289,40 +12657,40 @@ var parseTypeAliasDecl = (typeTok) => (state) => (($match_111) => {
   throw new Error("Pattern match failed");
 })(expectKeyword("alias")(state));
 var parseOptionalConstraintsForTypeDecl = (state) => peekConstraintContextInTypeDecl(state) ? parseConstraints(state) : Ok2([[], state]);
-var parseTypeParamsWithLayout = (typeLine) => (typeCol) => (state) => peekKind(LowerIdentifier2)(state) ? ((tok) => _AMP_AMP5($dict_Eq_Int2._SLASH_EQ(tok.span.start.line)(typeLine))(() => $dict_Ord_Int2._LT_EQ(tok.span.start.column)(typeCol)) ? Ok2([[], state]) : ((s1) => (($match_116) => {
-  if ($match_116.$tag === 1) {
-    const e = $match_116.$0;
+var parseTypeParamsWithLayout = (typeLine) => (typeCol) => (state) => peekKind(LowerIdentifier2)(state) ? ((tok) => _AMP_AMP6($dict_Eq_Int2._SLASH_EQ(tok.span.start.line)(typeLine))(() => $dict_Ord_Int2._LT_EQ(tok.span.start.column)(typeCol)) ? Ok2([[], state]) : ((s1) => (($match_114) => {
+  if ($match_114.$tag === 1) {
+    const e = $match_114.$0;
     return Err2(e);
   }
-  if ($match_116.$tag === 0) {
-    const rest = $match_116.$0[0];
-    const s2 = $match_116.$0[1];
+  if ($match_114.$tag === 0) {
+    const rest = $match_114.$0[0];
+    const s2 = $match_114.$0[1];
     return Ok2([_COLON_COLON2(tok.lexeme)(rest), s2]);
   }
   throw new Error("Pattern match failed");
 })(parseTypeParamsWithLayout(typeLine)(typeCol)(s1)))(advance2(state)))(current(state)) : Ok2([[], state]);
-var parseRecordTypeFields = (state) => (($match_117) => {
-  if ($match_117.$tag === 1) {
-    const e = $match_117.$0;
+var parseRecordTypeFields = (state) => (($match_115) => {
+  if ($match_115.$tag === 1) {
+    const e = $match_115.$0;
     return Err2(e);
   }
-  if ($match_117.$tag === 0) {
-    const s1 = $match_117.$0[1];
-    return peekKind(RBrace2)(s1) ? ((s2) => Ok2([[], s2]))(advance2(s1)) : (($match_118) => {
-      if ($match_118.$tag === 1) {
-        const e = $match_118.$0;
+  if ($match_115.$tag === 0) {
+    const s1 = $match_115.$0[1];
+    return peekKind(RBrace2)(s1) ? ((s2) => Ok2([[], s2]))(advance2(s1)) : (($match_116) => {
+      if ($match_116.$tag === 1) {
+        const e = $match_116.$0;
         return Err2(e);
       }
-      if ($match_118.$tag === 0) {
-        const fields = $match_118.$0[0];
-        const s2 = $match_118.$0[1];
-        return (($match_119) => {
-          if ($match_119.$tag === 1) {
-            const e = $match_119.$0;
+      if ($match_116.$tag === 0) {
+        const fields = $match_116.$0[0];
+        const s2 = $match_116.$0[1];
+        return (($match_117) => {
+          if ($match_117.$tag === 1) {
+            const e = $match_117.$0;
             return Err2(e);
           }
-          if ($match_119.$tag === 0) {
-            const s3 = $match_119.$0[1];
+          if ($match_117.$tag === 0) {
+            const s3 = $match_117.$0[1];
             return Ok2([fields, s3]);
           }
           throw new Error("Pattern match failed");
@@ -12333,22 +12701,22 @@ var parseRecordTypeFields = (state) => (($match_117) => {
   }
   throw new Error("Pattern match failed");
 })(expect(LBrace2)("record type start '{'")(state));
-var parseConstructorArgs = (lastSpan) => (state) => _AMP_AMP5(isTypeStart(current(state)))(() => _AMP_AMP5(onSameLine(lastSpan)(current(state)))(() => not2(peekKind(Pipe2)(state)))) ? (($match_120) => {
-  if ($match_120.$tag === 1) {
-    const e = $match_120.$0;
+var parseConstructorArgs = (lastSpan) => (state) => _AMP_AMP6(isTypeStart(current(state)))(() => _AMP_AMP6(onSameLine(lastSpan)(current(state)))(() => not2(peekKind(Pipe2)(state)))) ? (($match_118) => {
+  if ($match_118.$tag === 1) {
+    const e = $match_118.$0;
     return Err2(e);
   }
-  if ($match_120.$tag === 0) {
-    const arg = $match_120.$0[0];
-    const s1 = $match_120.$0[1];
-    return (($match_121) => {
-      if ($match_121.$tag === 1) {
-        const e = $match_121.$0;
+  if ($match_118.$tag === 0) {
+    const arg = $match_118.$0[0];
+    const s1 = $match_118.$0[1];
+    return (($match_119) => {
+      if ($match_119.$tag === 1) {
+        const e = $match_119.$0;
         return Err2(e);
       }
-      if ($match_121.$tag === 0) {
-        const rest = $match_121.$0[0];
-        const s2 = $match_121.$0[1];
+      if ($match_119.$tag === 0) {
+        const rest = $match_119.$0[0];
+        const s2 = $match_119.$0[1];
         return Ok2([_COLON_COLON2(arg)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -12356,28 +12724,28 @@ var parseConstructorArgs = (lastSpan) => (state) => _AMP_AMP5(isTypeStart(curren
   }
   throw new Error("Pattern match failed");
 })(parseTypeAtom(state)) : Ok2([[], state]);
-var parseConstructorVariant = (state) => (($match_122) => {
-  if ($match_122.$tag === 1) {
-    const e = $match_122.$0;
+var parseConstructorVariant = (state) => (($match_120) => {
+  if ($match_120.$tag === 1) {
+    const e = $match_120.$0;
     return Err2(e);
   }
-  if ($match_122.$tag === 0) {
-    const nameTok = $match_122.$0[0];
-    const s1 = $match_122.$0[1];
-    return (($match_123) => {
-      if ($match_123.$tag === 1) {
-        const e = $match_123.$0;
+  if ($match_120.$tag === 0) {
+    const nameTok = $match_120.$0[0];
+    const s1 = $match_120.$0[1];
+    return (($match_121) => {
+      if ($match_121.$tag === 1) {
+        const e = $match_121.$0;
         return Err2(e);
       }
-      if ($match_123.$tag === 0) {
-        const args = $match_123.$0[0];
-        const s2 = $match_123.$0[1];
-        return ((endPos) => Ok2([{ name: nameTok.lexeme, args, span: { start: nameTok.span.start, end: endPos } }, s2]))((($match_124) => {
-          if ($match_124.$tag === 0) {
-            const a = $match_124.$0;
+      if ($match_121.$tag === 0) {
+        const args = $match_121.$0[0];
+        const s2 = $match_121.$0[1];
+        return ((endPos) => Ok2([{ name: nameTok.lexeme, args, span: { start: nameTok.span.start, end: endPos } }, s2]))((($match_122) => {
+          if ($match_122.$tag === 0) {
+            const a = $match_122.$0;
             return typeSpan(a).end;
           }
-          if ($match_124.$tag === 1) {
+          if ($match_122.$tag === 1) {
             return nameTok.span.end;
           }
           throw new Error("Pattern match failed");
@@ -12388,22 +12756,22 @@ var parseConstructorVariant = (state) => (($match_122) => {
   }
   throw new Error("Pattern match failed");
 })(expect(UpperIdentifier2)("constructor name")(state));
-var parseMoreConstructors = (equalsCol) => (equalsLine) => (state) => peekKind(Pipe2)(state) ? ((pipeTok) => _AMP_AMP5($dict_Eq_Int2._SLASH_EQ(pipeTok.span.start.line)(equalsLine))(() => $dict_Eq_Int2._SLASH_EQ(pipeTok.span.start.column)(equalsCol)) ? Err2(makeError("Constructor variant '|' must align with '='")(pipeTok.span)) : ((s1) => (($match_125) => {
-  if ($match_125.$tag === 1) {
-    const e = $match_125.$0;
+var parseMoreConstructors = (equalsCol) => (equalsLine) => (state) => peekKind(Pipe2)(state) ? ((pipeTok) => _AMP_AMP6($dict_Eq_Int2._SLASH_EQ(pipeTok.span.start.line)(equalsLine))(() => $dict_Eq_Int2._SLASH_EQ(pipeTok.span.start.column)(equalsCol)) ? Err2(makeError("Constructor variant '|' must align with '='")(pipeTok.span)) : ((s1) => (($match_123) => {
+  if ($match_123.$tag === 1) {
+    const e = $match_123.$0;
     return Err2(e);
   }
-  if ($match_125.$tag === 0) {
-    const ctor = $match_125.$0[0];
-    const s2 = $match_125.$0[1];
-    return (($match_126) => {
-      if ($match_126.$tag === 1) {
-        const e = $match_126.$0;
+  if ($match_123.$tag === 0) {
+    const ctor = $match_123.$0[0];
+    const s2 = $match_123.$0[1];
+    return (($match_124) => {
+      if ($match_124.$tag === 1) {
+        const e = $match_124.$0;
         return Err2(e);
       }
-      if ($match_126.$tag === 0) {
-        const rest = $match_126.$0[0];
-        const s3 = $match_126.$0[1];
+      if ($match_124.$tag === 0) {
+        const rest = $match_124.$0[0];
+        const s3 = $match_124.$0[1];
         return Ok2([_COLON_COLON2(ctor)(rest), s3]);
       }
       throw new Error("Pattern match failed");
@@ -12411,22 +12779,22 @@ var parseMoreConstructors = (equalsCol) => (equalsLine) => (state) => peekKind(P
   }
   throw new Error("Pattern match failed");
 })(parseConstructorVariant(s1)))(advance2(state)))(current(state)) : Ok2([[], state]);
-var parseConstructorVariants = (equalsCol) => (equalsLine) => (state) => (($match_127) => {
-  if ($match_127.$tag === 1) {
-    const e = $match_127.$0;
+var parseConstructorVariants = (equalsCol) => (equalsLine) => (state) => (($match_125) => {
+  if ($match_125.$tag === 1) {
+    const e = $match_125.$0;
     return Err2(e);
   }
-  if ($match_127.$tag === 0) {
-    const first = $match_127.$0[0];
-    const s1 = $match_127.$0[1];
-    return (($match_128) => {
-      if ($match_128.$tag === 1) {
-        const e = $match_128.$0;
+  if ($match_125.$tag === 0) {
+    const first = $match_125.$0[0];
+    const s1 = $match_125.$0[1];
+    return (($match_126) => {
+      if ($match_126.$tag === 1) {
+        const e = $match_126.$0;
         return Err2(e);
       }
-      if ($match_128.$tag === 0) {
-        const rest = $match_128.$0[0];
-        const s2 = $match_128.$0[1];
+      if ($match_126.$tag === 0) {
+        const rest = $match_126.$0[0];
+        const s2 = $match_126.$0[1];
         return Ok2([_COLON_COLON2(first)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -12434,55 +12802,55 @@ var parseConstructorVariants = (equalsCol) => (equalsLine) => (state) => (($matc
   }
   throw new Error("Pattern match failed");
 })(parseConstructorVariant(state));
-var parseTypeOrOpaqueDecl = (typeTok) => (state) => ((typeColumn) => ((typeLine) => (($match_129) => {
-  if ($match_129.$tag === 1) {
-    const e = $match_129.$0;
+var parseTypeOrOpaqueDecl = (typeTok) => (state) => ((typeColumn) => ((typeLine) => (($match_127) => {
+  if ($match_127.$tag === 1) {
+    const e = $match_127.$0;
     return Err2(e);
   }
-  if ($match_129.$tag === 0) {
-    const constraints = $match_129.$0[0];
-    const s1 = $match_129.$0[1];
-    return (($match_130) => {
-      if ($match_130.$tag === 1) {
-        const e = $match_130.$0;
+  if ($match_127.$tag === 0) {
+    const constraints = $match_127.$0[0];
+    const s1 = $match_127.$0[1];
+    return (($match_128) => {
+      if ($match_128.$tag === 1) {
+        const e = $match_128.$0;
         return Err2(e);
       }
-      if ($match_130.$tag === 0) {
-        const nameTok = $match_130.$0[0];
-        const s2 = $match_130.$0[1];
-        return (($match_131) => {
-          if ($match_131.$tag === 1) {
-            const e = $match_131.$0;
+      if ($match_128.$tag === 0) {
+        const nameTok = $match_128.$0[0];
+        const s2 = $match_128.$0[1];
+        return (($match_129) => {
+          if ($match_129.$tag === 1) {
+            const e = $match_129.$0;
             return Err2(e);
           }
-          if ($match_131.$tag === 0) {
-            const params = $match_131.$0[0];
-            const s3 = $match_131.$0[1];
-            return peekKind(Equals2)(s3) ? ((eqTok) => ((s4) => ((equalsCol) => ((equalsLine) => peekKind(LBrace2)(s4) ? (($match_132) => {
-              if ($match_132.$tag === 1) {
-                const e = $match_132.$0;
+          if ($match_129.$tag === 0) {
+            const params = $match_129.$0[0];
+            const s3 = $match_129.$0[1];
+            return peekKind(Equals2)(s3) ? ((eqTok) => ((s4) => ((equalsCol) => ((equalsLine) => peekKind(LBrace2)(s4) ? (($match_130) => {
+              if ($match_130.$tag === 1) {
+                const e = $match_130.$0;
                 return Err2(e);
               }
-              if ($match_132.$tag === 0) {
-                const fields = $match_132.$0[0];
-                const s5 = $match_132.$0[1];
+              if ($match_130.$tag === 0) {
+                const fields = $match_130.$0[0];
+                const s5 = $match_130.$0[1];
                 return Ok2([DRecordType(nameTok.lexeme)(params)(constraints)(fields)({ start: typeTok.span.start, end: previous(s5).span.end }), s5]);
               }
               throw new Error("Pattern match failed");
-            })(parseRecordTypeFields(s4)) : (($match_133) => {
-              if ($match_133.$tag === 1) {
-                const e = $match_133.$0;
+            })(parseRecordTypeFields(s4)) : (($match_131) => {
+              if ($match_131.$tag === 1) {
+                const e = $match_131.$0;
                 return Err2(e);
               }
-              if ($match_133.$tag === 0) {
-                const ctors = $match_133.$0[0];
-                const s5 = $match_133.$0[1];
-                return ((endPos) => Ok2([DType(nameTok.lexeme)(params)(constraints)(ctors)({ start: typeTok.span.start, end: endPos }), s5]))((($match_134) => {
-                  if ($match_134.$tag === 0) {
-                    const c = $match_134.$0;
+              if ($match_131.$tag === 0) {
+                const ctors = $match_131.$0[0];
+                const s5 = $match_131.$0[1];
+                return ((endPos) => Ok2([DType(nameTok.lexeme)(params)(constraints)(ctors)({ start: typeTok.span.start, end: endPos }), s5]))((($match_132) => {
+                  if ($match_132.$tag === 0) {
+                    const c = $match_132.$0;
                     return c.span.end;
                   }
-                  if ($match_134.$tag === 1) {
+                  if ($match_132.$tag === 1) {
                     return eqTok.span.end;
                   }
                   throw new Error("Pattern match failed");
@@ -12499,36 +12867,36 @@ var parseTypeOrOpaqueDecl = (typeTok) => (state) => ((typeColumn) => ((typeLine)
   }
   throw new Error("Pattern match failed");
 })(parseOptionalConstraintsForTypeDecl(state)))(typeTok.span.start.line))(typeTok.span.start.column);
-var parseTypeOrAliasDeclaration = (state) => (($match_135) => {
-  if ($match_135.$tag === 1) {
-    const e = $match_135.$0;
+var parseTypeOrAliasDeclaration = (state) => (($match_133) => {
+  if ($match_133.$tag === 1) {
+    const e = $match_133.$0;
     return Err2(e);
   }
-  if ($match_135.$tag === 0) {
-    const typeTok = $match_135.$0[0];
-    const s1 = $match_135.$0[1];
+  if ($match_133.$tag === 0) {
+    const typeTok = $match_133.$0[0];
+    const s1 = $match_133.$0[1];
     return peekKeyword("alias")(s1) ? parseTypeAliasDecl(typeTok)(s1) : parseTypeOrOpaqueDecl(typeTok)(s1);
   }
   throw new Error("Pattern match failed");
 })(expectKeyword("type")(state));
 var parseOptionalConstraints = (hasConstraints) => (state) => hasConstraints ? parseConstraints(state) : Ok2([[], state]);
-var parseProtocolMethodName = (state) => ((tok) => (($match_136) => {
-  if ($match_136.$tag === 9) {
-    return ((s1) => (($match_137) => {
-      if ($match_137.$tag === 1) {
-        const e = $match_137.$0;
+var parseProtocolMethodName = (state) => ((tok) => (($match_134) => {
+  if ($match_134.$tag === 9) {
+    return ((s1) => (($match_135) => {
+      if ($match_135.$tag === 1) {
+        const e = $match_135.$0;
         return Err2(e);
       }
-      if ($match_137.$tag === 0) {
-        const opTok = $match_137.$0[0];
-        const s2 = $match_137.$0[1];
-        return (($match_138) => {
-          if ($match_138.$tag === 1) {
-            const e = $match_138.$0;
+      if ($match_135.$tag === 0) {
+        const opTok = $match_135.$0[0];
+        const s2 = $match_135.$0[1];
+        return (($match_136) => {
+          if ($match_136.$tag === 1) {
+            const e = $match_136.$0;
             return Err2(e);
           }
-          if ($match_138.$tag === 0) {
-            const s3 = $match_138.$0[1];
+          if ($match_136.$tag === 0) {
+            const s3 = $match_136.$0[1];
             return Ok2([opTok.lexeme, s3]);
           }
           throw new Error("Pattern match failed");
@@ -12537,7 +12905,7 @@ var parseProtocolMethodName = (state) => ((tok) => (($match_136) => {
       throw new Error("Pattern match failed");
     })(expect(Operator2)("operator in protocol method")(s1)))(advance2(state));
   }
-  if ($match_136.$tag === 0) {
+  if ($match_134.$tag === 0) {
     return ((s1) => Ok2([tok.lexeme, s1]))(advance2(state));
   }
   {
@@ -12545,50 +12913,50 @@ var parseProtocolMethodName = (state) => ((tok) => (($match_136) => {
   }
   throw new Error("Pattern match failed");
 })(tok.kind))(current(state));
-var setPatSpan = (pat) => (span) => (($match_139) => {
-  if ($match_139.$tag === 0) {
-    const n = $match_139.$0;
+var setPatSpan = (pat) => (span) => (($match_137) => {
+  if ($match_137.$tag === 0) {
+    const n = $match_137.$0;
     return PVar(n)(span);
   }
-  if ($match_139.$tag === 1) {
+  if ($match_137.$tag === 1) {
     return PWildcard(span);
   }
-  if ($match_139.$tag === 2) {
-    const n = $match_139.$0;
-    const a = $match_139.$1;
+  if ($match_137.$tag === 2) {
+    const n = $match_137.$0;
+    const a = $match_137.$1;
     return PConstructor(n)(a)(span);
   }
-  if ($match_139.$tag === 3) {
-    const e = $match_139.$0;
+  if ($match_137.$tag === 3) {
+    const e = $match_137.$0;
     return PTuple(e)(span);
   }
-  if ($match_139.$tag === 4) {
-    const e = $match_139.$0;
+  if ($match_137.$tag === 4) {
+    const e = $match_137.$0;
     return PList(e)(span);
   }
-  if ($match_139.$tag === 5) {
-    const h = $match_139.$0;
-    const t = $match_139.$1;
+  if ($match_137.$tag === 5) {
+    const h = $match_137.$0;
+    const t = $match_137.$1;
     return PCons(h)(t)(span);
   }
-  if ($match_139.$tag === 6) {
-    const f = $match_139.$0;
+  if ($match_137.$tag === 6) {
+    const f = $match_137.$0;
     return PRecord(f)(span);
   }
-  if ($match_139.$tag === 7) {
-    const v = $match_139.$0;
+  if ($match_137.$tag === 7) {
+    const v = $match_137.$0;
     return PInt(v)(span);
   }
-  if ($match_139.$tag === 8) {
-    const v = $match_139.$0;
+  if ($match_137.$tag === 8) {
+    const v = $match_137.$0;
     return PFloat(v)(span);
   }
-  if ($match_139.$tag === 9) {
-    const v = $match_139.$0;
+  if ($match_137.$tag === 9) {
+    const v = $match_137.$0;
     return PString(v)(span);
   }
-  if ($match_139.$tag === 10) {
-    const v = $match_139.$0;
+  if ($match_137.$tag === 10) {
+    const v = $match_137.$0;
     return PChar(v)(span);
   }
   throw new Error("Pattern match failed");
@@ -12601,20 +12969,20 @@ var parseFPTupleRest;
 var parseFPRecordPattern;
 var parseRecordFieldPatterns;
 var parseRecordFieldPattern;
-parseFunctionParamPattern = (state) => ((tok) => (($match_140) => {
-  if ($match_140.$tag === 0) {
+parseFunctionParamPattern = (state) => ((tok) => (($match_138) => {
+  if ($match_138.$tag === 0) {
     return ((s1) => $dict_Eq_String2._EQ_EQ(tok.lexeme)("_") ? Ok2([PWildcard(tok.span), s1]) : Ok2([PVar(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_140.$tag === 1) {
+  if ($match_138.$tag === 1) {
     return parseFPCtorPattern(state);
   }
-  if ($match_140.$tag === 9) {
+  if ($match_138.$tag === 9) {
     return parseFPTuplePattern(state);
   }
-  if ($match_140.$tag === 11) {
+  if ($match_138.$tag === 11) {
     return parseFPRecordPattern(state);
   }
-  if ($match_140.$tag === 13) {
+  if ($match_138.$tag === 13) {
     return Err2(makeError("List patterns are not allowed in function parameters")(tok.span));
   }
   {
@@ -12622,20 +12990,20 @@ parseFunctionParamPattern = (state) => ((tok) => (($match_140) => {
   }
   throw new Error("Pattern match failed");
 })(tok.kind))(current(state));
-parseFPCtorPattern = (state) => ((ctor) => ((s1) => (($match_141) => {
-  if ($match_141.$tag === 1) {
-    const e = $match_141.$0;
+parseFPCtorPattern = (state) => ((ctor) => ((s1) => (($match_139) => {
+  if ($match_139.$tag === 1) {
+    const e = $match_139.$0;
     return Err2(e);
   }
-  if ($match_141.$tag === 0) {
-    const args = $match_141.$0[0];
-    const s2 = $match_141.$0[1];
-    return ((endPos) => Ok2([PConstructor(ctor.lexeme)(args)({ start: ctor.span.start, end: endPos }), s2]))((($match_142) => {
-      if ($match_142.$tag === 0) {
-        const a = $match_142.$0;
+  if ($match_139.$tag === 0) {
+    const args = $match_139.$0[0];
+    const s2 = $match_139.$0[1];
+    return ((endPos) => Ok2([PConstructor(ctor.lexeme)(args)({ start: ctor.span.start, end: endPos }), s2]))((($match_140) => {
+      if ($match_140.$tag === 0) {
+        const a = $match_140.$0;
         return patSpan(a).end;
       }
-      if ($match_142.$tag === 1) {
+      if ($match_140.$tag === 1) {
         return ctor.span.end;
       }
       throw new Error("Pattern match failed");
@@ -12643,22 +13011,22 @@ parseFPCtorPattern = (state) => ((ctor) => ((s1) => (($match_141) => {
   }
   throw new Error("Pattern match failed");
 })(parseFPCtorArgs(s1)))(advance2(state)))(current(state));
-parseFPCtorArgs = (state) => isFunctionParamPatternStart(current(state)) ? (($match_143) => {
-  if ($match_143.$tag === 1) {
-    const e = $match_143.$0;
+parseFPCtorArgs = (state) => isFunctionParamPatternStart(current(state)) ? (($match_141) => {
+  if ($match_141.$tag === 1) {
+    const e = $match_141.$0;
     return Err2(e);
   }
-  if ($match_143.$tag === 0) {
-    const pat = $match_143.$0[0];
-    const s1 = $match_143.$0[1];
-    return (($match_144) => {
-      if ($match_144.$tag === 1) {
-        const e = $match_144.$0;
+  if ($match_141.$tag === 0) {
+    const pat = $match_141.$0[0];
+    const s1 = $match_141.$0[1];
+    return (($match_142) => {
+      if ($match_142.$tag === 1) {
+        const e = $match_142.$0;
         return Err2(e);
       }
-      if ($match_144.$tag === 0) {
-        const rest = $match_144.$0[0];
-        const s2 = $match_144.$0[1];
+      if ($match_142.$tag === 0) {
+        const rest = $match_142.$0[0];
+        const s2 = $match_142.$0[1];
         return Ok2([_COLON_COLON2(pat)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -12666,87 +13034,78 @@ parseFPCtorArgs = (state) => isFunctionParamPatternStart(current(state)) ? (($ma
   }
   throw new Error("Pattern match failed");
 })(parseFunctionParamPattern(state)) : Ok2([[], state]);
-parseFPTuplePattern = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([PTuple([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_145) => {
-  if ($match_145.$tag === 1) {
-    const e = $match_145.$0;
+parseFPTuplePattern = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([PTuple([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_143) => {
+  if ($match_143.$tag === 1) {
+    const e = $match_143.$0;
     return Err2(e);
   }
-  if ($match_145.$tag === 0) {
-    const first = $match_145.$0[0];
-    const s2 = $match_145.$0[1];
-    return (($match_146) => {
-      if ($match_146.$tag === 1) {
-        const e = $match_146.$0;
+  if ($match_143.$tag === 0) {
+    const first = $match_143.$0[0];
+    const s2 = $match_143.$0[1];
+    return (($match_144) => {
+      if ($match_144.$tag === 1) {
+        const e = $match_144.$0;
         return Err2(e);
       }
-      if ($match_146.$tag === 0) {
-        const more = $match_146.$0[0];
-        const s3 = $match_146.$0[1];
-        return (($match_147) => {
-          if ($match_147.$tag === 1) {
-            const e = $match_147.$0;
+      if ($match_144.$tag === 0) {
+        const more = $match_144.$0[0];
+        const s3 = $match_144.$0[1];
+        return (($match_145) => {
+          if ($match_145.$tag === 1) {
+            const e = $match_145.$0;
             return Err2(e);
           }
-          if ($match_147.$tag === 0) {
-            const cp = $match_147.$0[0];
-            const s4 = $match_147.$0[1];
+          if ($match_145.$tag === 0) {
+            const cp = $match_145.$0[0];
+            const s4 = $match_145.$0[1];
             return isEmpty2(more) ? Ok2([setPatSpan(first)({ start, end: cp.span.end }), s4]) : Ok2([PTuple(_COLON_COLON2(first)(more))({ start, end: cp.span.end }), s4]);
           }
           throw new Error("Pattern match failed");
         })(expect(RParen2)("close pattern group")(s3));
       }
       throw new Error("Pattern match failed");
-    })(parseFPTupleRest(first)(s2));
+    })(parseFPTupleRest(s2));
   }
   throw new Error("Pattern match failed");
 })(parseFunctionParamPattern(s1)))(advance2(state)))(current(state).span.start);
-parseFPTupleRest = (lastPat) => (state) => peekKind(Comma2)(state) ? (($match_148) => {
+parseFPTupleRest = (state) => peekKind(Comma2)(state) ? ((s1) => (($match_146) => {
+  if ($match_146.$tag === 1) {
+    const e = $match_146.$0;
+    return Err2(e);
+  }
+  if ($match_146.$tag === 0) {
+    const pat = $match_146.$0[0];
+    const s2 = $match_146.$0[1];
+    return (($match_147) => {
+      if ($match_147.$tag === 1) {
+        const e = $match_147.$0;
+        return Err2(e);
+      }
+      if ($match_147.$tag === 0) {
+        const rest = $match_147.$0[0];
+        const s3 = $match_147.$0[1];
+        return Ok2([_COLON_COLON2(pat)(rest), s3]);
+      }
+      throw new Error("Pattern match failed");
+    })(parseFPTupleRest(s2));
+  }
+  throw new Error("Pattern match failed");
+})(parseFunctionParamPattern(s1)))(advance2(state)) : Ok2([[], state]);
+parseFPRecordPattern = (state) => ((start) => ((s1) => peekKind(RBrace2)(s1) ? ((s2) => Ok2([PRecord([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_148) => {
   if ($match_148.$tag === 1) {
-    return Ok2([[], state]);
+    const e = $match_148.$0;
+    return Err2(e);
   }
   if ($match_148.$tag === 0) {
-    const next = $match_148.$0;
-    return continuesLayout(patSpan(lastPat).start.column)(patSpan(lastPat).end)(next) ? ((s1) => (($match_149) => {
+    const fields = $match_148.$0[0];
+    const s2 = $match_148.$0[1];
+    return (($match_149) => {
       if ($match_149.$tag === 1) {
         const e = $match_149.$0;
         return Err2(e);
       }
       if ($match_149.$tag === 0) {
-        const pat = $match_149.$0[0];
-        const s2 = $match_149.$0[1];
-        return (($match_150) => {
-          if ($match_150.$tag === 1) {
-            const e = $match_150.$0;
-            return Err2(e);
-          }
-          if ($match_150.$tag === 0) {
-            const rest = $match_150.$0[0];
-            const s3 = $match_150.$0[1];
-            return Ok2([_COLON_COLON2(pat)(rest), s3]);
-          }
-          throw new Error("Pattern match failed");
-        })(parseFPTupleRest(pat)(s2));
-      }
-      throw new Error("Pattern match failed");
-    })(parseFunctionParamPattern(s1)))(advance2(state)) : Ok2([[], state]);
-  }
-  throw new Error("Pattern match failed");
-})(peekAhead(1)(state)) : Ok2([[], state]);
-parseFPRecordPattern = (state) => ((start) => ((s1) => peekKind(RBrace2)(s1) ? ((s2) => Ok2([PRecord([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_151) => {
-  if ($match_151.$tag === 1) {
-    const e = $match_151.$0;
-    return Err2(e);
-  }
-  if ($match_151.$tag === 0) {
-    const fields = $match_151.$0[0];
-    const s2 = $match_151.$0[1];
-    return (($match_152) => {
-      if ($match_152.$tag === 1) {
-        const e = $match_152.$0;
-        return Err2(e);
-      }
-      if ($match_152.$tag === 0) {
-        const s3 = $match_152.$0[1];
+        const s3 = $match_149.$0[1];
         return Ok2([PRecord(fields)({ start, end: previous(s3).span.end }), s3]);
       }
       throw new Error("Pattern match failed");
@@ -12754,22 +13113,22 @@ parseFPRecordPattern = (state) => ((start) => ((s1) => peekKind(RBrace2)(s1) ? (
   }
   throw new Error("Pattern match failed");
 })(parseRecordFieldPatterns(s1)))(advance2(state)))(current(state).span.start);
-parseRecordFieldPatterns = (state) => (($match_153) => {
-  if ($match_153.$tag === 1) {
-    const e = $match_153.$0;
+parseRecordFieldPatterns = (state) => (($match_150) => {
+  if ($match_150.$tag === 1) {
+    const e = $match_150.$0;
     return Err2(e);
   }
-  if ($match_153.$tag === 0) {
-    const field = $match_153.$0[0];
-    const s1 = $match_153.$0[1];
-    return peekKind(Comma2)(s1) ? ((s2) => (($match_154) => {
-      if ($match_154.$tag === 1) {
-        const e = $match_154.$0;
+  if ($match_150.$tag === 0) {
+    const field = $match_150.$0[0];
+    const s1 = $match_150.$0[1];
+    return peekKind(Comma2)(s1) ? ((s2) => (($match_151) => {
+      if ($match_151.$tag === 1) {
+        const e = $match_151.$0;
         return Err2(e);
       }
-      if ($match_154.$tag === 0) {
-        const rest = $match_154.$0[0];
-        const s3 = $match_154.$0[1];
+      if ($match_151.$tag === 0) {
+        const rest = $match_151.$0[0];
+        const s3 = $match_151.$0[1];
         return Ok2([_COLON_COLON2(field)(rest), s3]);
       }
       throw new Error("Pattern match failed");
@@ -12777,22 +13136,22 @@ parseRecordFieldPatterns = (state) => (($match_153) => {
   }
   throw new Error("Pattern match failed");
 })(parseRecordFieldPattern(state));
-parseRecordFieldPattern = (state) => (($match_155) => {
-  if ($match_155.$tag === 1) {
-    const e = $match_155.$0;
+parseRecordFieldPattern = (state) => (($match_152) => {
+  if ($match_152.$tag === 1) {
+    const e = $match_152.$0;
     return Err2(e);
   }
-  if ($match_155.$tag === 0) {
-    const nameTok = $match_155.$0[0];
-    const s1 = $match_155.$0[1];
-    return peekKind(Equals2)(s1) ? ((s2) => (($match_156) => {
-      if ($match_156.$tag === 1) {
-        const e = $match_156.$0;
+  if ($match_152.$tag === 0) {
+    const nameTok = $match_152.$0[0];
+    const s1 = $match_152.$0[1];
+    return peekKind(Equals2)(s1) ? ((s2) => (($match_153) => {
+      if ($match_153.$tag === 1) {
+        const e = $match_153.$0;
         return Err2(e);
       }
-      if ($match_156.$tag === 0) {
-        const pat = $match_156.$0[0];
-        const s3 = $match_156.$0[1];
+      if ($match_153.$tag === 0) {
+        const pat = $match_153.$0[0];
+        const s3 = $match_153.$0[1];
         return Ok2([{ name: nameTok.lexeme, pattern: pat }, s3]);
       }
       throw new Error("Pattern match failed");
@@ -12800,22 +13159,22 @@ parseRecordFieldPattern = (state) => (($match_155) => {
   }
   throw new Error("Pattern match failed");
 })(expect(LowerIdentifier2)("record field name")(state));
-var parseFunctionParams = (state) => isFunctionParamPatternStart(current(state)) ? (($match_157) => {
-  if ($match_157.$tag === 1) {
-    const e = $match_157.$0;
+var parseFunctionParams = (state) => isFunctionParamPatternStart(current(state)) ? (($match_154) => {
+  if ($match_154.$tag === 1) {
+    const e = $match_154.$0;
     return Err2(e);
   }
-  if ($match_157.$tag === 0) {
-    const pat = $match_157.$0[0];
-    const s1 = $match_157.$0[1];
-    return (($match_158) => {
-      if ($match_158.$tag === 1) {
-        const e = $match_158.$0;
+  if ($match_154.$tag === 0) {
+    const pat = $match_154.$0[0];
+    const s1 = $match_154.$0[1];
+    return (($match_155) => {
+      if ($match_155.$tag === 1) {
+        const e = $match_155.$0;
         return Err2(e);
       }
-      if ($match_158.$tag === 0) {
-        const rest = $match_158.$0[0];
-        const s2 = $match_158.$0[1];
+      if ($match_155.$tag === 0) {
+        const rest = $match_155.$0[0];
+        const s2 = $match_155.$0[1];
         return Ok2([_COLON_COLON2(pat)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -12823,13 +13182,13 @@ var parseFunctionParams = (state) => isFunctionParamPatternStart(current(state))
   }
   throw new Error("Pattern match failed");
 })(parseFunctionParamPattern(state)) : Ok2([[], state]);
-var declToValueDecl = (decl) => (($match_159) => {
-  if ($match_159.$tag === 0) {
-    const vd = $match_159.$0;
+var declToValueDecl = (decl) => (($match_156) => {
+  if ($match_156.$tag === 0) {
+    const vd = $match_156.$0;
     return vd;
   }
-  if ($match_159.$tag === 1) {
-    const ta = $match_159.$0;
+  if ($match_156.$tag === 1) {
+    const ta = $match_156.$0;
     return { name: ta.name, args: [], body: EUnit(ta.span), span: ta.span };
   }
   {
@@ -12841,24 +13200,24 @@ var parseQualifiedCtorName = (name) => (end) => (state) => {
   while (true) {
     if (peekKind(Dot2)(state)) {
       {
-        const $match_160 = peekAhead(1)(state);
-        if ($match_160.$tag === 1) {
+        const $match_157 = peekAhead(1)(state);
+        if ($match_157.$tag === 1) {
           return Ok2([{ name, nameEnd: end }, state]);
         }
-        if ($match_160.$tag === 0) {
-          const next = $match_160.$0;
+        if ($match_157.$tag === 0) {
+          const next = $match_157.$0;
           if ($dict_Eq_TokenKind._EQ_EQ(next.kind)(UpperIdentifier2)) {
             {
               const s1 = advance2(state);
               {
-                const $match_161 = expect(UpperIdentifier2)("constructor name part")(s1);
-                if ($match_161.$tag === 1) {
-                  const e = $match_161.$0;
+                const $match_158 = expect(UpperIdentifier2)("constructor name part")(s1);
+                if ($match_158.$tag === 1) {
+                  const e = $match_158.$0;
                   return Err2(e);
                 }
-                if ($match_161.$tag === 0) {
-                  const nextTok = $match_161.$0[0];
-                  const s2 = $match_161.$0[1];
+                if ($match_158.$tag === 0) {
+                  const nextTok = $match_158.$0[0];
+                  const s2 = $match_158.$0[1];
                   [name, end, state] = [$dict_Appendable_String2._PLUS_PLUS($dict_Appendable_String2._PLUS_PLUS(name)("."))(nextTok.lexeme), nextTok.span.end, s2];
                   continue;
                 }
@@ -12880,26 +13239,27 @@ var parsePattern;
 var parsePrimaryPattern;
 var parseConstructorPattern;
 var parseConstructorPatternArgs;
+var parseAtomicPattern;
 var parseListPattern;
 var parsePatternList;
 var parseParenOrTuplePattern;
 var parseTuplePatternRest;
-parsePattern = (state) => (($match_162) => {
-  if ($match_162.$tag === 1) {
-    const e = $match_162.$0;
+parsePattern = (state) => (($match_159) => {
+  if ($match_159.$tag === 1) {
+    const e = $match_159.$0;
     return Err2(e);
   }
-  if ($match_162.$tag === 0) {
-    const primary = $match_162.$0[0];
-    const s1 = $match_162.$0[1];
-    return peekOperator("::")(s1) ? ((s2) => (($match_163) => {
-      if ($match_163.$tag === 1) {
-        const e = $match_163.$0;
+  if ($match_159.$tag === 0) {
+    const primary = $match_159.$0[0];
+    const s1 = $match_159.$0[1];
+    return peekOperator("::")(s1) ? ((s2) => (($match_160) => {
+      if ($match_160.$tag === 1) {
+        const e = $match_160.$0;
         return Err2(e);
       }
-      if ($match_163.$tag === 0) {
-        const tail = $match_163.$0[0];
-        const s3 = $match_163.$0[1];
+      if ($match_160.$tag === 0) {
+        const tail = $match_160.$0[0];
+        const s3 = $match_160.$0[1];
         return Ok2([PCons(primary)(tail)({ start: patSpan(primary).start, end: patSpan(tail).end }), s3]);
       }
       throw new Error("Pattern match failed");
@@ -12907,26 +13267,26 @@ parsePattern = (state) => (($match_162) => {
   }
   throw new Error("Pattern match failed");
 })(parsePrimaryPattern(state));
-parsePrimaryPattern = (state) => ((tok) => (($match_164) => {
-  if ($match_164.$tag === 0) {
+parsePrimaryPattern = (state) => ((tok) => (($match_161) => {
+  if ($match_161.$tag === 0) {
     return ((s1) => $dict_Eq_String2._EQ_EQ(tok.lexeme)("_") ? Ok2([PWildcard(tok.span), s1]) : Ok2([PVar(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_164.$tag === 3) {
+  if ($match_161.$tag === 3) {
     return ((s1) => contains(".")(tok.lexeme) ? Ok2([PFloat(tok.lexeme)(tok.span), s1]) : Ok2([PInt(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_164.$tag === 4) {
+  if ($match_161.$tag === 4) {
     return ((s1) => Ok2([PString(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_164.$tag === 5) {
+  if ($match_161.$tag === 5) {
     return ((s1) => Ok2([PChar(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_164.$tag === 1) {
+  if ($match_161.$tag === 1) {
     return parseConstructorPattern(state);
   }
-  if ($match_164.$tag === 13) {
+  if ($match_161.$tag === 13) {
     return parseListPattern(state);
   }
-  if ($match_164.$tag === 9) {
+  if ($match_161.$tag === 9) {
     return parseParenOrTuplePattern(state);
   }
   {
@@ -12934,28 +13294,28 @@ parsePrimaryPattern = (state) => ((tok) => (($match_164) => {
   }
   throw new Error("Pattern match failed");
 })(tok.kind))(current(state));
-parseConstructorPattern = (state) => ((ctor) => ((s1) => (($match_165) => {
-  if ($match_165.$tag === 1) {
-    const e = $match_165.$0;
+parseConstructorPattern = (state) => ((ctor) => ((s1) => (($match_162) => {
+  if ($match_162.$tag === 1) {
+    const e = $match_162.$0;
     return Err2(e);
   }
-  if ($match_165.$tag === 0) {
-    const nameResult = $match_165.$0[0];
-    const s2 = $match_165.$0[1];
-    return (($match_166) => {
-      if ($match_166.$tag === 1) {
-        const e = $match_166.$0;
+  if ($match_162.$tag === 0) {
+    const nameResult = $match_162.$0[0];
+    const s2 = $match_162.$0[1];
+    return (($match_163) => {
+      if ($match_163.$tag === 1) {
+        const e = $match_163.$0;
         return Err2(e);
       }
-      if ($match_166.$tag === 0) {
-        const args = $match_166.$0[0];
-        const s3 = $match_166.$0[1];
-        return ((endPos) => Ok2([PConstructor(nameResult.name)(args)({ start: ctor.span.start, end: endPos }), s3]))((($match_167) => {
-          if ($match_167.$tag === 0) {
-            const a = $match_167.$0;
+      if ($match_163.$tag === 0) {
+        const args = $match_163.$0[0];
+        const s3 = $match_163.$0[1];
+        return ((endPos) => Ok2([PConstructor(nameResult.name)(args)({ start: ctor.span.start, end: endPos }), s3]))((($match_164) => {
+          if ($match_164.$tag === 0) {
+            const a = $match_164.$0;
             return patSpan(a).end;
           }
-          if ($match_167.$tag === 1) {
+          if ($match_164.$tag === 1) {
             return nameResult.nameEnd;
           }
           throw new Error("Pattern match failed");
@@ -12966,44 +13326,64 @@ parseConstructorPattern = (state) => ((ctor) => ((s1) => (($match_165) => {
   }
   throw new Error("Pattern match failed");
 })(parseQualifiedCtorName(ctor.lexeme)(ctor.span.end)(s1)))(advance2(state)))(current(state));
-parseConstructorPatternArgs = (state) => isPatternStart(current(state)) ? (($match_168) => {
-  if ($match_168.$tag === 1) {
-    const e = $match_168.$0;
+parseConstructorPatternArgs = (state) => isPatternStart(current(state)) ? (($match_165) => {
+  if ($match_165.$tag === 1) {
+    const e = $match_165.$0;
     return Err2(e);
   }
-  if ($match_168.$tag === 0) {
-    const pat = $match_168.$0[0];
-    const s1 = $match_168.$0[1];
-    return (($match_169) => {
-      if ($match_169.$tag === 1) {
-        const e = $match_169.$0;
+  if ($match_165.$tag === 0) {
+    const pat = $match_165.$0[0];
+    const s1 = $match_165.$0[1];
+    return (($match_166) => {
+      if ($match_166.$tag === 1) {
+        const e = $match_166.$0;
         return Err2(e);
       }
-      if ($match_169.$tag === 0) {
-        const rest = $match_169.$0[0];
-        const s2 = $match_169.$0[1];
+      if ($match_166.$tag === 0) {
+        const rest = $match_166.$0[0];
+        const s2 = $match_166.$0[1];
         return Ok2([_COLON_COLON2(pat)(rest), s2]);
       }
       throw new Error("Pattern match failed");
     })(parseConstructorPatternArgs(s1));
   }
   throw new Error("Pattern match failed");
-})(parsePrimaryPattern(state)) : Ok2([[], state]);
-parseListPattern = (state) => ((start) => ((s1) => peekKind(RBracket2)(s1) ? ((s2) => Ok2([PList([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_170) => {
-  if ($match_170.$tag === 1) {
-    const e = $match_170.$0;
-    return Err2(e);
-  }
-  if ($match_170.$tag === 0) {
-    const elements = $match_170.$0[0];
-    const s2 = $match_170.$0[1];
-    return (($match_171) => {
-      if ($match_171.$tag === 1) {
-        const e = $match_171.$0;
+})(parseAtomicPattern(state)) : Ok2([[], state]);
+parseAtomicPattern = (state) => ((tok) => (($match_167) => {
+  if ($match_167.$tag === 1) {
+    return ((s1) => (($match_168) => {
+      if ($match_168.$tag === 1) {
+        const e = $match_168.$0;
         return Err2(e);
       }
-      if ($match_171.$tag === 0) {
-        const s3 = $match_171.$0[1];
+      if ($match_168.$tag === 0) {
+        const nameResult = $match_168.$0[0];
+        const s2 = $match_168.$0[1];
+        return Ok2([PConstructor(nameResult.name)([])({ start: tok.span.start, end: nameResult.nameEnd }), s2]);
+      }
+      throw new Error("Pattern match failed");
+    })(parseQualifiedCtorName(tok.lexeme)(tok.span.end)(s1)))(advance2(state));
+  }
+  {
+    return parsePrimaryPattern(state);
+  }
+  throw new Error("Pattern match failed");
+})(tok.kind))(current(state));
+parseListPattern = (state) => ((start) => ((s1) => peekKind(RBracket2)(s1) ? ((s2) => Ok2([PList([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_169) => {
+  if ($match_169.$tag === 1) {
+    const e = $match_169.$0;
+    return Err2(e);
+  }
+  if ($match_169.$tag === 0) {
+    const elements = $match_169.$0[0];
+    const s2 = $match_169.$0[1];
+    return (($match_170) => {
+      if ($match_170.$tag === 1) {
+        const e = $match_170.$0;
+        return Err2(e);
+      }
+      if ($match_170.$tag === 0) {
+        const s3 = $match_170.$0[1];
         return Ok2([PList(elements)({ start, end: previous(s3).span.end }), s3]);
       }
       throw new Error("Pattern match failed");
@@ -13011,22 +13391,22 @@ parseListPattern = (state) => ((start) => ((s1) => peekKind(RBracket2)(s1) ? ((s
   }
   throw new Error("Pattern match failed");
 })(parsePatternList(s1)))(advance2(state)))(current(state).span.start);
-parsePatternList = (state) => (($match_172) => {
-  if ($match_172.$tag === 1) {
-    const e = $match_172.$0;
+parsePatternList = (state) => (($match_171) => {
+  if ($match_171.$tag === 1) {
+    const e = $match_171.$0;
     return Err2(e);
   }
-  if ($match_172.$tag === 0) {
-    const pat = $match_172.$0[0];
-    const s1 = $match_172.$0[1];
-    return peekKind(Comma2)(s1) ? ((s2) => (($match_173) => {
-      if ($match_173.$tag === 1) {
-        const e = $match_173.$0;
+  if ($match_171.$tag === 0) {
+    const pat = $match_171.$0[0];
+    const s1 = $match_171.$0[1];
+    return peekKind(Comma2)(s1) ? ((s2) => (($match_172) => {
+      if ($match_172.$tag === 1) {
+        const e = $match_172.$0;
         return Err2(e);
       }
-      if ($match_173.$tag === 0) {
-        const rest = $match_173.$0[0];
-        const s3 = $match_173.$0[1];
+      if ($match_172.$tag === 0) {
+        const rest = $match_172.$0[0];
+        const s3 = $match_172.$0[1];
         return Ok2([_COLON_COLON2(pat)(rest), s3]);
       }
       throw new Error("Pattern match failed");
@@ -13034,94 +13414,85 @@ parsePatternList = (state) => (($match_172) => {
   }
   throw new Error("Pattern match failed");
 })(parsePattern(state));
-parseParenOrTuplePattern = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([PTuple([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_174) => {
-  if ($match_174.$tag === 1) {
-    const e = $match_174.$0;
+parseParenOrTuplePattern = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([PTuple([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_173) => {
+  if ($match_173.$tag === 1) {
+    const e = $match_173.$0;
     return Err2(e);
   }
-  if ($match_174.$tag === 0) {
-    const first = $match_174.$0[0];
-    const s2 = $match_174.$0[1];
-    return (($match_175) => {
-      if ($match_175.$tag === 1) {
-        const e = $match_175.$0;
+  if ($match_173.$tag === 0) {
+    const first = $match_173.$0[0];
+    const s2 = $match_173.$0[1];
+    return (($match_174) => {
+      if ($match_174.$tag === 1) {
+        const e = $match_174.$0;
         return Err2(e);
       }
-      if ($match_175.$tag === 0) {
-        const more = $match_175.$0[0];
-        const s3 = $match_175.$0[1];
-        return (($match_176) => {
-          if ($match_176.$tag === 1) {
-            const e = $match_176.$0;
+      if ($match_174.$tag === 0) {
+        const more = $match_174.$0[0];
+        const s3 = $match_174.$0[1];
+        return (($match_175) => {
+          if ($match_175.$tag === 1) {
+            const e = $match_175.$0;
             return Err2(e);
           }
-          if ($match_176.$tag === 0) {
-            const cp = $match_176.$0[0];
-            const s4 = $match_176.$0[1];
+          if ($match_175.$tag === 0) {
+            const cp = $match_175.$0[0];
+            const s4 = $match_175.$0[1];
             return isEmpty2(more) ? Ok2([setPatSpan(first)({ start, end: cp.span.end }), s4]) : Ok2([PTuple(_COLON_COLON2(first)(more))({ start, end: cp.span.end }), s4]);
           }
           throw new Error("Pattern match failed");
         })(expect(RParen2)("close pattern group")(s3));
       }
       throw new Error("Pattern match failed");
-    })(parseTuplePatternRest(first)(s2));
+    })(parseTuplePatternRest(s2));
   }
   throw new Error("Pattern match failed");
 })(parsePattern(s1)))(advance2(state)))(current(state).span.start);
-parseTuplePatternRest = (lastPat) => (state) => peekKind(Comma2)(state) ? (($match_177) => {
-  if ($match_177.$tag === 1) {
-    return Ok2([[], state]);
+parseTuplePatternRest = (state) => peekKind(Comma2)(state) ? ((s1) => (($match_176) => {
+  if ($match_176.$tag === 1) {
+    const e = $match_176.$0;
+    return Err2(e);
   }
-  if ($match_177.$tag === 0) {
-    const next = $match_177.$0;
-    return continuesLayout(patSpan(lastPat).start.column)(patSpan(lastPat).end)(next) ? ((s1) => (($match_178) => {
-      if ($match_178.$tag === 1) {
-        const e = $match_178.$0;
+  if ($match_176.$tag === 0) {
+    const pat = $match_176.$0[0];
+    const s2 = $match_176.$0[1];
+    return (($match_177) => {
+      if ($match_177.$tag === 1) {
+        const e = $match_177.$0;
         return Err2(e);
       }
-      if ($match_178.$tag === 0) {
-        const pat = $match_178.$0[0];
-        const s2 = $match_178.$0[1];
-        return (($match_179) => {
-          if ($match_179.$tag === 1) {
-            const e = $match_179.$0;
-            return Err2(e);
-          }
-          if ($match_179.$tag === 0) {
-            const rest = $match_179.$0[0];
-            const s3 = $match_179.$0[1];
-            return Ok2([_COLON_COLON2(pat)(rest), s3]);
-          }
-          throw new Error("Pattern match failed");
-        })(parseTuplePatternRest(pat)(s2));
+      if ($match_177.$tag === 0) {
+        const rest = $match_177.$0[0];
+        const s3 = $match_177.$0[1];
+        return Ok2([_COLON_COLON2(pat)(rest), s3]);
       }
       throw new Error("Pattern match failed");
-    })(parsePattern(s1)))(advance2(state)) : Ok2([[], state]);
+    })(parseTuplePatternRest(s2));
   }
   throw new Error("Pattern match failed");
-})(peekAhead(1)(state)) : Ok2([[], state]);
-var parseLambdaArgs = (state) => (($match_180) => {
-  if ($match_180.$tag === 0) {
-    const s1 = $match_180.$0;
+})(parsePattern(s1)))(advance2(state)) : Ok2([[], state]);
+var parseLambdaArgs = (state) => (($match_178) => {
+  if ($match_178.$tag === 0) {
+    const s1 = $match_178.$0;
     return Ok2([[], s1]);
   }
-  if ($match_180.$tag === 1) {
-    return isPatternStart(current(state)) ? (($match_181) => {
-      if ($match_181.$tag === 1) {
-        const e = $match_181.$0;
+  if ($match_178.$tag === 1) {
+    return isPatternStart(current(state)) ? (($match_179) => {
+      if ($match_179.$tag === 1) {
+        const e = $match_179.$0;
         return Err2(e);
       }
-      if ($match_181.$tag === 0) {
-        const pat = $match_181.$0[0];
-        const s2 = $match_181.$0[1];
-        return (($match_182) => {
-          if ($match_182.$tag === 1) {
-            const e = $match_182.$0;
+      if ($match_179.$tag === 0) {
+        const pat = $match_179.$0[0];
+        const s2 = $match_179.$0[1];
+        return (($match_180) => {
+          if ($match_180.$tag === 1) {
+            const e = $match_180.$0;
             return Err2(e);
           }
-          if ($match_182.$tag === 0) {
-            const rest = $match_182.$0[0];
-            const s3 = $match_182.$0[1];
+          if ($match_180.$tag === 0) {
+            const rest = $match_180.$0[0];
+            const s3 = $match_180.$0[1];
             return Ok2([_COLON_COLON2(pat)(rest), s3]);
           }
           throw new Error("Pattern match failed");
@@ -13135,15 +13506,15 @@ var parseLambdaArgs = (state) => (($match_180) => {
 var parseFieldAccesses = (expr) => (state) => {
   while (true) {
     {
-      const $match_183 = matchKind(Dot2)(state);
-      if ($match_183.$tag === 1) {
+      const $match_181 = matchKind(Dot2)(state);
+      if ($match_181.$tag === 1) {
         return Ok2([expr, state]);
       }
-      if ($match_183.$tag === 0) {
-        const s1 = $match_183.$0;
+      if ($match_181.$tag === 0) {
+        const s1 = $match_181.$0;
         {
           const tok = current(s1);
-          if (_PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(UpperIdentifier2))) {
+          if (_PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(tok.kind)(LowerIdentifier2))(() => $dict_Eq_TokenKind._EQ_EQ(tok.kind)(UpperIdentifier2))) {
             {
               const field = tok;
               {
@@ -13162,22 +13533,22 @@ var parseFieldAccesses = (expr) => (state) => {
   }
 };
 var noDefaultMethod = (name) => (typeExpr) => (span) => ({ name, methodType: typeExpr, defaultArgs: [], defaultBody: EUnit(span), hasDefault: false, hasType: true, span });
-var mergeProtocolItems = (items) => (($match_184) => {
-  if (Array.isArray($match_184) && $match_184.length === 0) {
+var mergeProtocolItems = (items) => (($match_182) => {
+  if (Array.isArray($match_182) && $match_182.length === 0) {
     return [];
   }
-  if (Array.isArray($match_184) && $match_184.length >= 1 && $match_184[0].$tag === 0) {
-    const name = $match_184[0].$0;
-    const typeExpr = $match_184[0].$1;
-    const span = $match_184[0].$2;
-    const rest = $match_184.slice(1);
-    return (($match_185) => {
-      if (Array.isArray($match_185) && $match_185.length >= 1 && $match_185[0].$tag === 1) {
-        const implName = $match_185[0].$0;
-        const args = $match_185[0].$1;
-        const body = $match_185[0].$2;
-        const implSpan = $match_185[0].$3;
-        const rest2 = $match_185.slice(1);
+  if (Array.isArray($match_182) && $match_182.length >= 1 && $match_182[0].$tag === 0) {
+    const name = $match_182[0].$0;
+    const typeExpr = $match_182[0].$1;
+    const span = $match_182[0].$2;
+    const rest = $match_182.slice(1);
+    return (($match_183) => {
+      if (Array.isArray($match_183) && $match_183.length >= 1 && $match_183[0].$tag === 1) {
+        const implName = $match_183[0].$0;
+        const args = $match_183[0].$1;
+        const body = $match_183[0].$2;
+        const implSpan = $match_183[0].$3;
+        const rest2 = $match_183.slice(1);
         return $dict_Eq_String2._EQ_EQ(name)(implName) ? _COLON_COLON2({ name, methodType: typeExpr, defaultArgs: args, defaultBody: body, hasDefault: true, hasType: true, span: { start: span.start, end: implSpan.end } })(mergeProtocolItems(rest2)) : _COLON_COLON2(noDefaultMethod(name)(typeExpr)(span))(mergeProtocolItems(rest));
       }
       {
@@ -13186,32 +13557,32 @@ var mergeProtocolItems = (items) => (($match_184) => {
       throw new Error("Pattern match failed");
     })(rest);
   }
-  if (Array.isArray($match_184) && $match_184.length >= 1 && $match_184[0].$tag === 1) {
-    const name = $match_184[0].$0;
-    const args = $match_184[0].$1;
-    const body = $match_184[0].$2;
-    const span = $match_184[0].$3;
-    const rest = $match_184.slice(1);
+  if (Array.isArray($match_182) && $match_182.length >= 1 && $match_182[0].$tag === 1) {
+    const name = $match_182[0].$0;
+    const args = $match_182[0].$1;
+    const body = $match_182[0].$2;
+    const span = $match_182[0].$3;
+    const rest = $match_182.slice(1);
     return ((dummyType) => _COLON_COLON2({ name, methodType: dummyType, defaultArgs: args, defaultBody: body, hasDefault: true, hasType: false, span })(mergeProtocolItems(rest)))(TRef("Unknown")([])(span));
   }
   throw new Error("Pattern match failed");
 })(items);
-var parseImplementationTypeArgs = (state) => isTypeStart(current(state)) ? (($match_186) => {
-  if ($match_186.$tag === 1) {
-    const e = $match_186.$0;
+var parseImplementationTypeArgs = (state) => isTypeStart(current(state)) ? (($match_184) => {
+  if ($match_184.$tag === 1) {
+    const e = $match_184.$0;
     return Err2(e);
   }
-  if ($match_186.$tag === 0) {
-    const t = $match_186.$0[0];
-    const s1 = $match_186.$0[1];
-    return (($match_187) => {
-      if ($match_187.$tag === 1) {
-        const e = $match_187.$0;
+  if ($match_184.$tag === 0) {
+    const t = $match_184.$0[0];
+    const s1 = $match_184.$0[1];
+    return (($match_185) => {
+      if ($match_185.$tag === 1) {
+        const e = $match_185.$0;
         return Err2(e);
       }
-      if ($match_187.$tag === 0) {
-        const rest = $match_187.$0[0];
-        const s2 = $match_187.$0[1];
+      if ($match_185.$tag === 0) {
+        const rest = $match_185.$0[0];
+        const s2 = $match_185.$0[1];
         return Ok2([_COLON_COLON2(t)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -13219,61 +13590,61 @@ var parseImplementationTypeArgs = (state) => isTypeStart(current(state)) ? (($ma
   }
   throw new Error("Pattern match failed");
 })(parseTypeAtom(state)) : Ok2([[], state]);
-var parseInfixOperator = (state) => peekKind(LParen2)(state) ? ((s1) => (($match_188) => {
-  if ($match_188.$tag === 1) {
-    const e = $match_188.$0;
+var parseInfixOperator = (state) => peekKind(LParen2)(state) ? ((s1) => (($match_186) => {
+  if ($match_186.$tag === 1) {
+    const e = $match_186.$0;
     return Err2(e);
   }
-  if ($match_188.$tag === 0) {
-    const opTok = $match_188.$0[0];
-    const s2 = $match_188.$0[1];
-    return (($match_189) => {
-      if ($match_189.$tag === 1) {
-        const e = $match_189.$0;
+  if ($match_186.$tag === 0) {
+    const opTok = $match_186.$0[0];
+    const s2 = $match_186.$0[1];
+    return (($match_187) => {
+      if ($match_187.$tag === 1) {
+        const e = $match_187.$0;
         return Err2(e);
       }
-      if ($match_189.$tag === 0) {
-        const cp = $match_189.$0[0];
-        const s3 = $match_189.$0[1];
+      if ($match_187.$tag === 0) {
+        const cp = $match_187.$0[0];
+        const s3 = $match_187.$0[1];
         return Ok2([{ opName: opTok.lexeme, opEnd: cp.span.end }, s3]);
       }
       throw new Error("Pattern match failed");
     })(expect(RParen2)("close paren")(s2));
   }
   throw new Error("Pattern match failed");
-})(expect(Operator2)("operator")(s1)))(advance2(state)) : (($match_190) => {
-  if ($match_190.$tag === 1) {
-    const e = $match_190.$0;
+})(expect(Operator2)("operator")(s1)))(advance2(state)) : (($match_188) => {
+  if ($match_188.$tag === 1) {
+    const e = $match_188.$0;
     return Err2(e);
   }
-  if ($match_190.$tag === 0) {
-    const opTok = $match_190.$0[0];
-    const s1 = $match_190.$0[1];
+  if ($match_188.$tag === 0) {
+    const opTok = $match_188.$0[0];
+    const s1 = $match_188.$0[1];
     return Ok2([{ opName: opTok.lexeme, opEnd: opTok.span.end }, s1]);
   }
   throw new Error("Pattern match failed");
 })(expect(Operator2)("operator")(state));
-var parseInfixDeclaration = (state) => ((fixityTok) => ((start) => ((s1) => (($match_191) => {
-  if ($match_191.$tag === 1) {
-    const e = $match_191.$0;
+var parseInfixDeclaration = (state) => ((fixityTok) => ((start) => ((s1) => (($match_189) => {
+  if ($match_189.$tag === 1) {
+    const e = $match_189.$0;
     return Err2(e);
   }
-  if ($match_191.$tag === 0) {
-    const precTok = $match_191.$0[0];
-    const s2 = $match_191.$0[1];
-    return (($match_192) => {
-      if ($match_192.$tag === 1) {
-        const e = $match_192.$0;
+  if ($match_189.$tag === 0) {
+    const precTok = $match_189.$0[0];
+    const s2 = $match_189.$0[1];
+    return (($match_190) => {
+      if ($match_190.$tag === 1) {
+        const e = $match_190.$0;
         return Err2(e);
       }
-      if ($match_192.$tag === 0) {
-        const opResult = $match_192.$0[0];
-        const s3 = $match_192.$0[1];
-        return ((assocStr) => Ok2([DInfix(assocStr)(stringToInt(precTok.lexeme))(opResult.opName)({ start, end: opResult.opEnd }), s3]))((($match_193) => {
-          if ($match_193 === "infixl") {
+      if ($match_190.$tag === 0) {
+        const opResult = $match_190.$0[0];
+        const s3 = $match_190.$0[1];
+        return ((assocStr) => Ok2([DInfix(assocStr)(stringToInt(precTok.lexeme))(opResult.opName)({ start, end: opResult.opEnd }), s3]))((($match_191) => {
+          if ($match_191 === "infixl") {
             return "left";
           }
-          if ($match_193 === "infixr") {
+          if ($match_191 === "infixr") {
             return "right";
           }
           {
@@ -13322,34 +13693,34 @@ var parseRecordExpr;
 var parseRecordFieldList;
 var parseRecordFieldValue;
 var parseMoreRecordFields;
-parseDeclaration = (state) => peekDecorator(state) ? parseDecoratedDeclaration(state) : peekKeyword("type")(state) ? parseTypeOrAliasDeclaration(state) : peekKeyword("protocol")(state) ? parseProtocolDeclaration(state) : peekKeyword("implement")(state) ? parseImplementationDeclaration(state) : _PIPE_PIPE6(peekKeyword("infix")(state))(() => _PIPE_PIPE6(peekKeyword("infixl")(state))(() => peekKeyword("infixr")(state))) ? parseInfixDeclaration(state) : parseAnnotationOrValue(state);
-parseAnnotationOrValue = (state) => (($match_194) => {
-  if ($match_194.$tag === 1) {
-    const e = $match_194.$0;
+parseDeclaration = (state) => peekDecorator(state) ? parseDecoratedDeclaration(state) : peekKeyword("type")(state) ? parseTypeOrAliasDeclaration(state) : peekKeyword("protocol")(state) ? parseProtocolDeclaration(state) : peekKeyword("implement")(state) ? parseImplementationDeclaration(state) : _PIPE_PIPE7(peekKeyword("infix")(state))(() => _PIPE_PIPE7(peekKeyword("infixl")(state))(() => peekKeyword("infixr")(state))) ? parseInfixDeclaration(state) : parseAnnotationOrValue(state);
+parseAnnotationOrValue = (state) => (($match_192) => {
+  if ($match_192.$tag === 1) {
+    const e = $match_192.$0;
     return Err2(e);
   }
-  if ($match_194.$tag === 0) {
-    const nameResult = $match_194.$0[0];
-    const s1 = $match_194.$0[1];
-    return peekKind(Colon2)(s1) ? ((s2) => (($match_195) => {
-      if ($match_195.$tag === 1) {
-        const e = $match_195.$0;
+  if ($match_192.$tag === 0) {
+    const nameResult = $match_192.$0[0];
+    const s1 = $match_192.$0[1];
+    return peekKind(Colon2)(s1) ? ((s2) => (($match_193) => {
+      if ($match_193.$tag === 1) {
+        const e = $match_193.$0;
         return Err2(e);
       }
-      if ($match_195.$tag === 0) {
-        const annotation = $match_195.$0[0];
-        const s3 = $match_195.$0[1];
+      if ($match_193.$tag === 0) {
+        const annotation = $match_193.$0[0];
+        const s3 = $match_193.$0[1];
         return Ok2([DTypeAnnotation({ name: nameResult.declName, annotation, span: { start: nameResult.declSpan.start, end: typeSpan(annotation).end } }), s3]);
       }
       throw new Error("Pattern match failed");
-    })(parseTypeExpression(s2)))(advance2(s1)) : (($match_196) => {
-      if ($match_196.$tag === 1) {
-        const e = $match_196.$0;
+    })(parseTypeExpression(s2)))(advance2(s1)) : (($match_194) => {
+      if ($match_194.$tag === 1) {
+        const e = $match_194.$0;
         return Err2(e);
       }
-      if ($match_196.$tag === 0) {
-        const result = $match_196.$0[0];
-        const s2 = $match_196.$0[1];
+      if ($match_194.$tag === 0) {
+        const result = $match_194.$0[0];
+        const s2 = $match_194.$0[1];
         return Ok2([DValue({ name: nameResult.declName, args: result.mArgs, body: result.mBody, span: { start: nameResult.declSpan.start, end: exprSpan(result.mBody).end } }), s2]);
       }
       throw new Error("Pattern match failed");
@@ -13357,47 +13728,47 @@ parseAnnotationOrValue = (state) => (($match_194) => {
   }
   throw new Error("Pattern match failed");
 })(parseDeclarationName(state));
-parseMethodBody = (declColumn) => (state) => (($match_197) => {
-  if ($match_197.$tag === 1) {
-    const e = $match_197.$0;
+parseMethodBody = (declColumn) => (state) => (($match_195) => {
+  if ($match_195.$tag === 1) {
+    const e = $match_195.$0;
     return Err2(e);
   }
-  if ($match_197.$tag === 0) {
-    const args = $match_197.$0[0];
-    const s1 = $match_197.$0[1];
-    return (($match_198) => {
-      if ($match_198.$tag === 1) {
-        const e = $match_198.$0;
+  if ($match_195.$tag === 0) {
+    const args = $match_195.$0[0];
+    const s1 = $match_195.$0[1];
+    return (($match_196) => {
+      if ($match_196.$tag === 1) {
+        const e = $match_196.$0;
         return Err2(e);
       }
-      if ($match_198.$tag === 0) {
-        const eqTok = $match_198.$0[0];
-        const s2 = $match_198.$0[1];
-        return (($match_199) => {
-          if ($match_199.$tag === 1) {
-            return (($match_200) => {
-              if ($match_200.$tag === 1) {
-                const e = $match_200.$0;
+      if ($match_196.$tag === 0) {
+        const eqTok = $match_196.$0[0];
+        const s2 = $match_196.$0[1];
+        return (($match_197) => {
+          if ($match_197.$tag === 1) {
+            return (($match_198) => {
+              if ($match_198.$tag === 1) {
+                const e = $match_198.$0;
                 return Err2(e);
               }
-              if ($match_200.$tag === 0) {
-                const body = $match_200.$0[0];
-                const s3 = $match_200.$0[1];
+              if ($match_198.$tag === 0) {
+                const body = $match_198.$0[0];
+                const s3 = $match_198.$0[1];
                 return Ok2([{ mArgs: args, mBody: body }, s3]);
               }
               throw new Error("Pattern match failed");
             })(parseExpression(Nothing2)(s2));
           }
-          if ($match_199.$tag === 0) {
-            const col = $match_199.$0;
-            return ((bodyTok) => _AMP_AMP5($dict_Eq_Int2._SLASH_EQ(bodyTok.span.start.line)(eqTok.span.start.line))(() => $dict_Ord_Int2._LT_EQ(bodyTok.span.start.column)(col)) ? Err2(makeError($dict_Appendable_String2._PLUS_PLUS("Function body must be indented past column ")(intToStr(col)))(bodyTok.span)) : (($match_201) => {
-              if ($match_201.$tag === 1) {
-                const e = $match_201.$0;
+          if ($match_197.$tag === 0) {
+            const col = $match_197.$0;
+            return ((bodyTok) => _AMP_AMP6($dict_Eq_Int2._SLASH_EQ(bodyTok.span.start.line)(eqTok.span.start.line))(() => $dict_Ord_Int2._LT_EQ(bodyTok.span.start.column)(col)) ? Err2(makeError($dict_Appendable_String2._PLUS_PLUS("Function body must be indented past column ")(intToStr(col)))(bodyTok.span)) : (($match_199) => {
+              if ($match_199.$tag === 1) {
+                const e = $match_199.$0;
                 return Err2(e);
               }
-              if ($match_201.$tag === 0) {
-                const body = $match_201.$0[0];
-                const s3 = $match_201.$0[1];
+              if ($match_199.$tag === 0) {
+                const body = $match_199.$0[0];
+                const s3 = $match_199.$0[1];
                 return Ok2([{ mArgs: args, mBody: body }, s3]);
               }
               throw new Error("Pattern match failed");
@@ -13411,73 +13782,73 @@ parseMethodBody = (declColumn) => (state) => (($match_197) => {
   }
   throw new Error("Pattern match failed");
 })(parseFunctionParams(state));
-parseProtocolDeclaration = (state) => (($match_202) => {
-  if ($match_202.$tag === 1) {
-    const e = $match_202.$0;
+parseProtocolDeclaration = (state) => (($match_200) => {
+  if ($match_200.$tag === 1) {
+    const e = $match_200.$0;
     return Err2(e);
   }
-  if ($match_202.$tag === 0) {
-    const protocolTok = $match_202.$0[0];
-    const s1 = $match_202.$0[1];
-    return ((hasConstraints) => (($match_203) => {
-      if ($match_203.$tag === 1) {
-        const e = $match_203.$0;
+  if ($match_200.$tag === 0) {
+    const protocolTok = $match_200.$0[0];
+    const s1 = $match_200.$0[1];
+    return ((hasConstraints) => (($match_201) => {
+      if ($match_201.$tag === 1) {
+        const e = $match_201.$0;
         return Err2(e);
       }
-      if ($match_203.$tag === 0) {
-        const constraints = $match_203.$0[0];
-        const s2 = $match_203.$0[1];
-        return (($match_204) => {
-          if ($match_204.$tag === 1) {
-            const e = $match_204.$0;
+      if ($match_201.$tag === 0) {
+        const constraints = $match_201.$0[0];
+        const s2 = $match_201.$0[1];
+        return (($match_202) => {
+          if ($match_202.$tag === 1) {
+            const e = $match_202.$0;
             return Err2(e);
           }
-          if ($match_204.$tag === 0) {
-            const nameTok = $match_204.$0[0];
-            const s3 = $match_204.$0[1];
-            return (($match_205) => {
-              if ($match_205.$tag === 1) {
-                const e = $match_205.$0;
+          if ($match_202.$tag === 0) {
+            const nameTok = $match_202.$0[0];
+            const s3 = $match_202.$0[1];
+            return (($match_203) => {
+              if ($match_203.$tag === 1) {
+                const e = $match_203.$0;
                 return Err2(e);
               }
-              if ($match_205.$tag === 0) {
-                const params = $match_205.$0[0];
-                const s4 = $match_205.$0[1];
-                return (($match_206) => {
-                  if ($match_206.$tag === 1) {
-                    const e = $match_206.$0;
+              if ($match_203.$tag === 0) {
+                const params = $match_203.$0[0];
+                const s4 = $match_203.$0[1];
+                return (($match_204) => {
+                  if ($match_204.$tag === 1) {
+                    const e = $match_204.$0;
                     return Err2(e);
                   }
-                  if ($match_206.$tag === 0) {
-                    const s5 = $match_206.$0[1];
-                    return (($match_207) => {
-                      if ($match_207.$tag === 1) {
-                        const e = $match_207.$0;
+                  if ($match_204.$tag === 0) {
+                    const s5 = $match_204.$0[1];
+                    return (($match_205) => {
+                      if ($match_205.$tag === 1) {
+                        const e = $match_205.$0;
                         return Err2(e);
                       }
-                      if ($match_207.$tag === 0) {
-                        const s6 = $match_207.$0[1];
-                        return (($match_208) => {
-                          if ($match_208.$tag === 1) {
-                            const e = $match_208.$0;
+                      if ($match_205.$tag === 0) {
+                        const s6 = $match_205.$0[1];
+                        return (($match_206) => {
+                          if ($match_206.$tag === 1) {
+                            const e = $match_206.$0;
                             return Err2(e);
                           }
-                          if ($match_208.$tag === 0) {
-                            const items = $match_208.$0[0];
-                            const s7 = $match_208.$0[1];
-                            return (($match_209) => {
-                              if ($match_209.$tag === 1) {
-                                const e = $match_209.$0;
+                          if ($match_206.$tag === 0) {
+                            const items = $match_206.$0[0];
+                            const s7 = $match_206.$0[1];
+                            return (($match_207) => {
+                              if ($match_207.$tag === 1) {
+                                const e = $match_207.$0;
                                 return Err2(e);
                               }
-                              if ($match_209.$tag === 0) {
-                                const s8 = $match_209.$0[1];
-                                return ((methods) => ((endPos) => Ok2([DProtocol(nameTok.lexeme)(params)(constraints)(methods)({ start: protocolTok.span.start, end: endPos }), s8]))((($match_210) => {
-                                  if ($match_210.$tag === 0) {
-                                    const m = $match_210.$0;
+                              if ($match_207.$tag === 0) {
+                                const s8 = $match_207.$0[1];
+                                return ((methods) => ((endPos) => Ok2([DProtocol(nameTok.lexeme)(params)(constraints)(methods)({ start: protocolTok.span.start, end: endPos }), s8]))((($match_208) => {
+                                  if ($match_208.$tag === 0) {
+                                    const m = $match_208.$0;
                                     return m.span.end;
                                   }
-                                  if ($match_210.$tag === 1) {
+                                  if ($match_208.$tag === 1) {
                                     return nameTok.span.end;
                                   }
                                   throw new Error("Pattern match failed");
@@ -13506,28 +13877,28 @@ parseProtocolDeclaration = (state) => (($match_202) => {
   }
   throw new Error("Pattern match failed");
 })(expectKeyword("protocol")(state));
-parseProtocolItems = (state) => (($match_211) => {
-  if ($match_211.$tag === 1) {
-    const e = $match_211.$0;
+parseProtocolItems = (state) => (($match_209) => {
+  if ($match_209.$tag === 1) {
+    const e = $match_209.$0;
     return Err2(e);
   }
-  if ($match_211.$tag === 0) {
-    const item = $match_211.$0[0];
-    const s1 = $match_211.$0[1];
-    return (($match_212) => {
-      if ($match_212.$tag === 1) {
+  if ($match_209.$tag === 0) {
+    const item = $match_209.$0[0];
+    const s1 = $match_209.$0[1];
+    return (($match_210) => {
+      if ($match_210.$tag === 1) {
         return Ok2([[item], s1]);
       }
-      if ($match_212.$tag === 0) {
-        const s2 = $match_212.$0;
-        return (($match_213) => {
-          if ($match_213.$tag === 1) {
-            const e = $match_213.$0;
+      if ($match_210.$tag === 0) {
+        const s2 = $match_210.$0;
+        return (($match_211) => {
+          if ($match_211.$tag === 1) {
+            const e = $match_211.$0;
             return Err2(e);
           }
-          if ($match_213.$tag === 0) {
-            const rest = $match_213.$0[0];
-            const s3 = $match_213.$0[1];
+          if ($match_211.$tag === 0) {
+            const rest = $match_211.$0[0];
+            const s3 = $match_211.$0[1];
             return Ok2([_COLON_COLON2(item)(rest), s3]);
           }
           throw new Error("Pattern match failed");
@@ -13538,48 +13909,48 @@ parseProtocolItems = (state) => (($match_211) => {
   }
   throw new Error("Pattern match failed");
 })(parseProtocolItem(state));
-parseProtocolItem = (state) => ((start) => (($match_214) => {
-  if ($match_214.$tag === 1) {
-    const e = $match_214.$0;
+parseProtocolItem = (state) => ((start) => (($match_212) => {
+  if ($match_212.$tag === 1) {
+    const e = $match_212.$0;
     return Err2(e);
   }
-  if ($match_214.$tag === 0) {
-    const methodName = $match_214.$0[0];
-    const s1 = $match_214.$0[1];
-    return peekKind(Colon2)(s1) ? ((s2) => (($match_215) => {
-      if ($match_215.$tag === 1) {
-        const e = $match_215.$0;
+  if ($match_212.$tag === 0) {
+    const methodName = $match_212.$0[0];
+    const s1 = $match_212.$0[1];
+    return peekKind(Colon2)(s1) ? ((s2) => (($match_213) => {
+      if ($match_213.$tag === 1) {
+        const e = $match_213.$0;
         return Err2(e);
       }
-      if ($match_215.$tag === 0) {
-        const methodType = $match_215.$0[0];
-        const s3 = $match_215.$0[1];
+      if ($match_213.$tag === 0) {
+        const methodType = $match_213.$0[0];
+        const s3 = $match_213.$0[1];
         return Ok2([PIAnnotation(methodName)(methodType)({ start, end: typeSpan(methodType).end }), s3]);
       }
       throw new Error("Pattern match failed");
-    })(parseTypeExpression(s2)))(advance2(s1)) : (($match_216) => {
-      if ($match_216.$tag === 1) {
-        const e = $match_216.$0;
+    })(parseTypeExpression(s2)))(advance2(s1)) : (($match_214) => {
+      if ($match_214.$tag === 1) {
+        const e = $match_214.$0;
         return Err2(e);
       }
-      if ($match_216.$tag === 0) {
-        const args = $match_216.$0[0];
-        const s2 = $match_216.$0[1];
-        return (($match_217) => {
-          if ($match_217.$tag === 1) {
-            const e = $match_217.$0;
+      if ($match_214.$tag === 0) {
+        const args = $match_214.$0[0];
+        const s2 = $match_214.$0[1];
+        return (($match_215) => {
+          if ($match_215.$tag === 1) {
+            const e = $match_215.$0;
             return Err2(e);
           }
-          if ($match_217.$tag === 0) {
-            const s3 = $match_217.$0[1];
-            return (($match_218) => {
-              if ($match_218.$tag === 1) {
-                const e = $match_218.$0;
+          if ($match_215.$tag === 0) {
+            const s3 = $match_215.$0[1];
+            return (($match_216) => {
+              if ($match_216.$tag === 1) {
+                const e = $match_216.$0;
                 return Err2(e);
               }
-              if ($match_218.$tag === 0) {
-                const body = $match_218.$0[0];
-                const s4 = $match_218.$0[1];
+              if ($match_216.$tag === 0) {
+                const body = $match_216.$0[0];
+                const s4 = $match_216.$0[1];
                 return Ok2([PIImpl(methodName)(args)(body)({ start, end: exprSpan(body).end }), s4]);
               }
               throw new Error("Pattern match failed");
@@ -13593,58 +13964,58 @@ parseProtocolItem = (state) => ((start) => (($match_214) => {
   }
   throw new Error("Pattern match failed");
 })(parseProtocolMethodName(state)))(current(state).span.start);
-parseImplementationDeclaration = (state) => (($match_219) => {
-  if ($match_219.$tag === 1) {
-    const e = $match_219.$0;
+parseImplementationDeclaration = (state) => (($match_217) => {
+  if ($match_217.$tag === 1) {
+    const e = $match_217.$0;
     return Err2(e);
   }
-  if ($match_219.$tag === 0) {
-    const implTok = $match_219.$0[0];
-    const s1 = $match_219.$0[1];
-    return ((hasConstraints) => (($match_220) => {
-      if ($match_220.$tag === 1) {
-        const e = $match_220.$0;
+  if ($match_217.$tag === 0) {
+    const implTok = $match_217.$0[0];
+    const s1 = $match_217.$0[1];
+    return ((hasConstraints) => (($match_218) => {
+      if ($match_218.$tag === 1) {
+        const e = $match_218.$0;
         return Err2(e);
       }
-      if ($match_220.$tag === 0) {
-        const constraints = $match_220.$0[0];
-        const s2 = $match_220.$0[1];
-        return (($match_221) => {
-          if ($match_221.$tag === 1) {
-            const e = $match_221.$0;
+      if ($match_218.$tag === 0) {
+        const constraints = $match_218.$0[0];
+        const s2 = $match_218.$0[1];
+        return (($match_219) => {
+          if ($match_219.$tag === 1) {
+            const e = $match_219.$0;
             return Err2(e);
           }
-          if ($match_221.$tag === 0) {
-            const protocolTok = $match_221.$0[0];
-            const s3 = $match_221.$0[1];
-            return (($match_222) => {
-              if ($match_222.$tag === 1) {
-                const e = $match_222.$0;
+          if ($match_219.$tag === 0) {
+            const protocolTok = $match_219.$0[0];
+            const s3 = $match_219.$0[1];
+            return (($match_220) => {
+              if ($match_220.$tag === 1) {
+                const e = $match_220.$0;
                 return Err2(e);
               }
-              if ($match_222.$tag === 0) {
-                const typeArgs = $match_222.$0[0];
-                const s4 = $match_222.$0[1];
-                return (($match_223) => {
-                  if ($match_223.$tag === 1) {
-                    const e = $match_223.$0;
+              if ($match_220.$tag === 0) {
+                const typeArgs = $match_220.$0[0];
+                const s4 = $match_220.$0[1];
+                return (($match_221) => {
+                  if ($match_221.$tag === 1) {
+                    const e = $match_221.$0;
                     return Err2(e);
                   }
-                  if ($match_223.$tag === 0) {
-                    const methods = $match_223.$0[0];
-                    const s5 = $match_223.$0[1];
-                    return ((endPos) => Ok2([DImplementation(constraints)(protocolTok.lexeme)(typeArgs)(methods)({ start: implTok.span.start, end: endPos }), s5]))((($match_224) => {
-                      if ($match_224.$tag === 0) {
-                        const m = $match_224.$0;
+                  if ($match_221.$tag === 0) {
+                    const methods = $match_221.$0[0];
+                    const s5 = $match_221.$0[1];
+                    return ((endPos) => Ok2([DImplementation(constraints)(protocolTok.lexeme)(typeArgs)(methods)({ start: implTok.span.start, end: endPos }), s5]))((($match_222) => {
+                      if ($match_222.$tag === 0) {
+                        const m = $match_222.$0;
                         return m.span.end;
                       }
-                      if ($match_224.$tag === 1) {
-                        return (($match_225) => {
-                          if ($match_225.$tag === 0) {
-                            const t = $match_225.$0;
+                      if ($match_222.$tag === 1) {
+                        return (($match_223) => {
+                          if ($match_223.$tag === 0) {
+                            const t = $match_223.$0;
                             return typeSpan(t).end;
                           }
-                          if ($match_225.$tag === 1) {
+                          if ($match_223.$tag === 1) {
                             return protocolTok.span.end;
                           }
                           throw new Error("Pattern match failed");
@@ -13667,35 +14038,35 @@ parseImplementationDeclaration = (state) => (($match_219) => {
   }
   throw new Error("Pattern match failed");
 })(expectKeyword("implement")(state));
-parseImplementationMethods = (state) => peekKeyword("where")(state) ? (($match_226) => {
-  if ($match_226.$tag === 1) {
-    const e = $match_226.$0;
+parseImplementationMethods = (state) => peekKeyword("where")(state) ? (($match_224) => {
+  if ($match_224.$tag === 1) {
+    const e = $match_224.$0;
     return Err2(e);
   }
-  if ($match_226.$tag === 0) {
-    const s1 = $match_226.$0[1];
-    return (($match_227) => {
-      if ($match_227.$tag === 1) {
-        const e = $match_227.$0;
+  if ($match_224.$tag === 0) {
+    const s1 = $match_224.$0[1];
+    return (($match_225) => {
+      if ($match_225.$tag === 1) {
+        const e = $match_225.$0;
         return Err2(e);
       }
-      if ($match_227.$tag === 0) {
-        const s2 = $match_227.$0[1];
-        return (($match_228) => {
-          if ($match_228.$tag === 1) {
-            const e = $match_228.$0;
+      if ($match_225.$tag === 0) {
+        const s2 = $match_225.$0[1];
+        return (($match_226) => {
+          if ($match_226.$tag === 1) {
+            const e = $match_226.$0;
             return Err2(e);
           }
-          if ($match_228.$tag === 0) {
-            const methods = $match_228.$0[0];
-            const s3 = $match_228.$0[1];
-            return (($match_229) => {
-              if ($match_229.$tag === 1) {
-                const e = $match_229.$0;
+          if ($match_226.$tag === 0) {
+            const methods = $match_226.$0[0];
+            const s3 = $match_226.$0[1];
+            return (($match_227) => {
+              if ($match_227.$tag === 1) {
+                const e = $match_227.$0;
                 return Err2(e);
               }
-              if ($match_229.$tag === 0) {
-                const s4 = $match_229.$0[1];
+              if ($match_227.$tag === 0) {
+                const s4 = $match_227.$0[1];
                 return Ok2([methods, s4]);
               }
               throw new Error("Pattern match failed");
@@ -13709,28 +14080,28 @@ parseImplementationMethods = (state) => peekKeyword("where")(state) ? (($match_2
   }
   throw new Error("Pattern match failed");
 })(expectKeyword("where")(state)) : Ok2([[], state]);
-parseImplMethodList = (state) => (($match_230) => {
-  if ($match_230.$tag === 1) {
-    const e = $match_230.$0;
+parseImplMethodList = (state) => (($match_228) => {
+  if ($match_228.$tag === 1) {
+    const e = $match_228.$0;
     return Err2(e);
   }
-  if ($match_230.$tag === 0) {
-    const method = $match_230.$0[0];
-    const s1 = $match_230.$0[1];
-    return (($match_231) => {
-      if ($match_231.$tag === 1) {
+  if ($match_228.$tag === 0) {
+    const method = $match_228.$0[0];
+    const s1 = $match_228.$0[1];
+    return (($match_229) => {
+      if ($match_229.$tag === 1) {
         return Ok2([[method], s1]);
       }
-      if ($match_231.$tag === 0) {
-        const s2 = $match_231.$0;
-        return (($match_232) => {
-          if ($match_232.$tag === 1) {
-            const e = $match_232.$0;
+      if ($match_229.$tag === 0) {
+        const s2 = $match_229.$0;
+        return (($match_230) => {
+          if ($match_230.$tag === 1) {
+            const e = $match_230.$0;
             return Err2(e);
           }
-          if ($match_232.$tag === 0) {
-            const rest = $match_232.$0[0];
-            const s3 = $match_232.$0[1];
+          if ($match_230.$tag === 0) {
+            const rest = $match_230.$0[0];
+            const s3 = $match_230.$0[1];
             return Ok2([_COLON_COLON2(method)(rest), s3]);
           }
           throw new Error("Pattern match failed");
@@ -13741,22 +14112,22 @@ parseImplMethodList = (state) => (($match_230) => {
   }
   throw new Error("Pattern match failed");
 })(parseImplMethod(state));
-parseImplMethod = (state) => (($match_233) => {
-  if ($match_233.$tag === 1) {
-    const e = $match_233.$0;
+parseImplMethod = (state) => (($match_231) => {
+  if ($match_231.$tag === 1) {
+    const e = $match_231.$0;
     return Err2(e);
   }
-  if ($match_233.$tag === 0) {
-    const nameResult = $match_233.$0[0];
-    const s1 = $match_233.$0[1];
-    return (($match_234) => {
-      if ($match_234.$tag === 1) {
-        const e = $match_234.$0;
+  if ($match_231.$tag === 0) {
+    const nameResult = $match_231.$0[0];
+    const s1 = $match_231.$0[1];
+    return (($match_232) => {
+      if ($match_232.$tag === 1) {
+        const e = $match_232.$0;
         return Err2(e);
       }
-      if ($match_234.$tag === 0) {
-        const result = $match_234.$0[0];
-        const s2 = $match_234.$0[1];
+      if ($match_232.$tag === 0) {
+        const result = $match_232.$0[0];
+        const s2 = $match_232.$0[1];
         return Ok2([{ name: nameResult.declName, implArgs: result.mArgs, implementation: result.mBody, span: { start: nameResult.declSpan.start, end: exprSpan(result.mBody).end } }, s2]);
       }
       throw new Error("Pattern match failed");
@@ -13765,14 +14136,14 @@ parseImplMethod = (state) => (($match_233) => {
   throw new Error("Pattern match failed");
 })(parseDeclarationName(state));
 parseExpression = (baseIndentFloor) => (state) => parseBinaryExpression(0)(baseIndentFloor)(state);
-parseBinaryExpression = (minPrec) => (baseIndentFloor) => (state) => (($match_235) => {
-  if ($match_235.$tag === 1) {
-    const e = $match_235.$0;
+parseBinaryExpression = (minPrec) => (baseIndentFloor) => (state) => (($match_233) => {
+  if ($match_233.$tag === 1) {
+    const e = $match_233.$0;
     return Err2(e);
   }
-  if ($match_235.$tag === 0) {
-    const left = $match_235.$0[0];
-    const s1 = $match_235.$0[1];
+  if ($match_233.$tag === 0) {
+    const left = $match_233.$0[0];
+    const s1 = $match_233.$0[1];
     return parseBinExprLoop(left)(minPrec)(baseIndentFloor)(s1);
   }
   throw new Error("Pattern match failed");
@@ -13795,8 +14166,8 @@ parseBinExprLoop = (left) => (minPrec) => (baseIndentFloor) => (state) => {
                 {
                   const s1 = advance2(state);
                   {
-                    const nextMin = (($match_236) => {
-                      if ($match_236.$tag === 1) {
+                    const nextMin = (($match_234) => {
+                      if ($match_234.$tag === 1) {
                         return prec;
                       }
                       {
@@ -13805,14 +14176,14 @@ parseBinExprLoop = (left) => (minPrec) => (baseIndentFloor) => (state) => {
                       throw new Error("Pattern match failed");
                     })(info.associativity);
                     {
-                      const $match_237 = parseBinaryExpression(nextMin)(baseIndentFloor)(s1);
-                      if ($match_237.$tag === 1) {
-                        const e = $match_237.$0;
+                      const $match_235 = parseBinaryExpression(nextMin)(baseIndentFloor)(s1);
+                      if ($match_235.$tag === 1) {
+                        const e = $match_235.$0;
                         return Err2(e);
                       }
-                      if ($match_237.$tag === 0) {
-                        const right = $match_237.$0[0];
-                        const s2 = $match_237.$0[1];
+                      if ($match_235.$tag === 0) {
+                        const right = $match_235.$0[0];
+                        const s2 = $match_235.$0[1];
                         {
                           const node = EInfix(left)(opTok.lexeme)(right)({ start: exprSpan(left).start, end: exprSpan(right).end });
                           [left, minPrec, baseIndentFloor, state] = [node, minPrec, baseIndentFloor, s2];
@@ -13833,20 +14204,20 @@ parseBinExprLoop = (left) => (minPrec) => (baseIndentFloor) => (state) => {
     }
   }
 };
-parseUnary = (baseIndentFloor) => (state) => ((tok) => _AMP_AMP5($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("-")) ? (($match_238) => {
-  if ($match_238.$tag === 1) {
+parseUnary = (baseIndentFloor) => (state) => ((tok) => _AMP_AMP6($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Operator2))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("-")) ? (($match_236) => {
+  if ($match_236.$tag === 1) {
     return parseApplication(baseIndentFloor)(state);
   }
-  if ($match_238.$tag === 0) {
-    const nextTok = $match_238.$0;
-    return _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(LowerIdentifier2))(() => _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(UpperIdentifier2))(() => _PIPE_PIPE6($dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(NumberToken2))(() => $dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(LParen2)))) ? ((s1) => (($match_239) => {
-      if ($match_239.$tag === 1) {
-        const e = $match_239.$0;
+  if ($match_236.$tag === 0) {
+    const nextTok = $match_236.$0;
+    return _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(LowerIdentifier2))(() => _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(UpperIdentifier2))(() => _PIPE_PIPE7($dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(NumberToken2))(() => $dict_Eq_TokenKind._EQ_EQ(nextTok.kind)(LParen2)))) ? ((s1) => (($match_237) => {
+      if ($match_237.$tag === 1) {
+        const e = $match_237.$0;
         return Err2(e);
       }
-      if ($match_239.$tag === 0) {
-        const operand = $match_239.$0[0];
-        const s2 = $match_239.$0[1];
+      if ($match_237.$tag === 0) {
+        const operand = $match_237.$0[0];
+        const s2 = $match_237.$0[1];
         return Ok2([EUnary("-")(operand)({ start: tok.span.start, end: exprSpan(operand).end }), s2]);
       }
       throw new Error("Pattern match failed");
@@ -13854,40 +14225,40 @@ parseUnary = (baseIndentFloor) => (state) => ((tok) => _AMP_AMP5($dict_Eq_TokenK
   }
   throw new Error("Pattern match failed");
 })(peekAhead(1)(state)) : parseApplication(baseIndentFloor)(state))(current(state));
-parseApplication = (baseIndentFloor) => (state) => (($match_240) => {
-  if ($match_240.$tag === 1) {
-    const e = $match_240.$0;
+parseApplication = (baseIndentFloor) => (state) => (($match_238) => {
+  if ($match_238.$tag === 1) {
+    const e = $match_238.$0;
     return Err2(e);
   }
-  if ($match_240.$tag === 0) {
-    const callee = $match_240.$0[0];
-    const s1 = $match_240.$0[1];
-    return ((baseIndent) => ((effectiveIndent) => (($match_241) => {
-      if ($match_241.$tag === 1) {
-        const e = $match_241.$0;
+  if ($match_238.$tag === 0) {
+    const callee = $match_238.$0[0];
+    const s1 = $match_238.$0[1];
+    return ((baseIndent) => ((effectiveIndent) => (($match_239) => {
+      if ($match_239.$tag === 1) {
+        const e = $match_239.$0;
         return Err2(e);
       }
-      if ($match_241.$tag === 0) {
-        const args = $match_241.$0[0];
-        const s2 = $match_241.$0[1];
-        return isEmpty2(args) ? Ok2([callee, s2]) : ((endPos) => Ok2([EApply(callee)(args)({ start: exprSpan(callee).start, end: endPos }), s2]))((($match_242) => {
-          if ($match_242.$tag === 0) {
-            const a = $match_242.$0;
+      if ($match_239.$tag === 0) {
+        const args = $match_239.$0[0];
+        const s2 = $match_239.$0[1];
+        return isEmpty2(args) ? Ok2([callee, s2]) : ((endPos) => Ok2([EApply(callee)(args)({ start: exprSpan(callee).start, end: endPos }), s2]))((($match_240) => {
+          if ($match_240.$tag === 0) {
+            const a = $match_240.$0;
             return exprSpan(a).end;
           }
-          if ($match_242.$tag === 1) {
+          if ($match_240.$tag === 1) {
             return exprSpan(callee).end;
           }
           throw new Error("Pattern match failed");
         })(last(args)));
       }
       throw new Error("Pattern match failed");
-    })(parseApplicationArgs(effectiveIndent)(exprSpan(callee).end)(s1)))((($match_243) => {
-      if ($match_243.$tag === 1) {
+    })(parseApplicationArgs(effectiveIndent)(exprSpan(callee).end)(s1)))((($match_241) => {
+      if ($match_241.$tag === 1) {
         return baseIndent;
       }
-      if ($match_243.$tag === 0) {
-        const floor = $match_243.$0;
+      if ($match_241.$tag === 0) {
+        const floor = $match_241.$0;
         return min(baseIndent)(floor);
       }
       throw new Error("Pattern match failed");
@@ -13895,22 +14266,22 @@ parseApplication = (baseIndentFloor) => (state) => (($match_240) => {
   }
   throw new Error("Pattern match failed");
 })(parsePrimaryWithAccess(state));
-parseApplicationArgs = (effectiveIndent) => (lastEnd) => (state) => isExpressionStart(current(state)) ? continuesLayout(effectiveIndent)(lastEnd)(current(state)) ? (($match_244) => {
-  if ($match_244.$tag === 1) {
-    const e = $match_244.$0;
+parseApplicationArgs = (effectiveIndent) => (lastEnd) => (state) => isExpressionStart(current(state)) ? continuesLayout(effectiveIndent)(lastEnd)(current(state)) ? (($match_242) => {
+  if ($match_242.$tag === 1) {
+    const e = $match_242.$0;
     return Err2(e);
   }
-  if ($match_244.$tag === 0) {
-    const arg = $match_244.$0[0];
-    const s1 = $match_244.$0[1];
-    return (($match_245) => {
-      if ($match_245.$tag === 1) {
-        const e = $match_245.$0;
+  if ($match_242.$tag === 0) {
+    const arg = $match_242.$0[0];
+    const s1 = $match_242.$0[1];
+    return (($match_243) => {
+      if ($match_243.$tag === 1) {
+        const e = $match_243.$0;
         return Err2(e);
       }
-      if ($match_245.$tag === 0) {
-        const rest = $match_245.$0[0];
-        const s2 = $match_245.$0[1];
+      if ($match_243.$tag === 0) {
+        const rest = $match_243.$0[0];
+        const s2 = $match_243.$0[1];
         return Ok2([_COLON_COLON2(arg)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -13918,44 +14289,44 @@ parseApplicationArgs = (effectiveIndent) => (lastEnd) => (state) => isExpression
   }
   throw new Error("Pattern match failed");
 })(parsePrimaryWithAccess(state)) : Ok2([[], state]) : Ok2([[], state]);
-parsePrimaryWithAccess = (state) => (($match_246) => {
-  if ($match_246.$tag === 1) {
-    const e = $match_246.$0;
+parsePrimaryWithAccess = (state) => (($match_244) => {
+  if ($match_244.$tag === 1) {
+    const e = $match_244.$0;
     return Err2(e);
   }
-  if ($match_246.$tag === 0) {
-    const expr = $match_246.$0[0];
-    const s1 = $match_246.$0[1];
+  if ($match_244.$tag === 0) {
+    const expr = $match_244.$0[0];
+    const s1 = $match_244.$0[1];
     return parseFieldAccesses(expr)(s1);
   }
   throw new Error("Pattern match failed");
 })(parsePrimary(state));
-parsePrimary = (state) => ((tok) => peekKeyword("if")(state) ? parseIf(state) : peekKeyword("let")(state) ? parseLetIn(state) : peekKeyword("case")(state) ? parseCase(state) : (($match_247) => {
-  if ($match_247.$tag === 8) {
+parsePrimary = (state) => ((tok) => peekKeyword("if")(state) ? parseIf(state) : peekKeyword("let")(state) ? parseLetIn(state) : peekKeyword("case")(state) ? parseCase(state) : (($match_245) => {
+  if ($match_245.$tag === 8) {
     return parseLambda(state);
   }
-  if ($match_247.$tag === 0) {
+  if ($match_245.$tag === 0) {
     return ((s1) => Ok2([EVar(tok.lexeme)("lower")(tok.span), s1]))(advance2(state));
   }
-  if ($match_247.$tag === 1) {
+  if ($match_245.$tag === 1) {
     return ((s1) => Ok2([EVar(tok.lexeme)("upper")(tok.span), s1]))(advance2(state));
   }
-  if ($match_247.$tag === 3) {
+  if ($match_245.$tag === 3) {
     return ((s1) => contains(".")(tok.lexeme) ? Ok2([EFloat(tok.lexeme)(tok.span), s1]) : Ok2([EInt(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_247.$tag === 4) {
+  if ($match_245.$tag === 4) {
     return ((s1) => Ok2([EString(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_247.$tag === 5) {
+  if ($match_245.$tag === 5) {
     return ((s1) => Ok2([EChar(tok.lexeme)(tok.span), s1]))(advance2(state));
   }
-  if ($match_247.$tag === 9) {
+  if ($match_245.$tag === 9) {
     return parseParenExpr(state);
   }
-  if ($match_247.$tag === 13) {
+  if ($match_245.$tag === 13) {
     return parseListExpr(state);
   }
-  if ($match_247.$tag === 11) {
+  if ($match_245.$tag === 11) {
     return parseRecordExpr(state);
   }
   {
@@ -13963,22 +14334,22 @@ parsePrimary = (state) => ((tok) => peekKeyword("if")(state) ? parseIf(state) : 
   }
   throw new Error("Pattern match failed");
 })(tok.kind))(current(state));
-parseLambda = (state) => ((start) => ((s1) => (($match_248) => {
-  if ($match_248.$tag === 1) {
-    const e = $match_248.$0;
+parseLambda = (state) => ((start) => ((s1) => (($match_246) => {
+  if ($match_246.$tag === 1) {
+    const e = $match_246.$0;
     return Err2(e);
   }
-  if ($match_248.$tag === 0) {
-    const args = $match_248.$0[0];
-    const s2 = $match_248.$0[1];
-    return (($match_249) => {
-      if ($match_249.$tag === 1) {
-        const e = $match_249.$0;
+  if ($match_246.$tag === 0) {
+    const args = $match_246.$0[0];
+    const s2 = $match_246.$0[1];
+    return (($match_247) => {
+      if ($match_247.$tag === 1) {
+        const e = $match_247.$0;
         return Err2(e);
       }
-      if ($match_249.$tag === 0) {
-        const body = $match_249.$0[0];
-        const s3 = $match_249.$0[1];
+      if ($match_247.$tag === 0) {
+        const body = $match_247.$0[0];
+        const s3 = $match_247.$0[1];
         return Ok2([ELambda(args)(body)({ start, end: exprSpan(body).end }), s3]);
       }
       throw new Error("Pattern match failed");
@@ -13986,52 +14357,52 @@ parseLambda = (state) => ((start) => ((s1) => (($match_248) => {
   }
   throw new Error("Pattern match failed");
 })(parseLambdaArgs(s1)))(advance2(state)))(current(state).span.start);
-parseIf = (state) => (($match_250) => {
-  if ($match_250.$tag === 1) {
-    const e = $match_250.$0;
+parseIf = (state) => (($match_248) => {
+  if ($match_248.$tag === 1) {
+    const e = $match_248.$0;
     return Err2(e);
   }
-  if ($match_250.$tag === 0) {
-    const ifTok = $match_250.$0[0];
-    const s1 = $match_250.$0[1];
-    return (($match_251) => {
-      if ($match_251.$tag === 1) {
-        const e = $match_251.$0;
+  if ($match_248.$tag === 0) {
+    const ifTok = $match_248.$0[0];
+    const s1 = $match_248.$0[1];
+    return (($match_249) => {
+      if ($match_249.$tag === 1) {
+        const e = $match_249.$0;
         return Err2(e);
       }
-      if ($match_251.$tag === 0) {
-        const condition = $match_251.$0[0];
-        const s2 = $match_251.$0[1];
-        return (($match_252) => {
-          if ($match_252.$tag === 1) {
-            const e = $match_252.$0;
+      if ($match_249.$tag === 0) {
+        const condition = $match_249.$0[0];
+        const s2 = $match_249.$0[1];
+        return (($match_250) => {
+          if ($match_250.$tag === 1) {
+            const e = $match_250.$0;
             return Err2(e);
           }
-          if ($match_252.$tag === 0) {
-            const s3 = $match_252.$0[1];
-            return (($match_253) => {
-              if ($match_253.$tag === 1) {
-                const e = $match_253.$0;
+          if ($match_250.$tag === 0) {
+            const s3 = $match_250.$0[1];
+            return (($match_251) => {
+              if ($match_251.$tag === 1) {
+                const e = $match_251.$0;
                 return Err2(e);
               }
-              if ($match_253.$tag === 0) {
-                const thenBranch = $match_253.$0[0];
-                const s4 = $match_253.$0[1];
-                return (($match_254) => {
-                  if ($match_254.$tag === 1) {
-                    const e = $match_254.$0;
+              if ($match_251.$tag === 0) {
+                const thenBranch = $match_251.$0[0];
+                const s4 = $match_251.$0[1];
+                return (($match_252) => {
+                  if ($match_252.$tag === 1) {
+                    const e = $match_252.$0;
                     return Err2(e);
                   }
-                  if ($match_254.$tag === 0) {
-                    const s5 = $match_254.$0[1];
-                    return (($match_255) => {
-                      if ($match_255.$tag === 1) {
-                        const e = $match_255.$0;
+                  if ($match_252.$tag === 0) {
+                    const s5 = $match_252.$0[1];
+                    return (($match_253) => {
+                      if ($match_253.$tag === 1) {
+                        const e = $match_253.$0;
                         return Err2(e);
                       }
-                      if ($match_255.$tag === 0) {
-                        const elseBranch = $match_255.$0[0];
-                        const s6 = $match_255.$0[1];
+                      if ($match_253.$tag === 0) {
+                        const elseBranch = $match_253.$0[0];
+                        const s6 = $match_253.$0[1];
                         return Ok2([EIf(condition)(thenBranch)(elseBranch)({ start: ifTok.span.start, end: exprSpan(elseBranch).end }), s6]);
                       }
                       throw new Error("Pattern match failed");
@@ -14051,51 +14422,51 @@ parseIf = (state) => (($match_250) => {
   }
   throw new Error("Pattern match failed");
 })(expectKeyword("if")(state));
-parseLetIn = (state) => (($match_256) => {
-  if ($match_256.$tag === 1) {
-    const e = $match_256.$0;
+parseLetIn = (state) => (($match_254) => {
+  if ($match_254.$tag === 1) {
+    const e = $match_254.$0;
     return Err2(e);
   }
-  if ($match_256.$tag === 0) {
-    const letTok = $match_256.$0[0];
-    const s1 = $match_256.$0[1];
-    return (($match_257) => {
-      if ($match_257.$tag === 1) {
-        const e = $match_257.$0;
+  if ($match_254.$tag === 0) {
+    const letTok = $match_254.$0[0];
+    const s1 = $match_254.$0[1];
+    return (($match_255) => {
+      if ($match_255.$tag === 1) {
+        const e = $match_255.$0;
         return Err2(e);
       }
-      if ($match_257.$tag === 0) {
-        const s2 = $match_257.$0[1];
-        return (($match_258) => {
-          if ($match_258.$tag === 1) {
-            const e = $match_258.$0;
+      if ($match_255.$tag === 0) {
+        const s2 = $match_255.$0[1];
+        return (($match_256) => {
+          if ($match_256.$tag === 1) {
+            const e = $match_256.$0;
             return Err2(e);
           }
-          if ($match_258.$tag === 0) {
-            const bindings = $match_258.$0[0];
-            const s3 = $match_258.$0[1];
-            return (($match_259) => {
-              if ($match_259.$tag === 1) {
-                const e = $match_259.$0;
+          if ($match_256.$tag === 0) {
+            const bindings = $match_256.$0[0];
+            const s3 = $match_256.$0[1];
+            return (($match_257) => {
+              if ($match_257.$tag === 1) {
+                const e = $match_257.$0;
                 return Err2(e);
               }
-              if ($match_259.$tag === 0) {
-                const s4 = $match_259.$0[1];
-                return (($match_260) => {
-                  if ($match_260.$tag === 1) {
-                    const e = $match_260.$0;
+              if ($match_257.$tag === 0) {
+                const s4 = $match_257.$0[1];
+                return (($match_258) => {
+                  if ($match_258.$tag === 1) {
+                    const e = $match_258.$0;
                     return Err2(e);
                   }
-                  if ($match_260.$tag === 0) {
-                    const s5 = $match_260.$0[1];
-                    return (($match_261) => {
-                      if ($match_261.$tag === 1) {
-                        const e = $match_261.$0;
+                  if ($match_258.$tag === 0) {
+                    const s5 = $match_258.$0[1];
+                    return (($match_259) => {
+                      if ($match_259.$tag === 1) {
+                        const e = $match_259.$0;
                         return Err2(e);
                       }
-                      if ($match_261.$tag === 0) {
-                        const body = $match_261.$0[0];
-                        const s6 = $match_261.$0[1];
+                      if ($match_259.$tag === 0) {
+                        const body = $match_259.$0[0];
+                        const s6 = $match_259.$0[1];
                         return Ok2([ELetIn(bindings)(body)({ start: letTok.span.start, end: exprSpan(body).end }), s6]);
                       }
                       throw new Error("Pattern match failed");
@@ -14115,28 +14486,28 @@ parseLetIn = (state) => (($match_256) => {
   }
   throw new Error("Pattern match failed");
 })(expectKeyword("let")(state));
-parseLetBindings = (state) => (($match_262) => {
-  if ($match_262.$tag === 1) {
-    const e = $match_262.$0;
+parseLetBindings = (state) => (($match_260) => {
+  if ($match_260.$tag === 1) {
+    const e = $match_260.$0;
     return Err2(e);
   }
-  if ($match_262.$tag === 0) {
-    const binding = $match_262.$0[0];
-    const s1 = $match_262.$0[1];
-    return (($match_263) => {
-      if ($match_263.$tag === 1) {
+  if ($match_260.$tag === 0) {
+    const binding = $match_260.$0[0];
+    const s1 = $match_260.$0[1];
+    return (($match_261) => {
+      if ($match_261.$tag === 1) {
         return Ok2([[binding], s1]);
       }
-      if ($match_263.$tag === 0) {
-        const s2 = $match_263.$0;
-        return (($match_264) => {
-          if ($match_264.$tag === 1) {
-            const e = $match_264.$0;
+      if ($match_261.$tag === 0) {
+        const s2 = $match_261.$0;
+        return (($match_262) => {
+          if ($match_262.$tag === 1) {
+            const e = $match_262.$0;
             return Err2(e);
           }
-          if ($match_264.$tag === 0) {
-            const rest = $match_264.$0[0];
-            const s3 = $match_264.$0[1];
+          if ($match_262.$tag === 0) {
+            const rest = $match_262.$0[0];
+            const s3 = $match_262.$0[1];
             return Ok2([_COLON_COLON2(binding)(rest), s3]);
           }
           throw new Error("Pattern match failed");
@@ -14147,69 +14518,69 @@ parseLetBindings = (state) => (($match_262) => {
   }
   throw new Error("Pattern match failed");
 })(parseLetBinding(state));
-parseLetBinding = (state) => (($match_265) => {
-  if ($match_265.$tag === 1) {
-    const e = $match_265.$0;
+parseLetBinding = (state) => (($match_263) => {
+  if ($match_263.$tag === 1) {
+    const e = $match_263.$0;
     return Err2(e);
   }
-  if ($match_265.$tag === 0) {
-    const decl = $match_265.$0[0];
-    const s1 = $match_265.$0[1];
+  if ($match_263.$tag === 0) {
+    const decl = $match_263.$0[0];
+    const s1 = $match_263.$0[1];
     return Ok2([declToValueDecl(decl), s1]);
   }
   throw new Error("Pattern match failed");
 })(parseDeclaration(state));
-parseCase = (state) => (($match_266) => {
-  if ($match_266.$tag === 1) {
-    const e = $match_266.$0;
+parseCase = (state) => (($match_264) => {
+  if ($match_264.$tag === 1) {
+    const e = $match_264.$0;
     return Err2(e);
   }
-  if ($match_266.$tag === 0) {
-    const caseTok = $match_266.$0[0];
-    const s1 = $match_266.$0[1];
-    return (($match_267) => {
-      if ($match_267.$tag === 1) {
-        const e = $match_267.$0;
+  if ($match_264.$tag === 0) {
+    const caseTok = $match_264.$0[0];
+    const s1 = $match_264.$0[1];
+    return (($match_265) => {
+      if ($match_265.$tag === 1) {
+        const e = $match_265.$0;
         return Err2(e);
       }
-      if ($match_267.$tag === 0) {
-        const discriminant = $match_267.$0[0];
-        const s2 = $match_267.$0[1];
-        return (($match_268) => {
-          if ($match_268.$tag === 1) {
-            const e = $match_268.$0;
+      if ($match_265.$tag === 0) {
+        const discriminant = $match_265.$0[0];
+        const s2 = $match_265.$0[1];
+        return (($match_266) => {
+          if ($match_266.$tag === 1) {
+            const e = $match_266.$0;
             return Err2(e);
           }
-          if ($match_268.$tag === 0) {
-            const s3 = $match_268.$0[1];
-            return (($match_269) => {
-              if ($match_269.$tag === 1) {
-                const e = $match_269.$0;
+          if ($match_266.$tag === 0) {
+            const s3 = $match_266.$0[1];
+            return (($match_267) => {
+              if ($match_267.$tag === 1) {
+                const e = $match_267.$0;
                 return Err2(e);
               }
-              if ($match_269.$tag === 0) {
-                const s4 = $match_269.$0[1];
-                return (($match_270) => {
-                  if ($match_270.$tag === 1) {
-                    const e = $match_270.$0;
+              if ($match_267.$tag === 0) {
+                const s4 = $match_267.$0[1];
+                return (($match_268) => {
+                  if ($match_268.$tag === 1) {
+                    const e = $match_268.$0;
                     return Err2(e);
                   }
-                  if ($match_270.$tag === 0) {
-                    const branches = $match_270.$0[0];
-                    const s5 = $match_270.$0[1];
-                    return (($match_271) => {
-                      if ($match_271.$tag === 1) {
-                        const e = $match_271.$0;
+                  if ($match_268.$tag === 0) {
+                    const branches = $match_268.$0[0];
+                    const s5 = $match_268.$0[1];
+                    return (($match_269) => {
+                      if ($match_269.$tag === 1) {
+                        const e = $match_269.$0;
                         return Err2(e);
                       }
-                      if ($match_271.$tag === 0) {
-                        const s6 = $match_271.$0[1];
-                        return ((endPos) => Ok2([ECase(discriminant)(branches)({ start: caseTok.span.start, end: endPos }), s6]))((($match_272) => {
-                          if ($match_272.$tag === 0) {
-                            const b = $match_272.$0;
+                      if ($match_269.$tag === 0) {
+                        const s6 = $match_269.$0[1];
+                        return ((endPos) => Ok2([ECase(discriminant)(branches)({ start: caseTok.span.start, end: endPos }), s6]))((($match_270) => {
+                          if ($match_270.$tag === 0) {
+                            const b = $match_270.$0;
                             return b.span.end;
                           }
-                          if ($match_272.$tag === 1) {
+                          if ($match_270.$tag === 1) {
                             return exprSpan(discriminant).end;
                           }
                           throw new Error("Pattern match failed");
@@ -14232,28 +14603,28 @@ parseCase = (state) => (($match_266) => {
   }
   throw new Error("Pattern match failed");
 })(expectKeyword("case")(state));
-parseCaseBranches = (state) => (($match_273) => {
-  if ($match_273.$tag === 1) {
-    const e = $match_273.$0;
+parseCaseBranches = (state) => (($match_271) => {
+  if ($match_271.$tag === 1) {
+    const e = $match_271.$0;
     return Err2(e);
   }
-  if ($match_273.$tag === 0) {
-    const branch = $match_273.$0[0];
-    const s1 = $match_273.$0[1];
-    return (($match_274) => {
-      if ($match_274.$tag === 1) {
+  if ($match_271.$tag === 0) {
+    const branch = $match_271.$0[0];
+    const s1 = $match_271.$0[1];
+    return (($match_272) => {
+      if ($match_272.$tag === 1) {
         return Ok2([[branch], s1]);
       }
-      if ($match_274.$tag === 0) {
-        const s2 = $match_274.$0;
-        return (($match_275) => {
-          if ($match_275.$tag === 1) {
-            const e = $match_275.$0;
+      if ($match_272.$tag === 0) {
+        const s2 = $match_272.$0;
+        return (($match_273) => {
+          if ($match_273.$tag === 1) {
+            const e = $match_273.$0;
             return Err2(e);
           }
-          if ($match_275.$tag === 0) {
-            const rest = $match_275.$0[0];
-            const s3 = $match_275.$0[1];
+          if ($match_273.$tag === 0) {
+            const rest = $match_273.$0[0];
+            const s3 = $match_273.$0[1];
             return Ok2([_COLON_COLON2(branch)(rest), s3]);
           }
           throw new Error("Pattern match failed");
@@ -14264,29 +14635,29 @@ parseCaseBranches = (state) => (($match_273) => {
   }
   throw new Error("Pattern match failed");
 })(parseCaseBranch(state));
-parseCaseBranch = (state) => (($match_276) => {
-  if ($match_276.$tag === 1) {
-    const e = $match_276.$0;
+parseCaseBranch = (state) => (($match_274) => {
+  if ($match_274.$tag === 1) {
+    const e = $match_274.$0;
     return Err2(e);
   }
-  if ($match_276.$tag === 0) {
-    const pat = $match_276.$0[0];
-    const s1 = $match_276.$0[1];
-    return (($match_277) => {
-      if ($match_277.$tag === 1) {
-        const e = $match_277.$0;
+  if ($match_274.$tag === 0) {
+    const pat = $match_274.$0[0];
+    const s1 = $match_274.$0[1];
+    return (($match_275) => {
+      if ($match_275.$tag === 1) {
+        const e = $match_275.$0;
         return Err2(e);
       }
-      if ($match_277.$tag === 0) {
-        const s2 = $match_277.$0[1];
-        return ((branchIndent) => (($match_278) => {
-          if ($match_278.$tag === 1) {
-            const e = $match_278.$0;
+      if ($match_275.$tag === 0) {
+        const s2 = $match_275.$0[1];
+        return ((branchIndent) => (($match_276) => {
+          if ($match_276.$tag === 1) {
+            const e = $match_276.$0;
             return Err2(e);
           }
-          if ($match_278.$tag === 0) {
-            const body = $match_278.$0[0];
-            const s3 = $match_278.$0[1];
+          if ($match_276.$tag === 0) {
+            const body = $match_276.$0[0];
+            const s3 = $match_276.$0[1];
             return Ok2([{ pattern: pat, body, span: { start: patSpan(pat).start, end: exprSpan(body).end } }, s3]);
           }
           throw new Error("Pattern match failed");
@@ -14297,108 +14668,99 @@ parseCaseBranch = (state) => (($match_276) => {
   }
   throw new Error("Pattern match failed");
 })(parsePattern(state));
-parseParenExpr = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([EUnit({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : peekKind(Operator2)(s1) ? (($match_279) => {
-  if ($match_279.$tag === 0) {
-    const next = $match_279.$0;
+parseParenExpr = (state) => ((start) => ((s1) => peekKind(RParen2)(s1) ? ((s2) => Ok2([EUnit({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : peekKind(Operator2)(s1) ? (($match_277) => {
+  if ($match_277.$tag === 0) {
+    const next = $match_277.$0;
     return $dict_Eq_TokenKind._EQ_EQ(next.kind)(RParen2) ? ((opTok) => ((s2) => ((s3) => Ok2([EVar(opTok.lexeme)("operator")({ start, end: previous(s3).span.end }), s3]))(advance2(s2)))(advance2(s1)))(current(s1)) : parseParenExprContents(start)(s1);
   }
-  if ($match_279.$tag === 1) {
+  if ($match_277.$tag === 1) {
     return parseParenExprContents(start)(s1);
   }
   throw new Error("Pattern match failed");
 })(peekAhead(1)(s1)) : parseParenExprContents(start)(s1))(advance2(state)))(current(state).span.start);
-parseParenExprContents = (start) => (state) => (($match_280) => {
-  if ($match_280.$tag === 1) {
-    const e = $match_280.$0;
+parseParenExprContents = (start) => (state) => (($match_278) => {
+  if ($match_278.$tag === 1) {
+    const e = $match_278.$0;
     return Err2(e);
   }
-  if ($match_280.$tag === 0) {
-    const first = $match_280.$0[0];
-    const s1 = $match_280.$0[1];
-    return (($match_281) => {
-      if ($match_281.$tag === 1) {
-        const e = $match_281.$0;
+  if ($match_278.$tag === 0) {
+    const first = $match_278.$0[0];
+    const s1 = $match_278.$0[1];
+    return (($match_279) => {
+      if ($match_279.$tag === 1) {
+        const e = $match_279.$0;
         return Err2(e);
       }
-      if ($match_281.$tag === 0) {
-        const more = $match_281.$0[0];
-        const s2 = $match_281.$0[1];
-        return (($match_282) => {
-          if ($match_282.$tag === 1) {
-            const e = $match_282.$0;
+      if ($match_279.$tag === 0) {
+        const more = $match_279.$0[0];
+        const s2 = $match_279.$0[1];
+        return (($match_280) => {
+          if ($match_280.$tag === 1) {
+            const e = $match_280.$0;
             return Err2(e);
           }
-          if ($match_282.$tag === 0) {
-            const cp = $match_282.$0[0];
-            const s3 = $match_282.$0[1];
+          if ($match_280.$tag === 0) {
+            const cp = $match_280.$0[0];
+            const s3 = $match_280.$0[1];
             return isEmpty2(more) ? Ok2([EParen(first)({ start, end: cp.span.end }), s3]) : Ok2([ETuple(_COLON_COLON2(first)(more))({ start, end: cp.span.end }), s3]);
           }
           throw new Error("Pattern match failed");
         })(expect(RParen2)("close group")(s2));
       }
       throw new Error("Pattern match failed");
-    })(parseMoreTupleExprs(first)(s1));
+    })(parseMoreTupleExprs(s1));
   }
   throw new Error("Pattern match failed");
 })(parseExpression(Nothing2)(state));
-parseMoreTupleExprs = (lastExpr) => (state) => peekKind(Comma2)(state) ? (($match_283) => {
-  if ($match_283.$tag === 1) {
-    return Ok2([[], state]);
-  }
-  if ($match_283.$tag === 0) {
-    const next = $match_283.$0;
-    return continuesLayout(exprSpan(lastExpr).start.column)(exprSpan(lastExpr).end)(next) ? ((s1) => (($match_284) => {
-      if ($match_284.$tag === 1) {
-        const e = $match_284.$0;
-        return Err2(e);
-      }
-      if ($match_284.$tag === 0) {
-        const expr = $match_284.$0[0];
-        const s2 = $match_284.$0[1];
-        return (($match_285) => {
-          if ($match_285.$tag === 1) {
-            const e2 = $match_285.$0;
-            return Err2(e2);
-          }
-          if ($match_285.$tag === 0) {
-            const rest = $match_285.$0[0];
-            const s3 = $match_285.$0[1];
-            return Ok2([_COLON_COLON2(expr)(rest), s3]);
-          }
-          throw new Error("Pattern match failed");
-        })(parseMoreTupleExprs(expr)(s2));
-      }
-      throw new Error("Pattern match failed");
-    })(parseExpression(Nothing2)(s1)))(advance2(state)) : Ok2([[], state]);
-  }
-  throw new Error("Pattern match failed");
-})(peekAhead(1)(state)) : Ok2([[], state]);
-parseListExpr = (state) => ((start) => ((s1) => peekKind(RBracket2)(s1) ? ((s2) => Ok2([EList([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_286) => {
-  if ($match_286.$tag === 1) {
-    const e = $match_286.$0;
+parseMoreTupleExprs = (state) => peekKind(Comma2)(state) ? ((s1) => (($match_281) => {
+  if ($match_281.$tag === 1) {
+    const e = $match_281.$0;
     return Err2(e);
   }
-  if ($match_286.$tag === 0) {
-    const first = $match_286.$0[0];
-    const s2 = $match_286.$0[1];
-    return (($match_287) => {
-      if ($match_287.$tag === 0) {
-        const s3 = $match_287.$0;
-        return (($match_288) => {
-          if ($match_288.$tag === 1) {
-            const e = $match_288.$0;
+  if ($match_281.$tag === 0) {
+    const expr = $match_281.$0[0];
+    const s2 = $match_281.$0[1];
+    return (($match_282) => {
+      if ($match_282.$tag === 1) {
+        const e2 = $match_282.$0;
+        return Err2(e2);
+      }
+      if ($match_282.$tag === 0) {
+        const rest = $match_282.$0[0];
+        const s3 = $match_282.$0[1];
+        return Ok2([_COLON_COLON2(expr)(rest), s3]);
+      }
+      throw new Error("Pattern match failed");
+    })(parseMoreTupleExprs(s2));
+  }
+  throw new Error("Pattern match failed");
+})(parseExpression(Nothing2)(s1)))(advance2(state)) : Ok2([[], state]);
+parseListExpr = (state) => ((start) => ((s1) => peekKind(RBracket2)(s1) ? ((s2) => Ok2([EList([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_283) => {
+  if ($match_283.$tag === 1) {
+    const e = $match_283.$0;
+    return Err2(e);
+  }
+  if ($match_283.$tag === 0) {
+    const first = $match_283.$0[0];
+    const s2 = $match_283.$0[1];
+    return (($match_284) => {
+      if ($match_284.$tag === 0) {
+        const s3 = $match_284.$0;
+        return (($match_285) => {
+          if ($match_285.$tag === 1) {
+            const e = $match_285.$0;
             return Err2(e);
           }
-          if ($match_288.$tag === 0) {
-            const endExpr = $match_288.$0[0];
-            const s4 = $match_288.$0[1];
-            return (($match_289) => {
-              if ($match_289.$tag === 1) {
-                const e = $match_289.$0;
+          if ($match_285.$tag === 0) {
+            const endExpr = $match_285.$0[0];
+            const s4 = $match_285.$0[1];
+            return (($match_286) => {
+              if ($match_286.$tag === 1) {
+                const e = $match_286.$0;
                 return Err2(e);
               }
-              if ($match_289.$tag === 0) {
-                const s5 = $match_289.$0[1];
+              if ($match_286.$tag === 0) {
+                const s5 = $match_286.$0[1];
                 return Ok2([EListRange(first)(endExpr)({ start, end: previous(s5).span.end }), s5]);
               }
               throw new Error("Pattern match failed");
@@ -14407,93 +14769,84 @@ parseListExpr = (state) => ((start) => ((s1) => peekKind(RBracket2)(s1) ? ((s2) 
           throw new Error("Pattern match failed");
         })(parseExpression(Nothing2)(s3));
       }
-      if ($match_287.$tag === 1) {
-        return (($match_290) => {
-          if ($match_290.$tag === 1) {
-            const e = $match_290.$0;
+      if ($match_284.$tag === 1) {
+        return (($match_287) => {
+          if ($match_287.$tag === 1) {
+            const e = $match_287.$0;
             return Err2(e);
           }
-          if ($match_290.$tag === 0) {
-            const more = $match_290.$0[0];
-            const s4 = $match_290.$0[1];
-            return (($match_291) => {
-              if ($match_291.$tag === 1) {
-                const e = $match_291.$0;
+          if ($match_287.$tag === 0) {
+            const more = $match_287.$0[0];
+            const s4 = $match_287.$0[1];
+            return (($match_288) => {
+              if ($match_288.$tag === 1) {
+                const e = $match_288.$0;
                 return Err2(e);
               }
-              if ($match_291.$tag === 0) {
-                const s5 = $match_291.$0[1];
+              if ($match_288.$tag === 0) {
+                const s5 = $match_288.$0[1];
                 return Ok2([EList(_COLON_COLON2(first)(more))({ start, end: previous(s5).span.end }), s5]);
               }
               throw new Error("Pattern match failed");
             })(expect(RBracket2)("close list")(s4));
           }
           throw new Error("Pattern match failed");
-        })(parseMoreListExprs(first)(s2));
+        })(parseMoreListExprs(s2));
       }
       throw new Error("Pattern match failed");
     })(matchKind(Range2)(s2));
   }
   throw new Error("Pattern match failed");
 })(parseExpression(Nothing2)(s1)))(advance2(state)))(current(state).span.start);
-parseMoreListExprs = (lastExpr) => (state) => peekKind(Comma2)(state) ? (($match_292) => {
-  if ($match_292.$tag === 1) {
-    return Ok2([[], state]);
-  }
-  if ($match_292.$tag === 0) {
-    const next = $match_292.$0;
-    return continuesLayout(exprSpan(lastExpr).start.column)(exprSpan(lastExpr).end)(next) ? ((s1) => (($match_293) => {
-      if ($match_293.$tag === 1) {
-        const e = $match_293.$0;
-        return Err2(e);
-      }
-      if ($match_293.$tag === 0) {
-        const expr = $match_293.$0[0];
-        const s2 = $match_293.$0[1];
-        return (($match_294) => {
-          if ($match_294.$tag === 1) {
-            const e2 = $match_294.$0;
-            return Err2(e2);
-          }
-          if ($match_294.$tag === 0) {
-            const rest = $match_294.$0[0];
-            const s3 = $match_294.$0[1];
-            return Ok2([_COLON_COLON2(expr)(rest), s3]);
-          }
-          throw new Error("Pattern match failed");
-        })(parseMoreListExprs(expr)(s2));
-      }
-      throw new Error("Pattern match failed");
-    })(parseExpression(Nothing2)(s1)))(advance2(state)) : Ok2([[], state]);
-  }
-  throw new Error("Pattern match failed");
-})(peekAhead(1)(state)) : Ok2([[], state]);
-parseRecordExpr = (state) => ((start) => ((s1) => peekKind(RBrace2)(s1) ? ((s2) => Ok2([ERecord([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_295) => {
-  if ($match_295.$tag === 1) {
-    const e = $match_295.$0;
+parseMoreListExprs = (state) => peekKind(Comma2)(state) ? ((s1) => (($match_289) => {
+  if ($match_289.$tag === 1) {
+    const e = $match_289.$0;
     return Err2(e);
   }
-  if ($match_295.$tag === 0) {
-    const head2 = $match_295.$0[0];
-    const s2 = $match_295.$0[1];
-    return (($match_296) => {
-      if ($match_296.$tag === 0) {
-        const s3 = $match_296.$0;
-        return (($match_297) => {
-          if ($match_297.$tag === 1) {
-            const e = $match_297.$0;
+  if ($match_289.$tag === 0) {
+    const expr = $match_289.$0[0];
+    const s2 = $match_289.$0[1];
+    return (($match_290) => {
+      if ($match_290.$tag === 1) {
+        const e2 = $match_290.$0;
+        return Err2(e2);
+      }
+      if ($match_290.$tag === 0) {
+        const rest = $match_290.$0[0];
+        const s3 = $match_290.$0[1];
+        return Ok2([_COLON_COLON2(expr)(rest), s3]);
+      }
+      throw new Error("Pattern match failed");
+    })(parseMoreListExprs(s2));
+  }
+  throw new Error("Pattern match failed");
+})(parseExpression(Nothing2)(s1)))(advance2(state)) : Ok2([[], state]);
+parseRecordExpr = (state) => ((start) => ((s1) => peekKind(RBrace2)(s1) ? ((s2) => Ok2([ERecord([])({ start, end: previous(s2).span.end }), s2]))(advance2(s1)) : (($match_291) => {
+  if ($match_291.$tag === 1) {
+    const e = $match_291.$0;
+    return Err2(e);
+  }
+  if ($match_291.$tag === 0) {
+    const head2 = $match_291.$0[0];
+    const s2 = $match_291.$0[1];
+    return (($match_292) => {
+      if ($match_292.$tag === 0) {
+        const s3 = $match_292.$0;
+        return (($match_293) => {
+          if ($match_293.$tag === 1) {
+            const e = $match_293.$0;
             return Err2(e);
           }
-          if ($match_297.$tag === 0) {
-            const fields = $match_297.$0[0];
-            const s4 = $match_297.$0[1];
-            return (($match_298) => {
-              if ($match_298.$tag === 1) {
-                const e = $match_298.$0;
+          if ($match_293.$tag === 0) {
+            const fields = $match_293.$0[0];
+            const s4 = $match_293.$0[1];
+            return (($match_294) => {
+              if ($match_294.$tag === 1) {
+                const e = $match_294.$0;
                 return Err2(e);
               }
-              if ($match_298.$tag === 0) {
-                const s5 = $match_298.$0[1];
+              if ($match_294.$tag === 0) {
+                const s5 = $match_294.$0[1];
                 return Ok2([ERecordUpdate(head2.lexeme)(fields)({ start, end: previous(s5).span.end }), s5]);
               }
               throw new Error("Pattern match failed");
@@ -14502,22 +14855,22 @@ parseRecordExpr = (state) => ((start) => ((s1) => peekKind(RBrace2)(s1) ? ((s2) 
           throw new Error("Pattern match failed");
         })(parseRecordFieldList(Nothing2)(head2.span.start.column)(s3));
       }
-      if ($match_296.$tag === 1) {
-        return (($match_299) => {
-          if ($match_299.$tag === 1) {
-            const e = $match_299.$0;
+      if ($match_292.$tag === 1) {
+        return (($match_295) => {
+          if ($match_295.$tag === 1) {
+            const e = $match_295.$0;
             return Err2(e);
           }
-          if ($match_299.$tag === 0) {
-            const fields = $match_299.$0[0];
-            const s4 = $match_299.$0[1];
-            return (($match_300) => {
-              if ($match_300.$tag === 1) {
-                const e = $match_300.$0;
+          if ($match_295.$tag === 0) {
+            const fields = $match_295.$0[0];
+            const s4 = $match_295.$0[1];
+            return (($match_296) => {
+              if ($match_296.$tag === 1) {
+                const e = $match_296.$0;
                 return Err2(e);
               }
-              if ($match_300.$tag === 0) {
-                const s5 = $match_300.$0[1];
+              if ($match_296.$tag === 0) {
+                const s5 = $match_296.$0[1];
                 return Ok2([ERecord(fields)({ start, end: previous(s5).span.end }), s5]);
               }
               throw new Error("Pattern match failed");
@@ -14531,62 +14884,62 @@ parseRecordExpr = (state) => ((start) => ((s1) => peekKind(RBrace2)(s1) ? ((s2) 
   }
   throw new Error("Pattern match failed");
 })(expect(LowerIdentifier2)("record field or base")(s1)))(advance2(state)))(current(state).span.start);
-parseRecordFieldList = (firstFieldToken) => (baseIndent) => (state) => (($match_301) => {
-  if ($match_301.$tag === 0) {
-    const tok = $match_301.$0;
-    return (($match_302) => {
-      if ($match_302.$tag === 1) {
-        const e = $match_302.$0;
+parseRecordFieldList = (firstFieldToken) => (baseIndent) => (state) => (($match_297) => {
+  if ($match_297.$tag === 0) {
+    const tok = $match_297.$0;
+    return (($match_298) => {
+      if ($match_298.$tag === 1) {
+        const e = $match_298.$0;
         return Err2(e);
       }
-      if ($match_302.$tag === 0) {
-        const firstField = $match_302.$0[0];
-        const s1 = $match_302.$0[1];
-        return (($match_303) => {
-          if ($match_303.$tag === 1) {
-            const e = $match_303.$0;
+      if ($match_298.$tag === 0) {
+        const firstField = $match_298.$0[0];
+        const s1 = $match_298.$0[1];
+        return (($match_299) => {
+          if ($match_299.$tag === 1) {
+            const e = $match_299.$0;
             return Err2(e);
           }
-          if ($match_303.$tag === 0) {
-            const rest = $match_303.$0[0];
-            const s2 = $match_303.$0[1];
+          if ($match_299.$tag === 0) {
+            const rest = $match_299.$0[0];
+            const s2 = $match_299.$0[1];
             return Ok2([_COLON_COLON2(firstField)(rest), s2]);
           }
           throw new Error("Pattern match failed");
-        })(parseMoreRecordFields(baseIndent)(firstField)(s1));
+        })(parseMoreRecordFields(baseIndent)(s1));
       }
       throw new Error("Pattern match failed");
     })(parseRecordFieldValue(tok)(baseIndent)(state));
   }
-  if ($match_301.$tag === 1) {
-    return (($match_304) => {
-      if ($match_304.$tag === 1) {
-        const e = $match_304.$0;
+  if ($match_297.$tag === 1) {
+    return (($match_300) => {
+      if ($match_300.$tag === 1) {
+        const e = $match_300.$0;
         return Err2(e);
       }
-      if ($match_304.$tag === 0) {
-        const tok = $match_304.$0[0];
-        const s1 = $match_304.$0[1];
-        return (($match_305) => {
-          if ($match_305.$tag === 1) {
-            const e = $match_305.$0;
+      if ($match_300.$tag === 0) {
+        const tok = $match_300.$0[0];
+        const s1 = $match_300.$0[1];
+        return (($match_301) => {
+          if ($match_301.$tag === 1) {
+            const e = $match_301.$0;
             return Err2(e);
           }
-          if ($match_305.$tag === 0) {
-            const firstField = $match_305.$0[0];
-            const s2 = $match_305.$0[1];
-            return (($match_306) => {
-              if ($match_306.$tag === 1) {
-                const e = $match_306.$0;
+          if ($match_301.$tag === 0) {
+            const firstField = $match_301.$0[0];
+            const s2 = $match_301.$0[1];
+            return (($match_302) => {
+              if ($match_302.$tag === 1) {
+                const e = $match_302.$0;
                 return Err2(e);
               }
-              if ($match_306.$tag === 0) {
-                const rest = $match_306.$0[0];
-                const s3 = $match_306.$0[1];
+              if ($match_302.$tag === 0) {
+                const rest = $match_302.$0[0];
+                const s3 = $match_302.$0[1];
                 return Ok2([_COLON_COLON2(firstField)(rest), s3]);
               }
               throw new Error("Pattern match failed");
-            })(parseMoreRecordFields(baseIndent)(firstField)(s2));
+            })(parseMoreRecordFields(baseIndent)(s2));
           }
           throw new Error("Pattern match failed");
         })(parseRecordFieldValue(tok)(baseIndent)(s1));
@@ -14596,21 +14949,21 @@ parseRecordFieldList = (firstFieldToken) => (baseIndent) => (state) => (($match_
   }
   throw new Error("Pattern match failed");
 })(firstFieldToken);
-parseRecordFieldValue = (fieldTok) => (baseIndent) => (state) => (($match_307) => {
-  if ($match_307.$tag === 1) {
-    const e = $match_307.$0;
+parseRecordFieldValue = (fieldTok) => (baseIndent) => (state) => (($match_303) => {
+  if ($match_303.$tag === 1) {
+    const e = $match_303.$0;
     return Err2(e);
   }
-  if ($match_307.$tag === 0) {
-    const s1 = $match_307.$0[1];
-    return (($match_308) => {
-      if ($match_308.$tag === 1) {
-        const e = $match_308.$0;
+  if ($match_303.$tag === 0) {
+    const s1 = $match_303.$0[1];
+    return (($match_304) => {
+      if ($match_304.$tag === 1) {
+        const e = $match_304.$0;
         return Err2(e);
       }
-      if ($match_308.$tag === 0) {
-        const value = $match_308.$0[0];
-        const s2 = $match_308.$0[1];
+      if ($match_304.$tag === 0) {
+        const value = $match_304.$0[0];
+        const s2 = $match_304.$0[1];
         return Ok2([{ name: fieldTok.lexeme, value, span: { start: fieldTok.span.start, end: exprSpan(value).end } }, s2]);
       }
       throw new Error("Pattern match failed");
@@ -14618,65 +14971,56 @@ parseRecordFieldValue = (fieldTok) => (baseIndent) => (state) => (($match_307) =
   }
   throw new Error("Pattern match failed");
 })(expect(Equals2)("record field assignment")(state));
-parseMoreRecordFields = (baseIndent) => (lastField) => (state) => peekKind(Comma2)(state) ? (($match_309) => {
-  if ($match_309.$tag === 1) {
-    return Ok2([[], state]);
-  }
-  if ($match_309.$tag === 0) {
-    const next = $match_309.$0;
-    return continuesLayout(baseIndent)(lastField.span.end)(next) ? ((s1) => (($match_310) => {
-      if ($match_310.$tag === 1) {
-        const e = $match_310.$0;
-        return Err2(e);
-      }
-      if ($match_310.$tag === 0) {
-        const fieldTok = $match_310.$0[0];
-        const s2 = $match_310.$0[1];
-        return (($match_311) => {
-          if ($match_311.$tag === 1) {
-            const e = $match_311.$0;
-            return Err2(e);
-          }
-          if ($match_311.$tag === 0) {
-            const field = $match_311.$0[0];
-            const s3 = $match_311.$0[1];
-            return (($match_312) => {
-              if ($match_312.$tag === 1) {
-                const e = $match_312.$0;
-                return Err2(e);
-              }
-              if ($match_312.$tag === 0) {
-                const rest = $match_312.$0[0];
-                const s4 = $match_312.$0[1];
-                return Ok2([_COLON_COLON2(field)(rest), s4]);
-              }
-              throw new Error("Pattern match failed");
-            })(parseMoreRecordFields(baseIndent)(field)(s3));
-          }
-          throw new Error("Pattern match failed");
-        })(parseRecordFieldValue(fieldTok)(baseIndent)(s2));
-      }
-      throw new Error("Pattern match failed");
-    })(expect(LowerIdentifier2)("record field name")(s1)))(advance2(state)) : Ok2([[], state]);
-  }
-  throw new Error("Pattern match failed");
-})(peekAhead(1)(state)) : Ok2([[], state]);
-var parseDeclarations = (state) => isAtEnd2(state) ? Ok2([[], state]) : ((tok) => $dict_Eq_Int2._EQ_EQ(tok.span.start.column)(1) ? (($match_313) => {
-  if ($match_313.$tag === 1) {
-    const e = $match_313.$0;
+parseMoreRecordFields = (baseIndent) => (state) => peekKind(Comma2)(state) ? ((s1) => (($match_305) => {
+  if ($match_305.$tag === 1) {
+    const e = $match_305.$0;
     return Err2(e);
   }
-  if ($match_313.$tag === 0) {
-    const decl = $match_313.$0[0];
-    const s1 = $match_313.$0[1];
-    return (($match_314) => {
-      if ($match_314.$tag === 1) {
-        const e = $match_314.$0;
+  if ($match_305.$tag === 0) {
+    const fieldTok = $match_305.$0[0];
+    const s2 = $match_305.$0[1];
+    return (($match_306) => {
+      if ($match_306.$tag === 1) {
+        const e = $match_306.$0;
         return Err2(e);
       }
-      if ($match_314.$tag === 0) {
-        const rest = $match_314.$0[0];
-        const s2 = $match_314.$0[1];
+      if ($match_306.$tag === 0) {
+        const field = $match_306.$0[0];
+        const s3 = $match_306.$0[1];
+        return (($match_307) => {
+          if ($match_307.$tag === 1) {
+            const e = $match_307.$0;
+            return Err2(e);
+          }
+          if ($match_307.$tag === 0) {
+            const rest = $match_307.$0[0];
+            const s4 = $match_307.$0[1];
+            return Ok2([_COLON_COLON2(field)(rest), s4]);
+          }
+          throw new Error("Pattern match failed");
+        })(parseMoreRecordFields(baseIndent)(s3));
+      }
+      throw new Error("Pattern match failed");
+    })(parseRecordFieldValue(fieldTok)(baseIndent)(s2));
+  }
+  throw new Error("Pattern match failed");
+})(expect(LowerIdentifier2)("record field name")(s1)))(advance2(state)) : Ok2([[], state]);
+var parseDeclarations = (state) => isAtEnd2(state) ? Ok2([[], state]) : ((tok) => $dict_Eq_Int2._EQ_EQ(tok.span.start.column)(1) ? (($match_308) => {
+  if ($match_308.$tag === 1) {
+    const e = $match_308.$0;
+    return Err2(e);
+  }
+  if ($match_308.$tag === 0) {
+    const decl = $match_308.$0[0];
+    const s1 = $match_308.$0[1];
+    return (($match_309) => {
+      if ($match_309.$tag === 1) {
+        const e = $match_309.$0;
+        return Err2(e);
+      }
+      if ($match_309.$tag === 0) {
+        const rest = $match_309.$0[0];
+        const s2 = $match_309.$0[1];
         return Ok2([_COLON_COLON2(decl)(rest), s2]);
       }
       throw new Error("Pattern match failed");
@@ -14684,30 +15028,30 @@ var parseDeclarations = (state) => isAtEnd2(state) ? Ok2([[], state]) : ((tok) =
   }
   throw new Error("Pattern match failed");
 })(parseDeclaration(state)) : Err2(makeError("top-level declaration must start at column 1")(tok.span)))(current(state));
-var parseProgram = (state) => ((tok) => $dict_Eq_Int2._EQ_EQ(tok.span.start.column)(1) ? (($match_315) => {
-  if ($match_315.$tag === 1) {
-    const e = $match_315.$0;
+var parseProgram = (state) => ((tok) => $dict_Eq_Int2._EQ_EQ(tok.span.start.column)(1) ? (($match_310) => {
+  if ($match_310.$tag === 1) {
+    const e = $match_310.$0;
     return Err2(e);
   }
-  if ($match_315.$tag === 0) {
-    const modDecl = $match_315.$0[0];
-    const s1 = $match_315.$0[1];
-    return (($match_316) => {
-      if ($match_316.$tag === 1) {
-        const e = $match_316.$0;
+  if ($match_310.$tag === 0) {
+    const modDecl = $match_310.$0[0];
+    const s1 = $match_310.$0[1];
+    return (($match_311) => {
+      if ($match_311.$tag === 1) {
+        const e = $match_311.$0;
         return Err2(e);
       }
-      if ($match_316.$tag === 0) {
-        const imports = $match_316.$0[0];
-        const s2 = $match_316.$0[1];
-        return (($match_317) => {
-          if ($match_317.$tag === 1) {
-            const e = $match_317.$0;
+      if ($match_311.$tag === 0) {
+        const imports = $match_311.$0[0];
+        const s2 = $match_311.$0[1];
+        return (($match_312) => {
+          if ($match_312.$tag === 1) {
+            const e = $match_312.$0;
             return Err2(e);
           }
-          if ($match_317.$tag === 0) {
-            const decls = $match_317.$0[0];
-            const s3 = $match_317.$0[1];
+          if ($match_312.$tag === 0) {
+            const decls = $match_312.$0[0];
+            const s3 = $match_312.$0[1];
             return Ok2([{ moduleDecl: modDecl, imports, declarations: decls }, s3]);
           }
           throw new Error("Pattern match failed");
@@ -14718,13 +15062,13 @@ var parseProgram = (state) => ((tok) => $dict_Eq_Int2._EQ_EQ(tok.span.start.colu
   }
   throw new Error("Pattern match failed");
 })(parseModuleDeclaration(state)) : Err2(makeError("module declaration must start at column 1")(tok.span)))(current(state));
-var parseTokens = (tokens) => (registry) => ((state) => (($match_318) => {
-  if ($match_318.$tag === 1) {
-    const e = $match_318.$0;
+var parseTokens = (tokens) => (registry) => ((state) => (($match_313) => {
+  if ($match_313.$tag === 1) {
+    const e = $match_313.$0;
     return Err2(e);
   }
-  if ($match_318.$tag === 0) {
-    const prog = $match_318.$0[0];
+  if ($match_313.$tag === 0) {
+    const prog = $match_313.$0[0];
     return Ok2(prog);
   }
   throw new Error("Pattern match failed");
@@ -15330,7 +15674,7 @@ var jsonObjectGet = (just, nothing, key, v) => {
 };
 
 // ../vibe-parser/dist/Json/Json/Decode.js
-var _AMP_AMP6 = (a) => (b) => a && b();
+var _AMP_AMP7 = (a) => (b) => a && b();
 var Decoder = ($0) => ({ $tag: 0, $0 });
 var Field = ($0) => ($1) => ({ $tag: 0, $0, $1 });
 var Index = ($0) => ($1) => ({ $tag: 1, $0, $1 });
@@ -15578,14 +15922,14 @@ $impl_Eq_Error__EQ_EQ = (x_impl) => (y_impl) => (($match_39) => {
     const a_1 = $match_39[0].$1;
     const b_0 = $match_39[1].$0;
     const b_1 = $match_39[1].$1;
-    return _AMP_AMP6($dict_Eq_String2._EQ_EQ(a_0)(b_0))(() => $dict_Eq_Error._EQ_EQ(a_1)(b_1));
+    return _AMP_AMP7($dict_Eq_String2._EQ_EQ(a_0)(b_0))(() => $dict_Eq_Error._EQ_EQ(a_1)(b_1));
   }
   if ($match_39[0].$tag === 1 && $match_39[1].$tag === 1) {
     const a_0 = $match_39[0].$0;
     const a_1 = $match_39[0].$1;
     const b_0 = $match_39[1].$0;
     const b_1 = $match_39[1].$1;
-    return _AMP_AMP6($dict_Eq_Int2._EQ_EQ(a_0)(b_0))(() => $dict_Eq_Error._EQ_EQ(a_1)(b_1));
+    return _AMP_AMP7($dict_Eq_Int2._EQ_EQ(a_0)(b_0))(() => $dict_Eq_Error._EQ_EQ(a_1)(b_1));
   }
   if ($match_39[0].$tag === 2 && $match_39[1].$tag === 2) {
     const a_0 = $match_39[0].$0;
@@ -15633,8 +15977,8 @@ $dict_Show_Error = {
 };
 
 // ../vibe-parser/dist/VibeLexer/VibeLexer.js
-var _PIPE_PIPE7 = (a) => (b) => a || b();
-var _AMP_AMP7 = (a) => (b) => a && b();
+var _PIPE_PIPE8 = (a) => (b) => a || b();
+var _AMP_AMP8 = (a) => (b) => a && b();
 var initState4 = (source) => ({ source, index: 0, line: 1, column: 1, sourceLen: length2(source) });
 var isAtEnd3 = (state) => $dict_Ord_Int2._GT_EQ(state.index)(state.sourceLen);
 var peek2 = (state) => charAt2(state.index)(state.source);
@@ -15662,11 +16006,11 @@ var skip3 = (state) => (($match_1) => {
 })(advance3(state));
 var skip22 = (state) => skip3(skip3(state));
 var sliceFrom2 = (startOffset) => (state) => slice2(startOffset)(state.index)(state.source);
-var isIdentifierStart2 = (c) => _PIPE_PIPE7(isAlpha2(c))(() => $dict_Eq_Char2._EQ_EQ(c)("_"));
-var isIdentifierPart2 = (c) => _PIPE_PIPE7(isIdentifierStart2(c))(() => isDigit2(c));
-var isWhitespace2 = (c) => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)(" "))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("\t"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)(`
+var isIdentifierStart2 = (c) => _PIPE_PIPE8(isAlpha2(c))(() => $dict_Eq_Char2._EQ_EQ(c)("_"));
+var isIdentifierPart2 = (c) => _PIPE_PIPE8(isIdentifierStart2(c))(() => isDigit2(c));
+var isWhitespace2 = (c) => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)(" "))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("\t"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)(`
 `))(() => $dict_Eq_Char2._EQ_EQ(c)("\r"))));
-var isOperatorChar2 = (c) => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("!"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("#"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("$"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("%"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("&"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("*"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("+"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("."))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("/"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("<"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("="))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)(">"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("?"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("@"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("\\"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("^"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("|"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)("~"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)(":"))(() => $dict_Eq_Char2._EQ_EQ(c)("-"))))))))))))))))))));
+var isOperatorChar2 = (c) => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("!"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("#"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("$"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("%"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("&"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("*"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("+"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("."))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("/"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("<"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("="))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)(">"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("?"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("@"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("\\"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("^"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("|"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)("~"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)(":"))(() => $dict_Eq_Char2._EQ_EQ(c)("-"))))))))))))))))))));
 var isKeyword2 = (word) => (($match_2) => {
   if ($match_2 === "if") {
     return true;
@@ -15827,7 +16171,7 @@ skipWhitespaceAndComments2 = (sawNl) => (state) => isAtEnd3(state) ? Ok2({ state
   }
   throw new Error("Pattern match failed");
 })(peek2(state));
-skipWsDispatch2 = (sawNl) => (state) => (c) => isWhitespace2(c) ? ((nl) => skipWhitespaceAndComments2(nl)(skip3(state)))(_PIPE_PIPE7(sawNl)(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(c)(`
+skipWsDispatch2 = (sawNl) => (state) => (c) => isWhitespace2(c) ? ((nl) => skipWhitespaceAndComments2(nl)(skip3(state)))(_PIPE_PIPE8(sawNl)(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(c)(`
 `))(() => $dict_Eq_Char2._EQ_EQ(c)("\r")))) : (($match_10) => {
   if ($match_10 === "-") {
     return skipWsMaybeLine2(sawNl)(state);
@@ -15870,7 +16214,7 @@ skipWsMaybeBlock2 = (sawNl) => (state) => (($match_13) => {
           }
           if ($match_15.$tag === 0) {
             const s3 = $match_15.$0;
-            return ((nl) => skipWhitespaceAndComments2(nl)(s3))(_PIPE_PIPE7(sawNl)(() => $dict_Ord_Int2._GT(s3.line)(lineBefore)));
+            return ((nl) => skipWhitespaceAndComments2(nl)(s3))(_PIPE_PIPE8(sawNl)(() => $dict_Ord_Int2._GT(s3.line)(lineBefore)));
           }
           throw new Error("Pattern match failed");
         })(skipBlockComment2(1)(s2)))(skip22(state)))(state.line);
@@ -15896,7 +16240,7 @@ var consumeIdentifierChars2 = (state) => {
       }
       if ($match_16.$tag === 0) {
         const c = $match_16.$0;
-        if (_PIPE_PIPE7(isIdentifierPart2(c))(() => $dict_Eq_Char2._EQ_EQ(c)("'"))) {
+        if (_PIPE_PIPE8(isIdentifierPart2(c))(() => $dict_Eq_Char2._EQ_EQ(c)("'"))) {
           state = skip3(state);
           continue;
         } else {
@@ -15965,7 +16309,7 @@ var readNumberAfterInt2 = (s1) => (startIdx) => (startPos) => (($match_20) => {
   throw new Error("Pattern match failed");
 })(peek2(s1));
 var readNumber2 = (state) => (startPos) => ((startIdx) => ((s1) => readNumberAfterInt2(s1)(startIdx)(startPos))(consumeDigits2(state)))(state.index);
-var isValidStringEscape2 = (esc) => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)("n"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)("r"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)("t"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)('"'))(() => $dict_Eq_Char2._EQ_EQ(esc)("\\")))));
+var isValidStringEscape2 = (esc) => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)("n"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)("r"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)("t"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)('"'))(() => $dict_Eq_Char2._EQ_EQ(esc)("\\")))));
 var readStringBody2;
 var readStringEscape2;
 readStringBody2 = (state) => (startIdx) => (startPos) => {
@@ -16020,7 +16364,7 @@ readStringEscape2 = (state) => (startIdx) => (startPos) => ((s1) => (($match_24)
   throw new Error("Pattern match failed");
 })(peek2(s1)))(skip3(state));
 var readString2 = (state) => (startPos) => ((startIdx) => ((s1) => readStringBody2(s1)(startIdx)(startPos))(skip3(state)))(state.index);
-var isValidCharEscape2 = (esc) => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)("n"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)("r"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)("t"))(() => _PIPE_PIPE7($dict_Eq_Char2._EQ_EQ(esc)("'"))(() => $dict_Eq_Char2._EQ_EQ(esc)("\\")))));
+var isValidCharEscape2 = (esc) => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)("n"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)("r"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)("t"))(() => _PIPE_PIPE8($dict_Eq_Char2._EQ_EQ(esc)("'"))(() => $dict_Eq_Char2._EQ_EQ(esc)("\\")))));
 var expectClosingQuote2 = (state) => (startIdx) => (startPos) => (($match_25) => {
   if ($match_25.$tag === 0) {
     const c = $match_25.$0;
@@ -16345,7 +16689,7 @@ var readToken2 = (state) => (startPos) => (($match_52) => {
   }
   throw new Error("Pattern match failed");
 })(peek2(state));
-var maybeInsertNewline2 = (tokens) => (sawNl) => (hasEmitted) => (state) => _AMP_AMP7(sawNl)(() => hasEmitted) ? ((nlPos) => ((nlToken) => _COLON_COLON2(nlToken)(tokens))({ kind: Newline2, lexeme: `
+var maybeInsertNewline2 = (tokens) => (sawNl) => (hasEmitted) => (state) => _AMP_AMP8(sawNl)(() => hasEmitted) ? ((nlPos) => ((nlToken) => _COLON_COLON2(nlToken)(tokens))({ kind: Newline2, lexeme: `
 `, span: { start: nlPos, end: nlPos } }))(position2(state)) : tokens;
 var lexLoop2 = (loop) => {
   while (true) {
@@ -16798,8 +17142,8 @@ var encodeRegistryEntry = (entry) => (($match_10) => {
 var encodeRegistry = (registry) => list2(encodeRegistryEntry)(toList3(registry));
 
 // ../vibe-parser/dist/VibeParser/VibeParser.js
-var _AMP_AMP8 = (a) => (b) => a && b();
-var _PIPE_PIPE8 = (a) => (b) => a || b();
+var _AMP_AMP9 = (a) => (b) => a && b();
+var _PIPE_PIPE9 = (a) => (b) => a || b();
 var findOperator = (tokens) => (($match_1) => {
   if (Array.isArray($match_1) && $match_1.length === 0) {
     return Nothing2;
@@ -16851,7 +17195,7 @@ var collectInfixLoop = (tokens) => (registry) => {
       if (Array.isArray($match_5) && $match_5.length >= 1) {
         const tok = $match_5[0];
         const rest = $match_5.slice(1);
-        if (_AMP_AMP8($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => _PIPE_PIPE8($dict_Eq_String2._EQ_EQ(tok.lexeme)("infix"))(() => _PIPE_PIPE8($dict_Eq_String2._EQ_EQ(tok.lexeme)("infixl"))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("infixr"))))) {
+        if (_AMP_AMP9($dict_Eq_TokenKind._EQ_EQ(tok.kind)(Keyword2))(() => _PIPE_PIPE9($dict_Eq_String2._EQ_EQ(tok.lexeme)("infix"))(() => _PIPE_PIPE9($dict_Eq_String2._EQ_EQ(tok.lexeme)("infixl"))(() => $dict_Eq_String2._EQ_EQ(tok.lexeme)("infixr"))))) {
           {
             const $match_6 = rest;
             if (Array.isArray($match_6) && $match_6.length >= 1) {
@@ -17945,6 +18289,8 @@ class SemanticAnalyzer {
   currentConstraintContext = createConstraintContext();
   _pendingProtocolUsages = [];
   _resolvedProtocolUsages = new Map;
+  _pendingConstrainedCallUsages = [];
+  _resolvedConstrainedCallUsages = new Map;
   _registry = new RegistryManager;
   _globalScope = new Scope;
   _substitution = new Map;
@@ -18090,6 +18436,7 @@ class SemanticAnalyzer {
   resetConstraintContext() {
     this.currentConstraintContext = createConstraintContext();
     this._pendingProtocolUsages = [];
+    this._pendingConstrainedCallUsages = [];
   }
   getConstraintContext() {
     return this.currentConstraintContext;
@@ -18286,7 +18633,13 @@ class SemanticAnalyzer {
           const fieldExpr = expr;
           const moduleAccess = tryResolveModuleFieldAccess(fieldExpr, imports, dependencies, substitution);
           if (moduleAccess) {
-            return moduleAccess;
+            if (moduleAccess.constraints.length > 0) {
+              this._pendingConstrainedCallUsages.push({
+                node: fieldExpr,
+                constraints: moduleAccess.constraints
+              });
+            }
+            return moduleAccess.type;
           }
           const targetType = this.analyzeExpr(fieldExpr.target, {
             scope,
@@ -20513,6 +20866,13 @@ class SemanticAnalyzer {
             typeArgs: resolvedArgs
           });
         }
+        for (const usage of this._pendingConstrainedCallUsages) {
+          const resolved = usage.constraints.map((c) => ({
+            protocolName: c.protocolName,
+            typeArgs: c.typeArgs.map((t) => applySubstitution(t, this.substitution))
+          }));
+          this._resolvedConstrainedCallUsages.set(usage.node, resolved);
+        }
       }
     }
   }
@@ -21099,7 +21459,8 @@ class SemanticAnalyzer {
       exports,
       errors: this.getErrors(),
       importedValues: this.importedValues,
-      protocolMethodUsages: this._resolvedProtocolUsages
+      protocolMethodUsages: this._resolvedProtocolUsages,
+      constrainedCallUsages: this._resolvedConstrainedCallUsages
     };
   }
   concretizeInstanceTypeArgs() {
@@ -22714,18 +23075,20 @@ function typeOverlaps(type1, type2) {
 function resolveModuleField(depModule, field2, substitution) {
   if (Object.hasOwn(depModule.typeSchemes, field2)) {
     const scheme = depModule.typeSchemes[field2];
-    return instantiate(scheme, substitution);
+    const { type, constraints } = instantiateWithConstraints(scheme, substitution);
+    return { type, constraints };
   }
   if (Object.hasOwn(depModule.values, field2)) {
     const valueInfo = depModule.values[field2];
     const valueType = valueInfo.type || depModule.types[field2];
     if (valueType) {
-      return valueType;
+      return { type: valueType, constraints: [] };
     }
   }
   if (Object.hasOwn(depModule.constructorTypes, field2)) {
     const ctorScheme = depModule.constructorTypes[field2];
-    return instantiate(ctorScheme, substitution);
+    const { type, constraints } = instantiateWithConstraints(ctorScheme, substitution);
+    return { type, constraints };
   }
   return null;
 }
@@ -22795,9 +23158,6 @@ function instantiateWithConstraints(scheme, substitution) {
     typeArgs: c.typeArgs.map((t) => instantiateType(t, instantiationMap, substitution))
   }));
   return { type: instantiatedType, constraints: instantiatedConstraints };
-}
-function instantiate(scheme, substitution) {
-  return instantiateWithConstraints(scheme, substitution).type;
 }
 function instantiateType(type, instantiationMap, substitution) {
   const concrete = applySubstitution(type, substitution);

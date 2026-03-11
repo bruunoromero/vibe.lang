@@ -132,6 +132,11 @@ export type IRModuleAccess = {
    * If undefined, valueName is used directly.
    */
   externalName?: string;
+  /**
+   * Constraints from the imported value's type scheme.
+   * Used by codegen to pass dictionary parameters at call sites.
+   */
+  constraints?: IRConstraint[];
   span: Span;
 };
 

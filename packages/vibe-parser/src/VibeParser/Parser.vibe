@@ -1515,28 +1515,22 @@ parseRecordTypeFieldList state =
   case parseRecordTypeField state of
     Err e -> Err e
     Ok (firstField, s1) ->
-      case parseMoreRecordTypeFields firstField s1 of
+      case parseMoreRecordTypeFields s1 of
         Err e -> Err e
         Ok (rest, s2) -> Ok (firstField :: rest, s2)
 
-parseMoreRecordTypeFields : RecordFieldType -> ParserState -> ParseResult (List RecordFieldType)
-parseMoreRecordTypeFields lastField state =
+parseMoreRecordTypeFields : ParserState -> ParseResult (List RecordFieldType)
+parseMoreRecordTypeFields state =
   case peekKind T.Comma state of
     False -> Ok ([], state)
     True ->
-      case peekAhead 1 state of
-        Nothing -> Ok ([], state)
-        Just next ->
-          case continuesLayout lastField.span.start.column lastField.span.end next of
-            False -> Ok ([], state)
-            True ->
-              let s1 = advance state
-              in case parseRecordTypeField s1 of
-                Err e -> Err e
-                Ok (field, s2) ->
-                  case parseMoreRecordTypeFields field s2 of
-                    Err e -> Err e
-                    Ok (rest, s3) -> Ok (field :: rest, s3)
+      let s1 = advance state
+      in case parseRecordTypeField s1 of
+        Err e -> Err e
+        Ok (field, s2) ->
+          case parseMoreRecordTypeFields s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (field :: rest, s3)
 
 parseRecordTypeField : ParserState -> ParseResult RecordFieldType
 parseRecordTypeField state =
@@ -1565,7 +1559,7 @@ parseParenOrTupleType state =
       case parseTypeExpression s1 of
         Err e -> Err e
         Ok (first, s2) ->
-          case parseMoreTupleTypes first s2 of
+          case parseMoreTupleTypes s2 of
             Err e -> Err e
             Ok (moreTypes, s3) ->
               case expect T.RParen "close type group" s3 of
@@ -1584,24 +1578,18 @@ setTypeSpan typeExpr span =
     TRecord fields _ -> TRecord fields span
     TQualified constraints typ _ -> TQualified constraints typ span
 
-parseMoreTupleTypes : TypeExpr -> ParserState -> ParseResult (List TypeExpr)
-parseMoreTupleTypes lastType state =
+parseMoreTupleTypes : ParserState -> ParseResult (List TypeExpr)
+parseMoreTupleTypes state =
   case peekKind T.Comma state of
     False -> Ok ([], state)
     True ->
-      case peekAhead 1 state of
-        Nothing -> Ok ([], state)
-        Just next ->
-          case continuesLayout (typeSpan lastType).start.column (typeSpan lastType).end next of
-            False -> Ok ([], state)
-            True ->
-              let s1 = advance state
-              in case parseTypeExpression s1 of
-                Err e -> Err e
-                Ok (t, s2) ->
-                  case parseMoreTupleTypes t s2 of
-                    Err e -> Err e
-                    Ok (rest, s3) -> Ok (t :: rest, s3)
+      let s1 = advance state
+      in case parseTypeExpression s1 of
+        Err e -> Err e
+        Ok (t, s2) ->
+          case parseMoreTupleTypes s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (t :: rest, s3)
 
 parseTypeRef : ParserState -> ParseResult TypeExpr
 parseTypeRef state =
@@ -1773,12 +1761,24 @@ parseConstructorPatternArgs state =
   case isPatternStart (current state) of
     False -> Ok ([], state)
     True ->
-      case parsePrimaryPattern state of
+      case parseAtomicPattern state of
         Err e -> Err e
         Ok (pat, s1) ->
           case parseConstructorPatternArgs s1 of
             Err e -> Err e
             Ok (rest, s2) -> Ok (pat :: rest, s2)
+
+parseAtomicPattern : ParserState -> ParseResult Pattern
+parseAtomicPattern state =
+  let tok = current state
+  in case tok.kind of
+    T.UpperIdentifier ->
+      let s1 = advance state
+      in case parseQualifiedCtorName tok.lexeme tok.span.end s1 of
+        Err e -> Err e
+        Ok (nameResult, s2) ->
+          Ok (PConstructor nameResult.name [] { start = tok.span.start, end = nameResult.nameEnd }, s2)
+    _ -> parsePrimaryPattern state
 
 parseListPattern : ParserState -> ParseResult Pattern
 parseListPattern state =
@@ -1825,7 +1825,7 @@ parseParenOrTuplePattern state =
       case parsePattern s1 of
         Err e -> Err e
         Ok (first, s2) ->
-          case parseTuplePatternRest first s2 of
+          case parseTuplePatternRest s2 of
             Err e -> Err e
             Ok (more, s3) ->
               case expect T.RParen "close pattern group" s3 of
@@ -1850,24 +1850,18 @@ setPatSpan pat span =
     PString v _ -> PString v span
     PChar v _ -> PChar v span
 
-parseTuplePatternRest : Pattern -> ParserState -> ParseResult (List Pattern)
-parseTuplePatternRest lastPat state =
+parseTuplePatternRest : ParserState -> ParseResult (List Pattern)
+parseTuplePatternRest state =
   case peekKind T.Comma state of
     False -> Ok ([], state)
     True ->
-      case peekAhead 1 state of
-        Nothing -> Ok ([], state)
-        Just next ->
-          case continuesLayout (patSpan lastPat).start.column (patSpan lastPat).end next of
-            False -> Ok ([], state)
-            True ->
-              let s1 = advance state
-              in case parsePattern s1 of
-                Err e -> Err e
-                Ok (pat, s2) ->
-                  case parseTuplePatternRest pat s2 of
-                    Err e -> Err e
-                    Ok (rest, s3) -> Ok (pat :: rest, s3)
+      let s1 = advance state
+      in case parsePattern s1 of
+        Err e -> Err e
+        Ok (pat, s2) ->
+          case parseTuplePatternRest s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (pat :: rest, s3)
 
 parseFunctionParamPattern : ParserState -> ParseResult Pattern
 parseFunctionParamPattern state =
@@ -1925,7 +1919,7 @@ parseFPTuplePattern state =
       case parseFunctionParamPattern s1 of
         Err e -> Err e
         Ok (first, s2) ->
-          case parseFPTupleRest first s2 of
+          case parseFPTupleRest s2 of
             Err e -> Err e
             Ok (more, s3) ->
               case expect T.RParen "close pattern group" s3 of
@@ -1935,24 +1929,18 @@ parseFPTuplePattern state =
                     True -> Ok (setPatSpan first { start = start, end = cp.span.end }, s4)
                     False -> Ok (PTuple (first :: more) { start = start, end = cp.span.end }, s4)
 
-parseFPTupleRest : Pattern -> ParserState -> ParseResult (List Pattern)
-parseFPTupleRest lastPat state =
+parseFPTupleRest : ParserState -> ParseResult (List Pattern)
+parseFPTupleRest state =
   case peekKind T.Comma state of
     False -> Ok ([], state)
     True ->
-      case peekAhead 1 state of
-        Nothing -> Ok ([], state)
-        Just next ->
-          case continuesLayout (patSpan lastPat).start.column (patSpan lastPat).end next of
-            False -> Ok ([], state)
-            True ->
-              let s1 = advance state
-              in case parseFunctionParamPattern s1 of
-                Err e -> Err e
-                Ok (pat, s2) ->
-                  case parseFPTupleRest pat s2 of
-                    Err e -> Err e
-                    Ok (rest, s3) -> Ok (pat :: rest, s3)
+      let s1 = advance state
+      in case parseFunctionParamPattern s1 of
+        Err e -> Err e
+        Ok (pat, s2) ->
+          case parseFPTupleRest s2 of
+            Err e -> Err e
+            Ok (rest, s3) -> Ok (pat :: rest, s3)
 
 parseFPRecordPattern : ParserState -> ParseResult Pattern
 parseFPRecordPattern state =
@@ -2337,7 +2325,7 @@ parseParenExprContents start state =
   case parseExpression Nothing state of
     Err e -> Err e
     Ok (first, s1) ->
-      case parseMoreTupleExprs first s1 of
+      case parseMoreTupleExprs s1 of
         Err e -> Err e
         Ok (more, s2) ->
           case expect T.RParen "close group" s2 of
@@ -2347,24 +2335,18 @@ parseParenExprContents start state =
                 True -> Ok (EParen first { start = start, end = cp.span.end }, s3)
                 False -> Ok (ETuple (first :: more) { start = start, end = cp.span.end }, s3)
 
-parseMoreTupleExprs : Expr -> ParserState -> ParseResult (List Expr)
-parseMoreTupleExprs lastExpr state =
+parseMoreTupleExprs : ParserState -> ParseResult (List Expr)
+parseMoreTupleExprs state =
   case peekKind T.Comma state of
     False -> Ok ([], state)
     True ->
-      case peekAhead 1 state of
-        Nothing -> Ok ([], state)
-        Just next ->
-          case continuesLayout (exprSpan lastExpr).start.column (exprSpan lastExpr).end next of
-            False -> Ok ([], state)
-            True ->
-              let s1 = advance state
-              in case parseExpression Nothing s1 of
-                Err e -> Err e
-                Ok (expr, s2) ->
-                  case parseMoreTupleExprs expr s2 of
-                    Err e2 -> Err e2
-                    Ok (rest, s3) -> Ok (expr :: rest, s3)
+      let s1 = advance state
+      in case parseExpression Nothing s1 of
+        Err e -> Err e
+        Ok (expr, s2) ->
+          case parseMoreTupleExprs s2 of
+            Err e2 -> Err e2
+            Ok (rest, s3) -> Ok (expr :: rest, s3)
 
 parseListExpr : ParserState -> ParseResult Expr
 parseListExpr state =
@@ -2389,31 +2371,25 @@ parseListExpr state =
                     Err e -> Err e
                     Ok (_, s5) -> Ok (EListRange first endExpr { start = start, end = (previous s5).span.end }, s5)
             Nothing ->
-              case parseMoreListExprs first s2 of
+              case parseMoreListExprs s2 of
                 Err e -> Err e
                 Ok (more, s4) ->
                   case expect T.RBracket "close list" s4 of
                     Err e -> Err e
                     Ok (_, s5) -> Ok (EList (first :: more) { start = start, end = (previous s5).span.end }, s5)
 
-parseMoreListExprs : Expr -> ParserState -> ParseResult (List Expr)
-parseMoreListExprs lastExpr state =
+parseMoreListExprs : ParserState -> ParseResult (List Expr)
+parseMoreListExprs state =
   case peekKind T.Comma state of
     False -> Ok ([], state)
     True ->
-      case peekAhead 1 state of
-        Nothing -> Ok ([], state)
-        Just next ->
-          case continuesLayout (exprSpan lastExpr).start.column (exprSpan lastExpr).end next of
-            False -> Ok ([], state)
-            True ->
-              let s1 = advance state
-              in case parseExpression Nothing s1 of
-                Err e -> Err e
-                Ok (expr, s2) ->
-                  case parseMoreListExprs expr s2 of
-                    Err e2 -> Err e2
-                    Ok (rest, s3) -> Ok (expr :: rest, s3)
+      let s1 = advance state
+      in case parseExpression Nothing s1 of
+        Err e -> Err e
+        Ok (expr, s2) ->
+          case parseMoreListExprs s2 of
+            Err e2 -> Err e2
+            Ok (rest, s3) -> Ok (expr :: rest, s3)
 
 parseRecordExpr : ParserState -> ParseResult Expr
 parseRecordExpr state =
@@ -2452,7 +2428,7 @@ parseRecordFieldList firstFieldToken baseIndent state =
       case parseRecordFieldValue tok baseIndent state of
         Err e -> Err e
         Ok (firstField, s1) ->
-          case parseMoreRecordFields baseIndent firstField s1 of
+          case parseMoreRecordFields baseIndent s1 of
             Err e -> Err e
             Ok (rest, s2) -> Ok (firstField :: rest, s2)
     Nothing ->
@@ -2462,7 +2438,7 @@ parseRecordFieldList firstFieldToken baseIndent state =
           case parseRecordFieldValue tok baseIndent s1 of
             Err e -> Err e
             Ok (firstField, s2) ->
-              case parseMoreRecordFields baseIndent firstField s2 of
+              case parseMoreRecordFields baseIndent s2 of
                 Err e -> Err e
                 Ok (rest, s3) -> Ok (firstField :: rest, s3)
 
@@ -2476,24 +2452,18 @@ parseRecordFieldValue fieldTok baseIndent state =
         Ok (value, s2) ->
           Ok ({ name = fieldTok.lexeme, value = value, span = { start = fieldTok.span.start, end = (exprSpan value).end } }, s2)
 
-parseMoreRecordFields : Int -> RecordField -> ParserState -> ParseResult (List RecordField)
-parseMoreRecordFields baseIndent lastField state =
+parseMoreRecordFields : Int -> ParserState -> ParseResult (List RecordField)
+parseMoreRecordFields baseIndent state =
   case peekKind T.Comma state of
     False -> Ok ([], state)
     True ->
-      case peekAhead 1 state of
-        Nothing -> Ok ([], state)
-        Just next ->
-          case continuesLayout baseIndent lastField.span.end next of
-            False -> Ok ([], state)
-            True ->
-              let s1 = advance state
-              in case expect T.LowerIdentifier "record field name" s1 of
+      let s1 = advance state
+      in case expect T.LowerIdentifier "record field name" s1 of
+        Err e -> Err e
+        Ok (fieldTok, s2) ->
+          case parseRecordFieldValue fieldTok baseIndent s2 of
+            Err e -> Err e
+            Ok (field, s3) ->
+              case parseMoreRecordFields baseIndent s3 of
                 Err e -> Err e
-                Ok (fieldTok, s2) ->
-                  case parseRecordFieldValue fieldTok baseIndent s2 of
-                    Err e -> Err e
-                    Ok (field, s3) ->
-                      case parseMoreRecordFields baseIndent field s3 of
-                        Err e -> Err e
-                        Ok (rest, s4) -> Ok (field :: rest, s4)
+                Ok (rest, s4) -> Ok (field :: rest, s4)

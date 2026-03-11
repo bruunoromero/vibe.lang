@@ -6,6 +6,7 @@ import * as $inst_Float from "../../Vibe/Vibe/Float.js";
 import * as $inst_String from "../../Vibe/Vibe/String.js";
 import * as $inst_Char from "../../Vibe/Vibe/Char.js";
 import * as $inst_List from "../../Vibe/Vibe/List.js";
+import * as $inst_Dict from "../../Vibe/Vibe/Dict.js";
 
 // Short-Circuit Operator Helpers
 const _AMP_AMP = (a) => (b) => a && b();

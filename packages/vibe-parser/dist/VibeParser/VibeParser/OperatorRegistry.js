@@ -13,9 +13,9 @@ import * as $inst_List from "../../Vibe/Vibe/List.js";
 // Values
 const emptyRegistry = Dict.empty;
 const defaultOperatorInfo = ({ precedence: 9, associativity: Types.AssocLeft });
-const builtinRegistry = Vibe._PIPE_GT(Vibe._PIPE_GT(Dict.empty)(Dict.insert("&&")(({ precedence: 3, associativity: Types.AssocRight }))))(Dict.insert("||")(({ precedence: 2, associativity: Types.AssocRight })));
-const getOperatorInfo = (op) => (registry) => (($match_0) => { if ($match_0.$tag === 0) { const info = $match_0.$0; return info; } if ($match_0.$tag === 1) { return defaultOperatorInfo; } throw new Error("Pattern match failed"); })(Dict.get(op)(registry));
-const insertOperator = Dict.insert;
-const mergeRegistries = (base) => (override) => Dict.union(override)(base);
+const builtinRegistry = Vibe._PIPE_GT(Vibe._PIPE_GT(Dict.empty)(Dict.insert($inst_String.$dict_Ord_String)("&&")(({ precedence: 3, associativity: Types.AssocRight }))))(Dict.insert($inst_String.$dict_Ord_String)("||")(({ precedence: 2, associativity: Types.AssocRight })));
+const getOperatorInfo = (op) => (registry) => (($match_0) => { if ($match_0.$tag === 0) { const info = $match_0.$0; return info; } if ($match_0.$tag === 1) { return defaultOperatorInfo; } throw new Error("Pattern match failed"); })(Dict.get($inst_String.$dict_Ord_String)(op)(registry));
+const insertOperator = Dict.insert($inst_String.$dict_Ord_String);
+const mergeRegistries = (base) => (override) => Dict.union($inst_String.$dict_Ord_String)(override)(base);
 
 export { builtinRegistry, defaultOperatorInfo, emptyRegistry, getOperatorInfo, insertOperator, mergeRegistries };

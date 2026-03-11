@@ -1,0 +1,69 @@
+module Vibe.Set exposing
+  ( Set
+  , empty
+  , singleton
+  , fromList
+  , insert
+  , remove
+  , member
+  , size
+  , isEmpty
+  , toList
+  , foldl
+  , map
+  , filter
+  , union
+  , intersect
+  , diff
+  )
+
+import Vibe.Basics exposing (Eq(..), Show(..), Appendable(..), not)
+import Vibe.Maybe exposing (Maybe(..))
+
+
+type Set a
+
+@external "./Set.ffi.js" "setEmpty"
+empty : Set a
+
+singleton : a -> Set a
+singleton v = insert v empty
+
+@external "./Set.ffi.js" "setFromList"
+fromList : List a -> Set a
+
+@external "./Set.ffi.js" "setInsert"
+insert : a -> Set a -> Set a
+
+@external "./Set.ffi.js" "setRemove"
+remove : a -> Set a -> Set a
+
+@external "./Set.ffi.js" "setMember"
+member : a -> Set a -> Bool
+
+@get "size"
+size : Set a -> Int
+
+isEmpty : Set a -> Bool
+isEmpty s = size s == 0
+
+@external "./Set.ffi.js" "setToList"
+toList : Set a -> List a
+
+@external "./Set.ffi.js" "setFoldl"
+foldl : (a -> b -> b) -> b -> Set a -> b
+
+@external "./Set.ffi.js" "setMap"
+map : (a -> b) -> Set a -> Set b
+
+@external "./Set.ffi.js" "setFilter"
+filter : (a -> Bool) -> Set a -> Set a
+
+@external "./Set.ffi.js" "setUnion"
+union : Set a -> Set a -> Set a
+
+@external "./Set.ffi.js" "setIntersect"
+intersect : Set a -> Set a -> Set a
+
+@external "./Set.ffi.js" "setDiff"
+diff : Set a -> Set a -> Set a

@@ -919,6 +919,26 @@ function lowerExpr(exprArg, ctx) {
     }
   }
 }
+function getModuleValueConstraints(depModule, valueName) {
+  const scheme = depModule.typeSchemes[valueName];
+  if (!scheme || scheme.constraints.length === 0) {
+    return [];
+  }
+  return scheme.constraints.map((c) => ({
+    protocolName: c.protocolName,
+    typeArgs: c.typeArgs.map((t) => convertType(t))
+  }));
+}
+function getInstantiatedConstraints(expr, depModule, valueName, ctx) {
+  const usages = ctx.semantics.constrainedCallUsages?.get(expr);
+  if (usages && usages.length > 0) {
+    return usages.map((u) => ({
+      protocolName: u.protocolName,
+      typeArgs: u.typeArgs.map((t) => convertType(t))
+    }));
+  }
+  return getModuleValueConstraints(depModule, valueName);
+}
 function tryResolveModuleAccess(expr, ctx) {
   const parts = [];
   let current = expr;
@@ -948,12 +968,14 @@ function tryResolveModuleAccess(expr, ctx) {
           if (decl.kind === "DecoratedDeclaration" && decl.decorator === "external") {
             externalName = decl.args[1];
           }
+          const constraints = getInstantiatedConstraints(expr, depModule, field, ctx);
           return {
             kind: "IRModuleAccess",
             importAlias: imp.alias,
             moduleName: imp.moduleName,
             valueName: field,
             externalName,
+            ...constraints.length > 0 ? { constraints } : {},
             span: expr.span
           };
         }
@@ -983,12 +1005,14 @@ function tryResolveModuleAccess(expr, ctx) {
               externalName = decl.args[1];
             }
             const alias = imp.alias || importParts[importParts.length - 1];
+            const constraints = getInstantiatedConstraints(expr, depModule, field, ctx);
             return {
               kind: "IRModuleAccess",
               importAlias: alias,
               moduleName: imp.moduleName,
               valueName: field,
               externalName,
+              ...constraints.length > 0 ? { constraints } : {},
               span: expr.span
             };
           }

@@ -187,6 +187,45 @@ export function lowerExpr(exprArg: Expr, ctx: LoweringContext): IRExpr {
 }
 
 /**
+ * Look up constraints for a value exported from a dependency module.
+ * Converts semantic Constraint types to IR IRConstraint types.
+ */
+function getModuleValueConstraints(
+  depModule: { typeSchemes: Record<string, { constraints: { protocolName: string; typeArgs: any[] }[] }> },
+  valueName: string,
+): IRConstraint[] {
+  const scheme = depModule.typeSchemes[valueName];
+  if (!scheme || scheme.constraints.length === 0) {
+    return [];
+  }
+  return scheme.constraints.map((c) => ({
+    protocolName: c.protocolName,
+    typeArgs: c.typeArgs.map((t) => convertType(t)),
+  }));
+}
+
+/**
+ * Get constraints for a module-qualified access, preferring instantiated constraints
+ * from semantic analysis (which have concrete types at the call site) over the
+ * generic type scheme constraints (which have type variables).
+ */
+function getInstantiatedConstraints(
+  expr: Expr,
+  depModule: { typeSchemes: Record<string, { constraints: { protocolName: string; typeArgs: any[] }[] }> },
+  valueName: string,
+  ctx: LoweringContext,
+): IRConstraint[] {
+  const usages = ctx.semantics.constrainedCallUsages?.get(expr);
+  if (usages && usages.length > 0) {
+    return usages.map((u) => ({
+      protocolName: u.protocolName,
+      typeArgs: u.typeArgs.map((t) => convertType(t)),
+    }));
+  }
+  return getModuleValueConstraints(depModule, valueName);
+}
+
+/**
  * Try to resolve a FieldAccess chain as a module-qualified access.
  *
  * This handles cases like:
@@ -250,12 +289,15 @@ function tryResolveModuleAccess(
             externalName = decl.args[1]!;
           }
 
+          const constraints = getInstantiatedConstraints(expr, depModule, field, ctx);
+
           return {
             kind: "IRModuleAccess",
             importAlias: imp.alias,
             moduleName: imp.moduleName,
             valueName: field,
             externalName,
+            ...(constraints.length > 0 ? { constraints } : {}),
             span: expr.span,
           };
         }
@@ -300,12 +342,15 @@ function tryResolveModuleAccess(
             // For unaliased imports, use the last segment of the module name as the alias
             const alias = imp.alias || importParts[importParts.length - 1]!;
 
+            const constraints = getInstantiatedConstraints(expr, depModule, field, ctx);
+
             return {
               kind: "IRModuleAccess",
               importAlias: alias,
               moduleName: imp.moduleName,
               valueName: field,
               externalName,
+              ...(constraints.length > 0 ? { constraints } : {}),
               span: expr.span,
             };
           }
