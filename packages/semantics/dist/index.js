@@ -36,7 +36,6 @@ var KEYWORDS = [
   "import",
   "exposing",
   "as",
-  "port",
   "infix",
   "infixl",
   "infixr",

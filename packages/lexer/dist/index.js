@@ -636,9 +636,6 @@ var isKeyword = (word) => (($match_2) => {
   if ($match_2 === "as") {
     return true;
   }
-  if ($match_2 === "port") {
-    return true;
-  }
   if ($match_2 === "infix") {
     return true;
   }

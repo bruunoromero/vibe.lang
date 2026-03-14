@@ -7,6 +7,7 @@ import * as $inst_Int from "../Vibe/Int.js";
 import * as $inst_Float from "../Vibe/Float.js";
 import * as $inst_String from "../Vibe/String.js";
 import * as $inst_Char from "../Vibe/Char.js";
+import * as $inst_Ref from "../Vibe/Ref.js";
 
 // ADT Constructors
 const Set = ($0) => ({ $tag: 0, $0 });

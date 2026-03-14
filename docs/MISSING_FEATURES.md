@@ -212,10 +212,6 @@ do
 
 Requires HKT/Monad support first.
 
-### Ports (Elm-style)
-
-Typed communication channels between Vibe and JS. Keyword already reserved in lexer but unused.
-
 ### Redundant Pattern Warnings
 
 Warn when a case branch can never match.

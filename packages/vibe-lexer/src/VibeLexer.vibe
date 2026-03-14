@@ -124,7 +124,6 @@ isKeyword word =
     "import"    -> True
     "exposing"  -> True
     "as"        -> True
-    "port"      -> True
     "infix"     -> True
     "infixl"    -> True
     "infixr"    -> True
