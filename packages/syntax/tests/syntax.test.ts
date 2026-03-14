@@ -13,7 +13,6 @@ describe("keywords", () => {
       "then",
       "case",
       "module",
-      "port",
       "exposing",
       "infix",
       "infixl",

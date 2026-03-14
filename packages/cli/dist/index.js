@@ -2528,9 +2528,6 @@ var isKeyword = (word) => (($match_2) => {
   if ($match_2 === "as") {
     return true;
   }
-  if ($match_2 === "port") {
-    return true;
-  }
   if ($match_2 === "infix") {
     return true;
   }
@@ -9344,9 +9341,6 @@ var isKeyword2 = (word) => (($match_2) => {
   if ($match_2 === "as") {
     return true;
   }
-  if ($match_2 === "port") {
-    return true;
-  }
   if ($match_2 === "infix") {
     return true;
   }
@@ -10773,7 +10767,6 @@ var KEYWORDS = [
   "import",
   "exposing",
   "as",
-  "port",
   "infix",
   "infixl",
   "infixr",

@@ -9,6 +9,7 @@ import * as $inst_Float from "../../Vibe/Vibe/Float.js";
 import * as $inst_String from "../../Vibe/Vibe/String.js";
 import * as $inst_Char from "../../Vibe/Vibe/Char.js";
 import * as $inst_List from "../../Vibe/Vibe/List.js";
+import * as $inst_Types from "../../VibeLexer/VibeLexer/Types.js";
 
 // Values
 const emptyRegistry = Dict.empty;

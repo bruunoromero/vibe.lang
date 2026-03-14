@@ -6,6 +6,7 @@ import * as $inst_Int from "../Vibe/Int.js";
 import * as $inst_Float from "../Vibe/Float.js";
 import * as $inst_String from "../Vibe/String.js";
 import * as $inst_Char from "../Vibe/Char.js";
+import * as $inst_Ref from "../Vibe/Ref.js";
 
 // Short-Circuit Operator Helpers
 const _AMP_AMP = (a) => (b) => a && b();
@@ -52,11 +53,11 @@ const $impl_Eq_NColor__EQ_EQ = (x_impl) => (y_impl) => (($match_37) => { if ($ma
 const $dict_Eq_NColor = {
   _EQ_EQ: $impl_Eq_NColor__EQ_EQ
 };
-let $impl_Eq_Dict_v903_v904__EQ_EQ;
-let $dict_Eq_Dict_v903_v904;
-$impl_Eq_Dict_v903_v904__EQ_EQ = ($dict_Eq) => (x_impl) => (y_impl) => (($match_38) => { if ($match_38[0].$tag === 0 && $match_38[1].$tag === 0) { return true; } if ($match_38[0].$tag === 1 && $match_38[1].$tag === 1) { const a_0 = $match_38[0].$0; const a_1 = $match_38[0].$1; const a_2 = $match_38[0].$2; const a_3 = $match_38[0].$3; const a_4 = $match_38[0].$4; const b_0 = $match_38[1].$0; const b_1 = $match_38[1].$1; const b_2 = $match_38[1].$2; const b_3 = $match_38[1].$3; const b_4 = $match_38[1].$4; return _AMP_AMP(_AMP_AMP(_AMP_AMP(_AMP_AMP($dict_Eq_NColor._EQ_EQ(a_0)(b_0))(() => $dict_Eq._EQ_EQ(a_1)(b_1)))(() => $dict_Eq._EQ_EQ(a_2)(b_2)))(() => $dict_Eq._EQ_EQ(a_3)(b_3)))(() => $dict_Eq._EQ_EQ(a_4)(b_4)); } { return false; } throw new Error("Pattern match failed"); })([x_impl, y_impl]);
-$dict_Eq_Dict_v903_v904 = ($dict_Eq) => ({
-  _EQ_EQ: $impl_Eq_Dict_v903_v904__EQ_EQ($dict_Eq)
+let $impl_Eq_Dict_v944_v945__EQ_EQ;
+let $dict_Eq_Dict_v944_v945;
+$impl_Eq_Dict_v944_v945__EQ_EQ = ($dict_Eq) => (x_impl) => (y_impl) => (($match_38) => { if ($match_38[0].$tag === 0 && $match_38[1].$tag === 0) { return true; } if ($match_38[0].$tag === 1 && $match_38[1].$tag === 1) { const a_0 = $match_38[0].$0; const a_1 = $match_38[0].$1; const a_2 = $match_38[0].$2; const a_3 = $match_38[0].$3; const a_4 = $match_38[0].$4; const b_0 = $match_38[1].$0; const b_1 = $match_38[1].$1; const b_2 = $match_38[1].$2; const b_3 = $match_38[1].$3; const b_4 = $match_38[1].$4; return _AMP_AMP(_AMP_AMP(_AMP_AMP(_AMP_AMP($dict_Eq_NColor._EQ_EQ(a_0)(b_0))(() => $dict_Eq._EQ_EQ(a_1)(b_1)))(() => $dict_Eq._EQ_EQ(a_2)(b_2)))(() => $dict_Eq._EQ_EQ(a_3)(b_3)))(() => $dict_Eq._EQ_EQ(a_4)(b_4)); } { return false; } throw new Error("Pattern match failed"); })([x_impl, y_impl]);
+$dict_Eq_Dict_v944_v945 = ($dict_Eq) => ({
+  _EQ_EQ: $impl_Eq_Dict_v944_v945__EQ_EQ($dict_Eq)
 });
 
-export { $dict_Eq_Dict_v903_v904, $dict_Eq_NColor, empty, filter, foldl, fromList, get, insert, isEmpty, keys, map, member, remove, singleton, size, toList, union, update, values };
+export { $dict_Eq_Dict_v944_v945, $dict_Eq_NColor, empty, filter, foldl, fromList, get, insert, isEmpty, keys, map, member, remove, singleton, size, toList, union, update, values };

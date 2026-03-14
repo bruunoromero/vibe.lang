@@ -8083,7 +8083,7 @@ var require_server = __commonJS((exports) => {
 
 // ../../node_modules/.bun/vscode-languageserver@9.0.1/node_modules/vscode-languageserver/lib/node/files.js
 var require_files = __commonJS((exports) => {
-  var __filename = "/Users/bromero/personal/vibe/node_modules/.bun/vscode-languageserver@9.0.1/node_modules/vscode-languageserver/lib/node/files.js";
+  var __filename = "/home/runner/work/vibe.lang/vibe.lang/node_modules/.bun/vscode-languageserver@9.0.1/node_modules/vscode-languageserver/lib/node/files.js";
   Object.defineProperty(exports, "__esModule", { value: true });
   exports.resolveModulePath = exports.FileSystem = exports.resolveGlobalYarnPath = exports.resolveGlobalNodePath = exports.resolve = exports.uriToFilePath = undefined;
   var url = __require("url");
@@ -9495,9 +9495,6 @@ var isKeyword = (word) => (($match_2) => {
     return true;
   }
   if ($match_2 === "as") {
-    return true;
-  }
-  if ($match_2 === "port") {
     return true;
   }
   if ($match_2 === "infix") {
@@ -16251,9 +16248,6 @@ var isKeyword2 = (word) => (($match_2) => {
   if ($match_2 === "as") {
     return true;
   }
-  if ($match_2 === "port") {
-    return true;
-  }
   if ($match_2 === "infix") {
     return true;
   }
@@ -17569,7 +17563,6 @@ var KEYWORDS = [
   "import",
   "exposing",
   "as",
-  "port",
   "infix",
   "infixl",
   "infixr",
